@@ -9,7 +9,9 @@ This guide covers local setup for Linux/macOS.
 - Workspace checkout on local machine
 
 ## 2. Slack App Setup
-Create an app in Slack, then configure:
+Use the full step-by-step guide in `docs/SLACK_SETUP.md`.
+
+Quick checklist:
 
 1. **Socket Mode**: enabled
 2. **OAuth scopes** (bot token):
