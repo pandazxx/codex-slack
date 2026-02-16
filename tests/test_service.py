@@ -43,3 +43,14 @@ def test_handle_prompt_uses_runtime() -> None:
     service = make_service()
     response = service.handle_prompt("C1", "<@U111> test")
     assert response == "sess_abc:test"
+
+
+def test_handle_prompt_accepts_conversation_metadata() -> None:
+    service = make_service()
+    response = service.handle_prompt(
+        "C1",
+        "<@U111> test metadata",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+    assert response == "sess_abc:test metadata"
