@@ -46,6 +46,11 @@ class LocalCodexBridge:
 
         if completed.returncode != 0:
             detail = stderr or stdout or f"exit code {completed.returncode}"
+            if "unexpected argument 'prompt' found" in detail and "session prompt" in command:
+                detail = (
+                    f"{detail}\nHint: your CODEX_COMMAND_TEMPLATE is incompatible with this codex version. "
+                    "Try: codex exec resume {session_id} -"
+                )
             raise CodexBridgeError(f"codex-cli failed: {detail}")
 
         if not stdout:
