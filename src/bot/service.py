@@ -66,6 +66,7 @@ class BotService:
         prompt = self.extract_prompt(text)
         if not prompt:
             raise ValueError("prompt is empty after removing mention")
+        conversation_key = f"{channel_id}:{thread_ts or '-'}"
 
         status_before = self.runtime.status()
         LOGGER.info(
@@ -81,6 +82,12 @@ class BotService:
             status_before.queue_depth,
             len(prompt),
         )
+        LOGGER.info(
+            "conversation.prompt_content conversation=%s user_id=%s prompt=%r",
+            conversation_key,
+            user_id or "-",
+            prompt,
+        )
 
         try:
             response = self.runtime.submit_prompt(prompt=prompt, bridge=self.bridge)
@@ -94,6 +101,12 @@ class BotService:
                 len(response),
                 duration_ms,
             )
+            LOGGER.info(
+                "conversation.response_content conversation=%s user_id=%s response=%r",
+                conversation_key,
+                user_id or "-",
+                response,
+            )
             return response
         except Exception:
             duration_ms = (time.perf_counter() - started_at) * 1000
@@ -104,5 +117,11 @@ class BotService:
                 user_id or "-",
                 self.runtime.status().session_id or "-",
                 duration_ms,
+            )
+            LOGGER.info(
+                "conversation.failed_prompt_content conversation=%s user_id=%s prompt=%r",
+                conversation_key,
+                user_id or "-",
+                prompt,
             )
             raise

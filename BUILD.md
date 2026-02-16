@@ -72,6 +72,17 @@ Optional single-channel override:
 python -m src.bot.main --session-id <SESSION_ID> --channel C01234567
 ```
 
+Logging options:
+```bash
+# default INFO level to terminal
+python -m src.bot.main --session-id <SESSION_ID> --log-level INFO
+
+# save all logs to file
+python -m src.bot.main --session-id <SESSION_ID> > bot.log 2>&1
+```
+
+See `docs/LOGGING.md` for full logging destination and level configuration.
+
 ## 7. Verify Startup
 In an allowlisted channel:
 1. Run `/codex-status`

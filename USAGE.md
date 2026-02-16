@@ -12,6 +12,8 @@ python -m src.bot.main --session-id <SESSION_ID>
 
 The bot becomes active after successful attach and only responds in allowlisted channels.
 
+For logging destination and level configuration, see `docs/LOGGING.md`.
+
 ## Prompt Workflow
 1. In an allowed Slack channel, mention the bot in a message or thread.
 2. Bot validates channel and enqueues prompt.
