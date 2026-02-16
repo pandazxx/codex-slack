@@ -45,3 +45,18 @@ def test_send_prompt_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_template_requires_session_id() -> None:
     with pytest.raises(ValueError, match="{session_id}"):
         LocalCodexBridge("codex prompt")
+
+
+def test_send_prompt_includes_template_hint_for_old_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="error: unexpected argument 'prompt' found",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    bridge = LocalCodexBridge("codex session prompt --session-id {session_id}")
+
+    with pytest.raises(CodexBridgeError, match="Try: codex exec resume \\{session_id\\} -"):
+        bridge.send_prompt("sess_1", "hello")

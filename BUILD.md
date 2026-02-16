@@ -49,11 +49,17 @@ CODEX_WORKSPACE_PATH=/absolute/path/to/workspace
 ```
 
 ## 5. Create or Locate Local Codex Session
-Create a session using your normal `codex-cli` workflow, then capture its session ID.
+Create a session once using your normal `codex` workflow, then reuse its session ID.
 
-Example placeholder:
+Example:
 ```bash
-codex sessions list
+# start or resume a session interactively, then note the session ID shown by codex
+codex resume
+```
+
+Default non-interactive command template used by this bot:
+```dotenv
+CODEX_COMMAND_TEMPLATE=codex exec resume {session_id} -
 ```
 
 ## 6. Start the Bot (Attach Mode)

@@ -25,7 +25,7 @@ def load_settings() -> Settings:
     allowed_channels = _parse_allowed_channels(os.getenv("SLACK_ALLOWED_CHANNELS", ""))
     command_template = os.getenv(
         "CODEX_COMMAND_TEMPLATE",
-        "codex session prompt --session-id {session_id}",
+        "codex exec resume {session_id} -",
     ).strip()
     timeout_seconds = int(os.getenv("CODEX_TIMEOUT_SECONDS", "120"))
 
