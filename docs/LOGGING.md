@@ -1,20 +1,25 @@
 # Logging Configuration
 
-This bot uses Python standard logging (`logging.basicConfig`) and writes logs to process output streams.
+This bot uses Python standard logging (`logging.basicConfig`) and can write logs to both console and file.
 
 ## Logging Destination
 Default destination:
-- `INFO` and `WARNING` logs -> standard output
-- `ERROR` and exception tracebacks -> standard error
+- Console (`stderr`) via `StreamHandler`
+- Optional file via `FileHandler` when `BOT_LOG_FILE` is set
 
-No file handler is configured in code by default.
-
-To persist logs, redirect output when starting the bot:
-```bash
-python -m src.bot.main --session-id <SESSION_ID> > bot.log 2>&1
+Enable file logging with environment variable:
+```dotenv
+BOT_LOG_FILE=./logs/bot.log
 ```
 
-To both view and save logs:
+Then run the bot normally:
+```bash
+python -m src.bot.main --session-id <SESSION_ID>
+```
+
+The bot writes to both console and file when `BOT_LOG_FILE` is configured.
+
+You can still use shell redirection if preferred:
 ```bash
 python -m src.bot.main --session-id <SESSION_ID> 2>&1 | tee bot.log
 ```

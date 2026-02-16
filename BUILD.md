@@ -46,6 +46,7 @@ SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 SLACK_ALLOWED_CHANNELS=C01234567,C08999999
 CODEX_WORKSPACE_PATH=/absolute/path/to/workspace
+BOT_LOG_FILE=./logs/bot.log
 ```
 
 ## 5. Create or Locate Local Codex Session
@@ -77,8 +78,8 @@ Logging options:
 # default INFO level to terminal
 python -m src.bot.main --session-id <SESSION_ID> --log-level INFO
 
-# save all logs to file
-python -m src.bot.main --session-id <SESSION_ID> > bot.log 2>&1
+# save logs to both terminal and BOT_LOG_FILE
+python -m src.bot.main --session-id <SESSION_ID>
 ```
 
 See `docs/LOGGING.md` for full logging destination and level configuration.
