@@ -46,6 +46,7 @@ SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 SLACK_ALLOWED_CHANNELS=C01234567,C08999999
 CODEX_WORKSPACE_PATH=/absolute/path/to/workspace
+BOT_LOG_FILE=./logs/bot.log
 ```
 
 ## 5. Create or Locate Local Codex Session
@@ -71,6 +72,17 @@ Optional single-channel override:
 ```bash
 python -m src.bot.main --session-id <SESSION_ID> --channel C01234567
 ```
+
+Logging options:
+```bash
+# default INFO level to terminal
+python -m src.bot.main --session-id <SESSION_ID> --log-level INFO
+
+# save logs to both terminal and BOT_LOG_FILE
+python -m src.bot.main --session-id <SESSION_ID>
+```
+
+See `docs/LOGGING.md` for full logging destination and level configuration.
 
 ## 7. Verify Startup
 In an allowlisted channel:

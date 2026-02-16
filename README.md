@@ -59,4 +59,5 @@ sequenceDiagram
 ## Next Reading
 - Build and setup: `BUILD.md`
 - Detailed Slack app configuration: `docs/SLACK_SETUP.md`
+- Logging configuration: `docs/LOGGING.md`
 - Daily operation and troubleshooting: `USAGE.md`

@@ -17,10 +17,23 @@ def create_app(bot_token: str, service: BotService) -> App:
         channel_id = event.get("channel", "")
         thread_ts = event.get("thread_ts") or event.get("ts")
         text = event.get("text", "")
+        user_id = event.get("user", "")
 
         try:
-            response = service.handle_prompt(channel_id=channel_id, text=text)
+            response = service.handle_prompt(
+                channel_id=channel_id,
+                text=text,
+                thread_ts=thread_ts,
+                user_id=user_id,
+            )
             say(text=response, thread_ts=thread_ts)
+            LOGGER.info(
+                "slack.reply_sent channel_id=%s thread_ts=%s user_id=%s chars=%d",
+                channel_id,
+                thread_ts or "-",
+                user_id or "-",
+                len(response),
+            )
         except AccessError:
             LOGGER.info("Ignored mention from non-allowlisted channel %s", channel_id)
         except Exception as exc:  # noqa: BLE001
@@ -34,6 +47,7 @@ def create_app(bot_token: str, service: BotService) -> App:
         if not service.is_allowed_channel(channel_id):
             respond("This channel is not allowlisted.")
             return
+        LOGGER.info("slash.codex-status channel_id=%s user_id=%s", channel_id, command.get("user_id", ""))
         respond(service.status_text())
 
     @app.command("/codex-attach")
@@ -50,6 +64,12 @@ def create_app(bot_token: str, service: BotService) -> App:
             return
 
         try:
+            LOGGER.info(
+                "slash.codex-attach channel_id=%s user_id=%s session_id=%s",
+                channel_id,
+                command.get("user_id", ""),
+                text,
+            )
             respond(service.attach(text))
         except Exception as exc:  # noqa: BLE001
             respond(f"Attach failed: {exc}")
@@ -61,6 +81,7 @@ def create_app(bot_token: str, service: BotService) -> App:
         if not service.is_allowed_channel(channel_id):
             respond("This channel is not allowlisted.")
             return
+        LOGGER.info("slash.codex-detach channel_id=%s user_id=%s", channel_id, command.get("user_id", ""))
         respond(service.detach())
 
     @app.command("/codex-help")
@@ -70,6 +91,7 @@ def create_app(bot_token: str, service: BotService) -> App:
         if not service.is_allowed_channel(channel_id):
             respond("This channel is not allowlisted.")
             return
+        LOGGER.info("slash.codex-help channel_id=%s user_id=%s", channel_id, command.get("user_id", ""))
         respond(
             "Use @codex <prompt> to chat. Commands: /codex-status, /codex-attach <session_id>, /codex-detach, /codex-help"
         )
