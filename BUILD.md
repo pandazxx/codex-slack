@@ -91,7 +91,7 @@ python -m src.bot.main --session-id <SESSION_ID>
 ```
 
 See `docs/LOGGING.md` for full logging destination and level configuration.
-See `docs/CONTAINER.md` for containerized runtime and mounted auth/config directories.
+See `docs/CONTAINER.md` for containerized runtime with token-based auth and no host auth/config mounts.
 
 ## 7. Verify Startup
 In an allowlisted channel:

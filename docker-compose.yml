@@ -11,12 +11,14 @@ services:
     environment:
       CODEX_WORKSPACE_PATH: /workspace
       BOT_LOG_FILE: /workspace/logs/bot.log
+      CODEX_HOME: /tmp/.codex
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GH_TOKEN: ${GH_TOKEN}
+      GITHUB_TOKEN: ${GH_TOKEN}
+      CODEX_COMMAND_TEMPLATE: codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -
+      CODEX_COMMAND_TEMPLATE_NO_SESSION: codex exec --dangerously-bypass-approvals-and-sandbox -
     volumes:
       - ./:/workspace
-      - ${HOME}/.codex:/home/appuser/.codex
-      - ${HOME}/.config/gh:/home/appuser/.config/gh
-      - ${HOME}/.gitconfig:/home/appuser/.gitconfig:ro
-      - ${HOME}/.ssh:/home/appuser/.ssh:ro
       - ./logs:/workspace/logs
     stdin_open: true
     tty: true

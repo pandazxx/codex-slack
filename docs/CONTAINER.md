@@ -13,19 +13,30 @@ The provided `docker-compose.yml` mounts:
 - Workspace: `./:/workspace`
 - Slack/env config: `./.env:/workspace/.env` (via `env_file`)
 - Bot logs: `./logs:/workspace/logs`
-- Codex config/auth: `${HOME}/.codex:/home/appuser/.codex`
-- GitHub CLI auth: `${HOME}/.config/gh:/home/appuser/.config/gh`
-- Git identity: `${HOME}/.gitconfig:/home/appuser/.gitconfig:ro`
-- SSH keys: `${HOME}/.ssh:/home/appuser/.ssh:ro`
+
+No host auth/config mounts are required.
+- Codex authentication is provided via `OPENAI_API_KEY`.
+- GitHub authentication is provided via `GH_TOKEN`.
 
 ## Session Management
 - Set `CODEX_SESSION_ID` to resume a specific Codex session.
-- If `CODEX_SESSION_ID` is omitted, the bot generates an `auto-*` session ID and uses `CODEX_COMMAND_TEMPLATE_NO_SESSION` (default: `codex exec -`).
+- If `CODEX_SESSION_ID` is omitted, the bot generates an `auto-*` session ID and uses `CODEX_COMMAND_TEMPLATE_NO_SESSION`.
 
 ## Start
 ```bash
 docker compose up --build
 ```
+
+## Get Required Tokens
+### `OPENAI_API_KEY`
+1. Open `https://platform.openai.com/api-keys`.
+2. Create a new secret key.
+3. Copy it and store it securely.
+
+### `GH_TOKEN`
+1. Open `https://github.com/settings/tokens`.
+2. Create a token (fine-grained recommended) with repository permissions you need.
+3. Copy it and store it securely.
 
 ## Environment Variables
 Minimum `.env` values:
@@ -35,12 +46,41 @@ SLACK_APP_TOKEN=xapp-...
 SLACK_ALLOWED_CHANNELS=C01234567
 CODEX_WORKSPACE_PATH=/workspace
 BOT_LOG_FILE=/workspace/logs/bot.log
+OPENAI_API_KEY=sk-...
+GH_TOKEN=ghp_...
 
 # optional session behavior
 CODEX_SESSION_ID=
-CODEX_COMMAND_TEMPLATE=codex exec resume {session_id} -
-CODEX_COMMAND_TEMPLATE_NO_SESSION=codex exec -
 
 # timeout control (empty or <=0 disables timeout)
 CODEX_TIMEOUT_SECONDS=
 ```
+
+If you prefer not to keep auth tokens in `.env`, export them in your shell before startup:
+```bash
+export OPENAI_API_KEY='sk-...'
+export GH_TOKEN='github_pat_...'
+```
+
+## Run Example
+```bash
+mkdir -p logs
+docker compose up --build -d
+docker compose logs -f
+```
+
+## Verify
+In your allowlisted Slack channel:
+1. Run `/codex-status`.
+2. Send `@codex hello`.
+3. Confirm the bot replies and logs are written to `./logs/bot.log`.
+
+## Codex Sandbox Bypass
+Container mode is configured to run Codex with:
+- `--dangerously-bypass-approvals-and-sandbox`
+
+This is applied through:
+- `CODEX_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -`
+- `CODEX_COMMAND_TEMPLATE_NO_SESSION=codex exec --dangerously-bypass-approvals-and-sandbox -`
+
+Use this only in trusted environments.
