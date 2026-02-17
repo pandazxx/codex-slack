@@ -17,6 +17,8 @@ Then run the bot normally:
 python -m src.bot.main --session-id <SESSION_ID>
 ```
 
+If `CODEX_SESSION_ID` is set in `.env`, you can omit `--session-id`.
+
 The bot writes to both console and file when `BOT_LOG_FILE` is configured.
 
 You can still use shell redirection if preferred:
@@ -38,7 +40,7 @@ Supported values include common Python levels: `DEBUG`, `INFO`, `WARNING`, `ERRO
 
 ## What Gets Logged
 Current logging includes:
-- Slack command activity (`/codex-status`, `/codex-attach`, `/codex-detach`, `/codex-help`)
+- Slack command activity (`/codex-status`, `/codex-attach`, `/codex-detach`, `/codex-conv-cancel`, `/codex-help`)
 - Conversation lifecycle events (received/completed/failed)
 - Conversation content logs (prompt and response text)
 - Error stack traces on failures

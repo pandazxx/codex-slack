@@ -93,7 +93,17 @@ def create_app(bot_token: str, service: BotService) -> App:
             return
         LOGGER.info("slash.codex-help channel_id=%s user_id=%s", channel_id, command.get("user_id", ""))
         respond(
-            "Use @codex <prompt> to chat. Commands: /codex-status, /codex-attach <session_id>, /codex-detach, /codex-help"
+            "Use @codex <prompt> to chat. Commands: /codex-status, /codex-attach <session_id>, /codex-detach, /codex-conv-cancel, /codex-help"
         )
+
+    @app.command("/codex-conv-cancel")
+    def on_conv_cancel(ack, respond, command: dict) -> None:  # type: ignore[no-untyped-def]
+        ack()
+        channel_id = command.get("channel_id", "")
+        if not service.is_allowed_channel(channel_id):
+            respond("This channel is not allowlisted.")
+            return
+        LOGGER.info("slash.codex-conv-cancel channel_id=%s user_id=%s", channel_id, command.get("user_id", ""))
+        respond(service.cancel_current_conversation())
 
     return app

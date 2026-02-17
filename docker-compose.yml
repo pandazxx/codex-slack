@@ -1,0 +1,22 @@
+services:
+  codex-slack-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: codex-slack-bot:latest
+    working_dir: /workspace
+    command: ["python", "-m", "src.bot.main"]
+    env_file:
+      - .env
+    environment:
+      CODEX_WORKSPACE_PATH: /workspace
+      BOT_LOG_FILE: /workspace/logs/bot.log
+    volumes:
+      - ./:/workspace
+      - ${HOME}/.codex:/home/appuser/.codex
+      - ${HOME}/.config/gh:/home/appuser/.config/gh
+      - ${HOME}/.gitconfig:/home/appuser/.gitconfig:ro
+      - ${HOME}/.ssh:/home/appuser/.ssh:ro
+      - ./logs:/workspace/logs
+    stdin_open: true
+    tty: true

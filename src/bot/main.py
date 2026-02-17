@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import uuid
 
 from dotenv import load_dotenv
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -16,7 +17,7 @@ from .slack_app import create_app
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Slack to Codex local bridge")
-    parser.add_argument("--session-id", required=True, help="Local Codex session ID to attach")
+    parser.add_argument("--session-id", help="Local Codex session ID to attach")
     parser.add_argument("--channel", help="Optional single allowed channel override")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     return parser.parse_args()
@@ -40,6 +41,13 @@ def configure_logging(log_level: str) -> None:
     )
 
 
+def resolve_session_context(cli_session_id: str | None) -> tuple[str, bool]:
+    configured = cli_session_id or os.getenv("CODEX_SESSION_ID", "").strip()
+    if configured:
+        return configured, True
+    return f"auto-{uuid.uuid4().hex[:12]}", False
+
+
 def main() -> None:
     load_dotenv()
     args = parse_args()
@@ -48,10 +56,23 @@ def main() -> None:
 
     settings = load_settings()
     allowed_channels = {args.channel} if args.channel else settings.allowed_channels
+    session_id, explicit_session = resolve_session_context(args.session_id)
+    command_template = (
+        settings.codex_command_template if explicit_session else settings.codex_command_template_no_session
+    )
 
-    runtime = SessionRuntime(initial_session_id=args.session_id)
+    if explicit_session:
+        logging.getLogger(__name__).info("Using explicit Codex session id=%s", session_id)
+    else:
+        logging.getLogger(__name__).info(
+            "No CODEX_SESSION_ID provided. Starting with generated session id=%s using template=%s",
+            session_id,
+            command_template,
+        )
+
+    runtime = SessionRuntime(initial_session_id=session_id)
     bridge = LocalCodexBridge(
-        command_template=settings.codex_command_template,
+        command_template=command_template,
         timeout_seconds=settings.codex_timeout_seconds,
         workspace_path=settings.codex_workspace_path,
     )
