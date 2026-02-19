@@ -29,6 +29,34 @@ Configured in compose (default):
 - token refresh updates still will not persist to host from container
 - refresh token manually on host (`codex login`) and restart container when needed
 
+## Refresh Codex Token (Container Workflow)
+Because the mounted auth file is read-only, refreshing inside the container does not update your host token cache.
+
+1. Stop the container:
+```bash
+docker compose down
+```
+2. Refresh auth on the host machine:
+```bash
+codex login
+test -f ~/.codex/auth.json
+```
+3. Restart the container so entrypoint copies the updated token into `CODEX_HOME`:
+```bash
+docker compose up --build -d
+```
+4. Verify from inside the running container:
+```bash
+docker compose exec bot sh -lc 'test -f /home/appuser/.codex/auth.json && echo "codex auth present"'
+```
+5. Verify end-to-end from Slack with `/codex-status`.
+
+If `/codex-status` still reports auth errors, repeat `codex login` on host and fully recreate the service:
+```bash
+docker compose down
+docker compose up --build --force-recreate -d
+```
+
 ## Session Management
 - Set `CODEX_SESSION_ID` to resume a specific Codex session.
 - If `CODEX_SESSION_ID` is omitted, the bot generates an `auto-*` session ID and uses `CODEX_COMMAND_TEMPLATE_NO_SESSION`.
