@@ -91,7 +91,7 @@ python -m src.bot.main --session-id <SESSION_ID>
 ```
 
 See `docs/LOGGING.md` for full logging destination and level configuration.
-See `docs/CONTAINER.md` for containerized runtime with token-based auth and no host auth/config mounts.
+See `docs/CONTAINER.md` for containerized runtime with mounted Codex auth cache (`~/.codex/auth.json`).
 In container mode, Slack secrets are also injected via shell environment variables (not `.env` file mounting).
 
 ## 7. Verify Startup

@@ -12,13 +12,20 @@ The image ships with:
 The provided `docker-compose.yml` mounts:
 - Workspace: `./:/workspace`
 - Bot logs: `./logs:/workspace/logs`
+- Codex auth cache file: `${HOME}/.codex/auth.json:/home/appuser/.codex/auth.json`
 
-No host auth/config mounts are required.
+Only the Codex auth cache file is mounted; the rest of your host auth/config files are not required.
 - Slack secrets are provided via environment variables.
-- Codex authentication is provided via `OPENAI_API_KEY`.
+- Codex authentication is provided via mounted `auth.json` cache.
 - GitHub authentication is provided via `GH_TOKEN`.
 - `CODEX_HOME` defaults to `/home/appuser/.codex` inside the container.
-- Entry-point auto-runs `codex login --with-api-key` when `OPENAI_API_KEY` is set.
+
+## Safe Forwarding of `auth.json`
+Configured in compose (default):
+- bind mount `~/.codex/auth.json` to `/home/appuser/.codex/auth.json:ro`
+- safer for multi-container usage and prevents container-side auth writes
+- token refresh updates will not persist from container
+- refresh token manually on host (`codex login`) and restart container when needed
 
 ## Session Management
 - Set `CODEX_SESSION_ID` to resume a specific Codex session.
@@ -30,12 +37,7 @@ docker compose up --build
 ```
 
 ## Get Required Tokens
-### `OPENAI_API_KEY`
-1. Open `https://platform.openai.com/api-keys`.
-2. Create a new secret key.
-3. Copy it and store it securely.
-
-### `GH_TOKEN`
+### `GH_TOKEN` (optional, for `gh` usage)
 1. Open `https://github.com/settings/tokens`.
 2. Create a token (fine-grained recommended) with repository permissions you need.
 3. Copy it and store it securely.
@@ -46,8 +48,13 @@ Export required variables in your shell before startup:
 export SLACK_BOT_TOKEN='xoxb-...'
 export SLACK_APP_TOKEN='xapp-...'
 export SLACK_ALLOWED_CHANNELS='C01234567'
-export OPENAI_API_KEY='sk-...'
 export GH_TOKEN='github_pat_...'
+```
+
+Prepare Codex auth on host (once):
+```bash
+codex login
+test -f ~/.codex/auth.json
 ```
 
 ## Run Example
