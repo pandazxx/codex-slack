@@ -18,6 +18,7 @@ No host auth/config mounts are required.
 - Codex authentication is provided via `OPENAI_API_KEY`.
 - GitHub authentication is provided via `GH_TOKEN`.
 - `CODEX_HOME` defaults to `/home/appuser/.codex` inside the container.
+- Entry-point auto-runs `codex login --with-api-key` when `OPENAI_API_KEY` is set.
 
 ## Session Management
 - Set `CODEX_SESSION_ID` to resume a specific Codex session.
