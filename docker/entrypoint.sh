@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CODEX_HOME_PATH="${CODEX_HOME:-/tmp/.codex}"
+CODEX_HOME_PATH="${CODEX_HOME:-/home/appuser/.codex}"
 mkdir -p "${CODEX_HOME_PATH}"
 
 SESSION_ARGS=()

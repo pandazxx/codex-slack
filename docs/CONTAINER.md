@@ -17,6 +17,7 @@ No host auth/config mounts are required.
 - Slack secrets are provided via environment variables.
 - Codex authentication is provided via `OPENAI_API_KEY`.
 - GitHub authentication is provided via `GH_TOKEN`.
+- `CODEX_HOME` defaults to `/home/appuser/.codex` inside the container.
 
 ## Session Management
 - Set `CODEX_SESSION_ID` to resume a specific Codex session.
