@@ -12,19 +12,21 @@ The image ships with:
 The provided `docker-compose.yml` mounts:
 - Workspace: `./:/workspace`
 - Bot logs: `./logs:/workspace/logs`
-- Codex auth cache file: `${HOME}/.codex/auth.json:/home/appuser/.codex/auth.json`
+- Codex auth cache file (as secret input): `${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro`
 
-Only the Codex auth cache file is mounted; the rest of your host auth/config files are not required.
+Only the Codex auth cache file is mounted read-only; the rest of your host auth/config files are not required.
 - Slack secrets are provided via environment variables.
-- Codex authentication is provided via mounted `auth.json` cache.
+- Codex authentication is provided by copying mounted auth cache into writable `CODEX_HOME` at startup.
 - GitHub authentication is provided via `GH_TOKEN`.
 - `CODEX_HOME` defaults to `/home/appuser/.codex` inside the container.
 
 ## Safe Forwarding of `auth.json`
 Configured in compose (default):
-- bind mount `~/.codex/auth.json` to `/home/appuser/.codex/auth.json:ro`
-- safer for multi-container usage and prevents container-side auth writes
-- token refresh updates will not persist from container
+- bind mount `~/.codex/auth.json` to `/run/secrets/codex_auth.json:ro`
+- entrypoint copies it to `${CODEX_HOME}/auth.json` on startup
+- avoids permission errors for Codex caches/skills writes under `CODEX_HOME`
+- prevents direct writes back to host auth file
+- token refresh updates still will not persist to host from container
 - refresh token manually on host (`codex login`) and restart container when needed
 
 ## Session Management

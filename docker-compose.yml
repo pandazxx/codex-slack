@@ -20,6 +20,6 @@ services:
     volumes:
       - ./:/workspace
       - ./logs:/workspace/logs
-      - ${HOME}/.codex/auth.json:/home/appuser/.codex/auth.json:ro
+      - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro
     stdin_open: true
     tty: true
