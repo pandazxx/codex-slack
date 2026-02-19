@@ -6,9 +6,10 @@ services:
     image: codex-slack-bot:latest
     working_dir: /workspace
     command: ["python", "-m", "src.bot.main"]
-    env_file:
-      - .env
     environment:
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
+      SLACK_ALLOWED_CHANNELS: ${SLACK_ALLOWED_CHANNELS}
       CODEX_WORKSPACE_PATH: /workspace
       BOT_LOG_FILE: /workspace/logs/bot.log
       CODEX_HOME: /tmp/.codex

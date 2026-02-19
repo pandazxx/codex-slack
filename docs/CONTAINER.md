@@ -11,10 +11,10 @@ The image ships with:
 ## Required Mounts
 The provided `docker-compose.yml` mounts:
 - Workspace: `./:/workspace`
-- Slack/env config: `./.env:/workspace/.env` (via `env_file`)
 - Bot logs: `./logs:/workspace/logs`
 
 No host auth/config mounts are required.
+- Slack secrets are provided via environment variables.
 - Codex authentication is provided via `OPENAI_API_KEY`.
 - GitHub authentication is provided via `GH_TOKEN`.
 
@@ -39,25 +39,11 @@ docker compose up --build
 3. Copy it and store it securely.
 
 ## Environment Variables
-Minimum `.env` values:
-```dotenv
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-SLACK_ALLOWED_CHANNELS=C01234567
-CODEX_WORKSPACE_PATH=/workspace
-BOT_LOG_FILE=/workspace/logs/bot.log
-OPENAI_API_KEY=sk-...
-GH_TOKEN=ghp_...
-
-# optional session behavior
-CODEX_SESSION_ID=
-
-# timeout control (empty or <=0 disables timeout)
-CODEX_TIMEOUT_SECONDS=
-```
-
-If you prefer not to keep auth tokens in `.env`, export them in your shell before startup:
+Export required variables in your shell before startup:
 ```bash
+export SLACK_BOT_TOKEN='xoxb-...'
+export SLACK_APP_TOKEN='xapp-...'
+export SLACK_ALLOWED_CHANNELS='C01234567'
 export OPENAI_API_KEY='sk-...'
 export GH_TOKEN='github_pat_...'
 ```
@@ -67,6 +53,12 @@ export GH_TOKEN='github_pat_...'
 mkdir -p logs
 docker compose up --build -d
 docker compose logs -f
+```
+
+Optional variables:
+```bash
+export CODEX_SESSION_ID='sess_...'
+export CODEX_TIMEOUT_SECONDS=''
 ```
 
 ## Verify
