@@ -65,7 +65,7 @@ codex resume
 
 Default non-interactive command template used by this bot:
 ```dotenv
-CODEX_COMMAND_TEMPLATE=codex exec resume {session_id} -
+CODEX_COMMAND_TEMPLATE=codex exec - resume {session_id}
 CODEX_COMMAND_TEMPLATE_NO_SESSION=codex exec -
 ```
 

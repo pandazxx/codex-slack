@@ -88,7 +88,7 @@ Container mode is configured to run Codex with:
 - `--dangerously-bypass-approvals-and-sandbox`
 
 This is applied through:
-- `CODEX_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -`
+- `CODEX_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox - resume {session_id}`
 - `CODEX_COMMAND_TEMPLATE_NO_SESSION=codex exec --dangerously-bypass-approvals-and-sandbox -`
 
 Podman note:

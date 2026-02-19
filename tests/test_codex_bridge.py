@@ -103,7 +103,7 @@ def test_send_prompt_includes_template_hint_for_old_command(monkeypatch: pytest.
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     bridge = LocalCodexBridge("codex session prompt --session-id {session_id}")
 
-    with pytest.raises(CodexBridgeError, match="Try: codex exec resume \\{session_id\\} -"):
+    with pytest.raises(CodexBridgeError, match="Try: codex exec - resume \\{session_id\\}"):
         bridge.send_prompt("sess_1", "hello")
 
 
