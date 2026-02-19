@@ -91,4 +91,8 @@ This is applied through:
 - `CODEX_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -`
 - `CODEX_COMMAND_TEMPLATE_NO_SESSION=codex exec --dangerously-bypass-approvals-and-sandbox -`
 
+Podman note:
+- keep `{session_id}` as a literal in compose template values.
+- avoid `${VAR:-...{session_id}...}` interpolation forms for these two variables, because some Podman/compose setups misparse braces.
+
 Use this only in trusted environments.
