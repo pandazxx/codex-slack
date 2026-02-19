@@ -13,8 +13,8 @@ services:
       CODEX_WORKSPACE_PATH: /workspace
       BOT_LOG_FILE: /workspace/logs/bot.log
       CODEX_HOME: /home/appuser/.codex
-      CODEX_SESSION_ID: ${CODEX_SESSION_ID:-}
-      CODEX_TIMEOUT_SECONDS: ${CODEX_TIMEOUT_SECONDS:-}
+      CODEX_SESSION_ID: ${CODEX_SESSION_ID}
+      CODEX_TIMEOUT_SECONDS: ${CODEX_TIMEOUT_SECONDS}
       GH_TOKEN: ${GH_TOKEN}
       GITHUB_TOKEN: ${GH_TOKEN}
       CODEX_COMMAND_TEMPLATE: codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -

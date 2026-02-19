@@ -105,6 +105,12 @@ def main() -> None:
     command_template = (
         settings.codex_command_template if explicit_session else settings.codex_command_template_no_session
     )
+    LOGGER.info(
+        "startup.session explicit=%s session_id=%s template=%r",
+        explicit_session,
+        session_id,
+        command_template,
+    )
 
     if explicit_session:
         LOGGER.info("Using explicit Codex session id=%s", session_id)

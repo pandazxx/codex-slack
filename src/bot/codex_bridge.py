@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import shlex
 import subprocess
 from threading import Lock
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CodexBridgeError(RuntimeError):
@@ -30,6 +33,13 @@ class LocalCodexBridge:
         else:
             command = self._command_template
         args = shlex.split(command)
+        LOGGER.info(
+            "codex.exec command=%r args=%r session_id=%s timeout=%s",
+            command,
+            args,
+            session_id,
+            self._timeout_seconds,
+        )
 
         try:
             process = subprocess.Popen(
