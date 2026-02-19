@@ -72,6 +72,11 @@ export CODEX_SESSION_ID='sess_...'
 export CODEX_TIMEOUT_SECONDS=''
 ```
 
+After changing exported variables, recreate the container so new values are applied:
+```bash
+docker compose up -d --force-recreate
+```
+
 ## Verify
 In your allowlisted Slack channel:
 1. Run `/codex-status`.
