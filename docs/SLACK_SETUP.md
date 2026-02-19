@@ -35,6 +35,7 @@ Create each command in **Slash Commands**:
 - `/codex-status`
 - `/codex-attach`
 - `/codex-detach`
+- `/codex-conv-cancel`
 - `/codex-help`
 
 For each command:

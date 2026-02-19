@@ -9,6 +9,9 @@ class PromptBridge(Protocol):
     def send_prompt(self, session_id: str, prompt: str) -> str:
         ...
 
+    def cancel_current_prompt(self) -> bool:
+        ...
+
 
 @dataclass(frozen=True)
 class RuntimeStatus:
@@ -16,6 +19,7 @@ class RuntimeStatus:
     session_id: str | None
     queue_depth: int
     busy: bool
+    current_prompt: str | None
     last_error: str | None
 
 
@@ -26,6 +30,7 @@ class SessionRuntime:
         self._session_id = initial_session_id
         self._busy = False
         self._pending = 0
+        self._current_prompt: str | None = None
         self._last_error: str | None = None
         self._state_lock = Lock()
         self._process_lock = Lock()
@@ -49,6 +54,7 @@ class SessionRuntime:
                 session_id=self._session_id,
                 queue_depth=self._pending,
                 busy=self._busy,
+                current_prompt=self._current_prompt,
                 last_error=self._last_error,
             )
 
@@ -69,6 +75,7 @@ class SessionRuntime:
             with self._state_lock:
                 self._pending -= 1
                 self._busy = True
+                self._current_prompt = prompt
 
             try:
                 session_id = self._require_session_id()
@@ -83,3 +90,10 @@ class SessionRuntime:
             finally:
                 with self._state_lock:
                     self._busy = False
+                    self._current_prompt = None
+
+    def cancel_current_prompt(self, bridge: PromptBridge) -> bool:
+        with self._state_lock:
+            if not self._busy:
+                return False
+        return bridge.cancel_current_prompt()

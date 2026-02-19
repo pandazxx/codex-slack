@@ -1,0 +1,25 @@
+services:
+  codex-slack-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: codex-slack-bot:latest
+    working_dir: /workspace
+    command: ["python", "-m", "src.bot.main"]
+    environment:
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
+      SLACK_ALLOWED_CHANNELS: ${SLACK_ALLOWED_CHANNELS}
+      CODEX_WORKSPACE_PATH: /workspace
+      BOT_LOG_FILE: /workspace/logs/bot.log
+      CODEX_HOME: /home/appuser/.codex
+      GH_TOKEN: ${GH_TOKEN}
+      GITHUB_TOKEN: ${GH_TOKEN}
+      CODEX_COMMAND_TEMPLATE: codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -
+      CODEX_COMMAND_TEMPLATE_NO_SESSION: codex exec --dangerously-bypass-approvals-and-sandbox -
+    volumes:
+      - ./:/workspace
+      - ./logs:/workspace/logs
+      - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro
+    stdin_open: true
+    tty: true

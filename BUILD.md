@@ -25,6 +25,7 @@ Quick checklist:
    - `/codex-status`
    - `/codex-attach`
    - `/codex-detach`
+   - `/codex-conv-cancel`
    - `/codex-help`
 
 Install the app to your workspace and collect:
@@ -46,14 +47,26 @@ SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 SLACK_ALLOWED_CHANNELS=C01234567,C08999999
 CODEX_WORKSPACE_PATH=/absolute/path/to/workspace
+BOT_LOG_FILE=./logs/bot.log
+# optional: explicit Codex session to resume
+CODEX_SESSION_ID=
+# optional: empty or <=0 disables timeout
+CODEX_TIMEOUT_SECONDS=
 ```
 
 ## 5. Create or Locate Local Codex Session
-Create a session using your normal `codex-cli` workflow, then capture its session ID.
+Create a session once using your normal `codex` workflow, then reuse its session ID.
 
-Example placeholder:
+Example:
 ```bash
-codex sessions list
+# start or resume a session interactively, then note the session ID shown by codex
+codex resume
+```
+
+Default non-interactive command template used by this bot:
+```dotenv
+CODEX_COMMAND_TEMPLATE=codex exec resume {session_id} -
+CODEX_COMMAND_TEMPLATE_NO_SESSION=codex exec -
 ```
 
 ## 6. Start the Bot (Attach Mode)
@@ -65,6 +78,21 @@ Optional single-channel override:
 ```bash
 python -m src.bot.main --session-id <SESSION_ID> --channel C01234567
 ```
+
+If `--session-id` and `CODEX_SESSION_ID` are both omitted, the bot starts with an auto-generated session id and uses `CODEX_COMMAND_TEMPLATE_NO_SESSION`.
+
+Logging options:
+```bash
+# default INFO level to terminal
+python -m src.bot.main --session-id <SESSION_ID> --log-level INFO
+
+# save logs to both terminal and BOT_LOG_FILE
+python -m src.bot.main --session-id <SESSION_ID>
+```
+
+See `docs/LOGGING.md` for full logging destination and level configuration.
+See `docs/CONTAINER.md` for containerized runtime with mounted Codex auth cache (`~/.codex/auth.json`).
+In container mode, Slack secrets are also injected via shell environment variables (not `.env` file mounting).
 
 ## 7. Verify Startup
 In an allowlisted channel:

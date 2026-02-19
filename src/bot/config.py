@@ -11,7 +11,8 @@ class Settings:
     allowed_channels: set[str]
     codex_workspace_path: str
     codex_command_template: str
-    codex_timeout_seconds: int = 120
+    codex_command_template_no_session: str
+    codex_timeout_seconds: int | None = None
 
 
 def _parse_allowed_channels(raw_value: str) -> set[str]:
@@ -25,9 +26,16 @@ def load_settings() -> Settings:
     allowed_channels = _parse_allowed_channels(os.getenv("SLACK_ALLOWED_CHANNELS", ""))
     command_template = os.getenv(
         "CODEX_COMMAND_TEMPLATE",
-        "codex session prompt --session-id {session_id}",
+        "codex exec resume {session_id} -",
     ).strip()
-    timeout_seconds = int(os.getenv("CODEX_TIMEOUT_SECONDS", "120"))
+    command_template_no_session = os.getenv(
+        "CODEX_COMMAND_TEMPLATE_NO_SESSION",
+        "codex exec -",
+    ).strip()
+    raw_timeout = os.getenv("CODEX_TIMEOUT_SECONDS", "").strip()
+    timeout_seconds = int(raw_timeout) if raw_timeout else None
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        timeout_seconds = None
 
     missing = []
     if not bot_token:
@@ -47,5 +55,6 @@ def load_settings() -> Settings:
         allowed_channels=allowed_channels,
         codex_workspace_path=workspace_path,
         codex_command_template=command_template,
+        codex_command_template_no_session=command_template_no_session,
         codex_timeout_seconds=timeout_seconds,
     )

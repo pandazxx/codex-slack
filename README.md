@@ -46,9 +46,10 @@ sequenceDiagram
 
 ## Commands
 - Mentions: `@codex <prompt>`
-- `/codex-status` show attach and queue state
+- `/codex-status` show attach, queue state, and current running prompt
 - `/codex-attach <session_id>` attach another local session
 - `/codex-detach` detach without deleting local session
+- `/codex-conv-cancel` cancel the currently running prompt
 - `/codex-help` show usage summary
 
 ## Security Model
@@ -59,4 +60,6 @@ sequenceDiagram
 ## Next Reading
 - Build and setup: `BUILD.md`
 - Detailed Slack app configuration: `docs/SLACK_SETUP.md`
+- Logging configuration: `docs/LOGGING.md`
+- Container runtime: `docs/CONTAINER.md`
 - Daily operation and troubleshooting: `USAGE.md`
