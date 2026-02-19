@@ -14,6 +14,23 @@ from .runtime import SessionRuntime
 from .service import BotService
 from .slack_app import create_app
 
+LOGGER = logging.getLogger(__name__)
+SECRET_KEY_MARKERS = ("TOKEN", "KEY", "SECRET", "PASSWORD", "PASSWD")
+STARTUP_ENV_KEYS = (
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "SLACK_ALLOWED_CHANNELS",
+    "CODEX_WORKSPACE_PATH",
+    "BOT_LOG_FILE",
+    "CODEX_SESSION_ID",
+    "CODEX_TIMEOUT_SECONDS",
+    "CODEX_COMMAND_TEMPLATE",
+    "CODEX_COMMAND_TEMPLATE_NO_SESSION",
+    "OPENAI_API_KEY",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Slack to Codex local bridge")
@@ -48,11 +65,39 @@ def resolve_session_context(cli_session_id: str | None) -> tuple[str, bool]:
     return f"auto-{uuid.uuid4().hex[:12]}", False
 
 
+def is_secret_env_key(key: str) -> bool:
+    upper_key = key.upper()
+    return any(marker in upper_key for marker in SECRET_KEY_MARKERS)
+
+
+def mask_secret_value(value: str) -> str:
+    if not value:
+        return "(unset)"
+    return f"{value[:3]}****{value[-3:]}"
+
+
+def format_startup_env_value(key: str, value: str) -> str:
+    if not value:
+        return "(unset)"
+    if is_secret_env_key(key):
+        return mask_secret_value(value)
+    return value
+
+
+def log_startup_environment() -> None:
+    if not LOGGER.isEnabledFor(logging.INFO):
+        return
+    for key in STARTUP_ENV_KEYS:
+        raw_value = os.getenv(key, "").strip()
+        LOGGER.info("startup.env %s=%s", key, format_startup_env_value(key, raw_value))
+
+
 def main() -> None:
     load_dotenv()
     args = parse_args()
 
     configure_logging(args.log_level)
+    log_startup_environment()
 
     settings = load_settings()
     allowed_channels = {args.channel} if args.channel else settings.allowed_channels
@@ -62,9 +107,9 @@ def main() -> None:
     )
 
     if explicit_session:
-        logging.getLogger(__name__).info("Using explicit Codex session id=%s", session_id)
+        LOGGER.info("Using explicit Codex session id=%s", session_id)
     else:
-        logging.getLogger(__name__).info(
+        LOGGER.info(
             "No CODEX_SESSION_ID provided. Starting with generated session id=%s using template=%s",
             session_id,
             command_template,
