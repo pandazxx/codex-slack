@@ -93,6 +93,7 @@ python -m src.bot.main --session-id <SESSION_ID>
 See `docs/LOGGING.md` for full logging destination and level configuration.
 See `docs/CONTAINER.md` for containerized runtime with mounted Codex auth cache (`~/.codex/auth.json`).
 In container mode, Slack secrets are also injected via shell environment variables (not `.env` file mounting).
+For Podman on Linux, use the `docker-compose.podman.yml` override documented in `docs/CONTAINER.md` to preserve host UID/GID for writable `/workspace` mounts.
 
 ## 7. Verify Startup
 In an allowlisted channel:

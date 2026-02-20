@@ -38,6 +38,19 @@ Configured in compose (default):
 docker compose up --build
 ```
 
+### Podman on Linux
+If `/workspace` appears as `root:root` and writes fail for `appuser`, run with the Podman override so host UID/GID are preserved:
+```bash
+export UID="$(id -u)"
+export GID="$(id -g)"
+podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build
+```
+
+The override enables:
+- `userns_mode: keep-id` to keep host identity in the container.
+- `user: ${UID}:${GID}` to run with host numeric IDs.
+- `:Z` volume labels for SELinux-compatible bind mounts.
+
 ## Get Required Tokens
 ### `GH_TOKEN` (optional, for `gh` usage)
 1. Open `https://github.com/settings/tokens`.
