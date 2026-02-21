@@ -13,25 +13,36 @@ The provided `docker-compose.yml` mounts:
 - Workspace: `./:/workspace`
 - Bot logs: `./logs:/workspace/logs`
 - Codex auth cache file (as secret input): `${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro`
+- Codex sessions directory (as secret input): `${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro`
 
-Only the Codex auth cache file is mounted read-only; the rest of your host auth/config files are not required.
+Only the Codex auth + sessions paths are mounted read-only; the rest of your host auth/config files are not required.
 - Slack secrets are provided via environment variables.
 - Codex authentication is provided by copying mounted auth cache into writable `CODEX_HOME` at startup.
 - GitHub authentication is provided via `GH_TOKEN`.
-- `CODEX_HOME` defaults to `/home/appuser/.codex` inside the container.
+- `CODEX_HOME` selection on startup:
+  1. Use explicit `CODEX_HOME` env var if set.
+  2. Else use `/workspace/.codex` if that directory exists.
+  3. Else fallback to `/home/appuser/.codex`.
 
 ## Safe Forwarding of `auth.json`
 Configured in compose (default):
 - bind mount `~/.codex/auth.json` to `/run/secrets/codex_auth.json:ro`
-- entrypoint copies it to `${CODEX_HOME}/auth.json` on startup
+- bind mount `~/.codex/sessions` to `/run/secrets/codex_sessions:ro`
+- entrypoint copies auth/sessions into `${CODEX_HOME}` only when missing
 - avoids permission errors for Codex caches/skills writes under `CODEX_HOME`
 - prevents direct writes back to host auth file
+- prevents direct writes back to host session files
 - token refresh updates still will not persist to host from container
 - refresh token manually on host (`codex login`) and restart container when needed
 
 ## Session Management
-- Set `CODEX_SESSION_ID` to resume a specific Codex session.
+- Set `CODEX_SESSION_ID` (from host session) to resume a specific Codex session.
 - If `CODEX_SESSION_ID` is omitted, the bot generates an `auto-*` session ID and uses `CODEX_COMMAND_TEMPLATE_NO_SESSION`.
+
+Example:
+```bash
+export CODEX_SESSION_ID='019c7460-8aad-7df3-a70c-947d5857373a'
+```
 
 ## Start
 ```bash
@@ -79,7 +90,29 @@ Prepare Codex auth on host (once):
 ```bash
 codex login
 test -f ~/.codex/auth.json
+test -d ~/.codex/sessions
 ```
+
+## Project-Specific `CODEX_HOME` (Recommended)
+If `./.codex` exists in your repository root, container startup uses it automatically as `CODEX_HOME`.
+
+Bootstrap project-local Codex state from global host state:
+```bash
+mkdir -p .codex
+cp ~/.codex/auth.json .codex/auth.json
+cp -a ~/.codex/sessions .codex/sessions
+cp ~/.codex/config.toml .codex/config.toml 2>/dev/null || true
+chmod 700 .codex
+chmod 600 .codex/auth.json
+```
+
+Use project-local Codex on host too:
+```bash
+export CODEX_HOME="$PWD/.codex"
+codex resume
+```
+
+Do not commit project-local Codex state. Keep `.codex/` in `.gitignore`.
 
 ## Run Example
 ```bash
@@ -160,7 +193,7 @@ Container mode is configured to run Codex with:
 - `--dangerously-bypass-approvals-and-sandbox`
 
 This is applied through:
-- `CODEX_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox - resume {session_id}`
+- `CODEX_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -`
 - `CODEX_COMMAND_TEMPLATE_NO_SESSION=codex exec --dangerously-bypass-approvals-and-sandbox -`
 
 Podman note:

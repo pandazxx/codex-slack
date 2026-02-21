@@ -26,7 +26,7 @@ def load_settings() -> Settings:
     allowed_channels = _parse_allowed_channels(os.getenv("SLACK_ALLOWED_CHANNELS", ""))
     command_template = os.getenv(
         "CODEX_COMMAND_TEMPLATE",
-        "codex exec - resume {session_id}",
+        "codex exec resume {session_id} -",
     ).strip()
     command_template_no_session = os.getenv(
         "CODEX_COMMAND_TEMPLATE_NO_SESSION",

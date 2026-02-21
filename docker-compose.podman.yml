@@ -9,3 +9,4 @@ services:
       - ./:/workspace:Z
       - ./logs:/workspace/logs:Z
       - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro,Z
+      - ${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro,Z
