@@ -1,7 +1,11 @@
+x-podman:
+  in_pod: false
+
 services:
   codex-slack-bot:
+    userns_mode: "keep-id"
     user: "${UID:-1000}:${GID:-1000}"
     volumes:
-      - ./:/workspace:Z,U
-      - ./logs:/workspace/logs:Z,U
+      - ./:/workspace:Z
+      - ./logs:/workspace/logs:Z
       - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro,Z

@@ -48,13 +48,13 @@ podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build
 
 The override enables:
 - `user: ${UID}:${GID}` to run with host numeric IDs.
+- `userns_mode: keep-id` so container UID/GID maps to the same host UID/GID.
+- `x-podman.in_pod: false` so Podman Compose does not place the service in a pod (required to avoid `--userns and --pod cannot be set together`).
 - `:Z` volume labels for SELinux-compatible bind mounts.
-- `:U` volume option for Podman bind mounts so `/workspace` and `/workspace/logs` are writable by the container user.
 
 Note:
-- `userns_mode: keep-id` is intentionally not used here because Podman compose runs services in a pod by default, and `--userns` cannot be combined with `--pod`.
-- `:U` may adjust ownership on mounted host paths for compatibility with user namespace mappings.
-- Host ownership changes you saw were caused by this `:U` remap behavior.
+- `:U` is intentionally not used; it can chown files on the host mount and caused the ownership drift you saw.
+- If you prefer global config, set Podman Compose to run without pods by default and keep `userns=keep-id` enabled for compose workloads.
 
 ## Get Required Tokens
 ### `GH_TOKEN` (optional, for `gh` usage)
@@ -87,6 +87,56 @@ mkdir -p logs
 docker compose up --build -d
 docker compose logs -f
 ```
+
+## Git SSH Authentication (No Private Key Mount)
+Use SSH agent forwarding so the container can authenticate to GitHub without copying `~/.ssh/id_*` into the image or volume.
+
+Host setup (current shell):
+```bash
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+ssh-add -l
+```
+
+Host setup (persist across new shells):
+```bash
+# ~/.bashrc or ~/.zshrc
+if [ -z "${SSH_AUTH_SOCK:-}" ]; then
+  eval "$(ssh-agent -s)" >/dev/null
+fi
+ssh-add -l >/dev/null 2>&1 || ssh-add ~/.ssh/id_ed25519
+```
+
+Quick checks on host:
+```bash
+echo "$SSH_AUTH_SOCK"
+ssh-add -l
+ssh -T git@github.com
+```
+
+Start container with SSH override:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ssh.yml up --build -d
+```
+
+For Podman:
+```bash
+export UID="$(id -u)"
+export GID="$(id -g)"
+podman compose -f docker-compose.yml -f docker-compose.podman.yml -f docker-compose.ssh.yml up --build -d
+```
+
+Verify from inside container:
+```bash
+ssh -T git@github.com
+git remote -v
+```
+
+Notes:
+- `docker-compose.ssh.yml` mounts only `SSH_AUTH_SOCK` and `known_hosts` as read-only.
+- Private key material remains on host and stays managed by host `ssh-agent`.
+- If agent/key changes, restart the compose stack to refresh socket mapping.
+- If `${HOME}/.ssh/known_hosts` is missing, create it with `ssh-keyscan github.com >> ~/.ssh/known_hosts`.
 
 Optional variables:
 ```bash
