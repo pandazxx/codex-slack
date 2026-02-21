@@ -19,6 +19,9 @@ class FakeBridge:
             time.sleep(self.delay)
         return f"reply:{prompt}"
 
+    def cancel_current_prompt(self) -> bool:
+        return True
+
 
 def test_submit_prompt_requires_attachment() -> None:
     runtime = SessionRuntime()
@@ -45,6 +48,7 @@ def test_submit_prompt_serializes_calls() -> None:
     status = runtime.status()
     assert status.busy is True
     assert status.queue_depth == 0
+    assert status.current_prompt == "a"
 
     second.start()
     time.sleep(0.05)
@@ -66,3 +70,9 @@ def test_attach_and_detach() -> None:
 
     runtime.detach()
     assert runtime.status().attached is False
+
+
+def test_cancel_current_prompt_when_idle_returns_false() -> None:
+    runtime = SessionRuntime(initial_session_id="sess_1")
+    bridge = FakeBridge()
+    assert runtime.cancel_current_prompt(bridge) is False

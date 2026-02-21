@@ -10,6 +10,11 @@ __pycache__/
 
 # Local logs
 *.log
+logs/
 
 # Local environment files
 .env
+*.secret
+
+# Local Codex state
+.codex/

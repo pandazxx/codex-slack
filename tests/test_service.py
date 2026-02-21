@@ -12,6 +12,9 @@ class FakeBridge:
     def send_prompt(self, session_id: str, prompt: str) -> str:
         return f"{session_id}:{prompt}"
 
+    def cancel_current_prompt(self) -> bool:
+        return True
+
 
 def make_service() -> BotService:
     runtime = SessionRuntime(initial_session_id="sess_abc")
@@ -36,9 +39,15 @@ def test_attach_detach_status_text() -> None:
 
     service.detach()
     assert "attached=False" in service.status_text()
+    assert "current_prompt=None" in service.status_text()
 
     message = service.attach("sess_new")
     assert "sess_new" in message
+
+
+def test_cancel_current_conversation_returns_success_message() -> None:
+    service = make_service()
+    assert service.cancel_current_conversation() == "No running prompt to cancel"
 
 
 def test_handle_prompt_uses_runtime() -> None:

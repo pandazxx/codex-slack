@@ -25,6 +25,7 @@ Quick checklist:
    - `/codex-status`
    - `/codex-attach`
    - `/codex-detach`
+   - `/codex-conv-cancel`
    - `/codex-help`
 
 Install the app to your workspace and collect:
@@ -47,6 +48,10 @@ SLACK_APP_TOKEN=xapp-...
 SLACK_ALLOWED_CHANNELS=C01234567,C08999999
 CODEX_WORKSPACE_PATH=/absolute/path/to/workspace
 BOT_LOG_FILE=./logs/bot.log
+# optional: explicit Codex session to resume
+CODEX_SESSION_ID=
+# optional: empty or <=0 disables timeout
+CODEX_TIMEOUT_SECONDS=
 ```
 
 ## 5. Create or Locate Local Codex Session
@@ -61,6 +66,7 @@ codex resume
 Default non-interactive command template used by this bot:
 ```dotenv
 CODEX_COMMAND_TEMPLATE=codex exec resume {session_id} -
+CODEX_COMMAND_TEMPLATE_NO_SESSION=codex exec -
 ```
 
 ## 6. Start the Bot (Attach Mode)
@@ -73,6 +79,8 @@ Optional single-channel override:
 python -m src.bot.main --session-id <SESSION_ID> --channel C01234567
 ```
 
+If `--session-id` and `CODEX_SESSION_ID` are both omitted, the bot starts with an auto-generated session id and uses `CODEX_COMMAND_TEMPLATE_NO_SESSION`.
+
 Logging options:
 ```bash
 # default INFO level to terminal
@@ -83,6 +91,9 @@ python -m src.bot.main --session-id <SESSION_ID>
 ```
 
 See `docs/LOGGING.md` for full logging destination and level configuration.
+See `docs/CONTAINER.md` for containerized runtime with mounted Codex auth cache (`~/.codex/auth.json`).
+In container mode, Slack secrets are also injected via shell environment variables (not `.env` file mounting).
+For Podman on Linux, use the `docker-compose.podman.yml` override documented in `docs/CONTAINER.md` to preserve host UID/GID for writable `/workspace` mounts.
 
 ## 7. Verify Startup
 In an allowlisted channel:

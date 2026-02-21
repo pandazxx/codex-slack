@@ -1,0 +1,40 @@
+FROM python:3.11-slim
+
+ARG CODEX_NPM_PACKAGE=@openai/codex
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    gh \
+    jq \
+    less \
+    make \
+    nodejs \
+    npm \
+    openssh-client \
+    tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g ${CODEX_NPM_PACKAGE}
+
+RUN useradd -m -u 1000 -s /bin/bash appuser
+USER appuser
+WORKDIR /workspace
+
+COPY --chown=appuser:appuser requirements.txt ./requirements.txt
+RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+COPY --chown=appuser:appuser src ./src
+COPY --chown=appuser:appuser docs ./docs
+COPY --chown=appuser:appuser README.md BUILD.md USAGE.md ./
+COPY --chown=appuser:appuser docker/entrypoint.sh /usr/local/bin/bot-entrypoint
+RUN chmod +x /usr/local/bin/bot-entrypoint
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/bot-entrypoint"]
+CMD ["python", "-m", "src.bot.main"]

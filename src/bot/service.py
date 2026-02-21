@@ -42,6 +42,7 @@ class BotService:
             f"session_id={status.session_id or '-'} "
             f"busy={status.busy} "
             f"queue_depth={status.queue_depth} "
+            f"current_prompt={status.current_prompt!r} "
             f"last_error={status.last_error or '-'}"
         )
 
@@ -52,6 +53,12 @@ class BotService:
     def detach(self) -> str:
         self.runtime.detach()
         return "Detached from session"
+
+    def cancel_current_conversation(self) -> str:
+        cancelled = self.runtime.cancel_current_prompt(self.bridge)
+        if not cancelled:
+            return "No running prompt to cancel"
+        return "Cancellation signal sent to current prompt"
 
     def handle_prompt(
         self,

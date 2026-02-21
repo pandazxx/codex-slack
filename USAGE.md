@@ -11,6 +11,7 @@ python -m src.bot.main --session-id <SESSION_ID>
 ```
 
 The bot becomes active after successful attach and only responds in allowlisted channels.
+If no session id is provided (`--session-id` or `CODEX_SESSION_ID`), the bot auto-generates one and starts with no-session template mode.
 
 For logging destination and level configuration, see `docs/LOGGING.md`.
 
@@ -28,7 +29,7 @@ Behavior notes:
 ## Command Reference
 
 ### `/codex-status`
-Shows current attach state, active session ID, queue depth, and last error.
+Shows current attach state, active session ID, queue depth, current running prompt, and last error.
 
 ### `/codex-attach <session_id>`
 Detaches current session (if any) and attaches to the provided local session.
@@ -43,6 +44,9 @@ Stops forwarding prompts. Local Codex session is not deleted.
 
 ### `/codex-help`
 Prints command and mention usage summary.
+
+### `/codex-conv-cancel`
+Stops the currently running Codex prompt. If no prompt is running, returns a no-op message.
 
 ## Recovery Playbooks
 

@@ -1,0 +1,7 @@
+services:
+  codex-slack-bot:
+    environment:
+      SSH_AUTH_SOCK: /ssh-agent
+    volumes:
+      - ${SSH_AUTH_SOCK:?SSH_AUTH_SOCK is required}:/ssh-agent:ro
+      - ${HOME}/.ssh/known_hosts:/etc/ssh/ssh_known_hosts:ro
