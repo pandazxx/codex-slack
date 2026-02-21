@@ -47,9 +47,14 @@ podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build
 ```
 
 The override enables:
-- `userns_mode: keep-id` to keep host identity in the container.
 - `user: ${UID}:${GID}` to run with host numeric IDs.
 - `:Z` volume labels for SELinux-compatible bind mounts.
+- `:U` volume option for Podman bind mounts so `/workspace` and `/workspace/logs` are writable by the container user.
+
+Note:
+- `userns_mode: keep-id` is intentionally not used here because Podman compose runs services in a pod by default, and `--userns` cannot be combined with `--pod`.
+- `:U` may adjust ownership on mounted host paths for compatibility with user namespace mappings.
+- Host ownership changes you saw were caused by this `:U` remap behavior.
 
 ## Get Required Tokens
 ### `GH_TOKEN` (optional, for `gh` usage)
@@ -64,7 +69,11 @@ export SLACK_BOT_TOKEN='xoxb-...'
 export SLACK_APP_TOKEN='xapp-...'
 export SLACK_ALLOWED_CHANNELS='C01234567'
 export GH_TOKEN='github_pat_...'
+export GIT_USER_NAME='Your Name'
+export GIT_USER_EMAIL='you@example.com'
 ```
+
+If `GIT_USER_NAME` / `GIT_USER_EMAIL` are set, entrypoint applies them via `git config --global` so commits work inside container.
 
 Prepare Codex auth on host (once):
 ```bash
