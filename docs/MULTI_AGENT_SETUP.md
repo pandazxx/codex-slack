@@ -47,8 +47,26 @@ Example mapping:
 ## Run with Compose
 Use `docker-compose.multi-agent.example.yml` and set environment variables in your shell (or `.env`).
 
+The example already consolidates:
+- Podman Linux fix: `x-podman.in_pod: false`
+- Host UID/GID write-safe container execution: `userns_mode: keep-id` + `user: ${UID}:${GID}`
+- SSH agent forwarding for `git`/`gh` over SSH (`SSH_AUTH_SOCK` + `known_hosts` mounts)
+
+Prerequisites:
+```bash
+export UID="$(id -u)"
+export GID="$(id -g)"
+export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:?start ssh-agent first}"
+ssh-add -l
+```
+
 ```bash
 docker compose -f docker-compose.multi-agent.example.yml up -d --build
+```
+
+For Podman:
+```bash
+podman compose -f docker-compose.multi-agent.example.yml up -d --build
 ```
 
 ## Validation Checklist
