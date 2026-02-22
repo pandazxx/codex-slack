@@ -37,17 +37,20 @@ docker build -t "${IMAGE_NAME}" .
 echo "[2/3] Removing previous container (if any): ${CONTAINER_NAME}"
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
+CONTAINER_WORKSPACE_PATH="${CODEX_WORKSPACE_PATH:-/workspace}"
+CONTAINER_LOG_FILE="${BOT_LOG_FILE:-${CONTAINER_WORKSPACE_PATH}/logs/bot.log}"
+
 echo "[3/3] Starting container with mounted workspace: ${TARGET_REPO}"
 docker run -d \
   --name "${CONTAINER_NAME}" \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
   -e SLACK_ALLOWED_CHANNELS \
-  -e CODEX_WORKSPACE_PATH=/workspace \
-  -e BOT_LOG_FILE=/workspace/logs/bot.log \
+  -e CODEX_WORKSPACE_PATH="${CONTAINER_WORKSPACE_PATH}" \
+  -e BOT_LOG_FILE="${CONTAINER_LOG_FILE}" \
   -e CODEX_SESSION_ID="${CODEX_SESSION_ID:-}" \
-  -v "${TARGET_REPO}:/workspace" \
-  -v "${TARGET_REPO}/logs:/workspace/logs" \
+  -v "${TARGET_REPO}:${CONTAINER_WORKSPACE_PATH}" \
+  -v "${TARGET_REPO}/logs:${CONTAINER_WORKSPACE_PATH}/logs" \
   -v "${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro" \
   -v "${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro" \
   "${IMAGE_NAME}"

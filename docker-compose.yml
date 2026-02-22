@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: codex-slack-bot:latest
-    working_dir: /workspace
+    working_dir: /opt/codex-slack
     command: ["python", "-m", "src.bot.main"]
     environment:
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}

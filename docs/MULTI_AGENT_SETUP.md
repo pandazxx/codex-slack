@@ -13,6 +13,11 @@ Example mapping:
 - `codex-agent-bar` -> repo `/repos/bar` -> channel `#codex-bar`
 - `codex-agent-baz` -> repo `/repos/baz` -> channel `#codex-baz`
 
+Important:
+- The bot application code is inside the image under `/opt/codex-slack`.
+- Target project repos are mounted to `/workspace` (safe with the current image layout).
+- `CODEX_WORKSPACE_PATH` should point to the mounted target repo path (`/workspace` in the example).
+
 ## Why one Slack app per agent
 - Strong token isolation.
 - No cross-channel reply confusion.

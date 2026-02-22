@@ -9,7 +9,7 @@ services:
       dockerfile: Dockerfile
     container_name: codex-agent-foo
     restart: unless-stopped
-    working_dir: /workspace
+    working_dir: /opt/codex-slack
     userns_mode: "keep-id"
     user: "${UID:-1000}:${GID:-1000}"
     command: ["python", "-m", "src.bot.main"]
@@ -40,7 +40,7 @@ services:
     image: codex-slack-bot:latest
     container_name: codex-agent-bar
     restart: unless-stopped
-    working_dir: /workspace
+    working_dir: /opt/codex-slack
     userns_mode: "keep-id"
     user: "${UID:-1000}:${GID:-1000}"
     command: ["python", "-m", "src.bot.main"]
@@ -71,7 +71,7 @@ services:
     image: codex-slack-bot:latest
     container_name: codex-agent-baz
     restart: unless-stopped
-    working_dir: /workspace
+    working_dir: /opt/codex-slack
     userns_mode: "keep-id"
     user: "${UID:-1000}:${GID:-1000}"
     command: ["python", "-m", "src.bot.main"]

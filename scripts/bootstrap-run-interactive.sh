@@ -61,7 +61,7 @@ SLACK_ALLOWED_CHANNELS="$(prompt_required "SLACK_ALLOWED_CHANNELS (comma-separat
 DEFAULT_IMAGE_NAME="${IMAGE_NAME:-codex-slack-bot:latest}"
 DEFAULT_CONTAINER_NAME="${CONTAINER_NAME:-codex-slack-bot}"
 DEFAULT_CODEX_WORKSPACE_PATH="/workspace"
-DEFAULT_BOT_LOG_FILE="/workspace/logs/bot.log"
+DEFAULT_BOT_LOG_FILE="${DEFAULT_CODEX_WORKSPACE_PATH}/logs/bot.log"
 DEFAULT_GIT_USER_NAME="$(git config --global user.name || true)"
 DEFAULT_GIT_USER_EMAIL="$(git config --global user.email || true)"
 
@@ -103,8 +103,8 @@ docker_args=(
   -e "SLACK_ALLOWED_CHANNELS=${SLACK_ALLOWED_CHANNELS}"
   -e "CODEX_WORKSPACE_PATH=${CODEX_WORKSPACE_PATH}"
   -e "BOT_LOG_FILE=${BOT_LOG_FILE}"
-  -v "${TARGET_REPO}:/workspace"
-  -v "${TARGET_REPO}/logs:/workspace/logs"
+  -v "${TARGET_REPO}:${CODEX_WORKSPACE_PATH}"
+  -v "${TARGET_REPO}/logs:${CODEX_WORKSPACE_PATH}/logs"
   -v "${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro"
   -v "${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro"
 )
