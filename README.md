@@ -62,4 +62,5 @@ sequenceDiagram
 - Detailed Slack app configuration: `docs/SLACK_SETUP.md`
 - Logging configuration: `docs/LOGGING.md`
 - Container runtime: `docs/CONTAINER.md`
+- Multi-agent setup (same Slack workspace): `docs/MULTI_AGENT_SETUP.md`
 - Daily operation and troubleshooting: `USAGE.md`
