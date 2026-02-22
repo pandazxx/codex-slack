@@ -11,6 +11,7 @@ __pycache__/
 # Local logs
 *.log
 logs/
+build/
 
 # Local environment files
 .env
