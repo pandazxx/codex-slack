@@ -64,4 +64,6 @@ sequenceDiagram
 - Logging configuration: `docs/LOGGING.md`
 - Container runtime: `docs/CONTAINER.md`
 - Multi-agent setup (same Slack workspace): `docs/MULTI_AGENT_SETUP.md`
+- Master-agent orchestration design (draft): `docs/MASTER_AGENT_ARCHITECTURE.md`
+- Master-agent implementation plan (draft): `docs/MASTER_AGENT_PLAN.md`
 - Daily operation and troubleshooting: `USAGE.md`
