@@ -16,10 +16,13 @@ def create_app(bot_token: str, service: BotService) -> App:
     def on_mention(event: dict, say) -> None:  # type: ignore[no-untyped-def]
         channel_id = event.get("channel", "")
         thread_ts = event.get("thread_ts") or event.get("ts")
+        event_ts = event.get("ts")
         text = event.get("text", "")
         user_id = event.get("user", "")
 
         try:
+            service.track_thread(channel_id=channel_id, thread_ts=thread_ts)
+            service.mark_mention_event(channel_id=channel_id, ts=event_ts)
             response = service.handle_prompt(
                 channel_id=channel_id,
                 text=text,
@@ -38,6 +41,45 @@ def create_app(bot_token: str, service: BotService) -> App:
             LOGGER.info("Ignored mention from non-allowlisted channel %s", channel_id)
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Failed to process mention")
+            say(text=f"Error: {exc}", thread_ts=thread_ts)
+
+    @app.event("message")
+    def on_thread_message(event: dict, say) -> None:  # type: ignore[no-untyped-def]
+        if event.get("subtype"):
+            return
+
+        channel_id = event.get("channel", "")
+        thread_ts = event.get("thread_ts")
+        event_ts = event.get("ts")
+        text = event.get("text", "")
+        user_id = event.get("user", "")
+
+        if not thread_ts or not text or not user_id:
+            return
+        if service.consume_marked_mention_event(channel_id=channel_id, ts=event_ts):
+            return
+        if not service.is_tracked_thread(channel_id=channel_id, thread_ts=thread_ts):
+            return
+
+        try:
+            response = service.handle_prompt(
+                channel_id=channel_id,
+                text=text,
+                thread_ts=thread_ts,
+                user_id=user_id,
+            )
+            say(text=response, thread_ts=thread_ts)
+            LOGGER.info(
+                "slack.thread_reply_sent channel_id=%s thread_ts=%s user_id=%s chars=%d",
+                channel_id,
+                thread_ts,
+                user_id,
+                len(response),
+            )
+        except AccessError:
+            LOGGER.info("Ignored thread message from non-allowlisted channel %s", channel_id)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("Failed to process thread message")
             say(text=f"Error: {exc}", thread_ts=thread_ts)
 
     @app.command("/codex-status")

@@ -6,6 +6,7 @@ Connect an existing local Codex session to Slack so channel members can send pro
 - Uses a bot process running inside your local workspace.
 - Attaches that process to one local Codex session (`--session-id`).
 - Accepts prompts from Slack mentions.
+- Continues thread replies after an initial bot mention (no repeated mention required).
 - Sends prompts to `codex-cli` and posts final responses back to Slack.
 
 ## MVP Scope

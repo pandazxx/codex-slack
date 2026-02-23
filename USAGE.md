@@ -20,6 +20,7 @@ For logging destination and level configuration, see `docs/LOGGING.md`.
 2. Bot validates channel and enqueues prompt.
 3. Bot sends prompt to attached local Codex session.
 4. Bot posts one final response to Slack.
+5. Subsequent replies in that same thread are accepted without mentioning the bot again.
 
 Behavior notes:
 - Prompts are processed FIFO.
