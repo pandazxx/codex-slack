@@ -1,0 +1,99 @@
+x-podman:
+  in_pod: false
+
+services:
+  codex-agent-foo:
+    image: codex-slack-bot:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: codex-agent-foo
+    restart: unless-stopped
+    working_dir: /opt/codex-slack
+    userns_mode: "keep-id"
+    user: "${UID:-1000}:${GID:-1000}"
+    command: ["python", "-m", "src.bot.main"]
+    environment:
+      SLACK_BOT_TOKEN: ${FOO_SLACK_BOT_TOKEN}
+      SLACK_APP_TOKEN: ${FOO_SLACK_APP_TOKEN}
+      SLACK_ALLOWED_CHANNELS: ${FOO_SLACK_ALLOWED_CHANNELS}
+      CODEX_WORKSPACE_PATH: /workspace
+      BOT_LOG_FILE: /workspace/logs/bot.log
+      CODEX_SESSION_ID: ${FOO_CODEX_SESSION_ID}
+      CODEX_TIMEOUT_SECONDS: ${FOO_CODEX_TIMEOUT_SECONDS}
+      GH_TOKEN: ${FOO_GH_TOKEN}
+      GITHUB_TOKEN: ${FOO_GH_TOKEN}
+      SSH_AUTH_SOCK: /ssh-agent
+      GIT_USER_NAME: ${FOO_GIT_USER_NAME}
+      GIT_USER_EMAIL: ${FOO_GIT_USER_EMAIL}
+      CODEX_COMMAND_TEMPLATE: codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -
+      CODEX_COMMAND_TEMPLATE_NO_SESSION: codex exec --dangerously-bypass-approvals-and-sandbox -
+    volumes:
+      - ${FOO_WORKSPACE_PATH}:/workspace:Z
+      - ${FOO_WORKSPACE_PATH}/logs:/workspace/logs:Z
+      - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro,Z
+      - ${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro,Z
+      - ${SSH_AUTH_SOCK:?SSH_AUTH_SOCK is required for SSH auth}:/ssh-agent:ro
+      - ${HOME}/.ssh/known_hosts:/etc/ssh/ssh_known_hosts:ro
+
+  codex-agent-bar:
+    image: codex-slack-bot:latest
+    container_name: codex-agent-bar
+    restart: unless-stopped
+    working_dir: /opt/codex-slack
+    userns_mode: "keep-id"
+    user: "${UID:-1000}:${GID:-1000}"
+    command: ["python", "-m", "src.bot.main"]
+    environment:
+      SLACK_BOT_TOKEN: ${BAR_SLACK_BOT_TOKEN}
+      SLACK_APP_TOKEN: ${BAR_SLACK_APP_TOKEN}
+      SLACK_ALLOWED_CHANNELS: ${BAR_SLACK_ALLOWED_CHANNELS}
+      CODEX_WORKSPACE_PATH: /workspace
+      BOT_LOG_FILE: /workspace/logs/bot.log
+      CODEX_SESSION_ID: ${BAR_CODEX_SESSION_ID}
+      CODEX_TIMEOUT_SECONDS: ${BAR_CODEX_TIMEOUT_SECONDS}
+      GH_TOKEN: ${BAR_GH_TOKEN}
+      GITHUB_TOKEN: ${BAR_GH_TOKEN}
+      SSH_AUTH_SOCK: /ssh-agent
+      GIT_USER_NAME: ${BAR_GIT_USER_NAME}
+      GIT_USER_EMAIL: ${BAR_GIT_USER_EMAIL}
+      CODEX_COMMAND_TEMPLATE: codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -
+      CODEX_COMMAND_TEMPLATE_NO_SESSION: codex exec --dangerously-bypass-approvals-and-sandbox -
+    volumes:
+      - ${BAR_WORKSPACE_PATH}:/workspace:Z
+      - ${BAR_WORKSPACE_PATH}/logs:/workspace/logs:Z
+      - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro,Z
+      - ${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro,Z
+      - ${SSH_AUTH_SOCK:?SSH_AUTH_SOCK is required for SSH auth}:/ssh-agent:ro
+      - ${HOME}/.ssh/known_hosts:/etc/ssh/ssh_known_hosts:ro
+
+  codex-agent-baz:
+    image: codex-slack-bot:latest
+    container_name: codex-agent-baz
+    restart: unless-stopped
+    working_dir: /opt/codex-slack
+    userns_mode: "keep-id"
+    user: "${UID:-1000}:${GID:-1000}"
+    command: ["python", "-m", "src.bot.main"]
+    environment:
+      SLACK_BOT_TOKEN: ${BAZ_SLACK_BOT_TOKEN}
+      SLACK_APP_TOKEN: ${BAZ_SLACK_APP_TOKEN}
+      SLACK_ALLOWED_CHANNELS: ${BAZ_SLACK_ALLOWED_CHANNELS}
+      CODEX_WORKSPACE_PATH: /workspace
+      BOT_LOG_FILE: /workspace/logs/bot.log
+      CODEX_SESSION_ID: ${BAZ_CODEX_SESSION_ID}
+      CODEX_TIMEOUT_SECONDS: ${BAZ_CODEX_TIMEOUT_SECONDS}
+      GH_TOKEN: ${BAZ_GH_TOKEN}
+      GITHUB_TOKEN: ${BAZ_GH_TOKEN}
+      SSH_AUTH_SOCK: /ssh-agent
+      GIT_USER_NAME: ${BAZ_GIT_USER_NAME}
+      GIT_USER_EMAIL: ${BAZ_GIT_USER_EMAIL}
+      CODEX_COMMAND_TEMPLATE: codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -
+      CODEX_COMMAND_TEMPLATE_NO_SESSION: codex exec --dangerously-bypass-approvals-and-sandbox -
+    volumes:
+      - ${BAZ_WORKSPACE_PATH}:/workspace:Z
+      - ${BAZ_WORKSPACE_PATH}/logs:/workspace/logs:Z
+      - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro,Z
+      - ${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro,Z
+      - ${SSH_AUTH_SOCK:?SSH_AUTH_SOCK is required for SSH auth}:/ssh-agent:ro
+      - ${HOME}/.ssh/known_hosts:/etc/ssh/ssh_known_hosts:ro

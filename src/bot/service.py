@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import Lock
 
 from .runtime import RuntimeStatus, SessionRuntime
 
@@ -20,6 +21,9 @@ class BotService:
     runtime: SessionRuntime
     bridge: object
     allowed_channels: set[str]
+    _tracked_threads: set[str] = field(default_factory=set, init=False, repr=False)
+    _recent_mention_events: set[str] = field(default_factory=set, init=False, repr=False)
+    _event_state_lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def is_allowed_channel(self, channel_id: str) -> bool:
         return channel_id in self.allowed_channels
@@ -28,9 +32,46 @@ class BotService:
         if not self.is_allowed_channel(channel_id):
             raise AccessError(f"channel {channel_id} is not allowlisted")
 
+    def _thread_key(self, channel_id: str, thread_ts: str) -> str:
+        return f"{channel_id}:{thread_ts}"
+
+    def _event_key(self, channel_id: str, ts: str) -> str:
+        return f"{channel_id}:{ts}"
+
     def extract_prompt(self, text: str) -> str:
         prompt = MENTION_PATTERN.sub("", text).strip()
         return prompt
+
+    def track_thread(self, channel_id: str, thread_ts: str | None) -> None:
+        if not thread_ts:
+            return
+        with self._event_state_lock:
+            self._tracked_threads.add(self._thread_key(channel_id, thread_ts))
+
+    def is_tracked_thread(self, channel_id: str, thread_ts: str | None) -> bool:
+        if not thread_ts:
+            return False
+        with self._event_state_lock:
+            return self._thread_key(channel_id, thread_ts) in self._tracked_threads
+
+    def mark_mention_event(self, channel_id: str, ts: str | None) -> None:
+        if not ts:
+            return
+        with self._event_state_lock:
+            self._recent_mention_events.add(self._event_key(channel_id, ts))
+            if len(self._recent_mention_events) > 256:
+                # Bound memory use; exact LRU behavior is unnecessary for this dedupe cache.
+                self._recent_mention_events = set(list(self._recent_mention_events)[-128:])
+
+    def consume_marked_mention_event(self, channel_id: str, ts: str | None) -> bool:
+        if not ts:
+            return False
+        key = self._event_key(channel_id, ts)
+        with self._event_state_lock:
+            if key not in self._recent_mention_events:
+                return False
+            self._recent_mention_events.remove(key)
+            return True
 
     def status(self) -> RuntimeStatus:
         return self.runtime.status()

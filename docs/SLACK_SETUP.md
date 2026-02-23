@@ -25,7 +25,9 @@ This guide configures Slack for local Socket Mode testing with this bot.
 ## 4. Enable Event Subscriptions
 1. Open **Event Subscriptions**.
 2. Toggle **Enable Events** on.
-3. Under **Subscribe to bot events**, add `app_mention`.
+3. Under **Subscribe to bot events**, add:
+   - `app_mention`
+   - `message.channels` (required for follow-up thread replies without mentioning the bot again)
 4. Save changes.
 
 Note: With Socket Mode, you do not need to configure a public Request URL.
@@ -87,7 +89,8 @@ python -m src.bot.main --session-id <SESSION_ID>
 ```
 2. In allowlisted channel, run `/codex-status`.
 3. Mention bot: `@codex say hello from Slack`.
-4. Confirm a final threaded response appears.
+4. Reply in the same thread without mentioning the bot (for example `now list files`).
+5. Confirm the bot continues the same thread.
 
 ## 11. Common Slack Errors
 - `invalid_auth` / `not_authed`: bad or missing tokens.

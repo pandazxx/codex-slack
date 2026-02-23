@@ -21,6 +21,7 @@ Quick checklist:
    - `commands`
 3. **Event subscriptions**:
    - `app_mention`
+   - `message.channels` (for thread replies without repeated mentions)
 4. **Slash commands**:
    - `/codex-status`
    - `/codex-attach`
@@ -99,7 +100,8 @@ For Podman on Linux, use the `docker-compose.podman.yml` override documented in 
 In an allowlisted channel:
 1. Run `/codex-status`
 2. Send `@codex say hello from slack`
-3. Confirm final response appears in thread
+3. Reply in thread without mention (for example `show pwd`)
+4. Confirm final response appears in thread
 
 ## 8. Test Commands
 Run unit and smoke checks:

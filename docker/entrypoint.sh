@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_CODEX_HOME="/workspace/.codex"
+WORKSPACE_PATH="${CODEX_WORKSPACE_PATH:-/workspace}"
+PROJECT_CODEX_HOME="${WORKSPACE_PATH}/.codex"
 DEFAULT_CODEX_HOME="/home/appuser/.codex"
 
 if [[ -n "${CODEX_HOME:-}" ]]; then

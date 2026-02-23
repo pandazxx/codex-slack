@@ -84,3 +84,21 @@ def test_handle_prompt_logs_prompt_and_response_content(caplog: pytest.LogCaptur
     assert "conversation.response_content" in text
     assert "'hello log'" in text
     assert "'sess_abc:hello log'" in text
+
+
+def test_thread_tracking_marks_and_matches_thread() -> None:
+    service = make_service()
+    assert service.is_tracked_thread("C1", "1730000000.1234") is False
+
+    service.track_thread("C1", "1730000000.1234")
+
+    assert service.is_tracked_thread("C1", "1730000000.1234") is True
+    assert service.is_tracked_thread("C1", "1730000000.9999") is False
+
+
+def test_marked_mention_event_is_consumed_once() -> None:
+    service = make_service()
+    service.mark_mention_event("C1", "1730000000.1234")
+
+    assert service.consume_marked_mention_event("C1", "1730000000.1234") is True
+    assert service.consume_marked_mention_event("C1", "1730000000.1234") is False
