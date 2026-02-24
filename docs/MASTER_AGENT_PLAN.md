@@ -7,16 +7,20 @@ This is a living phased plan for the master -> agent orchestration feature.
 - Agents remain the current `codex-slack-bot` image.
 - No dynamic secret entry via Slack.
 - No UI beyond Slack commands and logs.
+- Private team / self-managed environment assumptions are acceptable.
 
 ## Phase 0: Design Freeze (Short)
 - Finalize command set and registry schema.
 - Define runtime adapter interface (`docker` and `podman`).
 - Define policy rules (allowed repo roots, channel uniqueness).
+- Finalize simplified image override model (`default image` + `project manifest override`).
+- Finalize v1 start-agent flow: check `.prj_assistant/image/Dockerfile` on project main branch, build if present, otherwise use default image.
 
 Deliverables:
 - `docs/MASTER_AGENT_ARCHITECTURE.md`
 - `docs/MASTER_AGENT_PLAN.md`
 - sample registry JSON
+- sample project manifest (`.prj_assistant/agent.toml`)
 
 ## Phase 1: Local Orchestrator CLI (No Slack Yet)
 Goal: prove lifecycle management without Slack complexity.
@@ -78,8 +82,15 @@ Validation:
 
 ## Proposed Work Items (Next 3)
 1. Draft registry JSON schema and example (`docs/examples/master-agents.schema.json` or markdown table first).
-2. Implement local orchestrator CLI with a mock runtime adapter.
-3. Add a real Docker runtime adapter and one integration test path.
+2. Draft project manifest spec (`.prj_assistant/agent.toml`) with image override / Dockerfile options and validation rules (Dockerfile under `.prj_assistant/image/`).
+3. Implement local orchestrator CLI with a mock runtime adapter.
+
+## Decision Log Seeds (To Finalize Before Phase 1)
+- Agent runtime packaging strategy (v1): default image + project manifest image override / repo-local Dockerfile.
+- Agent start flow (v1): repo-load -> main branch check -> `.prj_assistant/image/Dockerfile` build-or-default -> workspace/agent init.
+- Slack ownership model: user-managed Slack apps/tokens; master validates and orchestrates only.
+- Workspace mode: host bind mounts by default, optional managed volumes later.
+- Codex auth/session model: read-only auth/session forwarding + local `CODEX_HOME` copy; support project-local `.codex`.
 
 ## Acceptance Criteria for First PR (Master Project)
 - Can register at least one agent in local registry.
