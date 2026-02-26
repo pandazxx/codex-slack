@@ -9,6 +9,7 @@ This is a living phased plan for the master -> agent orchestration feature.
 - No UI beyond Slack commands and logs.
 - Private team / self-managed environment assumptions are acceptable.
 - Agent workspaces are stored in named volumes by default (managed clone model).
+- Single Slack bot/app is used for both master and agent communications (channel-routed).
 
 ## Phase 0: Design Freeze (Short)
 - Finalize command set and registry schema.
@@ -17,6 +18,8 @@ This is a living phased plan for the master -> agent orchestration feature.
 - Finalize simplified image override model (`default image` + `project manifest override`).
 - Finalize v1 start-agent flow: check `.prj_assistant/image/Dockerfile` on project main branch, build if present, otherwise use default image, then clone repo in agent init using named volume.
 - Finalize v1 master command contract and state machine (`load/start/stop/status/list/remove`).
+- Finalize channel->agent routing model and admin-channel rules for single-bot mode.
+- Finalize channel conflict behavior and thread-routing ownership in master.
 
 Deliverables:
 - `docs/MASTER_AGENT_ARCHITECTURE.md`
@@ -25,6 +28,8 @@ Deliverables:
 - sample project manifest (`.prj_assistant/agent.toml`)
 - master command contract + idempotency rules
 - named-volume workspace lifecycle notes
+- channel routing rules (`channel_id` ownership and conflict handling)
+- admin channel policy + routing rules for non-admin channels
 
 ## Phase 1: Local Orchestrator CLI (No Slack Yet)
 Goal: prove lifecycle management without Slack complexity.
@@ -55,6 +60,8 @@ Build:
 - `src/master/slack_app.py`
 - `src/master/service.py`
 - `src/master/main.py`
+- channel router (`channel_id -> agent`) + worker dispatch interface
+- thread tracking in master for routed agent conversations
 
 Add Slack commands:
 - `/master-agent-list`
@@ -62,10 +69,15 @@ Add Slack commands:
 - `/master-agent-start`
 - `/master-agent-stop`
 - `/master-agent-status`
+- `/master-agent-remove`
 
 Validation:
 - Commands map cleanly to CLI/service actions.
 - Errors are actionable and safe to expose.
+- Messages in agent channels route to exactly one agent.
+- Unmapped channels receive no agent processing.
+- Admin-channel commands do not execute in non-admin channels.
+- Thread follow-up replies are routed by master to the same agent without repeated mention.
 
 ## Phase 3: Agent Config Templates + Profiles
 Goal: reduce repetitive setup for multiple agents.
@@ -94,7 +106,9 @@ Validation:
 ## Decision Log Seeds (To Finalize Before Phase 1)
 - Agent runtime packaging strategy (v1): default image + project manifest image override / repo-local Dockerfile.
 - Agent start flow (v1): repo-load -> main branch check -> `.prj_assistant/image/Dockerfile` build-or-default -> start container with named volume -> agent clones repo during init.
-- Slack ownership model: user-managed Slack apps/tokens; master validates and orchestrates only.
+- Slack ownership model (v1): one user-managed Slack app/token set for the whole system; master is the only Slack client.
+- Slack topology (v1): single Slack app/bot with channel->agent routing via master.
+- Channel ownership (v1): strict one-channel-to-one-agent; conflicts rejected unless explicit rebind command is added later.
 - Workspace mode (v1): named volume by default; host bind mount optional later.
 - Git auth model (v1): master and agent share SSH agent mechanism and/or `GH_TOKEN` refs.
 - Branch strategy and repo sync policy: deferred to per-project decisions (out of current scope).

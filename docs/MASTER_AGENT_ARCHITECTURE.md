@@ -17,8 +17,8 @@ This is a living design document for extending this project from a single Slack-
 ### Agent Container (Worker Plane)
 - Existing `codex-slack-bot` image.
 - One target repo per container.
-- One allowlisted Slack channel per container.
 - Runs Codex prompts for that project only.
+- In v1 single-bot mode, does not connect to Slack directly (master forwards work).
 
 ## Core Principle
 - Separate orchestration from execution.
@@ -27,13 +27,14 @@ This is a living design document for extending this project from a single Slack-
 
 ## Proposed Slack UX (Master)
 - `/master-agent-list`
-- `/master-agent-create <name> <repo_path> <channel_id>`
+- `/master-agent-load <name> <repo> <channel_id>`
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
 - `/master-agent-rm <name>`
 - `/master-agent-status <name>`
 - `/master-agent-logs <name>`
-- `/master-agent-config <name> key=value`
+- `/master-agent-bind <name> <channel_id>` (optional, if binding is not part of `load`)
+- `/master-agent-unbind <channel_id>` (optional)
 
 ## V1 Master Command Contract (Draft)
 This section defines the initial command surface to support the agreed v1 start flow.
@@ -56,6 +57,7 @@ Effects:
 - Mutates registry.
 - May create/update rendered config.
 - Does not need to start container (recommended default).
+- Binds `channel_id` to `name` if binding is available and not already owned by another agent.
 
 #### `/master-agent-start <name>`
 Purpose:
@@ -140,6 +142,47 @@ Responses should include:
 - short error summary
 - suggested next action when obvious (`run load again`, `fix Dockerfile`, `check repo path`)
 
+## Slack Topology and Routing (V1, Selected)
+### Topology
+- One Slack app / bot token for the whole system.
+- Master is the only Slack client (single Socket Mode connection).
+- Agent containers are worker runtimes and do not connect to Slack directly.
+
+### Channel Roles
+- **Admin channel(s)**: accepted for master orchestration commands only.
+- **Agent channels**: user prompts routed to exactly one mapped agent.
+
+### Channel Ownership Rule
+- One channel maps to one agent.
+- One agent may serve one or more channels (defer for now; default to one-to-one).
+
+V1 default:
+- one channel <-> one agent (strict)
+
+### Channel Conflict Handling (V1)
+When `/master-agent-load ... <channel_id>` is called:
+- If channel is unbound: bind it to the agent.
+- If channel is already bound to the same agent: idempotent success.
+- If channel is bound to a different agent: reject with conflict error.
+
+Optional later:
+- explicit `/master-agent-rebind <channel_id> <agent>` or force flag
+
+### Routing Rules (Agent Communication)
+For messages in non-admin channels:
+1. Master receives Slack event.
+2. Master resolves `channel_id -> agent`.
+3. If no mapping exists: ignore or reply with setup hint (policy configurable).
+4. If mapping exists: forward prompt to that agent worker.
+5. Agent returns response.
+6. Master posts response to Slack (same thread when applicable).
+
+### Thread Behavior (Recommended)
+- Reuse current thread semantics already implemented in this project:
+  - initial mention starts a tracked thread
+  - follow-up thread replies continue without repeated mention
+- Master owns thread tracking and routing in the single-bot model.
+
 ## Runtime Interface (Master -> Container Engine)
 Support both Docker and Podman via a thin adapter:
 - `create_or_update_agent(config)`
@@ -165,7 +208,7 @@ Per-agent fields (v1):
 - `status` (observed), `created_at`, `updated_at`
 
 ## Security Boundaries
-- One Slack app for master, separate Slack apps for agents (recommended).
+- One shared Slack app/token set for the system in v1; master is the only Slack client.
 - No raw secrets entered in Slack commands.
 - Secrets injected from host env/files or secret store references.
 - Restrict master-managed repo paths to approved prefixes.
@@ -289,14 +332,40 @@ Move to a managed image catalog when team scale/reliability needs increase:
 - CI-built/published images only
 
 ### 2. Slack Integration Ownership (User vs Master)
-- User-managed Slack app/channel setup is easiest to ship first.
-- Master-managed channel creation is possible through Slack Web API.
-- Master-managed Slack app creation/install is possible but significantly more complex and high-risk (OAuth distribution flow, admin consent, token storage).
+- Single Slack bot for both master and agent communications (selected for v1 to reduce setup overhead).
+- Channel-based forwarding determines which agent receives a user message.
+- Limitation: one channel maps to one agent at a time.
+- Master-managed Slack app creation/install remains out of scope.
 
 Recommended direction (v1):
-- User creates Slack apps manually (master app + agent apps).
-- Master validates provided channel IDs and token presence.
-- Revisit automated channel creation later; avoid app creation/install automation initially.
+- Use one Slack app/bot token for the whole system.
+- Reserve one admin channel (or command scope) for master control commands.
+- Maintain a channel -> agent mapping registry.
+- Master routes non-admin channel messages to the mapped agent container.
+- Revisit multi-bot isolation later if security/scale requires it.
+
+#### Channel-Based Forwarding Model (Selected v1)
+Core rule:
+- One Slack channel can be attached to exactly one agent.
+
+Implications:
+- Lower Slack app setup overhead (single app, single install, single token set).
+- Simpler operator onboarding.
+- Stronger need for routing correctness in master.
+- Agents no longer need direct Slack connectivity in v1 if master proxies messages (optional design choice to finalize).
+
+Two implementation variants:
+1. **Master-only Slack integration (recommended for this model)**
+   - Master receives all Slack events.
+   - Master forwards prompts/results to agent containers over an internal control interface.
+   - Agents do not need Slack tokens.
+2. **Shared Slack bot token across master + agents (possible but less clean)**
+   - Multiple containers connect to Slack with same app credentials.
+   - Routing ambiguity and duplicate event handling become harder.
+
+Recommended v1:
+- Master-only Slack integration with channel->agent routing.
+- Treat agent containers as worker runtimes, not Slack clients.
 
 ### 3. Workspace Storage Model (Host Mount vs Container Internal)
 - Host bind mounts: best for real repo workflows and Git interoperability (recommended default).
