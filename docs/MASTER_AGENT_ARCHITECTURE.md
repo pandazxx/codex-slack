@@ -35,6 +35,111 @@ This is a living design document for extending this project from a single Slack-
 - `/master-agent-logs <name>`
 - `/master-agent-config <name> key=value`
 
+## V1 Master Command Contract (Draft)
+This section defines the initial command surface to support the agreed v1 start flow.
+
+### Principles
+- Keep commands explicit and small.
+- Separate "register/load" from "start runtime" for clearer error handling.
+- Support idempotent retries from Slack.
+- Do not accept raw secrets in command arguments.
+
+### Commands (v1)
+#### `/master-agent-load <name> <repo_path> <channel_id>`
+Purpose:
+- Register or update an agent definition.
+- Validate repo path and channel mapping.
+- Load project `main` branch and evaluate `.prj_assistant/image/Dockerfile`.
+- Resolve build-vs-default image plan (optionally build in v1 if we choose eager build mode).
+
+Effects:
+- Mutates registry.
+- May create/update rendered config.
+- Does not need to start container (recommended default).
+
+#### `/master-agent-start <name>`
+Purpose:
+- Start agent container from resolved/default image and rendered config.
+
+Effects:
+- Mutates runtime state.
+- Updates observed status in registry.
+
+#### `/master-agent-stop <name>`
+Purpose:
+- Stop a running agent container.
+
+Effects:
+- Mutates runtime state.
+- Updates observed status in registry.
+
+#### `/master-agent-status <name>`
+Purpose:
+- Show registry data + observed runtime/container status.
+
+Effects:
+- Read-only.
+
+#### `/master-agent-list`
+Purpose:
+- List registered agents and summarized states.
+
+Effects:
+- Read-only.
+
+#### `/master-agent-remove <name>`
+Purpose:
+- Remove agent registration and optionally remove container (stopped first if running).
+
+Effects:
+- Mutates registry and runtime state.
+
+### Optional Convenience Command (v1.1)
+#### `/master-agent-up <name> <repo_path> <channel_id>`
+Wrapper for:
+1. `load`
+2. `start`
+
+This is optional sugar. Internally it should call the same service methods as `load` + `start`.
+
+## V1 Workflow / State Machine (Draft)
+Master manages agent lifecycle state independently from the container engine.
+
+### Logical States
+- `registered`: repo/channel recorded, not yet resolved
+- `loaded`: repo checked, start plan resolved (default image or build plan)
+- `built`: custom image built successfully (only for Dockerfile path case)
+- `running`: container running
+- `stopped`: container exists but not running (or intentionally stopped)
+- `error`: last operation failed (registry retains error details)
+
+### Common Transitions
+- `load`:
+  - `registered|stopped|error -> loaded`
+  - `loaded -> loaded` (idempotent refresh)
+  - `running -> loaded` only if load is allowed to refresh config without restart (mark drift)
+- `start`:
+  - `loaded|built|stopped|error -> running` (if prerequisites met)
+  - `running -> running` (idempotent no-op)
+- `stop`:
+  - `running -> stopped`
+  - `stopped -> stopped` (idempotent no-op)
+- `remove`:
+  - any non-running state -> removed (registry deletion)
+  - `running` requires stop first or `--force` policy (not in v1 Slack command)
+
+### Idempotency Rules (Important)
+- Repeating `load` should refresh and re-evaluate `.prj_assistant/image/Dockerfile` presence.
+- Repeating `start` on a running agent should return success with "already running".
+- Repeating `stop` on a stopped/missing runtime should return success with "already stopped".
+- `remove` on missing agent should return a not-found error (not success), to catch mistakes.
+
+### Error Reporting (Slack)
+Responses should include:
+- failed stage (`validate_repo`, `load_main_branch`, `build_image`, `start_container`, ...)
+- short error summary
+- suggested next action when obvious (`run load again`, `fix Dockerfile`, `check repo path`)
+
 ## Runtime Interface (Master -> Container Engine)
 Support both Docker and Podman via a thin adapter:
 - `create_or_update_agent(config)`
@@ -104,22 +209,25 @@ Master should persist both:
 This makes decisions auditable and stable across restarts.
 
 #### Start Agent Flow (v1 Baseline, Agreed)
-This is the simplified start flow to implement first:
+This is the revised v1 start flow (managed clone workspace):
 
-1. Master is instructed to load a project repo.
-2. Master loads the project's main branch (default `main`, configurable later).
-3. Master checks whether `.prj_assistant/image/Dockerfile` exists in that repo.
-4. If found:
-   - build an agent image from that Dockerfile/context
-   - start the agent container using the built image
-5. If not found:
-   - start the agent container using the default agent image
-6. Proceed with workspace mounting and agent initialization (details defined separately).
+1. Master is instructed to load a project repo (repo URL / repo identifier).
+2. Master resolves the project source and checks project `main` branch contents for `.prj_assistant/image/Dockerfile`.
+3. If found:
+   - build an agent image from `.prj_assistant/image/`
+   - record built image reference in agent registry
+4. If not found:
+   - use the default agent image
+5. Master starts agent container with:
+   - a named volume for workspace storage
+   - shared SSH agent and/or `GH_TOKEN` references for Git operations
+6. Agent container initialization clones/fetches the repo into its internal workspace volume.
+7. Proceed with agent workspace initialization and runtime startup (details deferred).
 
 Notes:
-- This flow intentionally keeps image selection simple for a private team environment.
-- Additional manifest-based controls remain useful, but image build-vs-default decision comes first.
-- Branch switching/worktree cleanliness rules still need a separate policy section.
+- This flow intentionally avoids mutating a host repo working tree.
+- "Dirty repo" host working tree concerns are removed from the default path.
+- Branch strategy and sync policy are intentionally deferred to project-level decisions (out of current scope).
 
 #### Project Requirements Manifest (Proposed v1)
 Allow each repo to define non-secret requirements in a project-owned file, e.g. `.prj_assistant/agent.toml`:
@@ -136,7 +244,7 @@ dockerfile = ".prj_assistant/image/Dockerfile"
 context = ".prj_assistant/image"
 
 [runtime]
-workspace_mode = "host_bind"
+workspace_mode = "named_volume"
 codex_home_mode = "project"
 ```
 
@@ -146,6 +254,7 @@ Rules:
 - Secrets/tokens are not allowed in the project manifest.
 - Project-specific image build assets live under `.prj_assistant/image/`.
 - In v1, presence of `.prj_assistant/image/Dockerfile` is the primary image-build trigger.
+- Branch strategy / sync behavior are intentionally not defined by this manifest in v1.
 
 #### Managing Images in v1 (Team-Controlled)
 Given a private, team-controlled environment:
@@ -157,6 +266,21 @@ Safety guardrails still recommended (even in private use):
 - Restrict Dockerfile/context to under repo root after `realpath` resolution.
 - Optional allowlist for image prefixes (e.g. `ghcr.io/myorg/`).
 - Build/run with explicit resource limits where possible.
+
+### 3. Workspace Storage Model (Host Mount vs Container Internal)
+- **Selected for revised v1:** named volume per agent (container-managed workspace storage).
+- Agent clones/fetches the repo during initialization instead of using a host bind mount.
+- Host bind mount mode can remain as an optional fallback/debug mode later.
+
+Why this was selected:
+- Removes host dirty-working-tree risk.
+- Makes agent behavior more reproducible.
+- Aligns with frequent commit/push workflow where GitHub is the primary outcome store.
+
+### 4. AI Login and Session Management
+- Auth/session forwarding remains supported (read-only mount + local writable `CODEX_HOME` copy).
+- Master and agent use the same SSH agent mechanism and/or `GH_TOKEN` references.
+- Branch strategy and repo sync policy are deferred to project-level decisions (not in current scope).
 
 #### Future Hardening Path (v2+)
 Move to a managed image catalog when team scale/reliability needs increase:
