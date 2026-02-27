@@ -2,6 +2,11 @@
 
 This is a living phased plan for the master -> agent orchestration feature.
 
+## Design Freeze Status (v1)
+- Status: frozen for implementation.
+- Remaining non-blocking item: runtime-config editability from Slack (tracked for further discussion / v1.1).
+- Implementation start scope: Phase 1 local orchestrator (`registry`, `runtime_adapter`, `cli`) with Podman runtime path.
+
 ## Scope Boundary (v1)
 - Master manages agent container lifecycle.
 - Agents remain the current `codex-slack-bot` image.

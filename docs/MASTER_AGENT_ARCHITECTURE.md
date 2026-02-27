@@ -6,6 +6,7 @@ This is a living design document for extending this project from a single Slack-
 - Keep the current container as the **agent runtime**.
 - Introduce a **master container** that accepts control commands from Slack and manages agent containers for different repos/channels.
 - For v1, the master manages containers via host Podman (socket passthrough), not a nested container daemon.
+- v1 design decisions are frozen for implementation; only runtime-config editability remains open for follow-up.
 
 ## Roles
 ### Master Container (Control Plane)

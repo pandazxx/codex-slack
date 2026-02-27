@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+from src.master.registry import AgentRegistry
+from src.master.service import MasterService
+
+
+class FakeRuntime:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+
+    def build_image(self, *, name: str, repo_path: str, context_rel: str, dockerfile_rel: str) -> str:
+        self.calls.append(("build_image", {"name": name, "repo_path": repo_path}))
+        return f"codex-agent-{name}:latest"
+
+    def create_or_update_agent(self, *, container_name: str, image: str, repo_volume: str) -> None:
+        self.calls.append(("create_or_update_agent", {"container_name": container_name, "image": image}))
+
+    def start_agent(self, name: str) -> None:
+        self.calls.append(("start_agent", name))
+
+    def stop_agent(self, name: str) -> None:
+        self.calls.append(("stop_agent", name))
+
+    def remove_agent(self, name: str) -> None:
+        self.calls.append(("remove_agent", name))
+
+    def inspect_agent(self, name: str) -> dict[str, str] | None:
+        self.calls.append(("inspect_agent", name))
+        return {"Name": name, "State": "running"}
+
+    def tail_logs(self, name: str, lines: int) -> str:
+        self.calls.append(("tail_logs", {"name": name, "lines": lines}))
+        return ""
+
+
+def test_load_agent_detects_dockerfile_plan(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    dockerfile = repo / ".prj_assistant" / "image" / "Dockerfile"
+    dockerfile.parent.mkdir(parents=True)
+    dockerfile.write_text("FROM alpine:3.20\n", encoding="utf-8")
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert result.ok is True
+    assert result.data["image_plan"]["type"] == "dockerfile"
+
+
+def test_load_agent_channel_conflict(tmp_path) -> None:
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    first = service.load_agent(name="payments-api", repo_path=str(repo_a), channel_id="C123")
+    assert first.ok is True
+
+    second = service.load_agent(name="billing-api", repo_path=str(repo_b), channel_id="C123")
+    assert second.ok is False
+    assert second.code == "ERR_CHANNEL_CONFLICT"
+
+
+def test_start_agent_builds_on_start(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    dockerfile = repo / ".prj_assistant" / "image" / "Dockerfile"
+    dockerfile.parent.mkdir(parents=True)
+    dockerfile.write_text("FROM alpine:3.20\n", encoding="utf-8")
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    load_result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert load_result.ok is True
+
+    start_result = service.start_agent(name="payments-api")
+    assert start_result.ok is True
+    assert start_result.data["resolved_image"] == "codex-agent-payments-api:latest"
+    assert runtime.calls[0][0] == "build_image"
+    assert runtime.calls[1][0] == "create_or_update_agent"
+    assert runtime.calls[2] == ("start_agent", "agent-payments-api")
+
+
+def test_status_returns_registry_and_runtime(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+
+    result = service.status(name="payments-api")
+    assert result.ok is True
+    assert result.data["record"]["name"] == "payments-api"
+    assert result.data["runtime"]["Name"] == "agent-payments-api"

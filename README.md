@@ -53,6 +53,14 @@ sequenceDiagram
 - `/codex-conv-cancel` cancel the currently running prompt
 - `/codex-help` show usage summary
 
+## Master CLI (Phase 1)
+Local orchestrator CLI is available for early master-agent implementation work:
+
+- `python -m src.master.cli --registry data/master/agents.json list`
+- `python -m src.master.cli --registry data/master/agents.json load <name> <repo_path> <channel_id>`
+- `python -m src.master.cli --registry data/master/agents.json --dry-run start <name>`
+- `python -m src.master.cli --registry data/master/agents.json --dry-run status <name>`
+
 ## Security Model
 - Keep secrets in environment variables only.
 - Do not commit tokens or session metadata.
