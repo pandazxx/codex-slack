@@ -9,7 +9,7 @@ This is a living phased plan for the master -> agent orchestration feature.
 
 ## Scope Boundary (v1)
 - Master manages agent container lifecycle.
-- Agents remain the current `codex-slack-bot` image.
+- Agent container is refactored into worker mode from current `codex-slack-bot` baseline.
 - No dynamic secret entry via Slack.
 - No UI beyond Slack commands and logs.
 - Private team / self-managed environment assumptions are acceptable.
@@ -40,78 +40,112 @@ Deliverables:
 - channel routing rules (`channel_id` ownership and conflict handling)
 - admin channel policy + routing rules for non-admin channels
 
-## Phase 1: Local Orchestrator CLI (No Slack Yet)
-Goal: prove lifecycle management without Slack complexity.
+## End-to-End Delivery Plan (v1)
+### Phase 1: Master Core (Local CLI Path)
+Goal:
+- Deliver local lifecycle orchestration with Podman and registry persistence before Slack integration.
 
-Build:
-- `src/master/registry.py`
-- `src/master/runtime_adapter.py`
-- `src/master/cli.py`
-
-Commands (local CLI):
-- `master agent list`
-- `master agent load`
-- `master agent start`
-- `master agent stop`
-- `master agent rm`
-- `master agent status`
+Implementation:
+- `src/master/registry.py`: JSON source-of-truth, channel conflict lookup, atomic write pattern.
+- `src/master/runtime_adapter.py`: Podman adapter (`build/create/start/stop/remove/inspect/logs`) with `--dry-run`.
+- `src/master/service.py`: command orchestration (`load/start/stop/status/remove/list`) and error-code mapping.
+- `src/master/cli.py`: local operator entrypoint and normalized response envelope.
 
 Validation:
-- Can start/stop one agent bound to a test repo and test channel.
-- Registry updates survive restart.
-- `load` and `start` are independently repeatable/idempotent.
-- Agent container initializes a repo clone into named volume workspace.
-- Master can report init stage failures using container exit code and recent logs.
+- Can `load/start/stop/status/remove` one agent successfully.
+- `load` enforces strict channel conflict behavior.
+- Build is triggered by `start` only when Dockerfile plan exists.
+- Registry survives process restarts.
 
-## Phase 2: Master Slack Bot (Admin Channel)
-Goal: expose orchestrator controls through Slack.
+### Phase 2: Agent Container Refactor (Worker Mode)
+Goal:
+- Convert agent runtime from Slack-connected bot to master-driven worker container.
 
-Build:
-- `src/master/slack_app.py`
-- `src/master/service.py`
-- `src/master/main.py`
-- channel router (`channel_id -> agent`) + worker dispatch interface
-- thread tracking in master for routed agent conversations
+Implementation:
+- Split runtime modes:
+- `master` mode (Slack-connected) for control plane only.
+- `agent-worker` mode (no Slack client) for execution plane.
+- Add staged agent entrypoint:
+- `preflight` -> `repo_sync` -> `workspace_prepare` -> `ready`.
+- Add status signaling contract from agent to master:
+- structured stage logs (stdout/stderr markers).
+- container exit codes for failed stages.
+- optional status file (`/run/master-agent/status.json`) if needed.
+- Add per-agent workspace bootstrap:
+- clone/fetch repo into named volume.
+- initialize isolated `CODEX_HOME`.
+- apply shared auth refs (`SSH_AUTH_SOCK`, `GH_TOKEN` file-path refs).
 
-Add Slack commands:
+Validation:
+- Agent starts without Slack token env.
+- Agent can initialize repo workspace and run worker process.
+- Failed init stage is visible to master via inspect + logs.
+
+### Phase 3: Master Slack Control Plane (Admin Channel Only)
+Goal:
+- Expose orchestration commands to Slack admin channel with stable response contract.
+
+Implementation:
+- `src/master/slack_app.py`, `src/master/main.py`.
+- Map slash commands to service operations:
 - `/master-agent-list`
-- `/master-agent-load`
-- `/master-agent-start`
-- `/master-agent-stop`
-- `/master-agent-status`
-- `/master-agent-remove`
+- `/master-agent-load <name> <repo_path> <channel_id>`
+- `/master-agent-start <name>`
+- `/master-agent-stop <name>`
+- `/master-agent-status <name>`
+- `/master-agent-remove <name>`
+- Enforce admin-channel-only execution for orchestration commands.
+- Return stable envelope and error codes in Slack replies.
 
 Validation:
-- Commands map cleanly to CLI/service actions.
-- Errors are actionable and safe to expose.
-- Messages in agent channels route to exactly one agent.
-- Unmapped channels receive no agent processing.
-- Admin-channel commands do not execute in non-admin channels.
-- Thread follow-up replies are routed by master to the same agent without repeated mention.
+- Slack command outputs match local CLI/service outcomes.
+- Unauthorized channel usage is rejected cleanly.
 
-## Phase 3: Agent Config Templates + Profiles
-Goal: reduce repetitive setup for multiple agents.
+### Phase 4: Message Routing and Thread Continuity
+Goal:
+- Route agent-channel prompts through master to mapped agent, preserving thread behavior.
 
-Build:
-- Agent template renderer (compose/run config)
-- Profile support for reusable defaults (GH token ref, git identity, runtime)
-- Per-agent logging destination conventions
+Implementation:
+- Implement `channel_id -> agent` router with strict 1:1 mapping.
+- Keep master as the only Slack event consumer.
+- Forward non-admin channel prompts to mapped agent worker interface.
+- Preserve thread continuity:
+- initial mention creates tracked thread.
+- follow-up replies route to same mapped agent without repeated mention.
 
 Validation:
-- Create multiple agents with minimal arguments.
-- Podman runtime path works for both rootful and rootless host socket modes.
+- Unmapped channels are ignored or receive setup hint per policy.
+- Mapped channels always route to exactly one agent.
+- Thread follow-up behavior remains consistent with existing UX.
 
-## Phase 4: Safety + Operability Hardening
-- File locking for concurrent commands.
-- Audit log for master actions.
-- Rate limiting / command throttling in admin channel.
-- Health check and restart policies.
-- Secret reference validation and masking in logs.
+### Phase 5: Operability, Safety, and Release Readiness
+Goal:
+- Harden v1 for team operation and prepare release PR.
 
-## Proposed Work Items (Next 3)
-1. Draft registry JSON schema and example (`docs/examples/master-agents.schema.json` or markdown table first).
-2. Draft project manifest spec (`.prj_assistant/agent.toml`) with image override / Dockerfile options and validation rules (Dockerfile under `.prj_assistant/image/`).
-3. Implement local orchestrator CLI with a mock runtime adapter and named-volume workspace init lifecycle.
+Implementation:
+- File locking for concurrent registry mutations.
+- Audit log for master actions (`request_id`, command, actor/channel, result code).
+- Rate limiting in admin channel.
+- Secret-path validation and masking in logs.
+- Podman socket mode verification (rootful/rootless).
+- Runbooks for bootstrap, recovery, and manual unbind/bind.
+
+Validation:
+- Failure scenarios covered:
+- build failure
+- start failure
+- container crash
+- Slack outage/reconnect
+- E2E smoke test: load -> start -> route prompt -> stop -> remove.
+
+## Immediate Backlog (Execution Order)
+1. Finalize registry schema doc and add sample payload (`docs/examples/master-agents.schema.json` or markdown table).
+2. Complete service error normalization and response envelope parity between CLI and Slack adapters.
+3. Implement agent worker mode entrypoint and staged initialization contract.
+4. Implement master-to-agent dispatch interface (non-Slack control path).
+5. Wire admin-channel slash commands to master service.
+6. Add channel routing + thread continuity integration tests.
+7. Add runbook docs for operational flows and failure handling.
 
 ## Decision Log Seeds (To Finalize Before Phase 1)
 - Agent runtime packaging strategy (v1): default image + project manifest image override / repo-local Dockerfile.
@@ -134,6 +168,16 @@ Validation:
 - Can render runtime config for that agent.
 - Can start/stop the agent container from local CLI.
 - Clear docs for setup and limitations.
+
+## V1 Release Acceptance Criteria (End-to-End)
+- Master runs in container and controls host Podman via mounted socket.
+- Admin-channel slash commands manage lifecycle end-to-end.
+- Agent container runs in worker mode with no direct Slack connectivity.
+- Agent init stages are observable via status and structured logs.
+- Channel mapping remains strict one-channel-to-one-agent.
+- Build-on-start behavior works for `.prj_assistant/image/Dockerfile`.
+- Shared auth reference + isolated per-agent `CODEX_HOME` behavior verified.
+- E2E flow passes: load -> start -> prompt route -> response -> stop -> remove.
 
 ## Non-Goals (for v1)
 - Scheduling/queueing across agents.
