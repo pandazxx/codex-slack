@@ -114,6 +114,7 @@ Validation:
 - Slack ownership model (v1): one user-managed Slack app/token set for the whole system; master is the only Slack client.
 - Slack topology (v1): single Slack app/bot with channel->agent routing via master.
 - Channel ownership (v1): strict one-channel-to-one-agent; conflicts rejected unless explicit rebind command is added later.
+- Channel identifier input (v1): commands take Slack `channel_id` directly; channel-name lookup deferred.
 - Workspace mode (v1): named volume by default; host bind mount optional later.
 - Container runtime (v1): Podman only, via host socket mounted into master container.
 - Git auth model (v1): master and agent share SSH agent mechanism and/or `GH_TOKEN` refs.

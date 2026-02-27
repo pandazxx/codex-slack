@@ -64,6 +64,7 @@ Input rules:
 - `name`: `^[a-z0-9][a-z0-9-]{1,30}$`
 - `repo_path`: Git URL or approved repo identifier (resolved by master policy)
 - `channel_id`: Slack channel ID (`C...`)
+- v1 requires `channel_id` as command input; channel-name resolution is out of scope.
 
 #### `/master-agent-start <name>`
 Purpose:
@@ -220,6 +221,7 @@ Responses should include:
 ### Channel Ownership Rule
 - One channel maps to one agent.
 - One agent may serve one or more channels (defer for now; default to one-to-one).
+- Channel binding key is always Slack `channel_id` in v1.
 
 V1 default:
 - one channel <-> one agent (strict)
