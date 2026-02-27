@@ -6,6 +6,8 @@ Operational guide for the master->agent v1 stack:
 - agent worker containers (no direct Slack connection)
 - Podman host socket control path
 
+See `docs/MASTER_AGENT_UAT.md` for step-by-step user acceptance test cases.
+
 ## Prerequisites
 - Host Podman service socket mounted into master container.
 - Slack app configured with command/event scopes.

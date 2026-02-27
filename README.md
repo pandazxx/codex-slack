@@ -104,4 +104,5 @@ Required env for worker init:
 - Master-agent orchestration design (draft): `docs/MASTER_AGENT_ARCHITECTURE.md`
 - Master-agent implementation plan (draft): `docs/MASTER_AGENT_PLAN.md`
 - Master-agent operations runbook: `docs/MASTER_AGENT_RUNBOOK.md`
+- Master-agent UAT test cases: `docs/MASTER_AGENT_UAT.md`
 - Daily operation and troubleshooting: `USAGE.md`
