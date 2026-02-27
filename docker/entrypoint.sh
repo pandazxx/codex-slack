@@ -42,4 +42,13 @@ if [[ -n "${CODEX_SESSION_ID:-}" ]]; then
   SESSION_ARGS+=("--session-id" "${CODEX_SESSION_ID}")
 fi
 
+MODE="${CODEX_CONTAINER_MODE:-bot}"
+
+if [[ "${MODE}" == "agent-worker" ]]; then
+  if [[ "$#" -eq 0 ]] || [[ "$*" == "python -m src.bot.main" ]]; then
+    exec python -m src.agent.main
+  fi
+  exec "$@"
+fi
+
 exec "$@" "${SESSION_ARGS[@]}"

@@ -66,6 +66,10 @@ Validation:
 Goal:
 - Convert agent runtime from Slack-connected bot to master-driven worker container.
 
+Status:
+- In progress.
+- Implemented in current branch: `agent-worker` runtime module, staged initialization flow, status file emission, and container mode switch in entrypoint.
+
 Implementation:
 - Split runtime modes:
 - `master` mode (Slack-connected) for control plane only.

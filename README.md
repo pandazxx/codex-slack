@@ -61,6 +61,18 @@ Local orchestrator CLI is available for early master-agent implementation work:
 - `python -m src.master.cli --registry data/master/agents.json --dry-run start <name>`
 - `python -m src.master.cli --registry data/master/agents.json --dry-run status <name>`
 
+## Agent Worker Mode (Phase 2 WIP)
+The container can run as a worker (no Slack connection) by setting:
+
+- `CODEX_CONTAINER_MODE=agent-worker`
+
+Required env for worker init:
+
+- `AGENT_REPO_URL` (repo to clone/fetch)
+- Optional: `AGENT_REPO_REF` (default `main`)
+- Optional: `AGENT_REPO_DIR` (default `repo`)
+- Optional: `AGENT_STATUS_FILE` (default `/run/master-agent/status.json`)
+
 ## Security Model
 - Keep secrets in environment variables only.
 - Do not commit tokens or session metadata.
