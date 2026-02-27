@@ -16,7 +16,7 @@ This is a living phased plan for the master -> agent orchestration feature.
 - Define runtime adapter interface (`podman` in v1).
 - Define policy rules (allowed repo roots, channel uniqueness).
 - Finalize simplified image override model (`default image` + `project manifest override`).
-- Finalize v1 start-agent flow: check `.prj_assistant/image/Dockerfile` on project main branch, build if present, otherwise use default image, then clone repo in agent init using named volume.
+- Finalize v1 start-agent flow: check `.prj_assistant/image/Dockerfile` on project main branch during `load`, then build on `start` if present, otherwise use default image, then clone repo in agent init using named volume.
 - Finalize v1 master command contract and state machine (`load/start/stop/status/list/remove`).
 - Finalize channel->agent routing model and admin-channel rules for single-bot mode.
 - Finalize channel conflict behavior and thread-routing ownership in master.
@@ -110,17 +110,19 @@ Validation:
 
 ## Decision Log Seeds (To Finalize Before Phase 1)
 - Agent runtime packaging strategy (v1): default image + project manifest image override / repo-local Dockerfile.
-- Agent start flow (v1): repo-load -> main branch check -> `.prj_assistant/image/Dockerfile` build-or-default -> start container with named volume -> agent clones repo during init.
+- Agent start flow (v1): repo-load -> main branch check -> plan build-or-default -> start triggers Dockerfile build when needed -> start container with named volume -> agent clones repo during init.
 - Slack ownership model (v1): one user-managed Slack app/token set for the whole system; master is the only Slack client.
 - Slack topology (v1): single Slack app/bot with channel->agent routing via master.
-- Channel ownership (v1): strict one-channel-to-one-agent; conflicts rejected unless explicit rebind command is added later.
+- Command surface (v1): master orchestration commands run in admin channel only.
+- Secret reference model (v1): file-path references (no raw secrets in commands).
+- Channel ownership (v1): strict one-channel-to-one-agent; conflicts resolved via manual unbind then bind/load.
 - Channel identifier input (v1): commands take Slack `channel_id` directly; channel-name lookup deferred.
 - Workspace mode (v1): named volume by default; host bind mount optional later.
 - Container runtime (v1): Podman only, via host socket mounted into master container.
 - Git auth model (v1): master and agent share SSH agent mechanism and/or `GH_TOKEN` refs.
 - Agent runtime control model (v1): no always-on service inside agent; master observes status via Podman state + structured logs.
 - Branch strategy and repo sync policy: deferred to per-project decisions (out of current scope).
-- Codex auth/session model: read-only auth/session forwarding + local `CODEX_HOME` copy; support project-local `.codex`.
+- Codex auth/session model (v1): shared token/auth reference + isolated per-agent `CODEX_HOME`.
 
 ## Acceptance Criteria for First PR (Master Project)
 - Can register at least one agent in local registry.

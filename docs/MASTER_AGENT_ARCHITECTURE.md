@@ -52,7 +52,7 @@ Purpose:
 - Register or update an agent definition.
 - Validate repo path and channel mapping.
 - Load project `main` branch and evaluate `.prj_assistant/image/Dockerfile`.
-- Resolve build-vs-default image plan (optionally build in v1 if we choose eager build mode).
+- Resolve build-vs-default image plan (build is executed by `start` in v1).
 
 Effects:
 - Mutates registry.
@@ -68,7 +68,7 @@ Input rules:
 
 #### `/master-agent-start <name>`
 Purpose:
-- Start agent container from resolved/default image and rendered config.
+- Build project image if required by resolved plan, then start agent container from built/default image and rendered config.
 
 Effects:
 - Mutates runtime state.
@@ -130,7 +130,7 @@ Fields:
 - `at`: RFC3339 timestamp.
 
 `data` payload by command:
-- `load`: `state`, `resolved_image`, `build_source`, `channel_id`.
+- `load`: `state`, `image_plan`, `build_source`, `channel_id`.
 - `start`: `state`, `container_name`, `container_id`, `started_at`.
 - `stop`: `state`, `container_name`, `stopped_at`.
 - `status`: registry + observed runtime snapshot.
@@ -220,7 +220,6 @@ Responses should include:
 
 ### Channel Ownership Rule
 - One channel maps to one agent.
-- One agent may serve one or more channels (defer for now; default to one-to-one).
 - Channel binding key is always Slack `channel_id` in v1.
 
 V1 default:
@@ -231,9 +230,7 @@ When `/master-agent-load ... <channel_id>` is called:
 - If channel is unbound: bind it to the agent.
 - If channel is already bound to the same agent: idempotent success.
 - If channel is bound to a different agent: reject with conflict error.
-
-Optional later:
-- explicit `/master-agent-rebind <channel_id> <agent>` or force flag
+- Rebinding is done manually in v1: unbind old mapping, then bind/load again.
 
 ### Routing Rules (Agent Communication)
 For messages in non-admin channels:
@@ -300,7 +297,7 @@ Per-agent fields (v1):
 ## Security Boundaries
 - One shared Slack app/token set for the system in v1; master is the only Slack client.
 - No raw secrets entered in Slack commands.
-- Secrets injected from host env/files or secret store references.
+- Secret references use file paths in v1 (host-mounted into master/agent).
 - Restrict master-managed repo paths to approved prefixes.
 - Restrict generated container names to safe pattern.
 
@@ -313,10 +310,13 @@ Per-agent fields (v1):
   - Master/agents continue local state; recover on reconnect.
 
 ## Open Design Questions
-1. Should master use slash commands only, or admin-channel mentions too?
-2. How should secret references be represented (env key name vs file path)?
-3. Do we allow shared Codex auth/session mounts for all agents, or per-agent scoped homes by default?
-4. How much of runtime config should be user-editable from Slack?
+1. How much of runtime config should be user-editable from Slack?
+
+### Runtime Config Editability (Discussion Focus)
+For further discussion:
+- Which fields are editable from Slack after `load` (for example `git_user_*`, resource limits, image override)?
+- Which fields require re-`load` vs full `stop/start` to take effect?
+- Which fields are immutable post-create in v1 (for example `repo_path`, `channel_id`)?
 
 ## Discussion Topics (Current)
 ### 1. Per-Project Toolchains (C++, Go, etc.)
@@ -347,11 +347,11 @@ This is the revised v1 start flow (managed clone workspace):
 1. Master is instructed to load a project repo (repo URL / repo identifier).
 2. Master resolves the project source and checks project `main` branch contents for `.prj_assistant/image/Dockerfile`.
 3. If found:
-   - build an agent image from `.prj_assistant/image/`
-   - record built image reference in agent registry
+   - record build plan (`.prj_assistant/image/`) in agent registry
 4. If not found:
    - use the default agent image
 5. Master starts agent container with:
+   - image build step first when a project Dockerfile plan exists
    - a named volume for workspace storage
    - shared SSH agent and/or `GH_TOKEN` references for Git operations
 6. Agent container initialization clones/fetches the repo into its internal workspace volume.
@@ -361,6 +361,7 @@ Notes:
 - This flow intentionally avoids mutating a host repo working tree.
 - "Dirty repo" host working tree concerns are removed from the default path.
 - Branch strategy and sync policy are intentionally deferred to project-level decisions (out of current scope).
+- In v1, image build happens during `start`, not `load`.
 
 #### Agent Initialization Stages (Selected v1)
 In v1, agent container startup is a staged entrypoint flow with no always-on control service.
@@ -429,7 +430,8 @@ Why this was selected:
 - Aligns with frequent commit/push workflow where GitHub is the primary outcome store.
 
 ### 4. AI Login and Session Management
-- Auth/session forwarding remains supported (read-only mount + local writable `CODEX_HOME` copy).
+- Shared Codex token/auth reference is used across master and agents in v1.
+- Each agent uses an isolated local writable `CODEX_HOME`.
 - Master and agent use the same SSH agent mechanism and/or `GH_TOKEN` references.
 - Branch strategy and repo sync policy are deferred to project-level decisions (not in current scope).
 
@@ -447,7 +449,7 @@ Move to a managed image catalog when team scale/reliability needs increase:
 
 Recommended direction (v1):
 - Use one Slack app/bot token for the whole system.
-- Reserve one admin channel (or command scope) for master control commands.
+- Use admin channel only for master control commands in v1.
 - Maintain a channel -> agent mapping registry.
 - Master routes non-admin channel messages to the mapped agent container.
 - Revisit multi-bot isolation later if security/scale requires it.
@@ -460,7 +462,7 @@ Implications:
 - Lower Slack app setup overhead (single app, single install, single token set).
 - Simpler operator onboarding.
 - Stronger need for routing correctness in master.
-- Agents no longer need direct Slack connectivity in v1 if master proxies messages (optional design choice to finalize).
+- Agents do not have direct Slack connectivity in v1; master proxies all communication.
 
 Two implementation variants:
 1. **Master-only Slack integration (recommended for this model)**
@@ -476,14 +478,14 @@ Recommended v1:
 - Treat agent containers as worker runtimes, not Slack clients.
 
 ### 3. Workspace Storage Model (Host Mount vs Container Internal)
-- Host bind mounts: best for real repo workflows and Git interoperability (recommended default).
-- Container internal storage: safer isolation but poor UX for existing repos and external tooling.
-- Managed named volumes: useful for ephemeral agents, but harder for user inspection and external IDE use.
+- Managed named volumes: selected default for v1 (agent clones/fetches repo internally).
+- Host bind mounts: optional fallback/debug mode later.
+- Container internal storage without managed lifecycle: not used in v1.
 
 Recommended direction (v1):
-- Host bind mount required for repo-based agents.
-- Add policy restrictions on allowed host repo roots.
-- Consider optional "ephemeral clone into managed volume" mode later.
+- Use named volume per agent workspace.
+- Agent initializes repo clone/fetch inside container startup.
+- Keep host bind mounts as optional later mode only.
 
 ### 4. AI Login and Session Management
 - Shared host Codex auth/session mounts are simple but broad.
@@ -491,6 +493,6 @@ Recommended direction (v1):
 - Token-based auth via env is easiest to automate but user may prefer auth cache.
 
 Recommended direction (v1):
-- Support auth cache forwarding (read-only host mount + local copy) as default.
-- Support per-agent project-local `CODEX_HOME` when repo has `.codex/`.
+- Use one shared Codex token/auth reference across master and agents.
+- Use isolated per-agent `CODEX_HOME` by default.
 - Master stores only session IDs / auth references, never raw secrets.
