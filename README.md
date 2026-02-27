@@ -73,6 +73,8 @@ Required env:
 - `MASTER_ADMIN_CHANNELS` (comma-separated channel IDs)
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
+- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec -`)
+- Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
 
 ## Agent Worker Mode (Phase 2 WIP)
 The container can run as a worker (no Slack connection) by setting:

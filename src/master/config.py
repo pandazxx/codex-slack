@@ -11,6 +11,8 @@ class MasterSettings:
     admin_channels: set[str]
     registry_path: str
     dry_run: bool
+    dispatch_command_template: str
+    dispatch_timeout_seconds: int | None
 
 
 def _parse_admin_channels(raw_value: str) -> set[str]:
@@ -27,6 +29,11 @@ def load_master_settings() -> MasterSettings:
     admin_channels = _parse_admin_channels(os.getenv("MASTER_ADMIN_CHANNELS", ""))
     registry_path = os.getenv("MASTER_REGISTRY_PATH", "data/master/agents.json").strip()
     dry_run = _parse_bool(os.getenv("MASTER_DRY_RUN", "false"))
+    dispatch_command_template = os.getenv("MASTER_AGENT_COMMAND_TEMPLATE", "codex exec -").strip()
+    raw_dispatch_timeout = os.getenv("MASTER_AGENT_TIMEOUT_SECONDS", "").strip()
+    dispatch_timeout_seconds = int(raw_dispatch_timeout) if raw_dispatch_timeout else None
+    if dispatch_timeout_seconds is not None and dispatch_timeout_seconds <= 0:
+        dispatch_timeout_seconds = None
 
     missing: list[str] = []
     if not bot_token:
@@ -44,4 +51,6 @@ def load_master_settings() -> MasterSettings:
         admin_channels=admin_channels,
         registry_path=registry_path,
         dry_run=dry_run,
+        dispatch_command_template=dispatch_command_template,
+        dispatch_timeout_seconds=dispatch_timeout_seconds,
     )

@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import logging
-from typing import Callable
 
 from slack_bolt import App
 
+from .router import ChannelRouter, RouteError
 from .service import CommandResult, MasterService
 
 LOGGER = logging.getLogger(__name__)
@@ -128,8 +128,71 @@ def _register_command(
             )
 
 
-def create_master_app(*, bot_token: str, admin_channels: set[str], service: MasterService) -> App:
+def create_master_app(
+    *,
+    bot_token: str,
+    admin_channels: set[str],
+    service: MasterService,
+    router: ChannelRouter | None = None,
+) -> App:
     app = App(token=bot_token)
+
+    if router is not None:
+        @app.event("app_mention")
+        def on_mention(event: dict, say) -> None:  # type: ignore[no-untyped-def]
+            channel_id = event.get("channel", "")
+            thread_ts = event.get("thread_ts") or event.get("ts")
+            event_ts = event.get("ts")
+            text = event.get("text", "")
+            user_id = event.get("user", "")
+
+            try:
+                router.track_thread(channel_id=channel_id, thread_ts=thread_ts)
+                router.mark_mention_event(channel_id=channel_id, ts=event_ts)
+                response = router.route_prompt(
+                    channel_id=channel_id,
+                    text=text,
+                    thread_ts=thread_ts,
+                    user_id=user_id,
+                )
+                say(text=response, thread_ts=thread_ts)
+            except RouteError:
+                LOGGER.info("route skipped for channel=%s", channel_id)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("master mention handling failed")
+                say(text=f"Error: {exc}", thread_ts=thread_ts)
+
+        @app.event("message")
+        def on_thread_message(event: dict, say) -> None:  # type: ignore[no-untyped-def]
+            if event.get("subtype"):
+                return
+
+            channel_id = event.get("channel", "")
+            thread_ts = event.get("thread_ts")
+            event_ts = event.get("ts")
+            text = event.get("text", "")
+            user_id = event.get("user", "")
+
+            if not thread_ts or not text or not user_id:
+                return
+            if router.consume_marked_mention_event(channel_id=channel_id, ts=event_ts):
+                return
+            if not router.is_tracked_thread(channel_id=channel_id, thread_ts=thread_ts):
+                return
+
+            try:
+                response = router.route_prompt(
+                    channel_id=channel_id,
+                    text=text,
+                    thread_ts=thread_ts,
+                    user_id=user_id,
+                )
+                say(text=response, thread_ts=thread_ts)
+            except RouteError:
+                LOGGER.info("thread route skipped for channel=%s", channel_id)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("master thread handling failed")
+                say(text=f"Error: {exc}", thread_ts=thread_ts)
 
     for command_name in (
         "/master-agent-list",

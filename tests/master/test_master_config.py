@@ -11,6 +11,8 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123,C999")
     monkeypatch.setenv("MASTER_REGISTRY_PATH", "data/master/test.json")
     monkeypatch.setenv("MASTER_DRY_RUN", "true")
+    monkeypatch.setenv("MASTER_AGENT_COMMAND_TEMPLATE", "codex exec resume abc -")
+    monkeypatch.setenv("MASTER_AGENT_TIMEOUT_SECONDS", "30")
 
     settings = load_master_settings()
     assert settings.slack_bot_token == "xoxb-token"
@@ -18,6 +20,8 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     assert settings.admin_channels == {"C123", "C999"}
     assert settings.registry_path == "data/master/test.json"
     assert settings.dry_run is True
+    assert settings.dispatch_command_template == "codex exec resume abc -"
+    assert settings.dispatch_timeout_seconds == 30
 
 
 def test_load_master_settings_requires_admin_channels(monkeypatch) -> None:  # type: ignore[no-untyped-def]

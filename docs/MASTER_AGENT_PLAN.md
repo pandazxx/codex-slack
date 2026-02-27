@@ -118,6 +118,10 @@ Validation:
 Goal:
 - Route agent-channel prompts through master to mapped agent, preserving thread behavior.
 
+Status:
+- In progress.
+- Implemented in current branch: `src/master/router.py` (channel mapping, thread tracking, mention dedupe) and Slack event wiring in `src/master/slack_app.py` using a Podman exec dispatcher.
+
 Implementation:
 - Implement `channel_id -> agent` router with strict 1:1 mapping.
 - Keep master as the only Slack event consumer.

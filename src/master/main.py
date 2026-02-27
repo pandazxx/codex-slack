@@ -7,6 +7,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .config import load_master_settings
 from .registry import AgentRegistry
+from .router import ChannelRouter, PodmanExecDispatcher
 from .runtime_adapter import PodmanRuntimeAdapter
 from .service import MasterService
 from .slack_app import create_master_app
@@ -28,11 +29,21 @@ def main() -> None:
     registry = AgentRegistry(settings.registry_path)
     runtime = PodmanRuntimeAdapter(dry_run=settings.dry_run)
     service = MasterService(registry=registry, runtime=runtime)
+    dispatcher = PodmanExecDispatcher(
+        command_template=settings.dispatch_command_template,
+        timeout_seconds=settings.dispatch_timeout_seconds,
+    )
+    router = ChannelRouter(
+        registry=registry,
+        dispatcher=dispatcher,
+        admin_channels=settings.admin_channels,
+    )
 
     app = create_master_app(
         bot_token=settings.slack_bot_token,
         admin_channels=settings.admin_channels,
         service=service,
+        router=router,
     )
     handler = SocketModeHandler(app, settings.slack_app_token)
     handler.start()
