@@ -21,6 +21,7 @@ This is a living phased plan for the master -> agent orchestration feature.
 - Finalize channel->agent routing model and admin-channel rules for single-bot mode.
 - Finalize channel conflict behavior and thread-routing ownership in master.
 - Finalize master container runtime wiring: mounted Podman socket + `podman` client config.
+- Finalize agent initialization stages and status reporting contract (no in-agent control service).
 
 Deliverables:
 - `docs/MASTER_AGENT_ARCHITECTURE.md`
@@ -53,6 +54,7 @@ Validation:
 - Registry updates survive restart.
 - `load` and `start` are independently repeatable/idempotent.
 - Agent container initializes a repo clone into named volume workspace.
+- Master can report init stage failures using container exit code and recent logs.
 
 ## Phase 2: Master Slack Bot (Admin Channel)
 Goal: expose orchestrator controls through Slack.
@@ -113,6 +115,7 @@ Validation:
 - Workspace mode (v1): named volume by default; host bind mount optional later.
 - Container runtime (v1): Podman only, via host socket mounted into master container.
 - Git auth model (v1): master and agent share SSH agent mechanism and/or `GH_TOKEN` refs.
+- Agent runtime control model (v1): no always-on service inside agent; master observes status via Podman state + structured logs.
 - Branch strategy and repo sync policy: deferred to per-project decisions (out of current scope).
 - Codex auth/session model: read-only auth/session forwarding + local `CODEX_HOME` copy; support project-local `.codex`.
 

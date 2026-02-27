@@ -289,12 +289,30 @@ This is the revised v1 start flow (managed clone workspace):
    - a named volume for workspace storage
    - shared SSH agent and/or `GH_TOKEN` references for Git operations
 6. Agent container initialization clones/fetches the repo into its internal workspace volume.
-7. Proceed with agent workspace initialization and runtime startup (details deferred).
+7. Agent completes initialization stages and then runs the worker process for prompt execution.
 
 Notes:
 - This flow intentionally avoids mutating a host repo working tree.
 - "Dirty repo" host working tree concerns are removed from the default path.
 - Branch strategy and sync policy are intentionally deferred to project-level decisions (out of current scope).
+
+#### Agent Initialization Stages (Selected v1)
+In v1, agent container startup is a staged entrypoint flow with no always-on control service.
+
+Stages:
+1. `preflight`: verify required env and credentials (`SSH_AUTH_SOCK` and/or `GH_TOKEN` ref), verify writable workspace volume.
+2. `repo_sync`: clone repo if missing; otherwise fetch/reset according to project policy.
+3. `workspace_prepare`: apply repo-local setup needed for agent runtime (for example `.codex` bootstrap if configured).
+4. `ready`: launch the agent worker process (no Slack client in agent).
+
+Status feedback to master (without in-agent service):
+- Container lifecycle state via Podman inspect (`created`, `running`, `exited`).
+- Structured stage logs emitted to stdout/stderr (master tails and parses markers).
+- Optional init status file in shared control path (for example `/run/master-agent/status.json`) written during stages.
+
+Failure behavior:
+- Any failed stage exits container with non-zero code.
+- Master records failed stage + exit code + last log lines into registry and reports to Slack.
 
 #### Project Requirements Manifest (Proposed v1)
 Allow each repo to define non-secret requirements in a project-owned file, e.g. `.prj_assistant/agent.toml`:
