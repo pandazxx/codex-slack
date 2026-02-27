@@ -75,6 +75,8 @@ Required env:
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
 - Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec -`)
 - Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
+- Optional: `MASTER_COMMAND_RATE_LIMIT_COUNT` (default `20`)
+- Optional: `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
 
 ## Agent Worker Mode (Phase 2 WIP)
 The container can run as a worker (no Slack connection) by setting:
@@ -101,4 +103,5 @@ Required env for worker init:
 - Multi-agent setup (same Slack workspace): `docs/MULTI_AGENT_SETUP.md`
 - Master-agent orchestration design (draft): `docs/MASTER_AGENT_ARCHITECTURE.md`
 - Master-agent implementation plan (draft): `docs/MASTER_AGENT_PLAN.md`
+- Master-agent operations runbook: `docs/MASTER_AGENT_RUNBOOK.md`
 - Daily operation and troubleshooting: `USAGE.md`

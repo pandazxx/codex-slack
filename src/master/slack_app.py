@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import logging
+from threading import Lock
+import time
 
 from slack_bolt import App
 
@@ -18,6 +20,28 @@ class SlackCommandRequest:
     text: str
     channel_id: str
     user_id: str
+
+
+@dataclass
+class CommandRateLimiter:
+    max_calls: int
+    window_seconds: int
+    _lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _events: dict[str, list[float]] = field(default_factory=dict, init=False, repr=False)
+
+    def allow(self, key: str) -> bool:
+        if self.max_calls <= 0:
+            return True
+        now = time.time()
+        lower_bound = now - self.window_seconds
+        with self._lock:
+            history = [ts for ts in self._events.get(key, []) if ts >= lower_bound]
+            if len(history) >= self.max_calls:
+                self._events[key] = history
+                return False
+            history.append(now)
+            self._events[key] = history
+            return True
 
 
 def is_admin_channel(channel_id: str, admin_channels: set[str]) -> bool:
@@ -82,6 +106,7 @@ def _register_command(
     command_name: str,
     admin_channels: set[str],
     service: MasterService,
+    rate_limiter: CommandRateLimiter | None = None,
 ) -> None:
     @app.command(command_name)
     def on_command(ack, respond, command: dict) -> None:  # type: ignore[no-untyped-def]
@@ -93,6 +118,12 @@ def _register_command(
             channel_id=command.get("channel_id", ""),
             user_id=command.get("user_id", ""),
         )
+        LOGGER.info(
+            "master.command_received command=%s channel=%s user=%s",
+            command_name,
+            request.channel_id,
+            request.user_id or "-",
+        )
 
         if not is_admin_channel(request.channel_id, admin_channels):
             respond(
@@ -103,6 +134,21 @@ def _register_command(
                         code="ERR_INVALID_ARGS",
                         message="command allowed in admin channel only",
                         data={"channel_id": request.channel_id},
+                    ),
+                )
+            )
+            return
+
+        limiter_key = f"{request.channel_id}:{request.user_id}"
+        if rate_limiter and not rate_limiter.allow(limiter_key):
+            respond(
+                format_command_result(
+                    command_name,
+                    CommandResult(
+                        ok=False,
+                        code="ERR_RATE_LIMITED",
+                        message="command rate limited",
+                        data={"window_seconds": rate_limiter.window_seconds, "max_calls": rate_limiter.max_calls},
                     ),
                 )
             )
@@ -134,6 +180,7 @@ def create_master_app(
     admin_channels: set[str],
     service: MasterService,
     router: ChannelRouter | None = None,
+    rate_limiter: CommandRateLimiter | None = None,
 ) -> App:
     app = App(token=bot_token)
 
@@ -202,6 +249,12 @@ def create_master_app(
         "/master-agent-status",
         "/master-agent-remove",
     ):
-        _register_command(app, command_name=command_name, admin_channels=admin_channels, service=service)
+        _register_command(
+            app,
+            command_name=command_name,
+            admin_channels=admin_channels,
+            service=service,
+            rate_limiter=rate_limiter,
+        )
 
     return app

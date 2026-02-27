@@ -10,7 +10,7 @@ from .registry import AgentRegistry
 from .router import ChannelRouter, PodmanExecDispatcher
 from .runtime_adapter import PodmanRuntimeAdapter
 from .service import MasterService
-from .slack_app import create_master_app
+from .slack_app import CommandRateLimiter, create_master_app
 
 
 def configure_logging() -> None:
@@ -38,12 +38,17 @@ def main() -> None:
         dispatcher=dispatcher,
         admin_channels=settings.admin_channels,
     )
+    rate_limiter = CommandRateLimiter(
+        max_calls=settings.command_rate_limit_count,
+        window_seconds=settings.command_rate_limit_window_seconds,
+    )
 
     app = create_master_app(
         bot_token=settings.slack_bot_token,
         admin_channels=settings.admin_channels,
         service=service,
         router=router,
+        rate_limiter=rate_limiter,
     )
     handler = SocketModeHandler(app, settings.slack_app_token)
     handler.start()

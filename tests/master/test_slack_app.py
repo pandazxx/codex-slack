@@ -4,6 +4,7 @@ import json
 
 from src.master.service import CommandResult
 from src.master.slack_app import (
+    CommandRateLimiter,
     SlackCommandRequest,
     dispatch_slash_command,
     format_command_result,
@@ -79,3 +80,10 @@ def test_format_command_result_json_payload() -> None:
     assert obj["ok"] is True
     assert obj["command"] == "/master-agent-list"
     assert obj["code"] == "OK"
+
+
+def test_command_rate_limiter_blocks_after_limit() -> None:
+    limiter = CommandRateLimiter(max_calls=2, window_seconds=60)
+    assert limiter.allow("C1:U1") is True
+    assert limiter.allow("C1:U1") is True
+    assert limiter.allow("C1:U1") is False

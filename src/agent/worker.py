@@ -82,7 +82,14 @@ def stage_preflight(settings: WorkerSettings) -> None:
     gh_token_file = os.getenv("GH_TOKEN_FILE", "").strip()
     if gh_token:
         auth_ok = True
-    if gh_token_file and Path(gh_token_file).exists():
+    if gh_token_file:
+        token_path = Path(gh_token_file)
+        if not token_path.is_absolute():
+            raise AgentInitError("preflight", "GH_TOKEN_FILE must be an absolute path")
+        if not token_path.exists():
+            raise AgentInitError("preflight", "GH_TOKEN_FILE path does not exist")
+        if not token_path.is_file():
+            raise AgentInitError("preflight", "GH_TOKEN_FILE path is not a file")
         auth_ok = True
 
     if not auth_ok:

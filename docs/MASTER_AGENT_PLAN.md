@@ -139,6 +139,11 @@ Validation:
 Goal:
 - Harden v1 for team operation and prepare release PR.
 
+Status:
+- In progress.
+- Implemented in current branch: registry file locking, structured master audit logs, and admin command rate limiting.
+- Remaining in this phase: complete runbook details and validate end-to-end failure drills on target infra.
+
 Implementation:
 - File locking for concurrent registry mutations.
 - Audit log for master actions (`request_id`, command, actor/channel, result code).

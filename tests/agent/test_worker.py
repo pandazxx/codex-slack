@@ -46,6 +46,47 @@ def test_stage_preflight_requires_auth(tmp_path, monkeypatch) -> None:  # type: 
         stage_preflight(settings)
 
 
+def test_stage_preflight_rejects_relative_gh_token_file(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN_FILE", "relative/path/token")
+
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path / "workspace"),
+        repo_url="unused",
+        repo_ref="main",
+        repo_dir_name="repo",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex"),
+        ready_poll_seconds=0.1,
+    )
+
+    with pytest.raises(AgentInitError, match="absolute path"):
+        stage_preflight(settings)
+
+
+def test_stage_preflight_accepts_absolute_gh_token_file(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    token_file = tmp_path / "gh.token"
+    token_file.write_text("token", encoding="utf-8")
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN_FILE", str(token_file))
+
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path / "workspace"),
+        repo_url="unused",
+        repo_ref="main",
+        repo_dir_name="repo",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex"),
+        ready_poll_seconds=0.1,
+    )
+
+    stage_preflight(settings)
+
+
 def test_stage_repo_sync_clones_repo(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     src_repo = _create_local_repo(tmp_path / "src")
     monkeypatch.setenv("GH_TOKEN", "token")

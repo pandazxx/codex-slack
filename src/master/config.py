@@ -13,6 +13,8 @@ class MasterSettings:
     dry_run: bool
     dispatch_command_template: str
     dispatch_timeout_seconds: int | None
+    command_rate_limit_count: int
+    command_rate_limit_window_seconds: int
 
 
 def _parse_admin_channels(raw_value: str) -> set[str]:
@@ -34,6 +36,14 @@ def load_master_settings() -> MasterSettings:
     dispatch_timeout_seconds = int(raw_dispatch_timeout) if raw_dispatch_timeout else None
     if dispatch_timeout_seconds is not None and dispatch_timeout_seconds <= 0:
         dispatch_timeout_seconds = None
+    raw_rate_limit_count = os.getenv("MASTER_COMMAND_RATE_LIMIT_COUNT", "20").strip()
+    raw_rate_limit_window = os.getenv("MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS", "60").strip()
+    command_rate_limit_count = int(raw_rate_limit_count) if raw_rate_limit_count else 20
+    command_rate_limit_window_seconds = int(raw_rate_limit_window) if raw_rate_limit_window else 60
+    if command_rate_limit_count < 0:
+        command_rate_limit_count = 0
+    if command_rate_limit_window_seconds <= 0:
+        command_rate_limit_window_seconds = 60
 
     missing: list[str] = []
     if not bot_token:
@@ -53,4 +63,6 @@ def load_master_settings() -> MasterSettings:
         dry_run=dry_run,
         dispatch_command_template=dispatch_command_template,
         dispatch_timeout_seconds=dispatch_timeout_seconds,
+        command_rate_limit_count=command_rate_limit_count,
+        command_rate_limit_window_seconds=command_rate_limit_window_seconds,
     )

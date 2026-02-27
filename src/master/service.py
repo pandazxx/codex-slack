@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 import re
 
@@ -9,6 +10,7 @@ from .runtime_adapter import RuntimeAdapter
 
 DEFAULT_IMAGE = "codex-slack-bot:latest"
 DEFAULT_RUNTIME = "podman"
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -26,29 +28,36 @@ class MasterService:
 
     def list_agents(self) -> CommandResult:
         agents = [agent.to_dict() for agent in self._registry.list_agents()]
-        return CommandResult(ok=True, code="OK", message="agents listed", data={"agents": agents})
+        result = CommandResult(ok=True, code="OK", message="agents listed", data={"agents": agents})
+        self._audit(command="list", agent="-", result=result)
+        return result
 
     def load_agent(self, *, name: str, repo_path: str, channel_id: str) -> CommandResult:
         validation_error = self._validate_load_inputs(name=name, channel_id=channel_id)
         if validation_error:
+            self._audit(command="load", agent=name or "-", result=validation_error)
             return validation_error
 
         if not Path(repo_path).exists():
-            return CommandResult(
+            result = CommandResult(
                 ok=False,
                 code="ERR_REPO_NOT_ALLOWED",
                 message=f"repo path does not exist: {repo_path}",
                 data={},
             )
+            self._audit(command="load", agent=name, result=result)
+            return result
 
         conflict = self._registry.find_by_channel(channel_id)
         if conflict and conflict.name != name:
-            return CommandResult(
+            result = CommandResult(
                 ok=False,
                 code="ERR_CHANNEL_CONFLICT",
                 message=f"channel {channel_id} already bound to {conflict.name}",
                 data={"owner": conflict.name},
             )
+            self._audit(command="load", agent=name, result=result)
+            return result
 
         image_plan = self._resolve_image_plan(repo_path)
         record = self._registry.get(name)
@@ -70,7 +79,7 @@ class MasterService:
             record.last_error = None
 
         saved = self._registry.upsert(record)
-        return CommandResult(
+        result = CommandResult(
             ok=True,
             code="OK",
             message=f"loaded {name}",
@@ -80,11 +89,15 @@ class MasterService:
                 "channel_id": saved.channel_id,
             },
         )
+        self._audit(command="load", agent=name, result=result)
+        return result
 
     def start_agent(self, *, name: str) -> CommandResult:
         record = self._registry.get(name)
         if not record:
-            return CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="start", agent=name, result=result)
+            return result
 
         try:
             image = DEFAULT_IMAGE
@@ -106,29 +119,35 @@ class MasterService:
             record.status = "error"
             record.last_error = str(exc)
             self._registry.upsert(record)
-            return CommandResult(
+            result = CommandResult(
                 ok=False,
                 code="ERR_RUNTIME_FAILED",
                 message=f"failed to start {name}: {exc}",
                 data={"state": record.status},
             )
+            self._audit(command="start", agent=name, result=result)
+            return result
 
         record.status = "running"
         record.resolved_image = image
         record.last_error = None
         self._registry.upsert(record)
 
-        return CommandResult(
+        result = CommandResult(
             ok=True,
             code="OK",
             message=f"started {name}",
             data={"state": record.status, "container_name": record.container_name, "resolved_image": image},
         )
+        self._audit(command="start", agent=name, result=result)
+        return result
 
     def stop_agent(self, *, name: str) -> CommandResult:
         record = self._registry.get(name)
         if not record:
-            return CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="stop", agent=name, result=result)
+            return result
 
         try:
             self._runtime.stop_agent(record.container_name)
@@ -136,48 +155,62 @@ class MasterService:
             record.status = "error"
             record.last_error = str(exc)
             self._registry.upsert(record)
-            return CommandResult(
+            result = CommandResult(
                 ok=False,
                 code="ERR_RUNTIME_FAILED",
                 message=f"failed to stop {name}: {exc}",
                 data={"state": record.status},
             )
+            self._audit(command="stop", agent=name, result=result)
+            return result
 
         record.status = "stopped"
         record.last_error = None
         self._registry.upsert(record)
-        return CommandResult(ok=True, code="OK", message=f"stopped {name}", data={"state": record.status})
+        result = CommandResult(ok=True, code="OK", message=f"stopped {name}", data={"state": record.status})
+        self._audit(command="stop", agent=name, result=result)
+        return result
 
     def remove_agent(self, *, name: str) -> CommandResult:
         record = self._registry.get(name)
         if not record:
-            return CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="remove", agent=name, result=result)
+            return result
 
         try:
             self._runtime.remove_agent(record.container_name)
         except Exception as exc:  # noqa: BLE001
-            return CommandResult(
+            result = CommandResult(
                 ok=False,
                 code="ERR_RUNTIME_FAILED",
                 message=f"failed to remove {name}: {exc}",
                 data={},
             )
+            self._audit(command="remove", agent=name, result=result)
+            return result
 
         self._registry.remove(name)
-        return CommandResult(ok=True, code="OK", message=f"removed {name}", data={"removed": True})
+        result = CommandResult(ok=True, code="OK", message=f"removed {name}", data={"removed": True})
+        self._audit(command="remove", agent=name, result=result)
+        return result
 
     def status(self, *, name: str) -> CommandResult:
         record = self._registry.get(name)
         if not record:
-            return CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="status", agent=name, result=result)
+            return result
 
         inspect = self._runtime.inspect_agent(record.container_name)
-        return CommandResult(
+        result = CommandResult(
             ok=True,
             code="OK",
             message=f"status {name}",
             data={"record": record.to_dict(), "runtime": inspect},
         )
+        self._audit(command="status", agent=name, result=result)
+        return result
 
     def _validate_load_inputs(self, *, name: str, channel_id: str) -> CommandResult | None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,30}", name):
@@ -195,6 +228,17 @@ class MasterService:
                 data={"field": "channel_id"},
             )
         return None
+
+    @staticmethod
+    def _audit(*, command: str, agent: str, result: CommandResult) -> None:
+        LOGGER.info(
+            "master.audit command=%s agent=%s ok=%s code=%s message=%s",
+            command,
+            agent,
+            result.ok,
+            result.code,
+            result.message,
+        )
 
     @staticmethod
     def _resolve_image_plan(repo_path: str) -> dict[str, str]:
