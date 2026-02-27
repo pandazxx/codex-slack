@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from .registry import AgentRecord, AgentRegistry
 from .runtime_adapter import RuntimeAdapter
@@ -28,8 +29,9 @@ class MasterService:
         return CommandResult(ok=True, code="OK", message="agents listed", data={"agents": agents})
 
     def load_agent(self, *, name: str, repo_path: str, channel_id: str) -> CommandResult:
-        self._validate_name(name)
-        self._validate_channel(channel_id)
+        validation_error = self._validate_load_inputs(name=name, channel_id=channel_id)
+        if validation_error:
+            return validation_error
 
         if not Path(repo_path).exists():
             return CommandResult(
@@ -84,21 +86,32 @@ class MasterService:
         if not record:
             return CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
 
-        image = DEFAULT_IMAGE
-        if record.image_plan.get("type") == "dockerfile":
-            image = self._runtime.build_image(
-                name=record.name,
-                repo_path=record.repo_path,
-                context_rel=str(record.image_plan["context"]),
-                dockerfile_rel=str(record.image_plan["dockerfile"]),
-            )
+        try:
+            image = DEFAULT_IMAGE
+            if record.image_plan.get("type") == "dockerfile":
+                image = self._runtime.build_image(
+                    name=record.name,
+                    repo_path=record.repo_path,
+                    context_rel=str(record.image_plan["context"]),
+                    dockerfile_rel=str(record.image_plan["dockerfile"]),
+                )
 
-        self._runtime.create_or_update_agent(
-            container_name=record.container_name,
-            image=image,
-            repo_volume=f"agent-workspace-{record.name}",
-        )
-        self._runtime.start_agent(record.container_name)
+            self._runtime.create_or_update_agent(
+                container_name=record.container_name,
+                image=image,
+                repo_volume=f"agent-workspace-{record.name}",
+            )
+            self._runtime.start_agent(record.container_name)
+        except Exception as exc:  # noqa: BLE001
+            record.status = "error"
+            record.last_error = str(exc)
+            self._registry.upsert(record)
+            return CommandResult(
+                ok=False,
+                code="ERR_RUNTIME_FAILED",
+                message=f"failed to start {name}: {exc}",
+                data={"state": record.status},
+            )
 
         record.status = "running"
         record.resolved_image = image
@@ -117,8 +130,21 @@ class MasterService:
         if not record:
             return CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
 
-        self._runtime.stop_agent(record.container_name)
+        try:
+            self._runtime.stop_agent(record.container_name)
+        except Exception as exc:  # noqa: BLE001
+            record.status = "error"
+            record.last_error = str(exc)
+            self._registry.upsert(record)
+            return CommandResult(
+                ok=False,
+                code="ERR_RUNTIME_FAILED",
+                message=f"failed to stop {name}: {exc}",
+                data={"state": record.status},
+            )
+
         record.status = "stopped"
+        record.last_error = None
         self._registry.upsert(record)
         return CommandResult(ok=True, code="OK", message=f"stopped {name}", data={"state": record.status})
 
@@ -127,7 +153,16 @@ class MasterService:
         if not record:
             return CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
 
-        self._runtime.remove_agent(record.container_name)
+        try:
+            self._runtime.remove_agent(record.container_name)
+        except Exception as exc:  # noqa: BLE001
+            return CommandResult(
+                ok=False,
+                code="ERR_RUNTIME_FAILED",
+                message=f"failed to remove {name}: {exc}",
+                data={},
+            )
+
         self._registry.remove(name)
         return CommandResult(ok=True, code="OK", message=f"removed {name}", data={"removed": True})
 
@@ -144,17 +179,22 @@ class MasterService:
             data={"record": record.to_dict(), "runtime": inspect},
         )
 
-    @staticmethod
-    def _validate_name(name: str) -> None:
-        if not name or len(name) < 2:
-            raise ValueError("invalid agent name")
-        if not all(ch.islower() or ch.isdigit() or ch == "-" for ch in name):
-            raise ValueError("invalid agent name")
-
-    @staticmethod
-    def _validate_channel(channel_id: str) -> None:
+    def _validate_load_inputs(self, *, name: str, channel_id: str) -> CommandResult | None:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,30}", name):
+            return CommandResult(
+                ok=False,
+                code="ERR_INVALID_ARGS",
+                message="invalid agent name",
+                data={"field": "name"},
+            )
         if not channel_id.startswith("C"):
-            raise ValueError("invalid channel id")
+            return CommandResult(
+                ok=False,
+                code="ERR_INVALID_ARGS",
+                message="invalid channel id",
+                data={"field": "channel_id"},
+            )
+        return None
 
     @staticmethod
     def _resolve_image_plan(repo_path: str) -> dict[str, str]:

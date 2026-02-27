@@ -45,6 +45,11 @@ Deliverables:
 Goal:
 - Deliver local lifecycle orchestration with Podman and registry persistence before Slack integration.
 
+Status:
+- In progress.
+- Implemented in current branch: registry, Podman adapter, service, CLI, tests.
+- Hardening added: input validation errors mapped to `ERR_INVALID_ARGS`, runtime failures mapped to `ERR_RUNTIME_FAILED`, registry error-state persistence, CLI envelope fields (`command`, `request_id`, `at`).
+
 Implementation:
 - `src/master/registry.py`: JSON source-of-truth, channel conflict lookup, atomic write pattern.
 - `src/master/runtime_adapter.py`: Podman adapter (`build/create/start/stop/remove/inspect/logs`) with `--dry-run`.

@@ -12,4 +12,7 @@ def test_cli_list_empty_registry(tmp_path, capsys) -> None:
     assert code == 0
     payload = json.loads(captured.out)
     assert payload["ok"] is True
+    assert payload["command"] == "list"
+    assert payload["request_id"].startswith("req_")
+    assert payload["at"]
     assert payload["data"]["agents"] == []

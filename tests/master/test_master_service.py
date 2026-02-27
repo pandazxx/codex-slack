@@ -33,6 +33,11 @@ class FakeRuntime:
         return ""
 
 
+class FailingRuntime(FakeRuntime):
+    def start_agent(self, name: str) -> None:
+        raise RuntimeError("podman start failed")
+
+
 def test_load_agent_detects_dockerfile_plan(tmp_path) -> None:
     repo = tmp_path / "repo"
     dockerfile = repo / ".prj_assistant" / "image" / "Dockerfile"
@@ -101,3 +106,37 @@ def test_status_returns_registry_and_runtime(tmp_path) -> None:
     assert result.ok is True
     assert result.data["record"]["name"] == "payments-api"
     assert result.data["runtime"]["Name"] == "agent-payments-api"
+
+
+def test_load_agent_invalid_name_returns_invalid_args(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(name="BadName", repo_path=str(repo), channel_id="C123")
+    assert result.ok is False
+    assert result.code == "ERR_INVALID_ARGS"
+    assert result.data["field"] == "name"
+
+
+def test_start_agent_runtime_failure_sets_error_state(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FailingRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert loaded.ok is True
+
+    started = service.start_agent(name="payments-api")
+    assert started.ok is False
+    assert started.code == "ERR_RUNTIME_FAILED"
+
+    saved = registry.get("payments-api")
+    assert saved is not None
+    assert saved.status == "error"
+    assert saved.last_error == "podman start failed"

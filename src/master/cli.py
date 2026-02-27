@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
+import uuid
 
 from .registry import AgentRegistry
 from .runtime_adapter import PodmanRuntimeAdapter
@@ -51,27 +53,43 @@ def main(argv: list[str] | None = None) -> int:
     runtime = PodmanRuntimeAdapter(dry_run=args.dry_run)
     service = MasterService(registry=registry, runtime=runtime)
 
-    if args.action == "list":
-        result = service.list_agents()
-    elif args.action == "load":
-        result = service.load_agent(name=args.name, repo_path=args.repo_path, channel_id=args.channel_id)
-    elif args.action == "start":
-        result = service.start_agent(name=args.name)
-    elif args.action == "stop":
-        result = service.stop_agent(name=args.name)
-    elif args.action == "status":
-        result = service.status(name=args.name)
-    elif args.action == "remove":
-        result = service.remove_agent(name=args.name)
-    else:
-        parser.error(f"unknown action: {args.action}")
-        return 2
+    try:
+        if args.action == "list":
+            result = service.list_agents()
+        elif args.action == "load":
+            result = service.load_agent(name=args.name, repo_path=args.repo_path, channel_id=args.channel_id)
+        elif args.action == "start":
+            result = service.start_agent(name=args.name)
+        elif args.action == "stop":
+            result = service.stop_agent(name=args.name)
+        elif args.action == "status":
+            result = service.status(name=args.name)
+        elif args.action == "remove":
+            result = service.remove_agent(name=args.name)
+        else:
+            parser.error(f"unknown action: {args.action}")
+            return 2
+    except Exception as exc:  # noqa: BLE001
+        payload = {
+            "ok": False,
+            "command": args.action,
+            "code": "ERR_INTERNAL",
+            "message": str(exc),
+            "data": {},
+            "request_id": f"req_{uuid.uuid4().hex[:12]}",
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 1
 
     payload = {
         "ok": result.ok,
+        "command": args.action,
         "code": result.code,
         "message": result.message,
         "data": result.data,
+        "request_id": f"req_{uuid.uuid4().hex[:12]}",
+        "at": datetime.now(timezone.utc).isoformat(),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if result.ok else 1
