@@ -60,6 +60,11 @@ Effects:
 - Does not need to start container (recommended default).
 - Binds `channel_id` to `name` if binding is available and not already owned by another agent.
 
+Input rules:
+- `name`: `^[a-z0-9][a-z0-9-]{1,30}$`
+- `repo_path`: Git URL or approved repo identifier (resolved by master policy)
+- `channel_id`: Slack channel ID (`C...`)
+
 #### `/master-agent-start <name>`
 Purpose:
 - Start agent container from resolved/default image and rendered config.
@@ -96,6 +101,52 @@ Purpose:
 
 Effects:
 - Mutates registry and runtime state.
+
+### Command Response Contract (v1)
+All command handlers should return a shared envelope:
+
+```json
+{
+  "ok": true,
+  "command": "load",
+  "agent": "payments-api",
+  "code": "OK",
+  "message": "Agent loaded",
+  "data": {},
+  "request_id": "req_01HT...",
+  "at": "2026-02-27T00:00:00Z"
+}
+```
+
+Fields:
+- `ok`: success/failure boolean.
+- `command`: normalized command (`list|load|start|stop|status|remove`).
+- `agent`: target agent when applicable.
+- `code`: stable machine code.
+- `message`: concise user-facing summary for Slack.
+- `data`: command-specific payload.
+- `request_id`: correlation ID for logs/debug.
+- `at`: RFC3339 timestamp.
+
+`data` payload by command:
+- `load`: `state`, `resolved_image`, `build_source`, `channel_id`.
+- `start`: `state`, `container_name`, `container_id`, `started_at`.
+- `stop`: `state`, `container_name`, `stopped_at`.
+- `status`: registry + observed runtime snapshot.
+- `list`: list of agents with summary status.
+- `remove`: `removed=true`, optional runtime cleanup notes.
+
+### Error Code Contract (v1)
+Use stable error codes in Slack and logs:
+- `ERR_INVALID_ARGS`: command argument validation failed.
+- `ERR_AGENT_NOT_FOUND`: target agent missing from registry.
+- `ERR_CHANNEL_CONFLICT`: channel already bound to another agent.
+- `ERR_REPO_NOT_ALLOWED`: repo outside policy or unresolvable.
+- `ERR_LOAD_FAILED`: repo load or manifest parse failed.
+- `ERR_BUILD_FAILED`: image build failed.
+- `ERR_RUNTIME_FAILED`: Podman start/stop/inspect failed.
+- `ERR_AGENT_NOT_RUNNING`: stop/status path expected running container but none found.
+- `ERR_INTERNAL`: unexpected master failure.
 
 ### Optional Convenience Command (v1.1)
 #### `/master-agent-up <name> <repo_path> <channel_id>`
@@ -142,6 +193,19 @@ Responses should include:
 - failed stage (`validate_repo`, `load_main_branch`, `build_image`, `start_container`, ...)
 - short error summary
 - suggested next action when obvious (`run load again`, `fix Dockerfile`, `check repo path`)
+
+### Slack Output Examples (v1)
+`/master-agent-load payments-api github.com/acme/payments C12345`
+- success: `OK load payments-api | state=loaded | image=ghcr.io/acme/codex-slack-bot:latest | channel=C12345`
+- conflict: `ERR_CHANNEL_CONFLICT load payments-api | channel C12345 is already bound to agent billing-api`
+
+`/master-agent-start payments-api`
+- success: `OK start payments-api | state=running | container=agent-payments-api`
+- idempotent: `OK start payments-api | already running`
+
+`/master-agent-stop payments-api`
+- success: `OK stop payments-api | state=stopped`
+- idempotent: `OK stop payments-api | already stopped`
 
 ## Slack Topology and Routing (V1, Selected)
 ### Topology

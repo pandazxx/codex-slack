@@ -29,6 +29,8 @@ Deliverables:
 - sample registry JSON
 - sample project manifest (`.prj_assistant/agent.toml`)
 - master command contract + idempotency rules
+- command response envelope + stable error code table
+- Slack command success/error examples
 - named-volume workspace lifecycle notes
 - channel routing rules (`channel_id` ownership and conflict handling)
 - admin channel policy + routing rules for non-admin channels
