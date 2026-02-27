@@ -94,6 +94,10 @@ Validation:
 Goal:
 - Expose orchestration commands to Slack admin channel with stable response contract.
 
+Status:
+- In progress.
+- Implemented in current branch: `src/master/slack_app.py` command wiring, admin-channel guard, and `src/master/main.py` Socket Mode entrypoint.
+
 Implementation:
 - `src/master/slack_app.py`, `src/master/main.py`.
 - Map slash commands to service operations:

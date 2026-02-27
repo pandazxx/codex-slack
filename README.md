@@ -61,6 +61,19 @@ Local orchestrator CLI is available for early master-agent implementation work:
 - `python -m src.master.cli --registry data/master/agents.json --dry-run start <name>`
 - `python -m src.master.cli --registry data/master/agents.json --dry-run status <name>`
 
+## Master Slack Mode (Phase 3 WIP)
+Master control plane Socket Mode entrypoint:
+
+- `python -m src.master.main`
+
+Required env:
+
+- `SLACK_BOT_TOKEN`
+- `SLACK_APP_TOKEN`
+- `MASTER_ADMIN_CHANNELS` (comma-separated channel IDs)
+- Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
+- Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
+
 ## Agent Worker Mode (Phase 2 WIP)
 The container can run as a worker (no Slack connection) by setting:
 
