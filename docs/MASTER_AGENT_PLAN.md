@@ -13,13 +13,14 @@ This is a living phased plan for the master -> agent orchestration feature.
 
 ## Phase 0: Design Freeze (Short)
 - Finalize command set and registry schema.
-- Define runtime adapter interface (`docker` and `podman`).
+- Define runtime adapter interface (`podman` in v1).
 - Define policy rules (allowed repo roots, channel uniqueness).
 - Finalize simplified image override model (`default image` + `project manifest override`).
 - Finalize v1 start-agent flow: check `.prj_assistant/image/Dockerfile` on project main branch, build if present, otherwise use default image, then clone repo in agent init using named volume.
 - Finalize v1 master command contract and state machine (`load/start/stop/status/list/remove`).
 - Finalize channel->agent routing model and admin-channel rules for single-bot mode.
 - Finalize channel conflict behavior and thread-routing ownership in master.
+- Finalize master container runtime wiring: mounted Podman socket + `podman` client config.
 
 Deliverables:
 - `docs/MASTER_AGENT_ARCHITECTURE.md`
@@ -89,7 +90,7 @@ Build:
 
 Validation:
 - Create multiple agents with minimal arguments.
-- Podman and Docker variants both supported.
+- Podman runtime path works for both rootful and rootless host socket modes.
 
 ## Phase 4: Safety + Operability Hardening
 - File locking for concurrent commands.
@@ -110,6 +111,7 @@ Validation:
 - Slack topology (v1): single Slack app/bot with channel->agent routing via master.
 - Channel ownership (v1): strict one-channel-to-one-agent; conflicts rejected unless explicit rebind command is added later.
 - Workspace mode (v1): named volume by default; host bind mount optional later.
+- Container runtime (v1): Podman only, via host socket mounted into master container.
 - Git auth model (v1): master and agent share SSH agent mechanism and/or `GH_TOKEN` refs.
 - Branch strategy and repo sync policy: deferred to per-project decisions (out of current scope).
 - Codex auth/session model: read-only auth/session forwarding + local `CODEX_HOME` copy; support project-local `.codex`.

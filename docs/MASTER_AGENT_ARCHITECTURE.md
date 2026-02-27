@@ -5,6 +5,7 @@ This is a living design document for extending this project from a single Slack-
 ## Goal
 - Keep the current container as the **agent runtime**.
 - Introduce a **master container** that accepts control commands from Slack and manages agent containers for different repos/channels.
+- For v1, the master manages containers via host Podman (socket passthrough), not a nested container daemon.
 
 ## Roles
 ### Master Container (Control Plane)
@@ -184,7 +185,7 @@ For messages in non-admin channels:
 - Master owns thread tracking and routing in the single-bot model.
 
 ## Runtime Interface (Master -> Container Engine)
-Support both Docker and Podman via a thin adapter:
+Use Podman in v1 via a thin runtime adapter:
 - `create_or_update_agent(config)`
 - `start_agent(name)`
 - `stop_agent(name)`
@@ -192,7 +193,30 @@ Support both Docker and Podman via a thin adapter:
 - `inspect_agent(name)`
 - `tail_logs(name, lines)`
 
-Start with CLI invocation (`docker` / `podman`), not daemon APIs.
+Start with CLI invocation (`podman`), not daemon APIs.
+
+## Master-In-Container Runtime Model (V1, Selected)
+Master runs as a container and controls host Podman through a mounted Podman socket.
+
+Execution model:
+1. Host exposes Podman service socket.
+2. Master container mounts that socket read/write.
+3. Master invokes `podman` client/remote against the mounted socket.
+4. Podman service on host creates/stops agent containers.
+
+Socket path options:
+- Rootful host Podman: `/run/podman/podman.sock`
+- Rootless host Podman: `/run/user/<uid>/podman/podman.sock`
+
+Required master container runtime wiring (v1):
+- Mount Podman socket into master container.
+- Provide Podman client binary in master image.
+- Set connection target (`CONTAINER_HOST=unix:///.../podman.sock`) or equivalent CLI flag.
+
+Guardrails:
+- Treat socket access as privileged control-plane capability.
+- Restrict which images/containers master may create (name prefix + project policy).
+- Keep master deployment limited to trusted infra/operators.
 
 ## Registry (Initial)
 Store in repo-local data files:
@@ -201,7 +225,7 @@ Store in repo-local data files:
 
 Per-agent fields (v1):
 - `name`, `repo_path`, `channel_id`, `container_name`
-- `image`, `runtime` (`docker|podman`)
+- `image`, `runtime` (`podman`)
 - `codex_session_id` (optional)
 - `git_user_name`, `git_user_email` (optional)
 - `gh_token_ref` (optional; do not store raw secret in registry)
