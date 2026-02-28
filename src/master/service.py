@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import logging
 from pathlib import Path
 import re
+import shutil
+import subprocess
 
 from .registry import AgentRecord, AgentRegistry
 from .runtime_adapter import RuntimeAdapter
@@ -38,11 +40,14 @@ class MasterService:
             self._audit(command="load", agent=name or "-", result=validation_error)
             return validation_error
 
-        if not Path(repo_path).exists():
+        try:
+            repo_source = self._normalize_repo_source(repo_path)
+            checkout_path = self._checkout_repo_source(name=name, repo_source=repo_source, repo_ref="main")
+        except Exception as exc:  # noqa: BLE001
             result = CommandResult(
                 ok=False,
                 code="ERR_REPO_NOT_ALLOWED",
-                message=f"repo path does not exist: {repo_path}",
+                message=f"repo path is not accessible: {repo_path} ({exc})",
                 data={},
             )
             self._audit(command="load", agent=name, result=result)
@@ -59,24 +64,28 @@ class MasterService:
             self._audit(command="load", agent=name, result=result)
             return result
 
-        image_plan = self._resolve_image_plan(repo_path)
+        image_plan = self._resolve_image_plan(str(checkout_path))
         record = self._registry.get(name)
         if not record:
             record = AgentRecord(
                 name=name,
-                repo_path=repo_path,
+                repo_path=str(checkout_path),
                 channel_id=channel_id,
                 container_name=f"agent-{name}",
                 runtime=DEFAULT_RUNTIME,
                 image_plan=image_plan,
                 status="loaded",
+                repo_source=repo_source,
+                repo_ref="main",
             )
         else:
-            record.repo_path = repo_path
+            record.repo_path = str(checkout_path)
             record.channel_id = channel_id
             record.image_plan = image_plan
             record.status = "loaded"
             record.last_error = None
+            record.repo_source = repo_source
+            record.repo_ref = "main"
 
         saved = self._registry.upsert(record)
         result = CommandResult(
@@ -113,6 +122,12 @@ class MasterService:
                 container_name=record.container_name,
                 image=image,
                 repo_volume=f"agent-workspace-{record.name}",
+                env={
+                    "CODEX_CONTAINER_MODE": "agent-worker",
+                    "AGENT_REPO_URL": record.repo_source or record.repo_path,
+                    "AGENT_REPO_REF": record.repo_ref,
+                    "AGENT_REPO_DIR": "repo",
+                },
             )
             self._runtime.start_agent(record.container_name)
         except Exception as exc:  # noqa: BLE001
@@ -250,3 +265,54 @@ class MasterService:
                 "context": ".prj_assistant/image",
             }
         return {"type": "default", "image": DEFAULT_IMAGE}
+
+    @staticmethod
+    def _normalize_repo_source(repo_input: str) -> str:
+        candidate = repo_input.strip()
+        if not candidate:
+            raise ValueError("empty repo source")
+
+        local_path = Path(candidate)
+        if local_path.exists():
+            return str(local_path.resolve())
+
+        if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", candidate):
+            return f"https://github.com/{candidate}.git"
+
+        if candidate.startswith(("https://", "http://", "ssh://", "git@", "file://")):
+            return candidate
+
+        raise ValueError("unsupported repo source")
+
+    def _checkout_repo_source(self, *, name: str, repo_source: str, repo_ref: str) -> Path:
+        source_path = Path(repo_source)
+        if source_path.exists():
+            return source_path
+
+        checkout_root = self._registry.path.parent / "repo-cache"
+        checkout_root.mkdir(parents=True, exist_ok=True)
+        checkout_path = checkout_root / name
+
+        if (checkout_path / ".git").exists():
+            self._run_git(["git", "fetch", "origin", repo_ref], cwd=checkout_path)
+            self._run_git(["git", "checkout", repo_ref], cwd=checkout_path)
+            self._run_git(["git", "reset", "--hard", f"origin/{repo_ref}"], cwd=checkout_path)
+            return checkout_path
+
+        if checkout_path.exists():
+            shutil.rmtree(checkout_path)
+
+        self._run_git(["git", "clone", "--branch", repo_ref, repo_source, str(checkout_path)])
+        return checkout_path
+
+    @staticmethod
+    def _run_git(args: list[str], cwd: Path | None = None) -> None:
+        completed = subprocess.run(
+            args,
+            cwd=str(cwd) if cwd else None,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr.strip() or f"git command failed: {' '.join(args)}")

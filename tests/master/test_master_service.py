@@ -12,8 +12,20 @@ class FakeRuntime:
         self.calls.append(("build_image", {"name": name, "repo_path": repo_path}))
         return f"codex-agent-{name}:latest"
 
-    def create_or_update_agent(self, *, container_name: str, image: str, repo_volume: str) -> None:
-        self.calls.append(("create_or_update_agent", {"container_name": container_name, "image": image}))
+    def create_or_update_agent(
+        self,
+        *,
+        container_name: str,
+        image: str,
+        repo_volume: str,
+        env: dict[str, str] | None = None,
+    ) -> None:
+        self.calls.append(
+            (
+                "create_or_update_agent",
+                {"container_name": container_name, "image": image, "env": env or {}},
+            )
+        )
 
     def start_agent(self, name: str) -> None:
         self.calls.append(("start_agent", name))
@@ -89,6 +101,7 @@ def test_start_agent_builds_on_start(tmp_path) -> None:
     assert start_result.data["resolved_image"] == "codex-agent-payments-api:latest"
     assert runtime.calls[0][0] == "build_image"
     assert runtime.calls[1][0] == "create_or_update_agent"
+    assert runtime.calls[1][1]["env"]["CODEX_CONTAINER_MODE"] == "agent-worker"
     assert runtime.calls[2] == ("start_agent", "agent-payments-api")
 
 
@@ -140,3 +153,26 @@ def test_start_agent_runtime_failure_sets_error_state(tmp_path) -> None:
     assert saved is not None
     assert saved.status == "error"
     assert saved.last_error == "podman start failed"
+
+
+def test_load_agent_accepts_github_shorthand(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    monkeypatch.setattr(
+        service,
+        "_checkout_repo_source",
+        lambda *, name, repo_source, repo_ref: repo,  # type: ignore[no-untyped-def]
+    )
+
+    result = service.load_agent(name="payments-api", repo_path="pandazxx/aidotfile", channel_id="C123")
+    assert result.ok is True
+
+    saved = registry.get("payments-api")
+    assert saved is not None
+    assert saved.repo_source == "https://github.com/pandazxx/aidotfile.git"
+    assert saved.repo_path == str(repo)

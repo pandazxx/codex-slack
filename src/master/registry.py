@@ -23,6 +23,8 @@ class AgentRecord:
     runtime: str
     image_plan: dict[str, Any]
     status: str
+    repo_source: str = ""
+    repo_ref: str = "main"
     resolved_image: str | None = None
     last_error: str | None = None
     created_at: str = ""

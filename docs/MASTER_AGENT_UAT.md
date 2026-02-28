@@ -130,7 +130,11 @@ Expected:
 
 ## UAT-003: Load Agent
 Preconditions:
-- Valid `REPO_URL` and target agent channel ID (example placeholder: `CAGENT`).
+- Valid repo source and target agent channel ID (example placeholder: `CAGENT`).
+- Supported repo source examples:
+- `pandazxx/aidotfile`
+- `https://github.com/pandazxx/aidotfile.git`
+- `/absolute/local/path/to/repo`
 
 Steps:
 1. In `CADMIN`, run:

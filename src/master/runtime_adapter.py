@@ -15,7 +15,14 @@ class RuntimeAdapter(Protocol):
     def build_image(self, *, name: str, repo_path: str, context_rel: str, dockerfile_rel: str) -> str:
         ...
 
-    def create_or_update_agent(self, *, container_name: str, image: str, repo_volume: str) -> None:
+    def create_or_update_agent(
+        self,
+        *,
+        container_name: str,
+        image: str,
+        repo_volume: str,
+        env: dict[str, str] | None = None,
+    ) -> None:
         ...
 
     def start_agent(self, name: str) -> None:
@@ -74,21 +81,30 @@ class PodmanRuntimeAdapter:
         )
         return image_tag
 
-    def create_or_update_agent(self, *, container_name: str, image: str, repo_volume: str) -> None:
+    def create_or_update_agent(
+        self,
+        *,
+        container_name: str,
+        image: str,
+        repo_volume: str,
+        env: dict[str, str] | None = None,
+    ) -> None:
         if self._container_exists(container_name):
             return
 
-        self._run(
-            [
-                "podman",
-                "create",
-                "--name",
-                container_name,
-                "-v",
-                f"{repo_volume}:/workspace",
-                image,
-            ]
-        )
+        cmd = [
+            "podman",
+            "create",
+            "--name",
+            container_name,
+            "-v",
+            f"{repo_volume}:/workspace",
+        ]
+        for key, value in sorted((env or {}).items()):
+            cmd.extend(["-e", f"{key}={value}"])
+        cmd.append(image)
+
+        self._run(cmd)
 
     def start_agent(self, name: str) -> None:
         self._run(["podman", "start", name])
