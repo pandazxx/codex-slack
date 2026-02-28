@@ -7,6 +7,7 @@ Operational guide for the master->agent v1 stack:
 - Podman host socket control path
 
 See `docs/MASTER_AGENT_UAT.md` for step-by-step user acceptance test cases.
+Containerized UAT is required for v1 sign-off; functional Slack-only checks are not sufficient.
 
 ## Prerequisites
 - Host Podman service socket mounted into master container.

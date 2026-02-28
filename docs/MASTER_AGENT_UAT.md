@@ -2,6 +2,7 @@
 
 ## Purpose
 Validate end-to-end v1 behavior for:
+- containerized deployment and runtime wiring
 - master lifecycle control
 - agent startup and workspace initialization
 - Slack routing and thread continuity
@@ -34,6 +35,26 @@ python -m src.master.main
 - `SSH_AUTH_SOCK` mounted, or
 - absolute-path `GH_TOKEN_FILE` mounted.
 
+## Container Deployment Requirement
+Containerized validation is mandatory for v1 sign-off.
+
+At minimum, UAT must verify:
+- master runs inside a container
+- master can reach host Podman through mounted socket
+- master creates and controls real agent containers
+- agent worker initialization and status are observed through container runtime behavior
+
+## Containerized UAT Setup
+1. Build the current image under test:
+```bash
+podman build -t codex-slack-v1-uat .
+```
+2. Start host Podman service/socket and confirm socket path.
+3. Run master in container with Podman socket mounted:
+```bash
+podman run --rm \\\n+  -e SLACK_BOT_TOKEN \\\n+  -e SLACK_APP_TOKEN \\\n+  -e MASTER_ADMIN_CHANNELS=CADMIN \\\n+  -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \\\n+  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec -' \\\n+  -e MASTER_AGENT_TIMEOUT_SECONDS=120 \\\n+  -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \\\n+  -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \\\n+  -e CODEX_CONTAINER_MODE=bot \\\n+  -v /run/podman/podman.sock:/run/podman/podman.sock \\\n+  -e CONTAINER_HOST=unix:///run/podman/podman.sock \\\n+  codex-slack-v1-uat \\\n+  python -m src.master.main\n+```
+4. Use equivalent rootless socket path if required by host setup.
+
 ## UAT-001: Master Startup
 Preconditions:
 - Shared setup complete.
@@ -46,6 +67,33 @@ Expected:
 - Master process stays running.
 - No missing-env startup exceptions.
 - Logs show command handlers initialized.
+
+## UAT-001A: Master Container Startup
+Preconditions:
+- Containerized UAT setup complete.
+
+Steps:
+1. Start master in container using mounted Podman socket.
+2. Confirm container stays running.
+3. Inspect master container logs.
+
+Expected:
+- Master container starts successfully.
+- No socket/path permission errors.
+- Master process inside container reaches steady state.
+
+## UAT-001B: Podman Socket Reachability From Master Container
+Preconditions:
+- Master container running.
+
+Steps:
+1. From host, confirm mounted socket path matches `CONTAINER_HOST`.
+2. Trigger a lifecycle command such as `/master-agent-list`.
+3. Trigger `/master-agent-load` and `/master-agent-start` for a test agent.
+
+Expected:
+- Master command path does not fail due to Podman connectivity.
+- Container operations execute through host Podman, not nested runtime.
 
 ## UAT-002: List Agents (Empty)
 Preconditions:
@@ -94,6 +142,39 @@ Expected:
 - Start returns `ok=true`.
 - Status shows runtime/container data.
 - If `.prj_assistant/image/Dockerfile` exists, build occurs at start.
+
+## UAT-004A: Real Agent Container Creation
+Preconditions:
+- Containerized master running.
+- UAT-003 completed.
+
+Steps:
+1. Run `/master-agent-start payments-agent`.
+2. On host, inspect Podman containers:
+```bash
+podman ps -a
+```
+
+Expected:
+- A real agent container exists (for example `agent-payments-agent`).
+- Container state reflects the command result (`running` or failed with inspectable state).
+
+## UAT-004B: Project Dockerfile Build From Master Container
+Preconditions:
+- Test repo contains `.prj_assistant/image/Dockerfile`.
+
+Steps:
+1. Load the project.
+2. Start the agent.
+3. Check host images:
+```bash
+podman images
+```
+
+Expected:
+- Build is triggered by `start`.
+- A built image for that agent appears on host Podman.
+- No build occurs during `load`.
 
 ## UAT-005: Stop and Remove Agent
 Preconditions:
@@ -226,6 +307,36 @@ Expected:
 - Missing absolute path fails preflight.
 - Valid absolute file passes preflight.
 
+## UAT-014A: Agent Container Mount Visibility
+Preconditions:
+- Containerized master starts a real agent container.
+- Agent relies on mounted auth source.
+
+Steps:
+1. Start agent with mounted `SSH_AUTH_SOCK` or absolute `GH_TOKEN_FILE`.
+2. Inspect worker status and logs.
+3. If needed, exec into container and verify path exists.
+
+Expected:
+- Mounted auth source is visible inside agent container.
+- Worker preflight passes with valid mount.
+
+## UAT-014B: Agent Status File and Runtime Logs
+Preconditions:
+- Agent container started or failed during init.
+
+Steps:
+1. Inspect agent container logs:
+```bash
+podman logs <agent-container>\n+```
+2. Inspect status file path inside agent container if container is still available:
+```bash
+podman exec <agent-container> cat /run/master-agent/status.json\n+```
+
+Expected:
+- Structured `agent.stage` log lines are present.
+- Status file reflects current stage or failure stage.
+
 ## UAT-015: Rate Limiting
 Preconditions:
 - Set low limits for test:
@@ -274,6 +385,19 @@ Steps:
 Expected:
 - Full flow succeeds without manual intervention.
 - No stale mapping remains after remove.
+
+## UAT-018: Rootful vs Rootless Podman Socket Check
+Preconditions:
+- Access to environments using rootful and/or rootless Podman.
+
+Steps:
+1. Run containerized master against rootful socket path.
+2. Repeat against rootless socket path.
+3. Execute `load -> start -> status` in each mode.
+
+Expected:
+- Master works with the selected socket mode when `CONTAINER_HOST` matches mounted path.
+- Any socket-mode-specific failure is documented before sign-off.
 
 ## UAT Sign-Off Template
 - Date:
