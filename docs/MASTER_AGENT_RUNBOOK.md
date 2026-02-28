@@ -11,13 +11,33 @@ Containerized UAT is required for v1 sign-off; functional Slack-only checks are 
 
 ## Prerequisites
 - Host Podman service socket mounted into master container.
+- For rootless Podman, mount `/run/user/<uid>/podman/podman.sock` and run the master container with `--userns=keep-id --security-opt label=disable`.
 - `podman` CLI installed inside the master image/container.
 - Slack app configured with command/event scopes.
 - `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS` set.
 - Shared auth refs available to agents (`SSH_AUTH_SOCK` and/or `GH_TOKEN_FILE`).
 
 ## Master Startup
-1. Start master runtime:
+1. Start master runtime. For containerized UAT, use the verified rootless Podman pattern:
+```bash
+podman run --rm \
+  --userns=keep-id \
+  --security-opt label=disable \
+  -e SLACK_BOT_TOKEN \
+  -e SLACK_APP_TOKEN \
+  -e MASTER_ADMIN_CHANNELS=<admin_channel_id> \
+  -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
+  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec -' \
+  -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
+  -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
+  -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
+  -e CODEX_CONTAINER_MODE=bot \
+  -v /run/user/$(id -u)/podman/podman.sock:/run/podman/podman.sock \
+  -e CONTAINER_HOST=unix:///run/podman/podman.sock \
+  codex-slack-v1-uat \
+  python -m src.master.main
+```
+For non-container local debugging, you can also run:
 ```bash
 python -m src.master.main
 ```
@@ -26,6 +46,7 @@ python -m src.master.main
 - registry path
 - no token parsing errors
 - no `podman CLI is not installed in the master runtime` errors before lifecycle commands
+- no `unable to connect to Podman socket ... permission denied` errors after a lifecycle command
 
 ## Agent Lifecycle (Admin Channel)
 1. Load mapping and image plan:
@@ -57,6 +78,7 @@ python -m src.master.main
 - Use `/master-agent-status <name>` to inspect state.
 - Check master logs for `ERR_RUNTIME_FAILED`.
 - Check agent logs and Podman inspect data.
+- If logs show `unable to connect to Podman socket ... permission denied`, switch to the rootless socket mount and confirm the container was started with `--userns=keep-id --security-opt label=disable`.
 - Fix repo image config and retry `/master-agent-start <name>`.
 
 ### Channel mapping conflict

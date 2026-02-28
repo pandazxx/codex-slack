@@ -56,9 +56,15 @@ podman build -t codex-slack-v1-uat .
 ```
 The master image must include the `podman` CLI binary. The mounted socket alone is not sufficient because the master runtime shells out to `podman ...` for build/create/start/stop/inspect operations.
 2. Start host Podman service/socket and confirm socket path.
-3. Run master in container with Podman socket mounted:
+3. Prefer the rootless user socket when running the master container as a non-root process:
+```bash
+ls -l /run/user/$(id -u)/podman/podman.sock
+```
+4. Run master in container with Podman socket mounted:
 ```bash
 podman run --rm \
+  --userns=keep-id \
+  --security-opt label=disable \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
   -e MASTER_ADMIN_CHANNELS=C0123456789 \
@@ -68,12 +74,17 @@ podman run --rm \
   -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
   -e CODEX_CONTAINER_MODE=bot \
-  -v /run/podman/podman.sock:/run/podman/podman.sock \
+  -v /run/user/$(id -u)/podman/podman.sock:/run/podman/podman.sock \
   -e CONTAINER_HOST=unix:///run/podman/podman.sock \
   codex-slack-v1-uat \
   python -m src.master.main
 ```
-4. Use equivalent rootless socket path if required by host setup.
+5. Use the rootful socket only if you intentionally run the master container with matching privileges.
+
+Why this matters:
+- `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.
+- `--security-opt label=disable` avoids SELinux relabel restrictions blocking socket access on host-mounted Unix sockets.
+- Mounting the rootless socket to `/run/podman/podman.sock` keeps the in-container `CONTAINER_HOST` stable.
 
 ## UAT-001: Master Startup
 Preconditions:
@@ -102,6 +113,7 @@ Expected:
 - No socket/path permission errors.
 - No `podman CLI is not installed in the master runtime` errors.
 - Master process inside container reaches steady state.
+- No `unable to connect to Podman socket ... permission denied` errors when starting agents.
 
 ## UAT-001B: Podman Socket Reachability From Master Container
 Preconditions:
@@ -115,6 +127,7 @@ Steps:
 Expected:
 - Master command path does not fail due to Podman connectivity.
 - Container operations execute through host Podman, not nested runtime.
+- Rootless socket access works when launched with `--userns=keep-id --security-opt label=disable`.
 
 ## UAT-002: List Agents (Empty)
 Preconditions:

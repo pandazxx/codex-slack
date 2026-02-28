@@ -72,6 +72,7 @@ Required env:
 - `SLACK_APP_TOKEN`
 - `MASTER_ADMIN_CHANNELS` (comma-separated channel IDs)
 - `podman` CLI available inside the master runtime image/container when using real lifecycle operations
+- For rootless Podman socket access in a containerized master, use `--userns=keep-id --security-opt label=disable` and mount `/run/user/<uid>/podman/podman.sock`
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
 - Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec -`)
