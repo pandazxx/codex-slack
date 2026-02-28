@@ -52,7 +52,21 @@ podman build -t codex-slack-v1-uat .
 2. Start host Podman service/socket and confirm socket path.
 3. Run master in container with Podman socket mounted:
 ```bash
-podman run --rm \\\n+  -e SLACK_BOT_TOKEN \\\n+  -e SLACK_APP_TOKEN \\\n+  -e MASTER_ADMIN_CHANNELS=CADMIN \\\n+  -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \\\n+  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec -' \\\n+  -e MASTER_AGENT_TIMEOUT_SECONDS=120 \\\n+  -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \\\n+  -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \\\n+  -e CODEX_CONTAINER_MODE=bot \\\n+  -v /run/podman/podman.sock:/run/podman/podman.sock \\\n+  -e CONTAINER_HOST=unix:///run/podman/podman.sock \\\n+  codex-slack-v1-uat \\\n+  python -m src.master.main\n+```
+podman run --rm \
+  -e SLACK_BOT_TOKEN \
+  -e SLACK_APP_TOKEN \
+  -e MASTER_ADMIN_CHANNELS=CADMIN \
+  -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
+  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec -' \
+  -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
+  -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
+  -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
+  -e CODEX_CONTAINER_MODE=bot \
+  -v /run/podman/podman.sock:/run/podman/podman.sock \
+  -e CONTAINER_HOST=unix:///run/podman/podman.sock \
+  codex-slack-v1-uat \
+  python -m src.master.main
+```
 4. Use equivalent rootless socket path if required by host setup.
 
 ## UAT-001: Master Startup
@@ -328,10 +342,12 @@ Preconditions:
 Steps:
 1. Inspect agent container logs:
 ```bash
-podman logs <agent-container>\n+```
+podman logs <agent-container>
+```
 2. Inspect status file path inside agent container if container is still available:
 ```bash
-podman exec <agent-container> cat /run/master-agent/status.json\n+```
+podman exec <agent-container> cat /run/master-agent/status.json
+```
 
 Expected:
 - Structured `agent.stage` log lines are present.
