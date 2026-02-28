@@ -1,99 +1,148 @@
 # Slack Integration Setup
 
-This guide configures Slack for local Socket Mode testing with this bot.
+This guide configures Slack for the v1 master-agent solution.
+
+v1 Slack model:
+- One Slack app for the whole system.
+- One bot token and one app token.
+- Master is the only Slack client.
+- Master commands run in admin channel(s) only.
+- Agent channels are normal Slack channels mapped to agents by `channel_id`.
 
 ## 1. Create Slack App
 1. Open `https://api.slack.com/apps`.
 2. Click **Create New App**.
 3. Choose **From scratch**.
-4. Set app name (for example `codex-local-bridge`) and select your workspace.
+4. Set app name (for example `codex-master`) and select your workspace.
 
 ## 2. Enable Socket Mode
-1. In app settings, open **Socket Mode**.
+1. Open **Socket Mode**.
 2. Toggle **Enable Socket Mode** on.
-3. Create an App-Level Token with scope `connections:write`.
-4. Copy the token (`xapp-...`) to use as `SLACK_APP_TOKEN`.
+3. Create an app-level token with scope `connections:write`.
+4. Save the token as `SLACK_APP_TOKEN`.
 
 ## 3. Configure Bot Token Scopes
-1. Open **OAuth & Permissions**.
-2. Under **Bot Token Scopes**, add:
+Open **OAuth & Permissions** and add these **Bot Token Scopes**:
 - `app_mentions:read`
 - `channels:history`
 - `chat:write`
 - `commands`
 
+Notes:
+- `app_mentions:read` is required for routed prompts started by mentioning the bot.
+- `channels:history` is required for follow-up thread replies in mapped channels.
+- `commands` is required for master slash commands.
+
 ## 4. Enable Event Subscriptions
 1. Open **Event Subscriptions**.
 2. Toggle **Enable Events** on.
 3. Under **Subscribe to bot events**, add:
-   - `app_mention`
-   - `message.channels` (required for follow-up thread replies without mentioning the bot again)
+- `app_mention`
+- `message.channels`
 4. Save changes.
 
-Note: With Socket Mode, you do not need to configure a public Request URL.
+With Socket Mode, no public Request URL is needed.
 
-## 5. Register Slash Commands
-Create each command in **Slash Commands**:
-- `/codex-status`
-- `/codex-attach`
-- `/codex-detach`
-- `/codex-conv-cancel`
-- `/codex-help`
+## 5. Register Master Slash Commands
+Create these commands in **Slash Commands**:
+- `/master-agent-list`
+- `/master-agent-load`
+- `/master-agent-start`
+- `/master-agent-stop`
+- `/master-agent-status`
+- `/master-agent-remove`
 
 For each command:
 1. Click **Create New Command**.
-2. Set command name.
-3. For Request URL, enter a placeholder URL (for example `https://example.com/slack/command`).
+2. Enter the command name.
+3. Use a placeholder Request URL, for example `https://example.com/slack/command`.
 4. Add a short description.
 5. Save.
 
 ## 6. Install App to Workspace
 1. Open **Install App**.
 2. Click **Install to Workspace**.
-3. Approve requested permissions.
-4. Copy Bot User OAuth Token (`xoxb-...`) as `SLACK_BOT_TOKEN`.
+3. Approve the requested scopes.
+4. Save the Bot User OAuth Token as `SLACK_BOT_TOKEN`.
 
-## 7. Invite Bot to Channel
-1. In Slack, open your test channel.
-2. Run `/invite @<your-bot-name>`.
-3. Confirm bot appears in member list.
+If you add scopes, events, or commands later, reinstall the app.
 
-## 8. Get Channel ID for Allowlist
-Use one of the following:
-- Channel details UI (copy channel ID).
-- Or run:
+## 7. Invite Bot to Channels
+Invite the bot to:
+- each admin channel
+- each agent channel that will receive routed prompts
+
+In each target channel:
+1. Run `/invite @<your-bot-name>`.
+2. Confirm the bot is visible in the member list.
+
+## 8. Get Channel IDs
+You need channel IDs for:
+- `MASTER_ADMIN_CHANNELS`
+- `/master-agent-load <name> <repo_path> <channel_id>`
+
+Options:
+- Copy from Slack channel details UI.
+- Or use:
 ```bash
 curl -sS -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
   "https://slack.com/api/conversations.list?types=public_channel,private_channel" | jq
 ```
 
-Set `SLACK_ALLOWED_CHANNELS` as comma-separated channel IDs.
-
-Example:
-```dotenv
-SLACK_ALLOWED_CHANNELS=C01234567,C08999999
-```
-
-## 9. Local Env Example
+## 9. Master Environment Example
 ```dotenv
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
-SLACK_ALLOWED_CHANNELS=C01234567
-CODEX_WORKSPACE_PATH=/absolute/path/to/workspace
+MASTER_ADMIN_CHANNELS=C01234567
+MASTER_REGISTRY_PATH=data/master/agents.json
+MASTER_DRY_RUN=false
+MASTER_AGENT_COMMAND_TEMPLATE=codex exec -
+MASTER_AGENT_TIMEOUT_SECONDS=120
+MASTER_COMMAND_RATE_LIMIT_COUNT=20
+MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60
 ```
 
-## 10. Verify Integration
-1. Start bot:
+## 10. Verify Master Slack Integration
+1. Start master:
 ```bash
-python -m src.bot.main --session-id <SESSION_ID>
+python -m src.master.main
 ```
-2. In allowlisted channel, run `/codex-status`.
-3. Mention bot: `@codex say hello from Slack`.
-4. Reply in the same thread without mentioning the bot (for example `now list files`).
-5. Confirm the bot continues the same thread.
+2. In an admin channel, run:
+```text
+/master-agent-list
+```
+3. Confirm a JSON response is posted.
+4. Run:
+```text
+/master-agent-load <name> <repo_path> <agent_channel_id>
+```
+5. Run:
+```text
+/master-agent-start <name>
+```
+6. In the mapped agent channel, mention the bot with a prompt.
+7. Reply in the same thread without mentioning the bot again.
+8. Confirm master routes both messages to the mapped agent.
 
-## 11. Common Slack Errors
-- `invalid_auth` / `not_authed`: bad or missing tokens.
-- `missing_scope`: one or more required scopes not granted.
-- Slash command no-op: app not reinstalled after scope/command changes.
-- Mention ignored: channel not in `SLACK_ALLOWED_CHANNELS`.
+## 11. Channel Usage Rules
+- Admin channels are for master slash commands only.
+- Non-admin mapped channels are for routed prompts.
+- One channel maps to one agent in v1.
+- Channel names are not used by commands in v1; use `channel_id`.
+
+## 12. Legacy Standalone Bot Mode
+The older standalone bot commands still exist in code:
+- `/codex-status`
+- `/codex-attach`
+- `/codex-detach`
+- `/codex-conv-cancel`
+- `/codex-help`
+
+Those are for the legacy single-bot flow and are not the primary v1 master-agent setup.
+
+## 13. Common Slack Errors
+- `invalid_auth` / `not_authed`: token missing or incorrect.
+- `missing_scope`: required scope not granted.
+- Slash command no-op: app not reinstalled after command/scope changes.
+- Mentions not routed in agent channel: channel not mapped to an agent.
+- Master command rejected: command was executed outside `MASTER_ADMIN_CHANNELS`.
