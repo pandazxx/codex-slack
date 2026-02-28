@@ -98,7 +98,7 @@ class PodmanRuntimeAdapter:
         env: dict[str, str] | None = None,
     ) -> None:
         if self._container_exists(container_name):
-            return
+            self._run(["podman", "rm", "-f", container_name], check=False)
 
         cmd = [
             "podman",
