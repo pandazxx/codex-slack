@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,13 @@ class PodmanRuntimeAdapter:
     def _run(self, cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
         if self.dry_run:
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        executable = cmd[0]
+        if shutil.which(executable) is None:
+            raise RuntimeErrorAdapter(
+                f"{executable} CLI is not installed in the master runtime; "
+                "rebuild the image with the client binary available"
+            )
 
         completed = subprocess.run(
             cmd,

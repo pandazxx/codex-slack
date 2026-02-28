@@ -71,6 +71,7 @@ Required env:
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
 - `MASTER_ADMIN_CHANNELS` (comma-separated channel IDs)
+- `podman` CLI available inside the master runtime image/container when using real lifecycle operations
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
 - Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec -`)

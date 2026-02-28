@@ -54,6 +54,7 @@ At minimum, UAT must verify:
 ```bash
 podman build -t codex-slack-v1-uat .
 ```
+The master image must include the `podman` CLI binary. The mounted socket alone is not sufficient because the master runtime shells out to `podman ...` for build/create/start/stop/inspect operations.
 2. Start host Podman service/socket and confirm socket path.
 3. Run master in container with Podman socket mounted:
 ```bash
@@ -99,6 +100,7 @@ Steps:
 Expected:
 - Master container starts successfully.
 - No socket/path permission errors.
+- No `podman CLI is not installed in the master runtime` errors.
 - Master process inside container reaches steady state.
 
 ## UAT-001B: Podman Socket Reachability From Master Container

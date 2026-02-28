@@ -11,6 +11,7 @@ Containerized UAT is required for v1 sign-off; functional Slack-only checks are 
 
 ## Prerequisites
 - Host Podman service socket mounted into master container.
+- `podman` CLI installed inside the master image/container.
 - Slack app configured with command/event scopes.
 - `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS` set.
 - Shared auth refs available to agents (`SSH_AUTH_SOCK` and/or `GH_TOKEN_FILE`).
@@ -24,6 +25,7 @@ python -m src.master.main
 - loaded admin channels
 - registry path
 - no token parsing errors
+- no `podman CLI is not installed in the master runtime` errors before lifecycle commands
 
 ## Agent Lifecycle (Admin Channel)
 1. Load mapping and image plan:
