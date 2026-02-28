@@ -126,6 +126,13 @@ def _register_command(
         )
 
         if not is_admin_channel(request.channel_id, admin_channels):
+            LOGGER.warning(
+                "master.command_rejected command=%s reason=non_admin_channel channel=%s user=%s admin_channels=%s",
+                command_name,
+                request.channel_id or "-",
+                request.user_id or "-",
+                ",".join(sorted(admin_channels)),
+            )
             respond(
                 format_command_result(
                     command_name,
@@ -141,6 +148,15 @@ def _register_command(
 
         limiter_key = f"{request.channel_id}:{request.user_id}"
         if rate_limiter and not rate_limiter.allow(limiter_key):
+            LOGGER.warning(
+                "master.command_rejected command=%s reason=rate_limited channel=%s user=%s key=%s max_calls=%d window_seconds=%d",
+                command_name,
+                request.channel_id or "-",
+                request.user_id or "-",
+                limiter_key,
+                rate_limiter.max_calls,
+                rate_limiter.window_seconds,
+            )
             respond(
                 format_command_result(
                     command_name,
@@ -155,9 +171,32 @@ def _register_command(
             return
 
         try:
+            LOGGER.info(
+                "master.command_dispatch_start command=%s channel=%s user=%s text=%r",
+                command_name,
+                request.channel_id or "-",
+                request.user_id or "-",
+                request.text,
+            )
             result = dispatch_slash_command(service, request)
+            LOGGER.info(
+                "master.command_dispatch_done command=%s channel=%s user=%s ok=%s code=%s",
+                command_name,
+                request.channel_id or "-",
+                request.user_id or "-",
+                result.ok,
+                result.code,
+            )
             respond(format_command_result(command_name, result))
         except ValueError as exc:
+            LOGGER.warning(
+                "master.command_rejected command=%s reason=invalid_args channel=%s user=%s error=%s text=%r",
+                command_name,
+                request.channel_id or "-",
+                request.user_id or "-",
+                str(exc),
+                request.text,
+            )
             respond(
                 format_command_result(
                     command_name,
@@ -183,6 +222,12 @@ def create_master_app(
     rate_limiter: CommandRateLimiter | None = None,
 ) -> App:
     app = App(token=bot_token)
+    LOGGER.info(
+        "master.slack_app_init admin_channels=%s router_enabled=%s rate_limiter_enabled=%s",
+        ",".join(sorted(admin_channels)),
+        router is not None,
+        rate_limiter is not None,
+    )
 
     if router is not None:
         @app.event("app_mention")
@@ -256,5 +301,6 @@ def create_master_app(
             service=service,
             rate_limiter=rate_limiter,
         )
+        LOGGER.info("master.command_registered command=%s", command_name)
 
     return app

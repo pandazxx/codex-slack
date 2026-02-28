@@ -26,6 +26,15 @@ def main() -> None:
     configure_logging()
 
     settings = load_master_settings()
+    logging.getLogger(__name__).info(
+        "master.startup registry_path=%s admin_channels=%s dry_run=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        settings.registry_path,
+        ",".join(sorted(settings.admin_channels)),
+        settings.dry_run,
+        settings.dispatch_timeout_seconds,
+        settings.command_rate_limit_count,
+        settings.command_rate_limit_window_seconds,
+    )
     registry = AgentRegistry(settings.registry_path)
     runtime = PodmanRuntimeAdapter(dry_run=settings.dry_run)
     service = MasterService(registry=registry, runtime=runtime)
@@ -50,6 +59,7 @@ def main() -> None:
         router=router,
         rate_limiter=rate_limiter,
     )
+    logging.getLogger(__name__).info("master.socket_mode_starting")
     handler = SocketModeHandler(app, settings.slack_app_token)
     handler.start()
 
