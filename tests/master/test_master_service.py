@@ -123,6 +123,28 @@ def test_start_agent_uses_configured_default_image(tmp_path) -> None:
     assert runtime.calls[0][1]["image"] == "codex-slack-v1-uat"
 
 
+def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    monkeypatch.setenv("GH_TOKEN", "gh-token-value")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    load_result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert load_result.ok is True
+
+    start_result = service.start_agent(name="payments-api")
+    assert start_result.ok is True
+    assert runtime.calls[0][0] == "create_or_update_agent"
+    env = runtime.calls[0][1]["env"]
+    assert env["GH_TOKEN"] == "gh-token-value"
+    assert env["OPENAI_API_KEY"] == "openai-key"
+
+
 def test_status_returns_registry_and_runtime(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 from pathlib import Path
 import re
 import shutil
@@ -128,12 +129,7 @@ class MasterService:
                 container_name=record.container_name,
                 image=image,
                 repo_volume=f"agent-workspace-{record.name}",
-                env={
-                    "CODEX_CONTAINER_MODE": "agent-worker",
-                    "AGENT_REPO_URL": record.repo_source or record.repo_path,
-                    "AGENT_REPO_REF": record.repo_ref,
-                    "AGENT_REPO_DIR": "repo",
-                },
+                env=self._build_agent_env(record),
             )
             self._runtime.start_agent(record.container_name)
         except Exception as exc:  # noqa: BLE001
@@ -260,6 +256,28 @@ class MasterService:
             result.code,
             result.message,
         )
+
+    @staticmethod
+    def _build_agent_env(record: AgentRecord) -> dict[str, str]:
+        env = {
+            "CODEX_CONTAINER_MODE": "agent-worker",
+            "AGENT_REPO_URL": record.repo_source or record.repo_path,
+            "AGENT_REPO_REF": record.repo_ref,
+            "AGENT_REPO_DIR": "repo",
+        }
+
+        gh_token = os.getenv("GH_TOKEN", "").strip()
+        github_token = os.getenv("GITHUB_TOKEN", "").strip()
+        openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+
+        if gh_token:
+            env["GH_TOKEN"] = gh_token
+        if github_token:
+            env["GITHUB_TOKEN"] = github_token
+        if openai_api_key:
+            env["OPENAI_API_KEY"] = openai_api_key
+
+        return env
 
     def _resolve_image_plan(self, repo_path: str) -> dict[str, str]:
         dockerfile = Path(repo_path) / ".prj_assistant" / "image" / "Dockerfile"

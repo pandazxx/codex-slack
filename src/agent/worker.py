@@ -34,7 +34,7 @@ def load_worker_settings() -> WorkerSettings:
         repo_url=os.getenv("AGENT_REPO_URL", "").strip(),
         repo_ref=os.getenv("AGENT_REPO_REF", "main").strip(),
         repo_dir_name=os.getenv("AGENT_REPO_DIR", "repo").strip(),
-        status_file=os.getenv("AGENT_STATUS_FILE", "/run/master-agent/status.json").strip(),
+        status_file=os.getenv("AGENT_STATUS_FILE", "/tmp/master-agent/status.json").strip(),
         codex_home=os.getenv("CODEX_HOME", "/home/appuser/.codex").strip(),
         ready_poll_seconds=float(os.getenv("AGENT_READY_POLL_SECONDS", "5")),
     )
@@ -58,8 +58,11 @@ def emit_stage_event(stage: str, status: str, message: str, **extra: object) -> 
 
 def write_status(path: str, payload: dict[str, object]) -> None:
     status_path = Path(path)
-    status_path.parent.mkdir(parents=True, exist_ok=True)
-    status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError as exc:
+        LOGGER.warning("agent.status_write_failed path=%s error=%s", path, exc)
 
 
 def _run_git(args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:

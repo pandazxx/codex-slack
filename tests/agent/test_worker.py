@@ -149,3 +149,32 @@ def test_run_worker_success_writes_ready_status(tmp_path, monkeypatch) -> None: 
     payload = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
     assert payload["status"] == "ok"
     assert payload["stage"] == "ready"
+
+
+def test_load_worker_settings_uses_writable_default_status_path(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.delenv("AGENT_STATUS_FILE", raising=False)
+
+    settings = worker.load_worker_settings()
+
+    assert settings.status_file == "/tmp/master-agent/status.json"
+
+
+def test_run_worker_returns_preflight_error_even_if_status_path_is_unwritable(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN_FILE", raising=False)
+
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path / "workspace"),
+        repo_url="unused",
+        repo_ref="main",
+        repo_dir_name="repo",
+        status_file="/proc/1/status.json",
+        codex_home=str(tmp_path / "codex"),
+        ready_poll_seconds=0.1,
+    )
+
+    code = run_worker(settings)
+
+    assert code == 1

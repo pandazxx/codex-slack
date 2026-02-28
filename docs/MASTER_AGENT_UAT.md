@@ -27,6 +27,7 @@ Important:
 ```bash
 export SLACK_BOT_TOKEN=...
 export SLACK_APP_TOKEN=...
+export GH_TOKEN=...
 export MASTER_ADMIN_CHANNELS=C0123456789
 export MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat
 export MASTER_REGISTRY_PATH=data/master/agents.json
@@ -40,6 +41,7 @@ python -m src.master.main
 2. Ensure agent auth source exists:
 - `SSH_AUTH_SOCK` mounted, or
 - absolute-path `GH_TOKEN_FILE` mounted.
+For the current v1 implementation, the simplest supported path is setting `GH_TOKEN` on the master process so it can be forwarded into agent containers.
 
 ## Container Deployment Requirement
 Containerized validation is mandatory for v1 sign-off.
@@ -68,6 +70,7 @@ podman run --rm \
   --security-opt label=disable \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
+  -e GH_TOKEN \
   -e MASTER_ADMIN_CHANNELS=C0123456789 \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
@@ -76,6 +79,7 @@ podman run --rm \
   -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
   -e CODEX_CONTAINER_MODE=bot \
+  -v "$(pwd)/data/master:/opt/codex-slack/data/master" \
   -v /run/user/$(id -u)/podman/podman.sock:/run/podman/podman.sock \
   -e CONTAINER_HOST=unix:///run/podman/podman.sock \
   codex-slack-v1-uat \
@@ -85,8 +89,10 @@ podman run --rm \
 
 Why this matters:
 - `MASTER_AGENT_BASE_IMAGE` controls which base image the master uses for default-image agents; if you rebuild `codex-slack-v1-uat` but leave this unset, the master still creates agents from `codex-slack-bot:latest`.
+- `GH_TOKEN` on the master is forwarded into agent containers so worker `preflight` can pass and `git clone` can authenticate.
 - `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.
 - `--security-opt label=disable` avoids SELinux relabel restrictions blocking socket access on host-mounted Unix sockets.
+- Mounting `$(pwd)/data/master` into `/opt/codex-slack/data/master` persists `agents.json` across master container restarts.
 - Mounting the rootless socket to `/run/podman/podman.sock` keeps the in-container `CONTAINER_HOST` stable.
 
 ## UAT-001: Master Startup
@@ -375,7 +381,7 @@ podman logs <agent-container>
 ```
 2. Inspect status file path inside agent container if container is still available:
 ```bash
-podman exec <agent-container> cat /run/master-agent/status.json
+podman exec <agent-container> cat /tmp/master-agent/status.json
 ```
 
 Expected:

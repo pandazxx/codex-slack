@@ -91,7 +91,7 @@ Required env for worker init:
 - `AGENT_REPO_URL` (repo to clone/fetch)
 - Optional: `AGENT_REPO_REF` (default `main`)
 - Optional: `AGENT_REPO_DIR` (default `repo`)
-- Optional: `AGENT_STATUS_FILE` (default `/run/master-agent/status.json`)
+- Optional: `AGENT_STATUS_FILE` (default `/tmp/master-agent/status.json`)
 
 ## Security Model
 - Keep secrets in environment variables only.

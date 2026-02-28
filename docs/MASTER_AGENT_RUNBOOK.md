@@ -13,6 +13,7 @@ Containerized UAT is required for v1 sign-off; functional Slack-only checks are 
 - Host Podman service socket mounted into master container.
 - For rootless Podman, mount `/run/user/<uid>/podman/podman.sock` and run the master container with `--userns=keep-id --security-opt label=disable`.
 - `podman` CLI installed inside the master image/container.
+- Provide `GH_TOKEN` on the master container so it can be forwarded into agent workers for repo access.
 - Slack app configured with command/event scopes.
 - `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS` set.
 - Shared auth refs available to agents (`SSH_AUTH_SOCK` and/or `GH_TOKEN_FILE`).
@@ -25,6 +26,7 @@ podman run --rm \
   --security-opt label=disable \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
+  -e GH_TOKEN \
   -e MASTER_ADMIN_CHANNELS=<admin_channel_id> \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
@@ -33,6 +35,7 @@ podman run --rm \
   -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
   -e CODEX_CONTAINER_MODE=bot \
+  -v "$(pwd)/data/master:/opt/codex-slack/data/master" \
   -v /run/user/$(id -u)/podman/podman.sock:/run/podman/podman.sock \
   -e CONTAINER_HOST=unix:///run/podman/podman.sock \
   codex-slack-v1-uat \
@@ -43,6 +46,7 @@ For non-container local debugging, you can also run:
 python -m src.master.main
 ```
 Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent containers. If this is left unset, default-image agents still start from `codex-slack-bot:latest`.
+Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
 2. Verify startup logs include:
 - loaded admin channels
 - registry path
@@ -92,8 +96,9 @@ Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent co
 
 ### Worker init failure
 - Inspect status file in agent container path:
-`/run/master-agent/status.json`
+`/tmp/master-agent/status.json`
 - Check stage failure (`preflight`, `repo_sync`, `workspace_prepare`).
+- If `preflight` shows `missing auth source: SSH_AUTH_SOCK or GH token`, ensure `GH_TOKEN` is set on the master container so it is passed into the agent.
 - Fix env/auth and restart agent.
 
 ### Rate-limited commands
@@ -103,6 +108,6 @@ Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent co
 - `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS`
 
 ## Operational Notes
-- Registry source of truth: `data/master/agents.json`
+- Registry source of truth: `data/master/agents.json` (persist by mounting host `data/master` into `/opt/codex-slack/data/master` in the master container)
 - Registry lock file: `data/master/agents.json.lock`
 - Command/audit signals are emitted in master logs under `master.audit`.
