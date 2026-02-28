@@ -27,17 +27,18 @@ def main() -> None:
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup registry_path=%s admin_channels=%s dry_run=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        "master.startup registry_path=%s admin_channels=%s dry_run=%s base_image=%s dispatch_timeout=%s rate_limit=%d/%ds",
         settings.registry_path,
         ",".join(sorted(settings.admin_channels)),
         settings.dry_run,
+        settings.agent_base_image,
         settings.dispatch_timeout_seconds,
         settings.command_rate_limit_count,
         settings.command_rate_limit_window_seconds,
     )
     registry = AgentRegistry(settings.registry_path)
     runtime = PodmanRuntimeAdapter(dry_run=settings.dry_run)
-    service = MasterService(registry=registry, runtime=runtime)
+    service = MasterService(registry=registry, runtime=runtime, default_image=settings.agent_base_image)
     dispatcher = PodmanExecDispatcher(
         command_template=settings.dispatch_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,

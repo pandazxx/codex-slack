@@ -26,6 +26,7 @@ podman run --rm \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
   -e MASTER_ADMIN_CHANNELS=<admin_channel_id> \
+  -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
   -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec -' \
   -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
@@ -41,6 +42,7 @@ For non-container local debugging, you can also run:
 ```bash
 python -m src.master.main
 ```
+Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent containers. If this is left unset, default-image agents still start from `codex-slack-bot:latest`.
 2. Verify startup logs include:
 - loaded admin channels
 - registry path

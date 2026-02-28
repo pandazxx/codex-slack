@@ -28,6 +28,7 @@ Important:
 export SLACK_BOT_TOKEN=...
 export SLACK_APP_TOKEN=...
 export MASTER_ADMIN_CHANNELS=C0123456789
+export MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat
 export MASTER_REGISTRY_PATH=data/master/agents.json
 export MASTER_DRY_RUN=false
 export MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'
@@ -68,6 +69,7 @@ podman run --rm \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
   -e MASTER_ADMIN_CHANNELS=C0123456789 \
+  -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
   -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec -' \
   -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
@@ -82,6 +84,7 @@ podman run --rm \
 5. Use the rootful socket only if you intentionally run the master container with matching privileges.
 
 Why this matters:
+- `MASTER_AGENT_BASE_IMAGE` controls which base image the master uses for default-image agents; if you rebuild `codex-slack-v1-uat` but leave this unset, the master still creates agents from `codex-slack-bot:latest`.
 - `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.
 - `--security-opt label=disable` avoids SELinux relabel restrictions blocking socket access on host-mounted Unix sockets.
 - Mounting the rootless socket to `/run/podman/podman.sock` keeps the in-container `CONTAINER_HOST` stable.

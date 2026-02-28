@@ -105,6 +105,24 @@ def test_start_agent_builds_on_start(tmp_path) -> None:
     assert runtime.calls[2] == ("start_agent", "agent-payments-api")
 
 
+def test_start_agent_uses_configured_default_image(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime, default_image="codex-slack-v1-uat")
+
+    load_result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert load_result.ok is True
+
+    start_result = service.start_agent(name="payments-api")
+    assert start_result.ok is True
+    assert start_result.data["resolved_image"] == "codex-slack-v1-uat"
+    assert runtime.calls[0][0] == "create_or_update_agent"
+    assert runtime.calls[0][1]["image"] == "codex-slack-v1-uat"
+
+
 def test_status_returns_registry_and_runtime(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

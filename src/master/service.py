@@ -24,9 +24,10 @@ class CommandResult:
 
 
 class MasterService:
-    def __init__(self, registry: AgentRegistry, runtime: RuntimeAdapter) -> None:
+    def __init__(self, registry: AgentRegistry, runtime: RuntimeAdapter, default_image: str = DEFAULT_IMAGE) -> None:
         self._registry = registry
         self._runtime = runtime
+        self._default_image = default_image
 
     def list_agents(self) -> CommandResult:
         agents = [agent.to_dict() for agent in self._registry.list_agents()]
@@ -114,7 +115,7 @@ class MasterService:
             return result
 
         try:
-            image = DEFAULT_IMAGE
+            image = self._default_image
             if record.image_plan.get("type") == "dockerfile":
                 image = self._runtime.build_image(
                     name=record.name,
@@ -260,8 +261,7 @@ class MasterService:
             result.message,
         )
 
-    @staticmethod
-    def _resolve_image_plan(repo_path: str) -> dict[str, str]:
+    def _resolve_image_plan(self, repo_path: str) -> dict[str, str]:
         dockerfile = Path(repo_path) / ".prj_assistant" / "image" / "Dockerfile"
         if dockerfile.exists():
             return {
@@ -269,7 +269,7 @@ class MasterService:
                 "dockerfile": ".prj_assistant/image/Dockerfile",
                 "context": ".prj_assistant/image",
             }
-        return {"type": "default", "image": DEFAULT_IMAGE}
+        return {"type": "default", "image": self._default_image}
 
     @staticmethod
     def _normalize_repo_source(repo_input: str) -> str:
