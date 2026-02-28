@@ -79,7 +79,7 @@ In each target channel:
 ## 8. Get Channel IDs
 You need channel IDs for:
 - `MASTER_ADMIN_CHANNELS`
-- `/master-agent-load <name> <repo_path> <channel_id>`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch]`
 
 Options:
 - Copy from Slack channel details UI.
@@ -112,9 +112,9 @@ python -m src.master.main
 /master-agent-list
 ```
 3. Confirm a JSON response is posted.
-4. Run:
+4. Run (branch optional; defaults to `main`, then falls back to `master`):
 ```text
-/master-agent-load <name> <repo_path> <agent_channel_id>
+/master-agent-load <name> <repo_path> <agent_channel_id> [branch]
 ```
 5. Run:
 ```text

@@ -135,6 +135,8 @@ Preconditions:
 - `pandazxx/aidotfile`
 - `https://github.com/pandazxx/aidotfile.git`
 - `/absolute/local/path/to/repo`
+- If branch is omitted, load tries `main` first and falls back to `master`.
+- Optional explicit branch example: `/master-agent-load test-agent1 pandazxx/touchfish_agent C0987654321 master`
 
 Steps:
 1. In `CADMIN`, run:

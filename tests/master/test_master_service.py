@@ -165,8 +165,8 @@ def test_load_agent_accepts_github_shorthand(tmp_path, monkeypatch) -> None:  # 
 
     monkeypatch.setattr(
         service,
-        "_checkout_repo_source",
-        lambda *, name, repo_source, repo_ref: repo,  # type: ignore[no-untyped-def]
+        "_checkout_repo_source_with_fallback",
+        lambda *, name, repo_source, repo_ref: (repo, repo_ref),  # type: ignore[no-untyped-def]
     )
 
     result = service.load_agent(name="payments-api", repo_path="pandazxx/aidotfile", channel_id="C123")
@@ -176,3 +176,57 @@ def test_load_agent_accepts_github_shorthand(tmp_path, monkeypatch) -> None:  # 
     assert saved is not None
     assert saved.repo_source == "https://github.com/pandazxx/aidotfile.git"
     assert saved.repo_path == str(repo)
+
+
+def test_load_agent_falls_back_to_master_when_main_missing(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    calls: list[str] = []
+
+    def fake_checkout(*, name: str, repo_source: str, repo_ref: str):  # type: ignore[no-untyped-def]
+        calls.append(repo_ref)
+        if repo_ref == "main":
+            raise RuntimeError("fatal: Remote branch main not found in upstream origin")
+        return repo
+
+    monkeypatch.setattr(service, "_checkout_repo_source", fake_checkout)
+
+    result = service.load_agent(name="payments-api", repo_path="pandazxx/touchfish_agent", channel_id="C123")
+    assert result.ok is True
+    assert calls == ["main", "master"]
+
+    saved = registry.get("payments-api")
+    assert saved is not None
+    assert saved.repo_ref == "master"
+
+
+def test_load_agent_accepts_explicit_branch(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    seen: list[str] = []
+
+    def fake_checkout(*, name: str, repo_source: str, repo_ref: str):  # type: ignore[no-untyped-def]
+        seen.append(repo_ref)
+        return repo
+
+    monkeypatch.setattr(service, "_checkout_repo_source", fake_checkout)
+
+    result = service.load_agent(
+        name="payments-api",
+        repo_path="pandazxx/touchfish_agent",
+        channel_id="C123",
+        repo_ref="master",
+    )
+    assert result.ok is True
+    assert seen == ["master"]
+    assert result.data["repo_ref"] == "master"

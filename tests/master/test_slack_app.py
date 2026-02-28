@@ -18,8 +18,13 @@ class FakeMasterService:
     def list_agents(self) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="listed", data={"agents": []})
 
-    def load_agent(self, *, name: str, repo_path: str, channel_id: str) -> CommandResult:
-        return CommandResult(ok=True, code="OK", message="loaded", data={"name": name, "repo_path": repo_path, "channel_id": channel_id})
+    def load_agent(self, *, name: str, repo_path: str, channel_id: str, repo_ref: str = "main") -> CommandResult:
+        return CommandResult(
+            ok=True,
+            code="OK",
+            message="loaded",
+            data={"name": name, "repo_path": repo_path, "channel_id": channel_id, "repo_ref": repo_ref},
+        )
 
     def start_agent(self, *, name: str) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="started", data={"name": name})
@@ -40,8 +45,13 @@ def test_is_admin_channel() -> None:
 
 
 def test_parse_load_text_requires_three_args() -> None:
-    name, repo_path, channel_id = parse_load_text("payments /tmp/repo C123")
-    assert (name, repo_path, channel_id) == ("payments", "/tmp/repo", "C123")
+    name, repo_path, channel_id, repo_ref = parse_load_text("payments /tmp/repo C123")
+    assert (name, repo_path, channel_id, repo_ref) == ("payments", "/tmp/repo", "C123", "main")
+
+
+def test_parse_load_text_accepts_optional_branch() -> None:
+    name, repo_path, channel_id, repo_ref = parse_load_text("payments /tmp/repo C123 master")
+    assert (name, repo_path, channel_id, repo_ref) == ("payments", "/tmp/repo", "C123", "master")
 
 
 def test_dispatch_load_command() -> None:

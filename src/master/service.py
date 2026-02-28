@@ -34,7 +34,7 @@ class MasterService:
         self._audit(command="list", agent="-", result=result)
         return result
 
-    def load_agent(self, *, name: str, repo_path: str, channel_id: str) -> CommandResult:
+    def load_agent(self, *, name: str, repo_path: str, channel_id: str, repo_ref: str = "main") -> CommandResult:
         validation_error = self._validate_load_inputs(name=name, channel_id=channel_id)
         if validation_error:
             self._audit(command="load", agent=name or "-", result=validation_error)
@@ -42,7 +42,11 @@ class MasterService:
 
         try:
             repo_source = self._normalize_repo_source(repo_path)
-            checkout_path = self._checkout_repo_source(name=name, repo_source=repo_source, repo_ref="main")
+            checkout_path, resolved_repo_ref = self._checkout_repo_source_with_fallback(
+                name=name,
+                repo_source=repo_source,
+                repo_ref=repo_ref,
+            )
         except Exception as exc:  # noqa: BLE001
             result = CommandResult(
                 ok=False,
@@ -76,7 +80,7 @@ class MasterService:
                 image_plan=image_plan,
                 status="loaded",
                 repo_source=repo_source,
-                repo_ref="main",
+                repo_ref=resolved_repo_ref,
             )
         else:
             record.repo_path = str(checkout_path)
@@ -85,7 +89,7 @@ class MasterService:
             record.status = "loaded"
             record.last_error = None
             record.repo_source = repo_source
-            record.repo_ref = "main"
+            record.repo_ref = resolved_repo_ref
 
         saved = self._registry.upsert(record)
         result = CommandResult(
@@ -96,6 +100,7 @@ class MasterService:
                 "state": saved.status,
                 "image_plan": saved.image_plan,
                 "channel_id": saved.channel_id,
+                "repo_ref": saved.repo_ref,
             },
         )
         self._audit(command="load", agent=name, result=result)
@@ -304,6 +309,22 @@ class MasterService:
 
         self._run_git(["git", "clone", "--branch", repo_ref, repo_source, str(checkout_path)])
         return checkout_path
+
+    def _checkout_repo_source_with_fallback(self, *, name: str, repo_source: str, repo_ref: str) -> tuple[Path, str]:
+        refs_to_try = [repo_ref]
+        if repo_ref == "main":
+            refs_to_try.append("master")
+
+        last_error: Exception | None = None
+        for candidate_ref in refs_to_try:
+            try:
+                return self._checkout_repo_source(name=name, repo_source=repo_source, repo_ref=candidate_ref), candidate_ref
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+
+        if last_error is None:
+            raise RuntimeError("no repo ref candidates available")
+        raise last_error
 
     @staticmethod
     def _run_git(args: list[str], cwd: Path | None = None) -> None:

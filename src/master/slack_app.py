@@ -59,11 +59,12 @@ def format_command_result(command_name: str, result: CommandResult) -> str:
     return json.dumps(payload, sort_keys=True)
 
 
-def parse_load_text(text: str) -> tuple[str, str, str]:
+def parse_load_text(text: str) -> tuple[str, str, str, str]:
     parts = [part.strip() for part in text.split() if part.strip()]
-    if len(parts) != 3:
-        raise ValueError("usage: /master-agent-load <name> <repo_path> <channel_id>")
-    return parts[0], parts[1], parts[2]
+    if len(parts) not in {3, 4}:
+        raise ValueError("usage: /master-agent-load <name> <repo_path> <channel_id> [branch]")
+    repo_ref = parts[3] if len(parts) == 4 else "main"
+    return parts[0], parts[1], parts[2], repo_ref
 
 
 def parse_single_name_text(text: str, command_name: str) -> str:
@@ -78,8 +79,8 @@ def dispatch_slash_command(service: MasterService, request: SlackCommandRequest)
         return service.list_agents()
 
     if request.command_name == "/master-agent-load":
-        name, repo_path, channel_id = parse_load_text(request.text)
-        return service.load_agent(name=name, repo_path=repo_path, channel_id=channel_id)
+        name, repo_path, channel_id, repo_ref = parse_load_text(request.text)
+        return service.load_agent(name=name, repo_path=repo_path, channel_id=channel_id, repo_ref=repo_ref)
 
     if request.command_name == "/master-agent-start":
         name = parse_single_name_text(request.text, request.command_name)
