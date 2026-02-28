@@ -11,18 +11,23 @@ Validate end-to-end v1 behavior for:
 ## Test Environment
 - Master branch under test: `feat/master-agent-phase1-impl` build.
 - One Slack workspace with:
-- admin channel (`CADMIN`)
-- mapped agent channel (`CAGENT`)
-- one non-admin non-mapped channel (`COTHER`)
+- admin channel (example channel ID placeholder: `CADMIN`)
+- mapped agent channel (example channel ID placeholder: `CAGENT`)
+- one non-admin non-mapped channel (example channel ID placeholder: `COTHER`)
 - Podman host socket mounted into master runtime.
 - Network access to a test repo (`REPO_URL`).
+
+Important:
+- `CADMIN`, `CAGENT`, and `COTHER` in this document are placeholder Slack channel IDs.
+- Replace them with real channel IDs such as `C0123456789`.
+- Do not use Slack channel names like `cadmin` or `cagent` in these commands.
 
 ## Shared Setup
 1. Export master env and start master:
 ```bash
 export SLACK_BOT_TOKEN=...
 export SLACK_APP_TOKEN=...
-export MASTER_ADMIN_CHANNELS=CADMIN
+export MASTER_ADMIN_CHANNELS=C0123456789
 export MASTER_REGISTRY_PATH=data/master/agents.json
 export MASTER_DRY_RUN=false
 export MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'
@@ -55,7 +60,7 @@ podman build -t codex-slack-v1-uat .
 podman run --rm \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
-  -e MASTER_ADMIN_CHANNELS=CADMIN \
+  -e MASTER_ADMIN_CHANNELS=C0123456789 \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
   -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec -' \
   -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
@@ -125,12 +130,12 @@ Expected:
 
 ## UAT-003: Load Agent
 Preconditions:
-- Valid `REPO_URL` and target channel `CAGENT`.
+- Valid `REPO_URL` and target agent channel ID (example placeholder: `CAGENT`).
 
 Steps:
 1. In `CADMIN`, run:
 ```text
-/master-agent-load payments-agent REPO_URL CAGENT
+/master-agent-load payments-agent REPO_URL C0987654321
 ```
 
 Expected:
