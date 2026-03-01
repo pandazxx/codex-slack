@@ -25,10 +25,17 @@ class CommandResult:
 
 
 class MasterService:
-    def __init__(self, registry: AgentRegistry, runtime: RuntimeAdapter, default_image: str = DEFAULT_IMAGE) -> None:
+    def __init__(
+        self,
+        registry: AgentRegistry,
+        runtime: RuntimeAdapter,
+        default_image: str = DEFAULT_IMAGE,
+        agent_codex_auth_json_path: str | None = None,
+    ) -> None:
         self._registry = registry
         self._runtime = runtime
         self._default_image = default_image
+        self._agent_codex_auth_json_path = agent_codex_auth_json_path
 
     def list_agents(self) -> CommandResult:
         agents = [agent.to_dict() for agent in self._registry.list_agents()]
@@ -130,6 +137,7 @@ class MasterService:
                 image=image,
                 repo_volume=f"agent-workspace-{record.name}",
                 env=self._build_agent_env(record),
+                mounts=self._build_agent_mounts(),
             )
             self._runtime.start_agent(record.container_name)
         except Exception as exc:  # noqa: BLE001
@@ -278,6 +286,12 @@ class MasterService:
             env["OPENAI_API_KEY"] = openai_api_key
 
         return env
+
+    def _build_agent_mounts(self) -> list[str]:
+        mounts: list[str] = []
+        if self._agent_codex_auth_json_path:
+            mounts.append(f"{self._agent_codex_auth_json_path}:/run/secrets/codex_auth.json:ro")
+        return mounts
 
     def _resolve_image_plan(self, repo_path: str) -> dict[str, str]:
         dockerfile = Path(repo_path) / ".prj_assistant" / "image" / "Dockerfile"

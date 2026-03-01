@@ -19,11 +19,12 @@ class FakeRuntime:
         image: str,
         repo_volume: str,
         env: dict[str, str] | None = None,
+        mounts: list[str] | None = None,
     ) -> None:
         self.calls.append(
             (
                 "create_or_update_agent",
-                {"container_name": container_name, "image": image, "env": env or {}},
+                {"container_name": container_name, "image": image, "env": env or {}, "mounts": mounts or []},
             )
         )
 
@@ -143,6 +144,28 @@ def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> No
     env = runtime.calls[0][1]["env"]
     assert env["GH_TOKEN"] == "gh-token-value"
     assert env["OPENAI_API_KEY"] == "openai-key"
+
+
+def test_start_agent_mounts_codex_auth_json_only(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_codex_auth_json_path="/host/secrets/codex-auth.json",
+    )
+
+    load_result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert load_result.ok is True
+
+    start_result = service.start_agent(name="payments-api")
+    assert start_result.ok is True
+    assert runtime.calls[0][0] == "create_or_update_agent"
+    mounts = runtime.calls[0][1]["mounts"]
+    assert mounts == ["/host/secrets/codex-auth.json:/run/secrets/codex_auth.json:ro"]
 
 
 def test_status_returns_registry_and_runtime(tmp_path) -> None:

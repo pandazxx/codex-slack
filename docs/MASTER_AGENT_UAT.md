@@ -28,6 +28,7 @@ Important:
 export SLACK_BOT_TOKEN=...
 export SLACK_APP_TOKEN=...
 export GH_TOKEN=...
+export MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json
 export MASTER_ADMIN_CHANNELS=C0123456789
 export MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat
 export MASTER_REGISTRY_PATH=data/master/agents.json
@@ -71,6 +72,7 @@ podman run --rm \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
   -e GH_TOKEN \
+  -e MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json \
   -e MASTER_ADMIN_CHANNELS=C0123456789 \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
@@ -90,6 +92,7 @@ podman run --rm \
 Why this matters:
 - `MASTER_AGENT_BASE_IMAGE` controls which base image the master uses for default-image agents; if you rebuild `codex-slack-v1-uat` but leave this unset, the master still creates agents from `codex-slack-bot:latest`.
 - `GH_TOKEN` on the master is forwarded into agent containers so worker `preflight` can pass and `git clone` can authenticate.
+- `MASTER_CODEX_AUTH_JSON_PATH` mounts only the shared Codex `auth.json` into agents. V1 does not forward Codex session directories into agents.
 - `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.
 - `--security-opt label=disable` avoids SELinux relabel restrictions blocking socket access on host-mounted Unix sockets.
 - Mounting `$(pwd)/data/master` into `/opt/codex-slack/data/master` persists `agents.json` across master container restarts.

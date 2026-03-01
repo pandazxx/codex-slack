@@ -14,6 +14,7 @@ Containerized UAT is required for v1 sign-off; functional Slack-only checks are 
 - For rootless Podman, mount `/run/user/<uid>/podman/podman.sock` and run the master container with `--userns=keep-id --security-opt label=disable`.
 - `podman` CLI installed inside the master image/container.
 - Provide `GH_TOKEN` on the master container so it can be forwarded into agent workers for repo access.
+- Provide `MASTER_CODEX_AUTH_JSON_PATH` as a host path to the shared Codex `auth.json`; v1 forwards only this auth file to agents, not Codex session directories.
 - Slack app configured with command/event scopes.
 - `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS` set.
 - Shared auth refs available to agents (`SSH_AUTH_SOCK` and/or `GH_TOKEN_FILE`).
@@ -27,6 +28,7 @@ podman run --rm \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
   -e GH_TOKEN \
+  -e MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json \
   -e MASTER_ADMIN_CHANNELS=<admin_channel_id> \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
@@ -46,6 +48,7 @@ For non-container local debugging, you can also run:
 python -m src.master.main
 ```
 Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent containers. If this is left unset, default-image agents still start from `codex-slack-bot:latest`.
+`MASTER_CODEX_AUTH_JSON_PATH` must be a host filesystem path visible to host Podman because the master uses the host Podman socket. It is mounted into each agent as `/run/secrets/codex_auth.json:ro`.
 Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
 2. Verify startup logs include:
 - loaded admin channels

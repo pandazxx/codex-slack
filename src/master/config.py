@@ -12,6 +12,7 @@ class MasterSettings:
     registry_path: str
     dry_run: bool
     agent_base_image: str
+    agent_codex_auth_json_path: str | None
     dispatch_command_template: str
     dispatch_timeout_seconds: int | None
     command_rate_limit_count: int
@@ -33,6 +34,7 @@ def load_master_settings() -> MasterSettings:
     registry_path = os.getenv("MASTER_REGISTRY_PATH", "data/master/agents.json").strip()
     dry_run = _parse_bool(os.getenv("MASTER_DRY_RUN", "false"))
     agent_base_image = os.getenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-bot:latest").strip() or "codex-slack-bot:latest"
+    agent_codex_auth_json_path = os.getenv("MASTER_CODEX_AUTH_JSON_PATH", "").strip() or None
     dispatch_command_template = os.getenv("MASTER_AGENT_COMMAND_TEMPLATE", "codex exec -").strip()
     raw_dispatch_timeout = os.getenv("MASTER_AGENT_TIMEOUT_SECONDS", "").strip()
     dispatch_timeout_seconds = int(raw_dispatch_timeout) if raw_dispatch_timeout else None
@@ -64,6 +66,7 @@ def load_master_settings() -> MasterSettings:
         registry_path=registry_path,
         dry_run=dry_run,
         agent_base_image=agent_base_image,
+        agent_codex_auth_json_path=agent_codex_auth_json_path,
         dispatch_command_template=dispatch_command_template,
         dispatch_timeout_seconds=dispatch_timeout_seconds,
         command_rate_limit_count=command_rate_limit_count,

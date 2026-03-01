@@ -23,6 +23,7 @@ class RuntimeAdapter(Protocol):
         image: str,
         repo_volume: str,
         env: dict[str, str] | None = None,
+        mounts: list[str] | None = None,
     ) -> None:
         ...
 
@@ -96,6 +97,7 @@ class PodmanRuntimeAdapter:
         image: str,
         repo_volume: str,
         env: dict[str, str] | None = None,
+        mounts: list[str] | None = None,
     ) -> None:
         if self._container_exists(container_name):
             self._run(["podman", "rm", "-f", container_name], check=False)
@@ -108,6 +110,8 @@ class PodmanRuntimeAdapter:
             "-v",
             f"{repo_volume}:/workspace",
         ]
+        for mount in mounts or []:
+            cmd.extend(["-v", mount])
         for key, value in sorted((env or {}).items()):
             cmd.extend(["-e", f"{key}={value}"])
         cmd.append(image)

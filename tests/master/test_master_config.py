@@ -12,6 +12,7 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     monkeypatch.setenv("MASTER_REGISTRY_PATH", "data/master/test.json")
     monkeypatch.setenv("MASTER_DRY_RUN", "true")
     monkeypatch.setenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-v1-uat")
+    monkeypatch.setenv("MASTER_CODEX_AUTH_JSON_PATH", "/host/secrets/codex-auth.json")
     monkeypatch.setenv("MASTER_AGENT_COMMAND_TEMPLATE", "codex exec resume abc -")
     monkeypatch.setenv("MASTER_AGENT_TIMEOUT_SECONDS", "30")
     monkeypatch.setenv("MASTER_COMMAND_RATE_LIMIT_COUNT", "10")
@@ -24,6 +25,7 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     assert settings.registry_path == "data/master/test.json"
     assert settings.dry_run is True
     assert settings.agent_base_image == "codex-slack-v1-uat"
+    assert settings.agent_codex_auth_json_path == "/host/secrets/codex-auth.json"
     assert settings.dispatch_command_template == "codex exec resume abc -"
     assert settings.dispatch_timeout_seconds == 30
     assert settings.command_rate_limit_count == 10
