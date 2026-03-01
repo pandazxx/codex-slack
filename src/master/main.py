@@ -21,13 +21,22 @@ def configure_logging() -> None:
     )
 
 
+def mask_token(token: str) -> str:
+    value = token.strip()
+    if not value:
+        return "-"
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}...{value[-4:]}"
+
+
 def main() -> None:
     load_dotenv()
     configure_logging()
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup registry_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        "master.startup registry_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s bot_token=%s app_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
         settings.registry_path,
         ",".join(sorted(settings.admin_channels)),
         settings.dry_run,
@@ -37,6 +46,8 @@ def main() -> None:
         settings.agent_ssh_known_hosts_path or "-",
         settings.git_user_name or "-",
         settings.git_user_email or "-",
+        mask_token(settings.slack_bot_token),
+        mask_token(settings.slack_app_token),
         settings.dispatch_timeout_seconds,
         settings.command_rate_limit_count,
         settings.command_rate_limit_window_seconds,
