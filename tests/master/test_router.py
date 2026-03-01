@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from src.master.registry import AgentRecord, AgentRegistry
-from src.master.router import ChannelRouter, RouteError, RouteSkip
+from src.master.router import ChannelRouter, PodmanExecDispatcher, RouteError, RouteSkip
 
 
 class FakeDispatcher:
@@ -118,3 +120,65 @@ def test_thread_tracking_and_mention_dedupe(tmp_path) -> None:
     router.mark_mention_event(channel_id="CAGENT", ts="1730000000.1111")
     assert router.consume_marked_mention_event(channel_id="CAGENT", ts="1730000000.1111") is True
     assert router.consume_marked_mention_event(channel_id="CAGENT", ts="1730000000.1111") is False
+
+
+def test_podman_exec_dispatcher_includes_exit_and_output_details(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = PodmanExecDispatcher()
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=17,
+            stdout="partial stdout",
+            stderr="fatal stderr",
+        )
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    with pytest.raises(RouteError, match=r"exit=17"):
+        dispatcher.send_prompt(
+            agent_name="payments-agent",
+            container_name="agent-payments",
+            prompt="hello",
+            channel_id="CAGENT",
+            thread_ts="1730000000.1234",
+            user_id="U123",
+        )
+
+
+def test_podman_exec_dispatcher_reports_timeout(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = PodmanExecDispatcher(timeout_seconds=12)
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=12)
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    with pytest.raises(RouteError, match=r"timed out after 12s"):
+        dispatcher.send_prompt(
+            agent_name="payments-agent",
+            container_name="agent-payments",
+            prompt="hello",
+            channel_id="CAGENT",
+            thread_ts="1730000000.1234",
+            user_id="U123",
+        )
+
+
+def test_podman_exec_dispatcher_reports_missing_podman(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = PodmanExecDispatcher()
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise FileNotFoundError("podman")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    with pytest.raises(RouteError, match=r"podman CLI is not available"):
+        dispatcher.send_prompt(
+            agent_name="payments-agent",
+            container_name="agent-payments",
+            prompt="hello",
+            channel_id="CAGENT",
+            thread_ts="1730000000.1234",
+            user_id="U123",
+        )

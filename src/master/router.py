@@ -40,6 +40,13 @@ class PodmanExecDispatcher:
     command_template: str = "codex exec -"
     timeout_seconds: int | None = None
 
+    @staticmethod
+    def _clip(value: str, limit: int = 240) -> str:
+        text = value.strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3] + "..."
+
     def send_prompt(
         self,
         *,
@@ -60,16 +67,52 @@ class PodmanExecDispatcher:
             user_id or "-",
             len(prompt),
         )
-        completed = subprocess.run(
-            cmd,
-            input=prompt,
-            text=True,
-            capture_output=True,
-            timeout=self.timeout_seconds,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                cmd,
+                input=prompt,
+                text=True,
+                capture_output=True,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            LOGGER.warning(
+                "router.dispatch_failed agent=%s container=%s channel=%s reason=timeout timeout_seconds=%s",
+                agent_name,
+                container_name,
+                channel_id,
+                self.timeout_seconds,
+            )
+            raise RouteError(f"dispatch timed out after {self.timeout_seconds}s") from exc
+        except FileNotFoundError as exc:
+            LOGGER.warning(
+                "router.dispatch_failed agent=%s container=%s channel=%s reason=missing_binary error=%s",
+                agent_name,
+                container_name,
+                channel_id,
+                exc,
+            )
+            raise RouteError("podman CLI is not available in the master runtime") from exc
+
         if completed.returncode != 0:
-            raise RouteError(completed.stderr.strip() or "dispatcher command failed")
+            stderr_text = self._clip(completed.stderr)
+            stdout_text = self._clip(completed.stdout)
+            LOGGER.warning(
+                "router.dispatch_failed agent=%s container=%s channel=%s exit_code=%s stderr=%r stdout=%r",
+                agent_name,
+                container_name,
+                channel_id,
+                completed.returncode,
+                stderr_text,
+                stdout_text,
+            )
+            details: list[str] = [f"exit={completed.returncode}"]
+            if stderr_text:
+                details.append(f"stderr={stderr_text}")
+            if stdout_text:
+                details.append(f"stdout={stdout_text}")
+            raise RouteError(f"dispatch failed ({', '.join(details)})")
         response = completed.stdout.strip()
         LOGGER.info(
             "router.dispatch_done agent=%s container=%s channel=%s thread_ts=%s user=%s response_chars=%d",
