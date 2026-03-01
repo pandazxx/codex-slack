@@ -121,6 +121,15 @@ def stage_repo_sync(settings: WorkerSettings) -> Path:
 def stage_workspace_prepare(settings: WorkerSettings) -> None:
     codex_home = Path(settings.codex_home)
     codex_home.mkdir(parents=True, exist_ok=True)
+    repo_dir = Path(settings.workspace_path) / settings.repo_dir_name
+    git_user_name = os.getenv("AGENT_GIT_USER_NAME", "").strip()
+    git_user_email = os.getenv("AGENT_GIT_USER_EMAIL", "").strip()
+
+    if repo_dir.joinpath(".git").exists():
+        if git_user_name:
+            _run_git(["git", "config", "user.name", git_user_name], cwd=str(repo_dir))
+        if git_user_email:
+            _run_git(["git", "config", "user.email", git_user_email], cwd=str(repo_dir))
 
 
 

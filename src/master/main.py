@@ -27,7 +27,7 @@ def main() -> None:
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup registry_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        "master.startup registry_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s dispatch_timeout=%s rate_limit=%d/%ds",
         settings.registry_path,
         ",".join(sorted(settings.admin_channels)),
         settings.dry_run,
@@ -35,6 +35,8 @@ def main() -> None:
         settings.agent_codex_auth_json_path or "-",
         settings.agent_ssh_auth_sock_path or "-",
         settings.agent_ssh_known_hosts_path or "-",
+        settings.git_user_name or "-",
+        settings.git_user_email or "-",
         settings.dispatch_timeout_seconds,
         settings.command_rate_limit_count,
         settings.command_rate_limit_window_seconds,
@@ -48,6 +50,8 @@ def main() -> None:
         agent_codex_auth_json_path=settings.agent_codex_auth_json_path,
         agent_ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
         agent_ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
+        git_user_name=settings.git_user_name,
+        git_user_email=settings.git_user_email,
     )
     dispatcher = PodmanExecDispatcher(
         command_template=settings.dispatch_command_template,

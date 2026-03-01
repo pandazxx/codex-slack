@@ -15,6 +15,8 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     monkeypatch.setenv("MASTER_CODEX_AUTH_JSON_PATH", "/host/secrets/codex-auth.json")
     monkeypatch.setenv("MASTER_SSH_AUTH_SOCK_PATH", "/run/user/1000/keyring/ssh")
     monkeypatch.setenv("MASTER_SSH_KNOWN_HOSTS_PATH", "/home/tester/.ssh/known_hosts")
+    monkeypatch.setenv("MASTER_GIT_USER_NAME", "Test User")
+    monkeypatch.setenv("MASTER_GIT_USER_EMAIL", "test@example.com")
     monkeypatch.setenv("MASTER_AGENT_COMMAND_TEMPLATE", "codex exec resume abc -")
     monkeypatch.setenv("MASTER_AGENT_TIMEOUT_SECONDS", "30")
     monkeypatch.setenv("MASTER_COMMAND_RATE_LIMIT_COUNT", "10")
@@ -30,6 +32,8 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     assert settings.agent_codex_auth_json_path == "/host/secrets/codex-auth.json"
     assert settings.agent_ssh_auth_sock_path == "/run/user/1000/keyring/ssh"
     assert settings.agent_ssh_known_hosts_path == "/home/tester/.ssh/known_hosts"
+    assert settings.git_user_name == "Test User"
+    assert settings.git_user_email == "test@example.com"
     assert settings.dispatch_command_template == "codex exec resume abc -"
     assert settings.dispatch_timeout_seconds == 30
     assert settings.command_rate_limit_count == 10

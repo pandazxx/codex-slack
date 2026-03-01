@@ -30,6 +30,8 @@ export SLACK_APP_TOKEN=...
 export GH_TOKEN=...
 export MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json
 export MASTER_SSH_AUTH_SOCK_PATH=/absolute/host/path/ssh-agent.sock
+export MASTER_GIT_USER_NAME='Your Name'
+export MASTER_GIT_USER_EMAIL='you@example.com'
 # Optional:
 # export MASTER_SSH_KNOWN_HOSTS_PATH=/absolute/host/path/known_hosts
 export MASTER_ADMIN_CHANNELS=C0123456789
@@ -83,6 +85,8 @@ podman run --rm \
   -e SLACK_APP_TOKEN \
   -e GH_TOKEN \
   -e SSH_AUTH_SOCK=/ssh-agent \
+  -e MASTER_GIT_USER_NAME='Your Name' \
+  -e MASTER_GIT_USER_EMAIL='you@example.com' \
   -e MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json \
   -e MASTER_SSH_AUTH_SOCK_PATH=/absolute/host/path/ssh-agent.sock \
   -e MASTER_ADMIN_CHANNELS=C0123456789 \
@@ -110,6 +114,7 @@ Why this matters:
 - The master container itself also needs the SSH socket mounted (for example to `/ssh-agent`) and `SSH_AUTH_SOCK=/ssh-agent` so `/master-agent-load` can use the same agent for private SSH clones.
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it mounts a host `known_hosts` file into agents for explicit SSH host verification.
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is omitted, master and agents default to `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null` to accept all SSH hosts.
+- `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are passed into agents and written into the checked-out repo's local Git config during worker startup so commit flows inherit the master's configured identity.
 - `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.
 - `--security-opt label=disable` avoids SELinux relabel restrictions blocking socket access on host-mounted Unix sockets.
 - Mounting `$(pwd)/data/master` into `/opt/codex-slack/data/master` persists `agents.json` across master container restarts.

@@ -33,6 +33,8 @@ class MasterService:
         agent_codex_auth_json_path: str | None = None,
         agent_ssh_auth_sock_path: str | None = None,
         agent_ssh_known_hosts_path: str | None = None,
+        git_user_name: str | None = None,
+        git_user_email: str | None = None,
     ) -> None:
         self._registry = registry
         self._runtime = runtime
@@ -40,6 +42,8 @@ class MasterService:
         self._agent_codex_auth_json_path = agent_codex_auth_json_path
         self._agent_ssh_auth_sock_path = agent_ssh_auth_sock_path
         self._agent_ssh_known_hosts_path = agent_ssh_known_hosts_path
+        self._git_user_name = git_user_name
+        self._git_user_email = git_user_email
 
     def list_agents(self) -> CommandResult:
         agents = [agent.to_dict() for agent in self._registry.list_agents()]
@@ -289,6 +293,10 @@ class MasterService:
             env["GITHUB_TOKEN"] = github_token
         if openai_api_key:
             env["OPENAI_API_KEY"] = openai_api_key
+        if self._git_user_name:
+            env["AGENT_GIT_USER_NAME"] = self._git_user_name
+        if self._git_user_email:
+            env["AGENT_GIT_USER_EMAIL"] = self._git_user_email
         if self._agent_ssh_auth_sock_path:
             env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
             env["GIT_SSH_COMMAND"] = self._agent_git_ssh_command()

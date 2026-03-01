@@ -31,6 +31,8 @@ podman run --rm \
   -e SLACK_APP_TOKEN \
   -e GH_TOKEN \
   -e SSH_AUTH_SOCK=/ssh-agent \
+  -e MASTER_GIT_USER_NAME='Your Name' \
+  -e MASTER_GIT_USER_EMAIL='you@example.com' \
   -e MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json \
   -e MASTER_SSH_AUTH_SOCK_PATH=/absolute/host/path/ssh-agent.sock \
   -e MASTER_SSH_KNOWN_HOSTS_PATH=/absolute/host/path/known_hosts \
@@ -59,6 +61,7 @@ Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent co
 The master container itself also needs the same socket mounted separately (for example `-v /absolute/host/path/ssh-agent.sock:/ssh-agent`) with `SSH_AUTH_SOCK=/ssh-agent` so `/master-agent-load` can clone private repos over SSH.
 If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it must also be a host filesystem path visible to host Podman and is mounted into each agent as `/run/secrets/ssh_known_hosts:ro`.
 If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`.
+If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup so commits do not require manual setup.
 Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
 2. Verify startup logs include:
 - loaded admin channels

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 
 import pytest
 
 from src.agent import worker
-from src.agent.worker import AgentInitError, WorkerSettings, run_worker, stage_preflight, stage_repo_sync
+from src.agent.worker import AgentInitError, WorkerSettings, run_worker, stage_preflight, stage_repo_sync, stage_workspace_prepare
 
 
 def _git(args: list[str], cwd: str | None = None) -> None:
@@ -149,6 +150,42 @@ def test_run_worker_success_writes_ready_status(tmp_path, monkeypatch) -> None: 
     payload = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
     assert payload["status"] == "ok"
     assert payload["stage"] == "ready"
+
+
+def test_stage_workspace_prepare_sets_repo_local_git_identity(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    repo_path = Path(_create_local_repo(tmp_path / "src"))
+    monkeypatch.setenv("AGENT_GIT_USER_NAME", "Agent User")
+    monkeypatch.setenv("AGENT_GIT_USER_EMAIL", "agent@example.com")
+
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path),
+        repo_url=str(repo_path),
+        repo_ref="main",
+        repo_dir_name="src",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex"),
+        ready_poll_seconds=0.1,
+    )
+
+    stage_workspace_prepare(settings)
+
+    name_result = subprocess.run(
+        ["git", "config", "user.name"],
+        cwd=str(repo_path),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    email_result = subprocess.run(
+        ["git", "config", "user.email"],
+        cwd=str(repo_path),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert name_result.stdout.strip() == "Agent User"
+    assert email_result.stdout.strip() == "agent@example.com"
 
 
 def test_load_worker_settings_uses_writable_default_status_path(monkeypatch) -> None:  # type: ignore[no-untyped-def]

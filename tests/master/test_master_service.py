@@ -146,6 +146,29 @@ def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> No
     assert env["OPENAI_API_KEY"] == "openai-key"
 
 
+def test_start_agent_passes_git_identity_to_agent(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        git_user_name="Test User",
+        git_user_email="test@example.com",
+    )
+
+    load_result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert load_result.ok is True
+
+    start_result = service.start_agent(name="payments-api")
+    assert start_result.ok is True
+    env = runtime.calls[0][1]["env"]
+    assert env["AGENT_GIT_USER_NAME"] == "Test User"
+    assert env["AGENT_GIT_USER_EMAIL"] == "test@example.com"
+
+
 def test_start_agent_mounts_codex_auth_json_only(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
