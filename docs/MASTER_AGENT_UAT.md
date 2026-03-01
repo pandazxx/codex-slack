@@ -43,6 +43,11 @@ python -m src.master.main
 - `SSH_AUTH_SOCK` mounted, or
 - absolute-path `GH_TOKEN_FILE` mounted.
 For the current v1 implementation, the simplest supported path is setting `GH_TOKEN` on the master process so it can be forwarded into agent containers.
+3. Prepare auth-specific test fixtures for Git operations:
+- one private repo reachable over SSH (for checkout validation)
+- one writable test repo/branch reachable over SSH (for push validation)
+- one valid GitHub token with enough scope for `gh auth status` and repo metadata checks
+- host `SSH_AUTH_SOCK` must reference an agent loaded with the correct key when running SSH-based UAT cases
 
 ## Container Deployment Requirement
 Containerized validation is mandatory for v1 sign-off.
@@ -390,6 +395,77 @@ podman exec <agent-container> cat /tmp/master-agent/status.json
 Expected:
 - Structured `agent.stage` log lines are present.
 - Status file reflects current stage or failure stage.
+
+## UAT-014C: Private Repo Checkout Via Shared SSH Key
+Preconditions:
+- SSH-based agent auth forwarding is enabled for the environment under test.
+- Host `SSH_AUTH_SOCK` has the correct private key loaded.
+- A private test repo is available over SSH URL (for example `git@github.com:org/private-repo.git`).
+
+Steps:
+1. Load the agent using the private SSH repo URL.
+2. Start the agent.
+3. Inspect agent logs and status.
+4. If needed, verify the checked-out repo exists inside the agent workspace:
+```bash
+podman exec <agent-container> sh -lc 'cd /workspace/repo && git remote -v && git rev-parse --is-inside-work-tree'
+```
+
+Expected:
+- Agent preflight passes with the shared SSH agent/key.
+- Repo sync succeeds against the private SSH remote.
+- Agent reaches `running` state without falling back to token-only auth.
+
+## UAT-014D: Git Push Via Shared SSH Key
+Preconditions:
+- UAT-014C passed.
+- The private key loaded in `SSH_AUTH_SOCK` has push permission to a safe test repo/branch.
+- A disposable branch name is selected for the test.
+
+Steps:
+1. Exec into the agent container:
+```bash
+podman exec -it <agent-container> sh
+```
+2. Create a disposable branch and test commit from `/workspace/repo`.
+3. Push the branch to origin over SSH:
+```bash
+git checkout -b uat/master-agent-ssh-push
+printf 'uat\n' >> .uat-push-check
+git add .uat-push-check
+git commit -m 'chore: uat ssh push check'
+git push -u origin uat/master-agent-ssh-push
+```
+4. Clean up the branch on the remote after verification.
+
+Expected:
+- `git push` succeeds over SSH from inside the agent container.
+- No interactive credential prompt appears.
+- The agent uses the shared SSH agent/key rather than failing with permission denied.
+
+## UAT-014E: GitHub CLI Token Availability In Agent Container
+Preconditions:
+- `GH_TOKEN` (or equivalent supported GitHub token path) is configured for agent use.
+- Agent container is running.
+
+Steps:
+1. Verify token presence in the agent runtime:
+```bash
+podman exec <agent-container> sh -lc 'env | grep -E "^(GH_TOKEN|GITHUB_TOKEN)="'
+```
+2. Verify GitHub CLI auth works:
+```bash
+podman exec <agent-container> sh -lc 'gh auth status'
+```
+3. Verify the token can access expected repo metadata:
+```bash
+podman exec <agent-container> sh -lc 'gh repo view <owner>/<repo> --json name,visibility'
+```
+
+Expected:
+- The expected GitHub token env var is present inside the agent container.
+- `gh auth status` succeeds.
+- `gh repo view` succeeds for an intended test repo, confirming the token scope is usable for agent workflows.
 
 ## UAT-015: Rate Limiting
 Preconditions:
