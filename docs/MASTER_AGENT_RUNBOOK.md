@@ -57,6 +57,7 @@ export UID="$(id -u)"
 export GID="$(id -g)"
 export PODMAN_SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
 export MASTER_DATA_DIR="$(pwd)/data/master"
+export MASTER_RUNTIME_IMAGE="codex-slack-v1-uat"
 export MASTER_CODEX_AUTH_JSON_PATH="${HOME}/.codex/auth.json"
 export MASTER_SSH_AUTH_SOCK_PATH="${SSH_AUTH_SOCK}"
 export MASTER_ADMIN_CHANNELS="<admin_channel_id>"
@@ -69,6 +70,7 @@ podman compose -f docker-compose.master-agent.example.yml up --build -d
 podman compose -f docker-compose.master-agent.example.yml logs -f
 ```
 The compose example is intended for Podman Compose and already includes `userns_mode: keep-id`, `security_opt: [label=disable]`, and `x-podman.in_pod: false`.
+It also reads the master container image from `MASTER_RUNTIME_IMAGE` (default `codex-slack-v1-uat`) so you can swap tags without editing the compose file.
 For non-container local debugging, you can also run:
 ```bash
 python -m src.master.main

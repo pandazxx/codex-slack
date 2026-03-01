@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: codex-slack-v1-uat
+    image: ${MASTER_RUNTIME_IMAGE:-codex-slack-v1-uat}
     working_dir: /opt/codex-slack
     command: ["python", "-m", "src.master.main"]
     userns_mode: "keep-id"
