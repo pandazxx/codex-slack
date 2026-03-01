@@ -39,6 +39,7 @@ class AgentDispatcher(Protocol):
 class PodmanExecDispatcher:
     command_template: str = "codex exec -"
     timeout_seconds: int | None = None
+    workdir: str = "/workspace/repo"
 
     @staticmethod
     def _clip(value: str, limit: int = 240) -> str:
@@ -57,15 +58,19 @@ class PodmanExecDispatcher:
         thread_ts: str | None,
         user_id: str | None,
     ) -> str:
-        cmd = ["podman", "exec", "-i", container_name, "sh", "-lc", self.command_template]
+        cmd = ["podman", "exec", "-i"]
+        if self.workdir:
+            cmd.extend(["--workdir", self.workdir])
+        cmd.extend([container_name, "sh", "-lc", self.command_template])
         LOGGER.info(
-            "router.dispatch_start agent=%s container=%s channel=%s thread_ts=%s user=%s prompt_chars=%d",
+            "router.dispatch_start agent=%s container=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s",
             agent_name,
             container_name,
             channel_id,
             thread_ts or "-",
             user_id or "-",
             len(prompt),
+            self.workdir or "-",
         )
         try:
             completed = subprocess.run(

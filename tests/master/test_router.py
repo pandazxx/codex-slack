@@ -182,3 +182,26 @@ def test_podman_exec_dispatcher_reports_missing_podman(monkeypatch) -> None:  # 
             thread_ts="1730000000.1234",
             user_id="U123",
         )
+
+
+def test_podman_exec_dispatcher_runs_in_repo_workdir(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = PodmanExecDispatcher()
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    response = dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert response == "ok"
+    assert seen["cmd"][0:5] == ["podman", "exec", "-i", "--workdir", "/workspace/repo"]
