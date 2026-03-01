@@ -8,7 +8,7 @@ import time
 
 from slack_bolt import App
 
-from .router import ChannelRouter, RouteError
+from .router import ChannelRouter, RouteError, RouteSkip
 from .service import CommandResult, MasterService
 
 LOGGER = logging.getLogger(__name__)
@@ -249,8 +249,11 @@ def create_master_app(
                     user_id=user_id,
                 )
                 say(text=response, thread_ts=thread_ts)
-            except RouteError:
-                LOGGER.info("route skipped for channel=%s", channel_id)
+            except RouteSkip as exc:
+                LOGGER.info("route skipped for channel=%s reason=%s", channel_id, exc)
+            except RouteError as exc:
+                LOGGER.warning("route dispatch failed for channel=%s error=%s", channel_id, exc)
+                say(text=f"Error: {exc}", thread_ts=thread_ts)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("master mention handling failed")
                 say(text=f"Error: {exc}", thread_ts=thread_ts)
@@ -281,8 +284,11 @@ def create_master_app(
                     user_id=user_id,
                 )
                 say(text=response, thread_ts=thread_ts)
-            except RouteError:
-                LOGGER.info("thread route skipped for channel=%s", channel_id)
+            except RouteSkip as exc:
+                LOGGER.info("thread route skipped for channel=%s reason=%s", channel_id, exc)
+            except RouteError as exc:
+                LOGGER.warning("thread route dispatch failed for channel=%s error=%s", channel_id, exc)
+                say(text=f"Error: {exc}", thread_ts=thread_ts)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("master thread handling failed")
                 say(text=f"Error: {exc}", thread_ts=thread_ts)

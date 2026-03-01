@@ -17,6 +17,10 @@ class RouteError(RuntimeError):
     pass
 
 
+class RouteSkip(RuntimeError):
+    pass
+
+
 class AgentDispatcher(Protocol):
     def send_prompt(
         self,
@@ -136,15 +140,15 @@ class ChannelRouter:
         user_id: str | None,
     ) -> str:
         if channel_id in self.admin_channels:
-            raise RouteError("admin channel is reserved for master commands")
+            raise RouteSkip("admin channel is reserved for master commands")
 
         record = self.registry.find_by_channel(channel_id)
         if not record:
-            raise RouteError(f"no mapped agent for channel {channel_id}")
+            raise RouteSkip(f"no mapped agent for channel {channel_id}")
 
         prompt = self.extract_prompt(text)
         if not prompt:
-            raise RouteError("prompt is empty after removing mention")
+            raise RouteSkip("prompt is empty after removing mention")
 
         return self.dispatcher.send_prompt(
             agent_name=record.name,

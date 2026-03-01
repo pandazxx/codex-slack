@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.master.registry import AgentRecord, AgentRegistry
-from src.master.router import ChannelRouter, RouteError
+from src.master.router import ChannelRouter, RouteError, RouteSkip
 
 
 class FakeDispatcher:
@@ -69,7 +69,7 @@ def test_route_prompt_rejects_unmapped_channel(tmp_path) -> None:
     dispatcher = FakeDispatcher()
     router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
 
-    with pytest.raises(RouteError):
+    with pytest.raises(RouteSkip):
         router.route_prompt(channel_id="CUNKNOWN", text="hello", thread_ts=None, user_id="U1")
 
 
@@ -79,8 +79,32 @@ def test_route_prompt_rejects_admin_channel(tmp_path) -> None:
     dispatcher = FakeDispatcher()
     router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
 
-    with pytest.raises(RouteError):
+    with pytest.raises(RouteSkip):
         router.route_prompt(channel_id="CADMIN", text="hello", thread_ts=None, user_id="U1")
+
+
+class FailingDispatcher(FakeDispatcher):
+    def send_prompt(
+        self,
+        *,
+        agent_name: str,
+        container_name: str,
+        prompt: str,
+        channel_id: str,
+        thread_ts: str | None,
+        user_id: str | None,
+    ) -> str:
+        raise RouteError("codex exec failed")
+
+
+def test_route_prompt_dispatch_failure_raises_route_error(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FailingDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    with pytest.raises(RouteError, match="codex exec failed"):
+        router.route_prompt(channel_id="CAGENT", text="<@U123> hi", thread_ts="1730000000.1234", user_id="U123")
 
 
 def test_thread_tracking_and_mention_dedupe(tmp_path) -> None:
