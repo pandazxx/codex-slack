@@ -51,6 +51,24 @@ podman run --rm \
   codex-slack-v1-uat \
   python -m src.master.main
 ```
+If you prefer Compose, use the dedicated example file:
+```bash
+export UID="$(id -u)"
+export GID="$(id -g)"
+export PODMAN_SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
+export MASTER_DATA_DIR="$(pwd)/data/master"
+export MASTER_CODEX_AUTH_JSON_PATH="${HOME}/.codex/auth.json"
+export MASTER_SSH_AUTH_SOCK_PATH="${SSH_AUTH_SOCK}"
+export MASTER_ADMIN_CHANNELS="<admin_channel_id>"
+export MASTER_AGENT_BASE_IMAGE="codex-slack-v1-uat"
+export MASTER_GIT_USER_NAME="Your Name"
+export MASTER_GIT_USER_EMAIL="you@example.com"
+export MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox -'
+mkdir -p "${MASTER_DATA_DIR}"
+podman compose -f docker-compose.master-agent.example.yml up --build -d
+podman compose -f docker-compose.master-agent.example.yml logs -f
+```
+The compose example is intended for Podman Compose and already includes `userns_mode: keep-id`, `security_opt: [label=disable]`, and `x-podman.in_pod: false`.
 For non-container local debugging, you can also run:
 ```bash
 python -m src.master.main
@@ -64,6 +82,7 @@ If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `S
 If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup so commits do not require manual setup.
 `MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'` keeps the default Codex sandbox, which is read-only and blocks edits, branch creation, commits, and pushes. For normal agent work that mutates the repo or uses networked Git operations, use `codex exec --dangerously-bypass-approvals-and-sandbox -`.
 Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
+The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
 2. Verify startup logs include:
 - loaded admin channels
 - registry path
