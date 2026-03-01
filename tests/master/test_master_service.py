@@ -168,6 +168,35 @@ def test_start_agent_mounts_codex_auth_json_only(tmp_path) -> None:
     assert mounts == ["/host/secrets/codex-auth.json:/run/secrets/codex_auth.json:ro"]
 
 
+def test_start_agent_mounts_ssh_forwarding_and_sets_env(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_ssh_auth_sock_path="/run/user/1000/keyring/ssh",
+        agent_ssh_known_hosts_path="/home/tester/.ssh/known_hosts",
+    )
+
+    load_result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert load_result.ok is True
+
+    start_result = service.start_agent(name="payments-api")
+    assert start_result.ok is True
+    assert runtime.calls[0][0] == "create_or_update_agent"
+    env = runtime.calls[0][1]["env"]
+    mounts = runtime.calls[0][1]["mounts"]
+    assert env["SSH_AUTH_SOCK"] == "/run/secrets/ssh-auth.sock"
+    assert env["GIT_SSH_COMMAND"] == "ssh -o UserKnownHostsFile=/run/secrets/ssh_known_hosts"
+    assert mounts == [
+        "/run/user/1000/keyring/ssh:/run/secrets/ssh-auth.sock",
+        "/home/tester/.ssh/known_hosts:/run/secrets/ssh_known_hosts:ro",
+    ]
+
+
 def test_status_returns_registry_and_runtime(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -29,6 +29,8 @@ export SLACK_BOT_TOKEN=...
 export SLACK_APP_TOKEN=...
 export GH_TOKEN=...
 export MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json
+export MASTER_SSH_AUTH_SOCK_PATH=/absolute/host/path/ssh-agent.sock
+export MASTER_SSH_KNOWN_HOSTS_PATH=/absolute/host/path/known_hosts
 export MASTER_ADMIN_CHANNELS=C0123456789
 export MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat
 export MASTER_REGISTRY_PATH=data/master/agents.json
@@ -48,6 +50,7 @@ For the current v1 implementation, the simplest supported path is setting `GH_TO
 - one writable test repo/branch reachable over SSH (for push validation)
 - one valid GitHub token with enough scope for `gh auth status` and repo metadata checks
 - host `SSH_AUTH_SOCK` must reference an agent loaded with the correct key when running SSH-based UAT cases
+- the host paths exported in `MASTER_SSH_AUTH_SOCK_PATH` and `MASTER_SSH_KNOWN_HOSTS_PATH` must be valid for the host Podman service
 
 ## Container Deployment Requirement
 Containerized validation is mandatory for v1 sign-off.
@@ -78,6 +81,8 @@ podman run --rm \
   -e SLACK_APP_TOKEN \
   -e GH_TOKEN \
   -e MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json \
+  -e MASTER_SSH_AUTH_SOCK_PATH=/absolute/host/path/ssh-agent.sock \
+  -e MASTER_SSH_KNOWN_HOSTS_PATH=/absolute/host/path/known_hosts \
   -e MASTER_ADMIN_CHANNELS=C0123456789 \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
@@ -98,6 +103,8 @@ Why this matters:
 - `MASTER_AGENT_BASE_IMAGE` controls which base image the master uses for default-image agents; if you rebuild `codex-slack-v1-uat` but leave this unset, the master still creates agents from `codex-slack-bot:latest`.
 - `GH_TOKEN` on the master is forwarded into agent containers so worker `preflight` can pass and `git clone` can authenticate.
 - `MASTER_CODEX_AUTH_JSON_PATH` mounts only the shared Codex `auth.json` into agents. V1 does not forward Codex session directories into agents.
+- `MASTER_SSH_AUTH_SOCK_PATH` mounts the shared SSH agent socket into agents so private repo checkout and push can use the same loaded key material as the master host.
+- `MASTER_SSH_KNOWN_HOSTS_PATH` mounts a host `known_hosts` file into agents so SSH Git operations do not block on interactive host verification.
 - `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.
 - `--security-opt label=disable` avoids SELinux relabel restrictions blocking socket access on host-mounted Unix sockets.
 - Mounting `$(pwd)/data/master` into `/opt/codex-slack/data/master` persists `agents.json` across master container restarts.

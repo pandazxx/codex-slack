@@ -31,11 +31,15 @@ class MasterService:
         runtime: RuntimeAdapter,
         default_image: str = DEFAULT_IMAGE,
         agent_codex_auth_json_path: str | None = None,
+        agent_ssh_auth_sock_path: str | None = None,
+        agent_ssh_known_hosts_path: str | None = None,
     ) -> None:
         self._registry = registry
         self._runtime = runtime
         self._default_image = default_image
         self._agent_codex_auth_json_path = agent_codex_auth_json_path
+        self._agent_ssh_auth_sock_path = agent_ssh_auth_sock_path
+        self._agent_ssh_known_hosts_path = agent_ssh_known_hosts_path
 
     def list_agents(self) -> CommandResult:
         agents = [agent.to_dict() for agent in self._registry.list_agents()]
@@ -267,8 +271,7 @@ class MasterService:
             result.message,
         )
 
-    @staticmethod
-    def _build_agent_env(record: AgentRecord) -> dict[str, str]:
+    def _build_agent_env(self, record: AgentRecord) -> dict[str, str]:
         env = {
             "CODEX_CONTAINER_MODE": "agent-worker",
             "AGENT_REPO_URL": record.repo_source or record.repo_path,
@@ -286,6 +289,10 @@ class MasterService:
             env["GITHUB_TOKEN"] = github_token
         if openai_api_key:
             env["OPENAI_API_KEY"] = openai_api_key
+        if self._agent_ssh_auth_sock_path:
+            env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
+        if self._agent_ssh_known_hosts_path:
+            env["GIT_SSH_COMMAND"] = "ssh -o UserKnownHostsFile=/run/secrets/ssh_known_hosts"
 
         return env
 
@@ -293,6 +300,10 @@ class MasterService:
         mounts: list[str] = []
         if self._agent_codex_auth_json_path:
             mounts.append(f"{self._agent_codex_auth_json_path}:/run/secrets/codex_auth.json:ro")
+        if self._agent_ssh_auth_sock_path:
+            mounts.append(f"{self._agent_ssh_auth_sock_path}:/run/secrets/ssh-auth.sock")
+        if self._agent_ssh_known_hosts_path:
+            mounts.append(f"{self._agent_ssh_known_hosts_path}:/run/secrets/ssh_known_hosts:ro")
         return mounts
 
     def _resolve_image_plan(self, repo_path: str) -> dict[str, str]:

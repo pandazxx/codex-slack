@@ -75,6 +75,8 @@ Required env:
 - For rootless Podman socket access in a containerized master, use `--userns=keep-id --security-opt label=disable` and mount `/run/user/<uid>/podman/podman.sock`
 - Optional: `MASTER_AGENT_BASE_IMAGE` (default `codex-slack-bot:latest`; set this to the rebuilt image tag you want agent containers to run, e.g. `codex-slack-v1-uat`)
 - Optional: `MASTER_CODEX_AUTH_JSON_PATH` (host path to the shared Codex `auth.json`; mounted into agents as `/run/secrets/codex_auth.json:ro`)
+- Optional: `MASTER_SSH_AUTH_SOCK_PATH` (host path to the SSH agent socket; mounted into agents as `/run/secrets/ssh-auth.sock`)
+- Optional: `MASTER_SSH_KNOWN_HOSTS_PATH` (host path to `known_hosts`; mounted into agents as `/run/secrets/ssh_known_hosts:ro`)
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
 - Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec -`)
