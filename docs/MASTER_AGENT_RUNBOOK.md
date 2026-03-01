@@ -16,7 +16,7 @@ Containerized UAT is required for v1 sign-off; functional Slack-only checks are 
 - Provide `GH_TOKEN` on the master container so it can be forwarded into agent workers for repo access.
 - Provide `MASTER_CODEX_AUTH_JSON_PATH` as a host path to the shared Codex `auth.json`; v1 forwards only this auth file to agents, not Codex session directories.
 - Provide `MASTER_SSH_AUTH_SOCK_PATH` as a host path to the SSH agent socket for private repo checkout and push over SSH.
-- Provide `MASTER_SSH_KNOWN_HOSTS_PATH` as a host path to `known_hosts` for non-interactive SSH host verification.
+- Optional: provide `MASTER_SSH_KNOWN_HOSTS_PATH` as a host path to `known_hosts` for explicit SSH host verification. If omitted, master and agents default to `StrictHostKeyChecking=no` with `/dev/null` known hosts.
 - Slack app configured with command/event scopes.
 - `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS` set.
 - Shared auth refs available to agents (`SSH_AUTH_SOCK` and/or `GH_TOKEN_FILE`).
@@ -53,7 +53,9 @@ python -m src.master.main
 ```
 Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent containers. If this is left unset, default-image agents still start from `codex-slack-bot:latest`.
 `MASTER_CODEX_AUTH_JSON_PATH` must be a host filesystem path visible to host Podman because the master uses the host Podman socket. It is mounted into each agent as `/run/secrets/codex_auth.json:ro`.
-`MASTER_SSH_AUTH_SOCK_PATH` and `MASTER_SSH_KNOWN_HOSTS_PATH` must also be host filesystem paths visible to host Podman. They are mounted into each agent as `/run/secrets/ssh-auth.sock` and `/run/secrets/ssh_known_hosts:ro`.
+`MASTER_SSH_AUTH_SOCK_PATH` must be a host filesystem path visible to host Podman. It is mounted into each agent as `/run/secrets/ssh-auth.sock`.
+If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it must also be a host filesystem path visible to host Podman and is mounted into each agent as `/run/secrets/ssh_known_hosts:ro`.
+If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`.
 Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
 2. Verify startup logs include:
 - loaded admin channels
@@ -107,7 +109,8 @@ Without the `data/master` volume mount, `agents.json` is lost when the master co
 `/tmp/master-agent/status.json`
 - Check stage failure (`preflight`, `repo_sync`, `workspace_prepare`).
 - If `preflight` shows `missing auth source: SSH_AUTH_SOCK or GH token`, ensure `GH_TOKEN` is set on the master container so it is passed into the agent.
-- For SSH-based Git operations, ensure `MASTER_SSH_AUTH_SOCK_PATH` points to a live host SSH agent socket and `MASTER_SSH_KNOWN_HOSTS_PATH` points to a valid `known_hosts` file before recreating the agent.
+- For SSH-based Git operations, ensure `MASTER_SSH_AUTH_SOCK_PATH` points to a live host SSH agent socket before recreating the agent.
+- If you want explicit host verification, also set `MASTER_SSH_KNOWN_HOSTS_PATH`; otherwise the default is to accept all hosts.
 - Fix env/auth and restart agent.
 
 ### Rate-limited commands

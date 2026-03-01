@@ -197,6 +197,55 @@ def test_start_agent_mounts_ssh_forwarding_and_sets_env(tmp_path) -> None:
     ]
 
 
+def test_start_agent_sets_insecure_default_ssh_config_without_known_hosts(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_ssh_auth_sock_path="/run/user/1000/keyring/ssh",
+    )
+
+    load_result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert load_result.ok is True
+
+    start_result = service.start_agent(name="payments-api")
+    assert start_result.ok is True
+    env = runtime.calls[0][1]["env"]
+    mounts = runtime.calls[0][1]["mounts"]
+    assert env["SSH_AUTH_SOCK"] == "/run/secrets/ssh-auth.sock"
+    assert env["GIT_SSH_COMMAND"] == "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    assert mounts == ["/run/user/1000/keyring/ssh:/run/secrets/ssh-auth.sock"]
+
+
+def test_run_git_uses_insecure_default_ssh_config_without_known_hosts(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_ssh_auth_sock_path="/run/user/1000/keyring/ssh",
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        seen["args"] = args
+        seen["env"] = kwargs.get("env")
+        return __import__("subprocess").CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("src.master.service.subprocess.run", fake_run)
+
+    service._run_git(["git", "clone", "git@github.com:org/repo.git", "/tmp/repo"])
+
+    env = seen["env"]
+    assert env["SSH_AUTH_SOCK"] == "/run/user/1000/keyring/ssh"
+    assert env["GIT_SSH_COMMAND"] == "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+
 def test_status_returns_registry_and_runtime(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

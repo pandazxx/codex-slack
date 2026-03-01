@@ -291,8 +291,7 @@ class MasterService:
             env["OPENAI_API_KEY"] = openai_api_key
         if self._agent_ssh_auth_sock_path:
             env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
-        if self._agent_ssh_known_hosts_path:
-            env["GIT_SSH_COMMAND"] = "ssh -o UserKnownHostsFile=/run/secrets/ssh_known_hosts"
+            env["GIT_SSH_COMMAND"] = self._agent_git_ssh_command()
 
         return env
 
@@ -305,6 +304,23 @@ class MasterService:
         if self._agent_ssh_known_hosts_path:
             mounts.append(f"{self._agent_ssh_known_hosts_path}:/run/secrets/ssh_known_hosts:ro")
         return mounts
+
+    def _agent_git_ssh_command(self) -> str:
+        if self._agent_ssh_known_hosts_path:
+            return "ssh -o UserKnownHostsFile=/run/secrets/ssh_known_hosts"
+        return "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+    def _master_git_env(self) -> dict[str, str] | None:
+        if not self._agent_ssh_auth_sock_path:
+            return None
+
+        env = os.environ.copy()
+        env["SSH_AUTH_SOCK"] = self._agent_ssh_auth_sock_path
+        if self._agent_ssh_known_hosts_path:
+            env["GIT_SSH_COMMAND"] = f"ssh -o UserKnownHostsFile={self._agent_ssh_known_hosts_path}"
+        else:
+            env["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        return env
 
     def _resolve_image_plan(self, repo_path: str) -> dict[str, str]:
         dockerfile = Path(repo_path) / ".prj_assistant" / "image" / "Dockerfile"
@@ -370,13 +386,13 @@ class MasterService:
             raise RuntimeError("no repo ref candidates available")
         raise last_error
 
-    @staticmethod
-    def _run_git(args: list[str], cwd: Path | None = None) -> None:
+    def _run_git(self, args: list[str], cwd: Path | None = None) -> None:
         completed = subprocess.run(
             args,
             cwd=str(cwd) if cwd else None,
             text=True,
             capture_output=True,
+            env=self._master_git_env(),
             check=False,
         )
         if completed.returncode != 0:
