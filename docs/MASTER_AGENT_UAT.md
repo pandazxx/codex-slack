@@ -82,6 +82,7 @@ podman run --rm \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
   -e GH_TOKEN \
+  -e SSH_AUTH_SOCK=/ssh-agent \
   -e MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json \
   -e MASTER_SSH_AUTH_SOCK_PATH=/absolute/host/path/ssh-agent.sock \
   -e MASTER_ADMIN_CHANNELS=C0123456789 \
@@ -93,6 +94,7 @@ podman run --rm \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
   -e CODEX_CONTAINER_MODE=bot \
   -v "$(pwd)/data/master:/opt/codex-slack/data/master" \
+  -v /absolute/host/path/ssh-agent.sock:/ssh-agent \
   -v /run/user/$(id -u)/podman/podman.sock:/run/podman/podman.sock \
   -e CONTAINER_HOST=unix:///run/podman/podman.sock \
   codex-slack-v1-uat \
@@ -105,6 +107,7 @@ Why this matters:
 - `GH_TOKEN` on the master is forwarded into agent containers so worker `preflight` can pass and `git clone` can authenticate.
 - `MASTER_CODEX_AUTH_JSON_PATH` mounts only the shared Codex `auth.json` into agents. V1 does not forward Codex session directories into agents.
 - `MASTER_SSH_AUTH_SOCK_PATH` mounts the shared SSH agent socket into agents so private repo checkout and push can use the same loaded key material as the master host.
+- The master container itself also needs the SSH socket mounted (for example to `/ssh-agent`) and `SSH_AUTH_SOCK=/ssh-agent` so `/master-agent-load` can use the same agent for private SSH clones.
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it mounts a host `known_hosts` file into agents for explicit SSH host verification.
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is omitted, master and agents default to `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null` to accept all SSH hosts.
 - `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.

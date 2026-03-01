@@ -242,7 +242,7 @@ def test_run_git_uses_insecure_default_ssh_config_without_known_hosts(tmp_path, 
     service._run_git(["git", "clone", "git@github.com:org/repo.git", "/tmp/repo"])
 
     env = seen["env"]
-    assert env["SSH_AUTH_SOCK"] == "/run/user/1000/keyring/ssh"
+    assert env["SSH_AUTH_SOCK"] == "/ssh-agent"
     assert env["GIT_SSH_COMMAND"] == "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 

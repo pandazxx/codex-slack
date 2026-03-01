@@ -315,7 +315,7 @@ class MasterService:
             return None
 
         env = os.environ.copy()
-        env["SSH_AUTH_SOCK"] = self._agent_ssh_auth_sock_path
+        env["SSH_AUTH_SOCK"] = "/ssh-agent"
         if self._agent_ssh_known_hosts_path:
             env["GIT_SSH_COMMAND"] = f"ssh -o UserKnownHostsFile={self._agent_ssh_known_hosts_path}"
         else:
