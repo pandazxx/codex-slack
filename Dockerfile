@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     openssh-client \
+    podman \
     tini \
     && rm -rf /var/lib/apt/lists/*
 

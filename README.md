@@ -53,6 +53,50 @@ sequenceDiagram
 - `/codex-conv-cancel` cancel the currently running prompt
 - `/codex-help` show usage summary
 
+## Master CLI (Phase 1)
+Local orchestrator CLI is available for early master-agent implementation work:
+
+- `python -m src.master.cli --registry data/master/agents.json list`
+- `python -m src.master.cli --registry data/master/agents.json load <name> <repo_path> <channel_id>`
+- `python -m src.master.cli --registry data/master/agents.json --dry-run start <name>`
+- `python -m src.master.cli --registry data/master/agents.json --dry-run status <name>`
+
+## Master Slack Mode (Phase 3 WIP)
+Master control plane Socket Mode entrypoint:
+
+- `python -m src.master.main`
+
+Required env:
+
+- `SLACK_BOT_TOKEN`
+- `SLACK_APP_TOKEN`
+- `MASTER_ADMIN_CHANNELS` (comma-separated channel IDs)
+- `podman` CLI available inside the master runtime image/container when using real lifecycle operations
+- For rootless Podman socket access in a containerized master, use `--userns=keep-id --security-opt label=disable` and mount `/run/user/<uid>/podman/podman.sock`
+- Optional: `MASTER_AGENT_BASE_IMAGE` (default `codex-slack-bot:latest`; set this to the rebuilt image tag you want agent containers to run, e.g. `codex-slack-v1-uat`)
+- Optional: `MASTER_CODEX_AUTH_JSON_PATH` (host path to the shared Codex `auth.json`; mounted into agents as `/run/secrets/codex_auth.json:ro`)
+- Optional: `MASTER_SSH_AUTH_SOCK_PATH` (host path to the SSH agent socket; mounted into agents as `/run/secrets/ssh-auth.sock`)
+- Optional: `MASTER_SSH_KNOWN_HOSTS_PATH` (host path to `known_hosts`; mounted into agents as `/run/secrets/ssh_known_hosts:ro`. If omitted, SSH defaults to `StrictHostKeyChecking=no` with `/dev/null` known hosts.)
+- Optional: `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` (passed into agents and written to repo-local `git config user.name` / `user.email` during worker startup)
+- Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
+- Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
+- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec -`; this is read-only. For agents that must edit files, create branches, commit, or push, use `codex exec --dangerously-bypass-approvals-and-sandbox -`)
+- Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
+- Optional: `MASTER_COMMAND_RATE_LIMIT_COUNT` (default `20`)
+- Optional: `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
+
+## Agent Worker Mode (Phase 2 WIP)
+The container can run as a worker (no Slack connection) by setting:
+
+- `CODEX_CONTAINER_MODE=agent-worker`
+
+Required env for worker init:
+
+- `AGENT_REPO_URL` (repo to clone/fetch)
+- Optional: `AGENT_REPO_REF` (default `main`)
+- Optional: `AGENT_REPO_DIR` (default `repo`)
+- Optional: `AGENT_STATUS_FILE` (default `/tmp/master-agent/status.json`)
+
 ## Security Model
 - Keep secrets in environment variables only.
 - Do not commit tokens or session metadata.
@@ -64,4 +108,8 @@ sequenceDiagram
 - Logging configuration: `docs/LOGGING.md`
 - Container runtime: `docs/CONTAINER.md`
 - Multi-agent setup (same Slack workspace): `docs/MULTI_AGENT_SETUP.md`
+- Master-agent orchestration design (draft): `docs/MASTER_AGENT_ARCHITECTURE.md`
+- Master-agent implementation plan (draft): `docs/MASTER_AGENT_PLAN.md`
+- Master-agent operations runbook: `docs/MASTER_AGENT_RUNBOOK.md`
+- Master-agent UAT test cases: `docs/MASTER_AGENT_UAT.md`
 - Daily operation and troubleshooting: `USAGE.md`
