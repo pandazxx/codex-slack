@@ -38,7 +38,7 @@ export MASTER_ADMIN_CHANNELS=C0123456789
 export MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat
 export MASTER_REGISTRY_PATH=data/master/agents.json
 export MASTER_DRY_RUN=false
-export MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'
+export MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox -'
 export MASTER_AGENT_TIMEOUT_SECONDS=120
 export MASTER_COMMAND_RATE_LIMIT_COUNT=20
 export MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60
@@ -92,7 +92,7 @@ podman run --rm \
   -e MASTER_ADMIN_CHANNELS=C0123456789 \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
-  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec -' \
+  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox -' \
   -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
   -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
@@ -115,6 +115,7 @@ Why this matters:
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it mounts a host `known_hosts` file into agents for explicit SSH host verification.
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is omitted, master and agents default to `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null` to accept all SSH hosts.
 - `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are passed into agents and written into the checked-out repo's local Git config during worker startup so commit flows inherit the master's configured identity.
+- `MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'` keeps Codex in its default read-only sandbox. For UAT cases where the agent must edit files, create branches, commit, or push, use `codex exec --dangerously-bypass-approvals-and-sandbox -`.
 - `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.
 - `--security-opt label=disable` avoids SELinux relabel restrictions blocking socket access on host-mounted Unix sockets.
 - Mounting `$(pwd)/data/master` into `/opt/codex-slack/data/master` persists `agents.json` across master container restarts.
