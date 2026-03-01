@@ -50,6 +50,7 @@ class MasterService:
             return validation_error
 
         try:
+            self._clear_cached_checkout(name)
             repo_source = self._normalize_repo_source(repo_path)
             checkout_path, resolved_repo_ref = self._checkout_repo_source_with_fallback(
                 name=name,
@@ -216,6 +217,7 @@ class MasterService:
             return result
 
         self._registry.remove(name)
+        self._clear_cached_checkout(name)
         result = CommandResult(ok=True, code="OK", message=f"removed {name}", data={"removed": True})
         self._audit(command="remove", agent=name, result=result)
         return result
@@ -321,6 +323,14 @@ class MasterService:
 
         raise ValueError("unsupported repo source")
 
+    def _cached_checkout_path(self, name: str) -> Path:
+        return self._registry.path.parent / "repo-cache" / name
+
+    def _clear_cached_checkout(self, name: str) -> None:
+        checkout_path = self._cached_checkout_path(name)
+        if checkout_path.exists():
+            shutil.rmtree(checkout_path)
+
     def _checkout_repo_source(self, *, name: str, repo_source: str, repo_ref: str) -> Path:
         source_path = Path(repo_source)
         if source_path.exists():
@@ -329,15 +339,6 @@ class MasterService:
         checkout_root = self._registry.path.parent / "repo-cache"
         checkout_root.mkdir(parents=True, exist_ok=True)
         checkout_path = checkout_root / name
-
-        if (checkout_path / ".git").exists():
-            self._run_git(["git", "fetch", "origin", repo_ref], cwd=checkout_path)
-            self._run_git(["git", "checkout", repo_ref], cwd=checkout_path)
-            self._run_git(["git", "reset", "--hard", f"origin/{repo_ref}"], cwd=checkout_path)
-            return checkout_path
-
-        if checkout_path.exists():
-            shutil.rmtree(checkout_path)
 
         self._run_git(["git", "clone", "--branch", repo_ref, repo_source, str(checkout_path)])
         return checkout_path

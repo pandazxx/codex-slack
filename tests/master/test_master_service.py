@@ -293,3 +293,49 @@ def test_load_agent_accepts_explicit_branch(tmp_path, monkeypatch) -> None:  # t
     assert result.ok is True
     assert seen == ["master"]
     assert result.data["repo_ref"] == "master"
+
+
+def test_load_agent_clears_stale_repo_cache_before_checkout(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    repo = tmp_path / "fresh-repo"
+    repo.mkdir()
+    stale_cache = tmp_path / "repo-cache" / "payments-api"
+    stale_dockerfile = stale_cache / ".prj_assistant" / "image" / "Dockerfile"
+    stale_dockerfile.parent.mkdir(parents=True)
+    stale_dockerfile.write_text("FROM alpine:3.20\n", encoding="utf-8")
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    monkeypatch.setattr(service, "_normalize_repo_source", lambda _value: "https://github.com/example/repo.git")
+
+    def fake_checkout(*, name: str, repo_source: str, repo_ref: str):  # type: ignore[no-untyped-def]
+        assert not stale_cache.exists()
+        return repo
+
+    monkeypatch.setattr(service, "_checkout_repo_source", fake_checkout)
+
+    result = service.load_agent(name="payments-api", repo_path="example/repo", channel_id="C123")
+
+    assert result.ok is True
+    assert result.data["image_plan"]["type"] == "default"
+
+
+def test_remove_agent_cleans_repo_cache(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    load_result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert load_result.ok is True
+
+    stale_cache = tmp_path / "repo-cache" / "payments-api"
+    stale_cache.mkdir(parents=True)
+    (stale_cache / "README.md").write_text("stale\n", encoding="utf-8")
+
+    removed = service.remove_agent(name="payments-api")
+
+    assert removed.ok is True
+    assert stale_cache.exists() is False
