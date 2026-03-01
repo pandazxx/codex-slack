@@ -47,7 +47,16 @@ def test_create_or_update_agent_recreates_existing_container(monkeypatch) -> Non
     )
 
     assert seen[0] == ["podman", "rm", "-f", "agent-payments-api"]
-    assert seen[1][0:4] == ["podman", "create", "--name", "agent-payments-api"]
+    assert seen[1][0:8] == [
+        "podman",
+        "create",
+        "--userns=keep-id",
+        "--security-opt",
+        "label=disable",
+        "--name",
+        "agent-payments-api",
+        "-v",
+    ]
     assert "-e" in seen[1]
 
 
@@ -70,9 +79,12 @@ def test_create_or_update_agent_adds_extra_mounts(monkeypatch) -> None:  # type:
         mounts=["/host/auth.json:/run/secrets/codex_auth.json:ro"],
     )
 
-    assert seen[0][0:8] == [
+    assert seen[0][0:11] == [
         "podman",
         "create",
+        "--userns=keep-id",
+        "--security-opt",
+        "label=disable",
         "--name",
         "agent-payments-api",
         "-v",

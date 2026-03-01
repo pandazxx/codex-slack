@@ -105,6 +105,9 @@ class PodmanRuntimeAdapter:
         cmd = [
             "podman",
             "create",
+            "--userns=keep-id",
+            "--security-opt",
+            "label=disable",
             "--name",
             container_name,
             "-v",
