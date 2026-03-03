@@ -204,7 +204,7 @@ def test_podman_exec_dispatcher_runs_in_repo_workdir(monkeypatch) -> None:  # ty
     )
 
     assert response == "ok"
-    assert seen["cmd"][0:5] == ["podman", "exec", "-i", "--workdir", "/workspace/repo"]
+    assert seen["cmd"][0:7] == ["podman", "exec", "-i", "-e", "CODEX_HOME=/workspace/.codex", "--workdir", "/workspace/repo"]
     assert "resume slack-CAGENT-1730000000-1234 -" in seen["cmd"][-1]
 
 

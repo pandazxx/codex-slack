@@ -323,6 +323,7 @@ class MasterService:
     def _build_agent_env(self, record: AgentRecord) -> dict[str, str]:
         env = {
             "CODEX_CONTAINER_MODE": "agent-worker",
+            "CODEX_HOME": "/workspace/.codex",
             "AGENT_REPO_URL": record.repo_source or record.repo_path,
             "AGENT_REPO_REF": record.repo_ref,
             "AGENT_REPO_DIR": "repo",
