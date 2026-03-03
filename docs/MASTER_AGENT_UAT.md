@@ -265,6 +265,25 @@ Expected:
 - Remove returns `ok=true`, `removed=true`.
 - Agent no longer listed in `/master-agent-list`.
 
+## UAT-005A: Refresh Agent Auth From Host
+Preconditions:
+- Agent is loaded.
+- `MASTER_CODEX_AUTH_JSON_PATH` points to the host auth file.
+- Host auth file has been refreshed (for example, `codex login` completed on the host).
+
+Steps:
+1. In `CADMIN`, run:
+```text
+/master-agent-refresh-auth payments-agent
+```
+2. Inspect the response payload.
+
+Expected:
+- `ok=true`, `code=OK`.
+- Response includes `refreshed=true`.
+- Response includes the target workspace volume name.
+- Existing agent workspace `.codex` is re-seeded from the current host `auth.json` without removing the agent record.
+
 ## UAT-006: Admin Channel Enforcement
 Preconditions:
 - Master running.

@@ -51,6 +51,7 @@ Create these commands in **Slash Commands**:
 - `/master-agent-stop`
 - `/master-agent-status`
 - `/master-agent-remove`
+- `/master-agent-refresh-auth`
 
 For each command:
 1. Click **Create New Command**.
@@ -121,9 +122,13 @@ python -m src.master.main
 ```text
 /master-agent-start <name>
 ```
-6. In the mapped agent channel, mention the bot with a prompt.
-7. Reply in the same thread without mentioning the bot again.
-8. Confirm master routes both messages to the mapped agent.
+6. If the host Codex auth file is renewed and an existing agent needs to pick it up, run:
+```text
+/master-agent-refresh-auth <name>
+```
+7. In the mapped agent channel, mention the bot with a prompt.
+8. Reply in the same thread without mentioning the bot again.
+9. Confirm master routes both messages to the mapped agent.
 
 ## 11. Channel Usage Rules
 - Admin channels are for master slash commands only.

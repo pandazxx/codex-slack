@@ -92,3 +92,38 @@ def test_create_or_update_agent_adds_extra_mounts(monkeypatch) -> None:  # type:
         "-v",
         "/host/auth.json:/run/secrets/codex_auth.json:ro",
     ]
+
+
+def test_refresh_agent_auth_rewrites_workspace_codex_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    adapter = PodmanRuntimeAdapter()
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], cwd: str | None = None, check: bool = True):  # type: ignore[no-untyped-def]
+        seen.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(adapter, "_run", fake_run)
+
+    adapter.refresh_agent_auth(
+        volume_name="agent-workspace-payments-api",
+        host_auth_path="/host/auth.json",
+    )
+
+    assert seen[0] == [
+        "podman",
+        "run",
+        "--rm",
+        "-v",
+        "agent-workspace-payments-api:/workspace",
+        "-v",
+        "/host/auth.json:/run/secrets/codex_auth.json:ro",
+        "alpine:3.20",
+        "sh",
+        "-lc",
+        (
+            "rm -rf /workspace/.codex && "
+            "mkdir -p /workspace/.codex && "
+            "cp /run/secrets/codex_auth.json /workspace/.codex/auth.json && "
+            "chmod 600 /workspace/.codex/auth.json"
+        ),
+    ]

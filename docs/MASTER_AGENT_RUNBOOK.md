@@ -111,6 +111,10 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 /master-agent-stop <name>
 /master-agent-remove <name>
 ```
+5. Refresh the agent's persisted Codex auth after renewing the host auth file:
+```text
+/master-agent-refresh-auth <name>
+```
 
 ## Routing Validation
 1. In mapped non-admin channel, mention bot with prompt.
@@ -141,6 +145,15 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 - For SSH-based Git operations, ensure `MASTER_SSH_AUTH_SOCK_PATH` points to a live host SSH agent socket before recreating the agent.
 - If you want explicit host verification, also set `MASTER_SSH_KNOWN_HOSTS_PATH`; otherwise the default is to accept all hosts.
 - Fix env/auth and restart agent.
+
+### Codex refresh-token failure
+- If the agent returns `Your refresh token has already been used to generate a new access token`, refresh the host auth source first (for example, `codex login` on the host that owns `MASTER_CODEX_AUTH_JSON_PATH`).
+- Then run:
+```text
+/master-agent-refresh-auth <name>
+```
+- This wipes the agent workspace `.codex` directory in the named volume and re-copies the current host `auth.json` into `/workspace/.codex/auth.json`.
+- You do not need to remove the agent container for this recovery path.
 
 ### Rate-limited commands
 - Master returns `ERR_RATE_LIMITED`.

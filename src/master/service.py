@@ -247,6 +247,51 @@ class MasterService:
         self._audit(command="status", agent=name, result=result)
         return result
 
+    def refresh_agent_auth(self, *, name: str) -> CommandResult:
+        record = self._registry.get(name)
+        if not record:
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="refresh-auth", agent=name, result=result)
+            return result
+
+        if not self._agent_codex_auth_json_path:
+            result = CommandResult(
+                ok=False,
+                code="ERR_RUNTIME_FAILED",
+                message="agent codex auth source is not configured",
+                data={},
+            )
+            self._audit(command="refresh-auth", agent=name, result=result)
+            return result
+
+        try:
+            self._runtime.refresh_agent_auth(
+                volume_name=f"agent-workspace-{record.name}",
+                host_auth_path=self._agent_codex_auth_json_path,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = CommandResult(
+                ok=False,
+                code="ERR_RUNTIME_FAILED",
+                message=f"failed to refresh auth for {name}: {exc}",
+                data={},
+            )
+            self._audit(command="refresh-auth", agent=name, result=result)
+            return result
+
+        result = CommandResult(
+            ok=True,
+            code="OK",
+            message=f"refreshed auth for {name}",
+            data={
+                "refreshed": True,
+                "volume_name": f"agent-workspace-{record.name}",
+                "auth_source": self._agent_codex_auth_json_path,
+            },
+        )
+        self._audit(command="refresh-auth", agent=name, result=result)
+        return result
+
     def _validate_load_inputs(self, *, name: str, channel_id: str) -> CommandResult | None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,30}", name):
             return CommandResult(
