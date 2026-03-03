@@ -38,7 +38,6 @@ class AgentDispatcher(Protocol):
 @dataclass(frozen=True)
 class PodmanExecDispatcher:
     command_template: str = "codex exec -"
-    timeout_seconds: int | None = None
     workdir: str = "/workspace/repo"
     codex_home: str = "/workspace/.codex"
 
@@ -82,18 +81,8 @@ class PodmanExecDispatcher:
                 input=prompt,
                 text=True,
                 capture_output=True,
-                timeout=self.timeout_seconds,
                 check=False,
             )
-        except subprocess.TimeoutExpired as exc:
-            LOGGER.warning(
-                "router.dispatch_failed agent=%s container=%s channel=%s reason=timeout timeout_seconds=%s",
-                agent_name,
-                container_name,
-                channel_id,
-                self.timeout_seconds,
-            )
-            raise RouteError(f"dispatch timed out after {self.timeout_seconds}s") from exc
         except FileNotFoundError as exc:
             LOGGER.warning(
                 "router.dispatch_failed agent=%s container=%s channel=%s reason=missing_binary error=%s",

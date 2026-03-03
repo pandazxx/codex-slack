@@ -18,7 +18,6 @@ class MasterSettings:
     git_user_name: str | None
     git_user_email: str | None
     dispatch_command_template: str
-    dispatch_timeout_seconds: int | None
     command_rate_limit_count: int
     command_rate_limit_window_seconds: int
 
@@ -44,10 +43,6 @@ def load_master_settings() -> MasterSettings:
     git_user_name = os.getenv("MASTER_GIT_USER_NAME", "").strip() or None
     git_user_email = os.getenv("MASTER_GIT_USER_EMAIL", "").strip() or None
     dispatch_command_template = os.getenv("MASTER_AGENT_COMMAND_TEMPLATE", "codex exec -").strip()
-    raw_dispatch_timeout = os.getenv("MASTER_AGENT_TIMEOUT_SECONDS", "").strip()
-    dispatch_timeout_seconds = int(raw_dispatch_timeout) if raw_dispatch_timeout else None
-    if dispatch_timeout_seconds is not None and dispatch_timeout_seconds <= 0:
-        dispatch_timeout_seconds = None
     raw_rate_limit_count = os.getenv("MASTER_COMMAND_RATE_LIMIT_COUNT", "20").strip()
     raw_rate_limit_window = os.getenv("MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS", "60").strip()
     command_rate_limit_count = int(raw_rate_limit_count) if raw_rate_limit_count else 20
@@ -80,7 +75,6 @@ def load_master_settings() -> MasterSettings:
         git_user_name=git_user_name,
         git_user_email=git_user_email,
         dispatch_command_template=dispatch_command_template,
-        dispatch_timeout_seconds=dispatch_timeout_seconds,
         command_rate_limit_count=command_rate_limit_count,
         command_rate_limit_window_seconds=command_rate_limit_window_seconds,
     )

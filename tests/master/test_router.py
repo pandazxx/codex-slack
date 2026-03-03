@@ -145,26 +145,6 @@ def test_podman_exec_dispatcher_includes_exit_and_output_details(monkeypatch) ->
             user_id="U123",
         )
 
-
-def test_podman_exec_dispatcher_reports_timeout(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    dispatcher = PodmanExecDispatcher(timeout_seconds=12)
-
-    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise subprocess.TimeoutExpired(cmd=args[0], timeout=12)
-
-    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
-
-    with pytest.raises(RouteError, match=r"timed out after 12s"):
-        dispatcher.send_prompt(
-            agent_name="payments-agent",
-            container_name="agent-payments",
-            prompt="hello",
-            channel_id="CAGENT",
-            thread_ts="1730000000.1234",
-            user_id="U123",
-        )
-
-
 def test_podman_exec_dispatcher_reports_missing_podman(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     dispatcher = PodmanExecDispatcher()
 

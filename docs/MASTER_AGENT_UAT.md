@@ -39,7 +39,6 @@ export MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat
 export MASTER_REGISTRY_PATH=data/master/agents.json
 export MASTER_DRY_RUN=false
 export MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox -'
-export MASTER_AGENT_TIMEOUT_SECONDS=120
 export MASTER_COMMAND_RATE_LIMIT_COUNT=20
 export MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60
 python -m src.master.main
@@ -93,7 +92,6 @@ podman run --rm \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
   -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox -' \
-  -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
   -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
   -e CODEX_CONTAINER_MODE=bot \
