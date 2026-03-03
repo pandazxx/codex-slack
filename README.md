@@ -86,6 +86,15 @@ Required env:
 - Optional: `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
 - For a Compose-based master runtime, use `docker-compose.master-agent.example.yml` (Podman Compose-oriented example for the v1 master container)
 
+Admin slash commands:
+- `/master-agent-list`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch]`
+- `/master-agent-start <name>`
+- `/master-agent-stop <name>`
+- `/master-agent-status <name>`
+- `/master-agent-remove <name>`
+- `/master-agent-refresh-auth <name>` (re-seeds the agent workspace `CODEX_HOME/auth.json` from `MASTER_CODEX_AUTH_JSON_PATH`)
+
 ## Agent Worker Mode (Phase 2 WIP)
 The container can run as a worker (no Slack connection) by setting:
 

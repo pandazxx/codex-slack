@@ -98,6 +98,10 @@ def dispatch_slash_command(service: MasterService, request: SlackCommandRequest)
         name = parse_single_name_text(request.text, request.command_name)
         return service.remove_agent(name=name)
 
+    if request.command_name == "/master-agent-refresh-auth":
+        name = parse_single_name_text(request.text, request.command_name)
+        return service.refresh_agent_auth(name=name)
+
     return CommandResult(ok=False, code="ERR_INVALID_ARGS", message=f"unsupported command: {request.command_name}", data={})
 
 
@@ -300,6 +304,7 @@ def create_master_app(
         "/master-agent-stop",
         "/master-agent-status",
         "/master-agent-remove",
+        "/master-agent-refresh-auth",
     ):
         _register_command(
             app,

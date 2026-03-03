@@ -36,6 +36,9 @@ class RuntimeAdapter(Protocol):
     def remove_agent(self, name: str) -> None:
         ...
 
+    def refresh_agent_auth(self, *, volume_name: str, host_auth_path: str) -> None:
+        ...
+
     def inspect_agent(self, name: str) -> dict[str, Any] | None:
         ...
 
@@ -129,6 +132,28 @@ class PodmanRuntimeAdapter:
 
     def remove_agent(self, name: str) -> None:
         self._run(["podman", "rm", name])
+
+    def refresh_agent_auth(self, *, volume_name: str, host_auth_path: str) -> None:
+        self._run(
+            [
+                "podman",
+                "run",
+                "--rm",
+                "-v",
+                f"{volume_name}:/workspace",
+                "-v",
+                f"{host_auth_path}:/run/secrets/codex_auth.json:ro",
+                "alpine:3.20",
+                "sh",
+                "-lc",
+                (
+                    "rm -rf /workspace/.codex && "
+                    "mkdir -p /workspace/.codex && "
+                    "cp /run/secrets/codex_auth.json /workspace/.codex/auth.json && "
+                    "chmod 600 /workspace/.codex/auth.json"
+                ),
+            ]
+        )
 
     def inspect_agent(self, name: str) -> dict[str, Any] | None:
         completed = self._run(["podman", "inspect", "--type", "container", name], check=False)

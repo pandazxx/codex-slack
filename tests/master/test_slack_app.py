@@ -38,6 +38,9 @@ class FakeMasterService:
     def remove_agent(self, *, name: str) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="removed", data={"name": name})
 
+    def refresh_agent_auth(self, *, name: str) -> CommandResult:
+        return CommandResult(ok=True, code="OK", message="refreshed", data={"name": name})
+
 
 def test_is_admin_channel() -> None:
     assert is_admin_channel("C1", {"C1", "C2"}) is True
@@ -80,6 +83,20 @@ def test_dispatch_list_command() -> None:
     result = dispatch_slash_command(service, request)
     assert result.ok is True
     assert result.data["agents"] == []
+
+
+def test_dispatch_refresh_auth_command() -> None:
+    service = FakeMasterService()
+    request = SlackCommandRequest(
+        command_name="/master-agent-refresh-auth",
+        text="payments",
+        channel_id="CADMIN",
+        user_id="U1",
+    )
+
+    result = dispatch_slash_command(service, request)
+    assert result.ok is True
+    assert result.message == "refreshed"
 
 
 def test_format_command_result_json_payload() -> None:
