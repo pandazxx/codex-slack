@@ -82,7 +82,8 @@ The master container itself also needs the same socket mounted separately (for e
 If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it must also be a host filesystem path visible to host Podman and is mounted into each agent as `/run/secrets/ssh_known_hosts:ro`.
 If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`.
 If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup so commits do not require manual setup.
-`MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'` keeps the default Codex sandbox, which is read-only and blocks edits, branch creation, commits, and pushes. For normal agent work that mutates the repo or uses networked Git operations, use `codex exec --dangerously-bypass-approvals-and-sandbox -`.
+The router now derives a stable session id from Slack channel/thread identity and reuses it for routed prompts, so agent conversations keep thread-local memory. The default template is `codex exec resume {session_id} -`.
+`MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'` keeps the default Codex sandbox, which is read-only and blocks edits, branch creation, commits, and pushes. For normal agent work that mutates the repo or uses networked Git operations, use `codex exec --dangerously-bypass-approvals-and-sandbox -`; the router will inject `resume <session_id>` automatically when the template ends with ` -`.
 Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
 The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
 2. Verify startup logs include:

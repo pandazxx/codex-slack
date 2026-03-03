@@ -115,7 +115,8 @@ Why this matters:
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it mounts a host `known_hosts` file into agents for explicit SSH host verification.
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is omitted, master and agents default to `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null` to accept all SSH hosts.
 - `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are passed into agents and written into the checked-out repo's local Git config during worker startup so commit flows inherit the master's configured identity.
-- `MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'` keeps Codex in its default read-only sandbox. For UAT cases where the agent must edit files, create branches, commit, or push, use `codex exec --dangerously-bypass-approvals-and-sandbox -`.
+- Routed agent prompts now use a stable per-thread session id, so repeated messages in the same Slack thread should retain conversation context.
+- `MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'` keeps Codex in its default read-only sandbox. For UAT cases where the agent must edit files, create branches, commit, or push, use `codex exec --dangerously-bypass-approvals-and-sandbox -`; the router will inject `resume <session_id>` automatically for the standard `... -` form.
 - `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.
 - `--security-opt label=disable` avoids SELinux relabel restrictions blocking socket access on host-mounted Unix sockets.
 - Mounting `$(pwd)/data/master` into `/opt/codex-slack/data/master` persists `agents.json` across master container restarts.

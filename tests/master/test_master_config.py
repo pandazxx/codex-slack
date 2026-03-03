@@ -47,3 +47,14 @@ def test_load_master_settings_requires_admin_channels(monkeypatch) -> None:  # t
 
     with pytest.raises(ValueError):
         load_master_settings()
+
+
+def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
+    monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123")
+    monkeypatch.delenv("MASTER_AGENT_COMMAND_TEMPLATE", raising=False)
+
+    settings = load_master_settings()
+
+    assert settings.dispatch_command_template == "codex exec resume {session_id} -"
