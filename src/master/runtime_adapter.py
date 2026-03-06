@@ -147,7 +147,6 @@ class PodmanRuntimeAdapter:
                 "sh",
                 "-lc",
                 (
-                    "rm -rf /workspace/.codex && "
                     "mkdir -p /workspace/.codex && "
                     "cp /run/secrets/codex_auth.json /workspace/.codex/auth.json && "
                     "chmod 600 /workspace/.codex/auth.json"

@@ -94,7 +94,7 @@ def test_create_or_update_agent_adds_extra_mounts(monkeypatch) -> None:  # type:
     ]
 
 
-def test_refresh_agent_auth_rewrites_workspace_codex_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_refresh_agent_auth_replaces_auth_file_without_deleting_codex_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = PodmanRuntimeAdapter()
     seen: list[list[str]] = []
 
@@ -121,7 +121,6 @@ def test_refresh_agent_auth_rewrites_workspace_codex_home(monkeypatch) -> None: 
         "sh",
         "-lc",
         (
-            "rm -rf /workspace/.codex && "
             "mkdir -p /workspace/.codex && "
             "cp /run/secrets/codex_auth.json /workspace/.codex/auth.json && "
             "chmod 600 /workspace/.codex/auth.json"
