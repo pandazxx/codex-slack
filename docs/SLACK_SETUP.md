@@ -97,7 +97,7 @@ SLACK_APP_TOKEN=xapp-...
 MASTER_ADMIN_CHANNELS=C01234567
 MASTER_REGISTRY_PATH=data/master/agents.json
 MASTER_DRY_RUN=false
-MASTER_AGENT_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox -
+MASTER_AGENT_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -
 # The router injects a stable per-thread `resume <session_id>` automatically for standard `... -` templates.
 MASTER_AGENT_TIMEOUT_SECONDS=120
 MASTER_COMMAND_RATE_LIMIT_COUNT=20

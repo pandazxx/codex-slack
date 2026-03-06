@@ -43,7 +43,10 @@ def load_master_settings() -> MasterSettings:
     agent_ssh_known_hosts_path = os.getenv("MASTER_SSH_KNOWN_HOSTS_PATH", "").strip() or None
     git_user_name = os.getenv("MASTER_GIT_USER_NAME", "").strip() or None
     git_user_email = os.getenv("MASTER_GIT_USER_EMAIL", "").strip() or None
-    dispatch_command_template = os.getenv("MASTER_AGENT_COMMAND_TEMPLATE", "codex exec resume {session_id} -").strip()
+    dispatch_command_template = os.getenv(
+        "MASTER_AGENT_COMMAND_TEMPLATE",
+        "codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -",
+    ).strip()
     raw_dispatch_timeout = os.getenv("MASTER_AGENT_TIMEOUT_SECONDS", "").strip()
     dispatch_timeout_seconds = int(raw_dispatch_timeout) if raw_dispatch_timeout else None
     if dispatch_timeout_seconds is not None and dispatch_timeout_seconds <= 0:

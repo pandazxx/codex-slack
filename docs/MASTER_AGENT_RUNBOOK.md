@@ -39,7 +39,7 @@ podman run --rm \
   -e MASTER_ADMIN_CHANNELS=<admin_channel_id> \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
-  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox -' \
+  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -' \
   -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
   -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
@@ -64,7 +64,7 @@ export MASTER_ADMIN_CHANNELS="<admin_channel_id>"
 export MASTER_AGENT_BASE_IMAGE="codex-slack-v1-uat"
 export MASTER_GIT_USER_NAME="Your Name"
 export MASTER_GIT_USER_EMAIL="you@example.com"
-export MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox -'
+export MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -'
 mkdir -p "${MASTER_DATA_DIR}"
 podman compose -f docker-compose.master-agent.example.yml up --build -d
 podman compose -f docker-compose.master-agent.example.yml logs -f
@@ -83,7 +83,7 @@ If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it must also be a host filesystem path 
 If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`.
 If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup so commits do not require manual setup.
 The router now derives a stable session id from Slack channel/thread identity and reuses it for routed prompts, so agent conversations keep thread-local memory. The default template is `codex exec resume {session_id} -`.
-`MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'` keeps the default Codex sandbox, which is read-only and blocks edits, branch creation, commits, and pushes. For normal agent work that mutates the repo or uses networked Git operations, use `codex exec --dangerously-bypass-approvals-and-sandbox -`; the router will inject `resume <session_id>` automatically when the template ends with ` -`.
+Default is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -'`.
 Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
 The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
 2. Verify startup logs include:
