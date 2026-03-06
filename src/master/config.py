@@ -45,7 +45,7 @@ def load_master_settings() -> MasterSettings:
     git_user_email = os.getenv("MASTER_GIT_USER_EMAIL", "").strip() or None
     dispatch_command_template = os.getenv(
         "MASTER_AGENT_COMMAND_TEMPLATE",
-        "codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -",
+        "codex exec --dangerously-bypass-approvals-and-sandbox --last -",
     ).strip()
     raw_dispatch_timeout = os.getenv("MASTER_AGENT_TIMEOUT_SECONDS", "").strip()
     dispatch_timeout_seconds = int(raw_dispatch_timeout) if raw_dispatch_timeout else None

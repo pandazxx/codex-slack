@@ -80,7 +80,7 @@ Required env:
 - Optional: `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` (passed into agents and written to repo-local `git config user.name` / `user.email` during worker startup)
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
-- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -`; routed agent prompts reuse a stable per-thread session id so conversations retain context)
+- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec --dangerously-bypass-approvals-and-sandbox --last -`)
 - Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
 - Optional: `MASTER_COMMAND_RATE_LIMIT_COUNT` (default `20`)
 - Optional: `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` (default `60`)

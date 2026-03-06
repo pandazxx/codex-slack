@@ -57,7 +57,4 @@ def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -
 
     settings = load_master_settings()
 
-    assert (
-        settings.dispatch_command_template
-        == "codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -"
-    )
+    assert settings.dispatch_command_template == "codex exec --dangerously-bypass-approvals-and-sandbox --last -"

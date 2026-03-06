@@ -205,7 +205,7 @@ def test_podman_exec_dispatcher_runs_in_repo_workdir(monkeypatch) -> None:  # ty
 
     assert response == "ok"
     assert seen["cmd"][0:7] == ["podman", "exec", "-i", "-e", "CODEX_HOME=/workspace/.codex", "--workdir", "/workspace/repo"]
-    assert "resume slack-CAGENT-1730000000-1234 -" in seen["cmd"][-1]
+    assert seen["cmd"][-1] == "codex exec --dangerously-bypass-approvals-and-sandbox --last -"
 
 
 def test_podman_exec_dispatcher_injects_session_resume_for_legacy_template(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -231,3 +231,25 @@ def test_podman_exec_dispatcher_injects_session_resume_for_legacy_template(monke
         "codex exec --dangerously-bypass-approvals-and-sandbox "
         "resume slack-CAGENT-1730000000-1234 -"
     )
+
+
+def test_podman_exec_dispatcher_does_not_inject_resume_for_last_template(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = PodmanExecDispatcher(command_template="codex exec --dangerously-bypass-approvals-and-sandbox --last -")
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert seen["cmd"][-1] == "codex exec --dangerously-bypass-approvals-and-sandbox --last -"

@@ -37,7 +37,7 @@ class AgentDispatcher(Protocol):
 
 @dataclass(frozen=True)
 class PodmanExecDispatcher:
-    command_template: str = "codex exec resume {session_id} -"
+    command_template: str = "codex exec --dangerously-bypass-approvals-and-sandbox --last -"
     timeout_seconds: int | None = None
     workdir: str = "/workspace/repo"
     codex_home: str = "/workspace/.codex"
@@ -63,6 +63,8 @@ class PodmanExecDispatcher:
             return self.command_template.format(session_id=session_id), session_id
 
         stripped = self.command_template.rstrip()
+        if "--last" in stripped:
+            return stripped, session_id
         if stripped.endswith(" -"):
             return f"{stripped[:-2]} resume {session_id} -", session_id
 
