@@ -37,7 +37,7 @@ class AgentDispatcher(Protocol):
 
 @dataclass(frozen=True)
 class PodmanExecDispatcher:
-    command_template: str = "codex exec --dangerously-bypass-approvals-and-sandbox --last -"
+    command_template: str = "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
     timeout_seconds: int | None = None
     workdir: str = "/workspace/repo"
     codex_home: str = "/workspace/.codex"
