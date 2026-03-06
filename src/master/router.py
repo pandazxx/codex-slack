@@ -86,7 +86,7 @@ class PodmanExecDispatcher:
             cmd.extend(["--workdir", self.workdir])
         cmd.extend([container_name, "sh", "-lc", rendered_command])
         LOGGER.info(
-            "router.dispatch_start agent=%s container=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s codex_home=%s session_id=%s",
+            "router.dispatch_start agent=%s container=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s codex_home=%s session_id=%s agent_command=%r",
             agent_name,
             container_name,
             channel_id,
@@ -96,6 +96,7 @@ class PodmanExecDispatcher:
             self.workdir or "-",
             self.codex_home or "-",
             session_id,
+            rendered_command,
         )
         try:
             completed = subprocess.run(
