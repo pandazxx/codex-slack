@@ -80,12 +80,21 @@ Required env:
 - Optional: `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` (passed into agents and written to repo-local `git config user.name` / `user.email` during worker startup)
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
-- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec -`; this is read-only. For agents that must edit files, create branches, commit, or push, use `codex exec --dangerously-bypass-approvals-and-sandbox -`)
+- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec resume {session_id} -`; routed agent prompts now reuse a stable per-thread session id so conversations retain context. For agents that must edit files, create branches, commit, or push, use `codex exec --dangerously-bypass-approvals-and-sandbox -`; the router will inject `resume <session_id>` automatically for the default `... -` form)
 - Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
 - Optional: `MASTER_COMMAND_RATE_LIMIT_COUNT` (default `20`)
 - Optional: `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
 - For a Compose-based master runtime, use `docker-compose.master-agent.example.yml` (Podman Compose-oriented example for the v1 master container)
   Set `MASTER_RUNTIME_IMAGE` to override the master container image tag used by that compose example.
+
+Admin slash commands:
+- `/master-agent-list`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch]`
+- `/master-agent-start <name>`
+- `/master-agent-stop <name>`
+- `/master-agent-status <name>`
+- `/master-agent-remove <name>`
+- `/master-agent-refresh-auth <name>` (re-seeds the agent workspace `CODEX_HOME/auth.json` from `MASTER_CODEX_AUTH_JSON_PATH`)
 
 ## Agent Worker Mode (Phase 2 WIP)
 The container can run as a worker (no Slack connection) by setting:

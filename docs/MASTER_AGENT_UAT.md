@@ -115,7 +115,8 @@ Why this matters:
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it mounts a host `known_hosts` file into agents for explicit SSH host verification.
 - If `MASTER_SSH_KNOWN_HOSTS_PATH` is omitted, master and agents default to `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null` to accept all SSH hosts.
 - `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are passed into agents and written into the checked-out repo's local Git config during worker startup so commit flows inherit the master's configured identity.
-- `MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'` keeps Codex in its default read-only sandbox. For UAT cases where the agent must edit files, create branches, commit, or push, use `codex exec --dangerously-bypass-approvals-and-sandbox -`.
+- Routed agent prompts now use a stable per-thread session id, so repeated messages in the same Slack thread should retain conversation context.
+- `MASTER_AGENT_COMMAND_TEMPLATE='codex exec -'` keeps Codex in its default read-only sandbox. For UAT cases where the agent must edit files, create branches, commit, or push, use `codex exec --dangerously-bypass-approvals-and-sandbox -`; the router will inject `resume <session_id>` automatically for the standard `... -` form.
 - `--userns=keep-id` preserves the host UID/GID so the container process can open the rootless Podman socket owned by your user.
 - `--security-opt label=disable` avoids SELinux relabel restrictions blocking socket access on host-mounted Unix sockets.
 - Mounting `$(pwd)/data/master` into `/opt/codex-slack/data/master` persists `agents.json` across master container restarts.
@@ -263,6 +264,25 @@ Expected:
 - Stop returns `ok=true`, state `stopped`.
 - Remove returns `ok=true`, `removed=true`.
 - Agent no longer listed in `/master-agent-list`.
+
+## UAT-005A: Refresh Agent Auth From Host
+Preconditions:
+- Agent is loaded.
+- `MASTER_CODEX_AUTH_JSON_PATH` points to the host auth file.
+- Host auth file has been refreshed (for example, `codex login` completed on the host).
+
+Steps:
+1. In `CADMIN`, run:
+```text
+/master-agent-refresh-auth payments-agent
+```
+2. Inspect the response payload.
+
+Expected:
+- `ok=true`, `code=OK`.
+- Response includes `refreshed=true`.
+- Response includes the target workspace volume name.
+- Existing agent workspace `.codex` is re-seeded from the current host `auth.json` without removing the agent record.
 
 ## UAT-006: Admin Channel Enforcement
 Preconditions:

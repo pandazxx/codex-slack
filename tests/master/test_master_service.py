@@ -37,6 +37,9 @@ class FakeRuntime:
     def remove_agent(self, name: str) -> None:
         self.calls.append(("remove_agent", name))
 
+    def refresh_agent_auth(self, *, volume_name: str, host_auth_path: str) -> None:
+        self.calls.append(("refresh_agent_auth", {"volume_name": volume_name, "host_auth_path": host_auth_path}))
+
     def inspect_agent(self, name: str) -> dict[str, str] | None:
         self.calls.append(("inspect_agent", name))
         return {"Name": name, "State": "running"}
@@ -49,6 +52,9 @@ class FakeRuntime:
 class FailingRuntime(FakeRuntime):
     def start_agent(self, name: str) -> None:
         raise RuntimeError("podman start failed")
+
+    def refresh_agent_auth(self, *, volume_name: str, host_auth_path: str) -> None:
+        raise RuntimeError("auth refresh failed")
 
 
 def test_load_agent_detects_dockerfile_plan(tmp_path) -> None:
@@ -142,6 +148,7 @@ def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> No
     assert start_result.ok is True
     assert runtime.calls[0][0] == "create_or_update_agent"
     env = runtime.calls[0][1]["env"]
+    assert env["CODEX_HOME"] == "/workspace/.codex"
     assert env["GH_TOKEN"] == "gh-token-value"
     assert env["OPENAI_API_KEY"] == "openai-key"
 
@@ -283,6 +290,69 @@ def test_status_returns_registry_and_runtime(tmp_path) -> None:
     assert result.ok is True
     assert result.data["record"]["name"] == "payments-api"
     assert result.data["runtime"]["Name"] == "agent-payments-api"
+
+
+def test_refresh_agent_auth_reseeds_workspace_codex_home(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_codex_auth_json_path="/host/secrets/codex-auth.json",
+    )
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert loaded.ok is True
+
+    refreshed = service.refresh_agent_auth(name="payments-api")
+    assert refreshed.ok is True
+    assert refreshed.data["refreshed"] is True
+    assert runtime.calls[-1] == (
+        "refresh_agent_auth",
+        {
+            "volume_name": "agent-workspace-payments-api",
+            "host_auth_path": "/host/secrets/codex-auth.json",
+        },
+    )
+
+
+def test_refresh_agent_auth_requires_configured_auth_source(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert loaded.ok is True
+
+    refreshed = service.refresh_agent_auth(name="payments-api")
+    assert refreshed.ok is False
+    assert refreshed.code == "ERR_RUNTIME_FAILED"
+
+
+def test_refresh_agent_auth_propagates_runtime_failure(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FailingRuntime()
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_codex_auth_json_path="/host/secrets/codex-auth.json",
+    )
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert loaded.ok is True
+
+    refreshed = service.refresh_agent_auth(name="payments-api")
+    assert refreshed.ok is False
+    assert refreshed.code == "ERR_RUNTIME_FAILED"
 
 
 def test_load_agent_invalid_name_returns_invalid_args(tmp_path) -> None:

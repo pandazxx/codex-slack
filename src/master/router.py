@@ -37,9 +37,10 @@ class AgentDispatcher(Protocol):
 
 @dataclass(frozen=True)
 class PodmanExecDispatcher:
-    command_template: str = "codex exec -"
+    command_template: str = "codex exec resume {session_id} -"
     timeout_seconds: int | None = None
     workdir: str = "/workspace/repo"
+    codex_home: str = "/workspace/.codex"
 
     @staticmethod
     def _clip(value: str, limit: int = 240) -> str:
@@ -47,6 +48,25 @@ class PodmanExecDispatcher:
         if len(text) <= limit:
             return text
         return text[: limit - 3] + "..."
+
+    @staticmethod
+    def _session_id(*, channel_id: str, thread_ts: str | None) -> str:
+        source = thread_ts or channel_id
+        normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", source).strip("-")
+        if not normalized:
+            normalized = "session"
+        return f"slack-{channel_id}-{normalized}"
+
+    def _render_command(self, *, channel_id: str, thread_ts: str | None) -> tuple[str, str]:
+        session_id = self._session_id(channel_id=channel_id, thread_ts=thread_ts)
+        if "{session_id}" in self.command_template:
+            return self.command_template.format(session_id=session_id), session_id
+
+        stripped = self.command_template.rstrip()
+        if stripped.endswith(" -"):
+            return f"{stripped[:-2]} resume {session_id} -", session_id
+
+        return self.command_template, session_id
 
     def send_prompt(
         self,
@@ -58,12 +78,15 @@ class PodmanExecDispatcher:
         thread_ts: str | None,
         user_id: str | None,
     ) -> str:
+        rendered_command, session_id = self._render_command(channel_id=channel_id, thread_ts=thread_ts)
         cmd = ["podman", "exec", "-i"]
+        if self.codex_home:
+            cmd.extend(["-e", f"CODEX_HOME={self.codex_home}"])
         if self.workdir:
             cmd.extend(["--workdir", self.workdir])
-        cmd.extend([container_name, "sh", "-lc", self.command_template])
+        cmd.extend([container_name, "sh", "-lc", rendered_command])
         LOGGER.info(
-            "router.dispatch_start agent=%s container=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s",
+            "router.dispatch_start agent=%s container=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s codex_home=%s session_id=%s",
             agent_name,
             container_name,
             channel_id,
@@ -71,6 +94,8 @@ class PodmanExecDispatcher:
             user_id or "-",
             len(prompt),
             self.workdir or "-",
+            self.codex_home or "-",
+            session_id,
         )
         try:
             completed = subprocess.run(

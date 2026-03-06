@@ -168,6 +168,7 @@ Validation:
 5. Wire admin-channel slash commands to master service.
 6. Add channel routing + thread continuity integration tests.
 7. Add runbook docs for operational flows and failure handling.
+8. Add follow-up hardening for `/master-agent-refresh-auth`: verify running-session behavior and add UAT coverage for host-auth refresh recovery.
 
 ## Decision Log Seeds (To Finalize Before Phase 1)
 - Agent runtime packaging strategy (v1): default image + project manifest image override / repo-local Dockerfile.
