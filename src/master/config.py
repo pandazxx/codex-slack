@@ -42,7 +42,10 @@ def load_master_settings() -> MasterSettings:
     agent_ssh_known_hosts_path = os.getenv("MASTER_SSH_KNOWN_HOSTS_PATH", "").strip() or None
     git_user_name = os.getenv("MASTER_GIT_USER_NAME", "").strip() or None
     git_user_email = os.getenv("MASTER_GIT_USER_EMAIL", "").strip() or None
-    dispatch_command_template = os.getenv("MASTER_AGENT_COMMAND_TEMPLATE", "codex exec -").strip()
+    dispatch_command_template = os.getenv(
+        "MASTER_AGENT_COMMAND_TEMPLATE",
+        "codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -",
+    ).strip()
     raw_rate_limit_count = os.getenv("MASTER_COMMAND_RATE_LIMIT_COUNT", "20").strip()
     raw_rate_limit_window = os.getenv("MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS", "60").strip()
     command_rate_limit_count = int(raw_rate_limit_count) if raw_rate_limit_count else 20

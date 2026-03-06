@@ -80,7 +80,7 @@ Required env:
 - Optional: `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` (passed into agents and written to repo-local `git config user.name` / `user.email` during worker startup)
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
-- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec -`; this is read-only. For agents that must edit files, create branches, commit, or push, use `codex exec --dangerously-bypass-approvals-and-sandbox -`)
+- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -`)
 - Optional: `MASTER_COMMAND_RATE_LIMIT_COUNT` (default `20`)
 - Optional: `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
 - For a Compose-based master runtime, use `docker-compose.master-agent.example.yml` (Podman Compose-oriented example for the v1 master container)
