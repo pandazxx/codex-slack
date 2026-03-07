@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 import logging
 
 from src.master.service import CommandResult
@@ -8,9 +6,11 @@ from src.master.slack_app import (
     CommandRateLimiter,
     SlackCommandRequest,
     dispatch_slash_command,
+    format_status_full_chunks,
     format_command_result,
     is_admin_channel,
     parse_load_text,
+    parse_status_text,
 )
 
 
@@ -57,6 +57,12 @@ def test_parse_load_text_accepts_optional_branch() -> None:
     assert (name, repo_path, channel_id, repo_ref) == ("payments", "/tmp/repo", "C123", "master")
 
 
+def test_parse_status_text_accepts_full_flag() -> None:
+    name, is_full = parse_status_text("payments --full")
+    assert name == "payments"
+    assert is_full is True
+
+
 def test_dispatch_load_command() -> None:
     service = FakeMasterService()
     request = SlackCommandRequest(
@@ -99,15 +105,110 @@ def test_dispatch_refresh_auth_command() -> None:
     assert result.message == "refreshed"
 
 
+def test_dispatch_status_command_accepts_full_flag() -> None:
+    service = FakeMasterService()
+    request = SlackCommandRequest(
+        command_name="/master-agent-status",
+        text="payments --full",
+        channel_id="CADMIN",
+        user_id="U1",
+    )
+
+    result = dispatch_slash_command(service, request)
+    assert result.ok is True
+    assert result.message == "status"
+
+
 def test_format_command_result_json_payload() -> None:
     payload = format_command_result(
-        "/master-agent-list",
-        CommandResult(ok=True, code="OK", message="listed", data={"agents": []}),
+        "/master-agent-start",
+        CommandResult(ok=True, code="OK", message="started", data={"name": "payments-agent"}),
     )
-    obj = json.loads(payload)
-    assert obj["ok"] is True
-    assert obj["command"] == "/master-agent-list"
-    assert obj["code"] == "OK"
+    assert ":white_check_mark:" in payload
+    assert "*Code:* `OK`" in payload
+    assert "*Message:* started" in payload
+    assert "```json" in payload
+    assert '"name": "payments-agent"' in payload
+
+
+def test_format_command_result_status_summary() -> None:
+    payload = format_command_result(
+        "/master-agent-status",
+        CommandResult(
+            ok=True,
+            code="OK",
+            message="status payments",
+            data={
+                "record": {
+                    "name": "payments",
+                    "status": "running",
+                    "channel_id": "C123",
+                    "container_name": "agent-payments",
+                },
+                "runtime": {"State": {"Status": "running"}},
+            },
+        ),
+    )
+    assert "*Agent:* `payments`" in payload
+    assert "*State:* registry=`running` runtime=`running`" in payload
+
+
+def test_format_command_result_keeps_large_data_for_non_status_commands() -> None:
+    payload = format_command_result(
+        "/master-agent-start",
+        CommandResult(ok=True, code="OK", message="started", data={"blob": "x" * 5000}),
+    )
+    assert "..." not in payload
+    assert len(payload) > 3000
+
+
+def test_format_command_result_renders_agent_list_as_bullets() -> None:
+    payload = format_command_result(
+        "/master-agent-list",
+        CommandResult(
+            ok=True,
+            code="OK",
+            message="agents listed",
+            data={
+                "agents": [
+                    {
+                        "name": "aidotfile-agent",
+                        "status": "running",
+                        "channel_id": "C0123456789",
+                        "repo_ref": "master",
+                        "runtime": "podman",
+                        "container_name": "agent-aidotfile-agent",
+                    }
+                ]
+            },
+        ),
+    )
+    assert "*Total agents:* 1" in payload
+    assert "• *aidotfile-agent*" in payload
+    assert "state=`running`" in payload
+    assert "aidotfile-agent" in payload
+    assert "container=`agent-aidotfile-agent`" in payload
+
+
+def test_status_full_messages_chunk_large_payload() -> None:
+    result = CommandResult(
+        ok=True,
+        code="OK",
+        message="status payments",
+        data={
+            "record": {
+                "name": "payments",
+                "status": "running",
+                "channel_id": "C123",
+                "container_name": "agent-payments",
+            },
+            "runtime": {"blob": "x" * 7000},
+        },
+    )
+    messages = format_status_full_chunks("/master-agent-status", result)
+    assert len(messages) >= 2
+    assert "full output" in messages[0]
+    assert "part 1/" in messages[0]
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:

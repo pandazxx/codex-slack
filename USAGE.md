@@ -40,6 +40,17 @@ Behavior notes:
 
 Reference tutorials: `docs/TUTORIALS.md`.
 
+## Naming Convention
+- Agent name (`<name>` in master commands):
+  - lowercase letters, digits, and hyphen only
+  - regex: `[a-z0-9][a-z0-9-]{1,30}`
+  - examples: `aidotfile-agent`, `payments-api`
+- Slack channel input:
+  - use channel ID (for example `C0123456789`), not channel name.
+- Runtime-generated resources:
+  - container name: `agent-<name>`
+  - workspace volume: `agent-workspace-<name>`
+
 ## Command Reference
 
 ### `/codex-status`

@@ -81,6 +81,13 @@ Expected behavior:
 2. Verify agent status and runtime inspection.
 3. Tail container logs when needed.
 4. Re-run auth refresh or restart agent if auth/runtime drift is detected.
+5. For SSH clone failures:
+   - Ensure `MASTER_SSH_AUTH_SOCK_PATH` points to a live socket (`test -S ...`).
+   - In debug container, `/run/secrets/ssh-auth.sock` must be socket type (`s...`), not regular file (`-...`).
+6. For custom Dockerfiles:
+   - If you switch to `USER root` for package install, switch back to `USER appuser` before image end.
+7. If you remove an agent and still need to clear workspace state:
+   - Delete named volume manually: `podman volume rm agent-workspace-<name>`.
 
 ## Tutorial 5: Member Onboarding for Personal GitHub Projects
 Use this flow after master runtime is already deployed and healthy.
@@ -111,8 +118,13 @@ Use this flow after master runtime is already deployed and healthy.
 ## Tutorial 6: Project-Specific Image While Preserving Base Agent Setup
 Use this when your project needs extra OS packages, CLI tools, or language runtimes.
 
-1. Ensure base agent image exists locally before custom build.
-   - From this repository root, build base image:
+1. Use the published minimal base image from registry (default path).
+   - Base image:
+     - `ghcr.io/<owner>/codex-slack-agent-minimal:latest`
+   - Reason: no local base-image bootstrap is required for normal customization flow.
+
+2. Optional fallback for local-only development:
+   - If registry access is unavailable, build/tag locally from this repository root:
 
 ```bash
 cd /workspace/repo
@@ -120,37 +132,37 @@ podman build -t codex-slack-bot:latest -f Dockerfile .
 podman tag codex-slack-bot:latest localhost/codex-slack-bot:latest
 ```
 
-   - Reason: if base image is missing locally, Podman/Docker tries to pull from a public registry and fails.
-
-2. Add project image files in your repo:
+3. Add project image files in your repo:
    - `.prj_assistant/image/Dockerfile`
-3. Keep base agent behavior by extending, not replacing.
+4. Keep base agent behavior by extending, not replacing.
    - Start with:
+     - `FROM ghcr.io/<owner>/codex-slack-agent-minimal:latest`
+   - Local fallback:
      - `FROM localhost/codex-slack-bot:latest`
    - Install only project dependencies on top.
    - Do not override `ENTRYPOINT`, container mode env flow, or workspace mount assumptions unless required.
-4. Example Dockerfile:
+5. Example Dockerfile:
 
 ```dockerfile
-FROM localhost/codex-slack-bot:latest
+FROM ghcr.io/<owner>/codex-slack-agent-minimal:latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     jq ripgrep && \
     rm -rf /var/lib/apt/lists/*
 ```
 
-5. Build locally in project repo before asking admin to start the agent:
+6. Build locally in project repo before asking admin to start the agent:
 
 ```bash
-podman build --pull-never -t local-<project>-agent -f .prj_assistant/image/Dockerfile .prj_assistant/image
+podman build -t local-<project>-agent -f .prj_assistant/image/Dockerfile .prj_assistant/image
 ```
 
-6. Run a smoke test for base behavior compatibility:
+7. Run a smoke test for base behavior compatibility:
    - Container starts successfully.
    - `python -m src.agent.main` is still runnable in image context.
    - Required project tools are present (`jq`, `rg`, language runtime, etc.).
 
-7. Hand off to admin for framework usage:
+8. Hand off to admin for framework usage:
    - Admin runs `/master-agent-load ...` and `/master-agent-start ...`.
    - Master auto-detects `.prj_assistant/image/Dockerfile` and builds `codex-agent-<name>:latest`.
    - Verify `/master-agent-status <name>` shows dockerfile-based image plan.
