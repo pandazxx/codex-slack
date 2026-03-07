@@ -58,6 +58,42 @@ Use this flow after master runtime is already deployed and healthy.
    - `/master-agent-status <name>`
    - `/master-agent-refresh-auth <name>` (non-destructive to Codex session state)
 
+## Tutorial 6: Project-Specific Image While Preserving Base Agent Setup
+Use this when your project needs extra OS packages, CLI tools, or language runtimes.
+
+1. Add project image files in your repo:
+   - `.prj_assistant/image/Dockerfile`
+2. Keep base agent behavior by extending, not replacing.
+   - Start with:
+     - `FROM codex-slack-bot:latest`
+   - Install only project dependencies on top.
+   - Do not override `ENTRYPOINT`, container mode env flow, or workspace mount assumptions unless required.
+3. Example Dockerfile:
+
+```dockerfile
+FROM codex-slack-bot:latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    jq ripgrep && \
+    rm -rf /var/lib/apt/lists/*
+```
+
+4. Build locally in project repo before asking admin to start the agent:
+
+```bash
+podman build -t local-<project>-agent -f .prj_assistant/image/Dockerfile .prj_assistant/image
+```
+
+5. Run a smoke test for base behavior compatibility:
+   - Container starts successfully.
+   - `python -m src.agent.main` is still runnable in image context.
+   - Required project tools are present (`jq`, `rg`, language runtime, etc.).
+
+6. Hand off to admin for framework usage:
+   - Admin runs `/master-agent-load ...` and `/master-agent-start ...`.
+   - Master auto-detects `.prj_assistant/image/Dockerfile` and builds `codex-agent-<name>:latest`.
+   - Verify `/master-agent-status <name>` shows dockerfile-based image plan.
+
 ## Release Wrap-Up Checklist (v2.2)
 - [ ] No net-new features merged.
 - [ ] Bugfixes include tests.
