@@ -5,7 +5,42 @@ This cycle is documentation-first and bugfix-only. No new feature development is
 
 ## Tutorial 1: Boot a Single Bot Session
 1. Export required env vars: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_CHANNELS`, `CODEX_SESSION_ID`.
-2. Start bot with Compose (containerized runtime):
+2. Use this sample Compose baseline (`docker-compose.yml`):
+
+```yaml
+services:
+  codex-bot:
+    build: .
+    image: codex-slack-bot:latest
+    environment:
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
+      SLACK_ALLOWED_CHANNELS: ${SLACK_ALLOWED_CHANNELS}
+      CODEX_SESSION_ID: ${CODEX_SESSION_ID}
+      GH_TOKEN: ${GH_TOKEN:-}
+      GIT_USER_NAME: ${GIT_USER_NAME:-}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
+    volumes:
+      - ./:/workspace
+      - ./logs:/workspace/logs
+      - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro
+      - ${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro
+```
+
+3. For Podman, add override (`docker-compose.podman.yml`):
+
+```yaml
+services:
+  codex-bot:
+    user: "${UID}:${GID}"
+    userns_mode: keep-id
+    security_opt:
+      - label=disable
+    x-podman:
+      in_pod: false
+```
+
+4. Start bot with Compose (containerized runtime):
 
 ```bash
 docker compose up --build -d
@@ -21,8 +56,8 @@ podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build -d
 podman compose -f docker-compose.yml -f docker-compose.podman.yml logs -f
 ```
 
-3. In Slack, mention the bot in an allowlisted channel.
-4. Confirm response and run `/codex-status`.
+5. In Slack, mention the bot in an allowlisted channel.
+6. Confirm response and run `/codex-status`.
 
 ## Tutorial 2: Master Agent Command Flow
 1. Start master: `python -m src.master.main` with `MASTER_ADMIN_CHANNELS` configured.
