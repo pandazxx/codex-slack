@@ -66,6 +66,29 @@ def test_route_prompt_for_mapped_channel(tmp_path) -> None:
     assert dispatcher.calls[0]["container_name"] == "agent-payments"
 
 
+def test_route_prompt_includes_image_urls_and_tracks_usage(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    router.route_prompt(
+        channel_id="CAGENT",
+        text="<@U123> investigate this",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+        image_urls=["https://files.slack.com/abc.png"],
+    )
+
+    sent_prompt = dispatcher.calls[0]["prompt"]
+    assert "Attached images:" in sent_prompt
+    assert "https://files.slack.com/abc.png" in sent_prompt
+
+    usage = router.usage_summary("payments-agent")
+    assert usage[0]["prompt_count"] == 1
+    assert usage[0]["image_count"] == 1
+
+
 def test_route_prompt_rejects_unmapped_channel(tmp_path) -> None:
     registry = AgentRegistry(tmp_path / "agents.json")
     dispatcher = FakeDispatcher()

@@ -5,6 +5,7 @@ import logging
 import re
 import subprocess
 from threading import Lock
+import time
 from typing import Protocol
 
 from .registry import AgentRegistry
@@ -166,6 +167,7 @@ class ChannelRouter:
     admin_channels: set[str]
     _tracked_threads: set[str] = field(default_factory=set, init=False, repr=False)
     _recent_mention_events: set[str] = field(default_factory=set, init=False, repr=False)
+    _usage_by_agent: dict[str, dict[str, float]] = field(default_factory=dict, init=False, repr=False)
     _state_lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def extract_prompt(self, text: str) -> str:
@@ -214,6 +216,7 @@ class ChannelRouter:
         text: str,
         thread_ts: str | None,
         user_id: str | None,
+        image_urls: list[str] | None = None,
     ) -> str:
         if channel_id in self.admin_channels:
             raise RouteSkip("admin channel is reserved for master commands")
@@ -223,10 +226,17 @@ class ChannelRouter:
             raise RouteSkip(f"no mapped agent for channel {channel_id}")
 
         prompt = self.extract_prompt(text)
+        image_urls = image_urls or []
+        if image_urls:
+            image_lines = "\n".join(f"- {url}" for url in image_urls)
+            prefix = f"{prompt}\n\n" if prompt else ""
+            prompt = f"{prefix}Attached images:\n{image_lines}"
+
         if not prompt:
             raise RouteSkip("prompt is empty after removing mention")
 
-        return self.dispatcher.send_prompt(
+        started_at = time.perf_counter()
+        response = self.dispatcher.send_prompt(
             agent_name=record.name,
             container_name=record.container_name,
             prompt=prompt,
@@ -234,3 +244,67 @@ class ChannelRouter:
             thread_ts=thread_ts,
             user_id=user_id,
         )
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self._record_usage(
+            agent_name=record.name,
+            prompt_chars=len(prompt),
+            response_chars=len(response),
+            image_count=len(image_urls),
+            elapsed_ms=elapsed_ms,
+        )
+        return response
+
+    def _record_usage(
+        self,
+        *,
+        agent_name: str,
+        prompt_chars: int,
+        response_chars: int,
+        image_count: int,
+        elapsed_ms: float,
+    ) -> None:
+        with self._state_lock:
+            entry = self._usage_by_agent.setdefault(
+                agent_name,
+                {
+                    "prompt_count": 0.0,
+                    "prompt_chars": 0.0,
+                    "response_chars": 0.0,
+                    "image_count": 0.0,
+                    "total_latency_ms": 0.0,
+                },
+            )
+            entry["prompt_count"] += 1
+            entry["prompt_chars"] += prompt_chars
+            entry["response_chars"] += response_chars
+            entry["image_count"] += image_count
+            entry["total_latency_ms"] += elapsed_ms
+
+    def usage_summary(self, agent_name: str | None = None) -> list[dict[str, object]]:
+        with self._state_lock:
+            items = (
+                {agent_name: self._usage_by_agent.get(agent_name, {})}
+                if agent_name
+                else dict(self._usage_by_agent)
+            )
+
+        result: list[dict[str, object]] = []
+        for name, raw in sorted(items.items()):
+            prompt_count = int(raw.get("prompt_count", 0.0))
+            prompt_chars = int(raw.get("prompt_chars", 0.0))
+            response_chars = int(raw.get("response_chars", 0.0))
+            image_count = int(raw.get("image_count", 0.0))
+            total_latency_ms = float(raw.get("total_latency_ms", 0.0))
+            avg_latency_ms = (total_latency_ms / prompt_count) if prompt_count else 0.0
+            result.append(
+                {
+                    "agent_name": name,
+                    "prompt_count": prompt_count,
+                    "prompt_chars": prompt_chars,
+                    "response_chars": response_chars,
+                    "image_count": image_count,
+                    "total_latency_ms": round(total_latency_ms, 2),
+                    "avg_latency_ms": round(avg_latency_ms, 2),
+                }
+            )
+        return result

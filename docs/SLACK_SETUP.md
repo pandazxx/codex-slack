@@ -50,6 +50,7 @@ Create these commands in **Slash Commands**:
 - `/master-agent-start`
 - `/master-agent-stop`
 - `/master-agent-status`
+- `/master-agent-usage`
 - `/master-agent-remove`
 - `/master-agent-refresh-auth`
 

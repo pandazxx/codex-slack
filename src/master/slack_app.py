@@ -87,11 +87,39 @@ def _format_agent_list_table(result: CommandResult) -> str | None:
     )
 
 
+def _format_agent_usage(result: CommandResult) -> str | None:
+    usage = result.data.get("usage")
+    if not isinstance(usage, list):
+        return None
+    if not usage:
+        return ":white_check_mark: *No usage recorded yet.*"
+
+    lines = [":bar_chart: */master-agent-usage*"]
+    for item in usage:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            (
+                f"• *{_clip(item.get('agent_name', '-'), 24)}*"
+                f" | prompts=`{item.get('prompt_count', 0)}`"
+                f" | images=`{item.get('image_count', 0)}`"
+                f" | prompt_chars=`{item.get('prompt_chars', 0)}`"
+                f" | response_chars=`{item.get('response_chars', 0)}`"
+                f" | avg_ms=`{item.get('avg_latency_ms', 0)}`"
+            )
+        )
+    return "\n".join(lines)
+
+
 def format_command_result(command_name: str, result: CommandResult) -> str:
     if command_name == "/master-agent-list":
         rendered_table = _format_agent_list_table(result)
         if rendered_table:
             return rendered_table
+    if command_name == "/master-agent-usage":
+        rendered_usage = _format_agent_usage(result)
+        if rendered_usage:
+            return rendered_usage
     if command_name == "/master-agent-status":
         rendered_summary = _format_status_summary(result)
         if rendered_summary:
@@ -125,6 +153,11 @@ def parse_single_name_text(text: str, command_name: str) -> str:
     if not name:
         raise ValueError(f"usage: {command_name} <name>")
     return name
+
+
+def parse_optional_name_text(text: str) -> str | None:
+    value = text.strip()
+    return value or None
 
 
 def parse_status_text(text: str, command_name: str = "/master-agent-status") -> tuple[str, bool]:
@@ -255,6 +288,7 @@ def _register_command(
     command_name: str,
     admin_channels: set[str],
     service: MasterService,
+    router: ChannelRouter | None = None,
     rate_limiter: CommandRateLimiter | None = None,
 ) -> None:
     @app.command(command_name)
@@ -320,6 +354,25 @@ def _register_command(
             return
 
         try:
+            if command_name == "/master-agent-usage":
+                if router is None:
+                    result = CommandResult(
+                        ok=False,
+                        code="ERR_INTERNAL",
+                        message="usage router is not configured",
+                        data={},
+                    )
+                else:
+                    selected_agent = parse_optional_name_text(request.text)
+                    result = CommandResult(
+                        ok=True,
+                        code="OK",
+                        message="usage listed",
+                        data={"usage": router.usage_summary(selected_agent)},
+                    )
+            else:
+                result = dispatch_slash_command(service, request)
+
             LOGGER.info(
                 "master.command_dispatch_start command=%s channel=%s user=%s text=%r",
                 command_name,
@@ -327,7 +380,6 @@ def _register_command(
                 request.user_id or "-",
                 request.text,
             )
-            result = dispatch_slash_command(service, request)
             LOGGER.info(
                 "master.command_dispatch_done command=%s channel=%s user=%s ok=%s code=%s",
                 command_name,
@@ -390,6 +442,7 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
+            image_urls = extract_image_urls(event.get("files", []))
 
             try:
                 router.track_thread(channel_id=channel_id, thread_ts=thread_ts)
@@ -399,6 +452,7 @@ def create_master_app(
                     text=text,
                     thread_ts=thread_ts,
                     user_id=user_id,
+                    image_urls=image_urls,
                 )
                 say(text=response, thread_ts=thread_ts)
             except RouteSkip as exc:
@@ -420,6 +474,7 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
+            image_urls = extract_image_urls(event.get("files", []))
 
             if not thread_ts or not text or not user_id:
                 return
@@ -434,6 +489,7 @@ def create_master_app(
                     text=text,
                     thread_ts=thread_ts,
                     user_id=user_id,
+                    image_urls=image_urls,
                 )
                 say(text=response, thread_ts=thread_ts)
             except RouteSkip as exc:
@@ -451,6 +507,7 @@ def create_master_app(
         "/master-agent-start",
         "/master-agent-stop",
         "/master-agent-status",
+        "/master-agent-usage",
         "/master-agent-remove",
         "/master-agent-refresh-auth",
     ):
@@ -459,8 +516,25 @@ def create_master_app(
             command_name=command_name,
             admin_channels=admin_channels,
             service=service,
+            router=router,
             rate_limiter=rate_limiter,
         )
         LOGGER.info("master.command_registered command=%s", command_name)
 
     return app
+
+
+def extract_image_urls(files: object) -> list[str]:
+    if not isinstance(files, list):
+        return []
+    urls: list[str] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        mimetype = str(item.get("mimetype", ""))
+        if not mimetype.startswith("image/"):
+            continue
+        url_private = str(item.get("url_private", "")).strip()
+        if url_private:
+            urls.append(url_private)
+    return urls

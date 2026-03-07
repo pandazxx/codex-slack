@@ -6,6 +6,7 @@ from src.master.slack_app import (
     CommandRateLimiter,
     SlackCommandRequest,
     dispatch_slash_command,
+    extract_image_urls,
     format_status_full_chunks,
     format_command_result,
     is_admin_channel,
@@ -190,6 +191,32 @@ def test_format_command_result_renders_agent_list_as_bullets() -> None:
     assert "container=`agent-aidotfile-agent`" in payload
 
 
+def test_format_command_result_renders_usage_bullets() -> None:
+    payload = format_command_result(
+        "/master-agent-usage",
+        CommandResult(
+            ok=True,
+            code="OK",
+            message="usage listed",
+            data={
+                "usage": [
+                    {
+                        "agent_name": "aidotfile-agent",
+                        "prompt_count": 3,
+                        "image_count": 1,
+                        "prompt_chars": 1200,
+                        "response_chars": 2400,
+                        "avg_latency_ms": 412.5,
+                    }
+                ]
+            },
+        ),
+    )
+    assert ":bar_chart: */master-agent-usage*" in payload
+    assert "prompts=`3`" in payload
+    assert "images=`1`" in payload
+
+
 def test_status_full_messages_chunk_large_payload() -> None:
     result = CommandResult(
         ok=True,
@@ -209,6 +236,16 @@ def test_status_full_messages_chunk_large_payload() -> None:
     assert len(messages) >= 2
     assert "full output" in messages[0]
     assert "part 1/" in messages[0]
+
+
+def test_extract_image_urls_only_keeps_image_files() -> None:
+    urls = extract_image_urls(
+        [
+            {"mimetype": "image/png", "url_private": "https://files.slack.com/a.png"},
+            {"mimetype": "text/plain", "url_private": "https://files.slack.com/readme.txt"},
+        ]
+    )
+    assert urls == ["https://files.slack.com/a.png"]
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:

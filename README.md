@@ -98,11 +98,14 @@ Admin slash commands:
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
 - `/master-agent-status <name>`
+- `/master-agent-usage [name]`
 - `/master-agent-remove <name>`
 - `/master-agent-refresh-auth <name>` (re-seeds the agent workspace `CODEX_HOME/auth.json` from `MASTER_CODEX_AUTH_JSON_PATH`)
 
 Operator notes:
 - Slash-command replies are optimized for readability (status, code, message, and compact data block).
+- `/master-agent-status <name> --full` returns chunked full JSON output across multiple Slack messages.
+- Image attachments in mapped channel conversations are forwarded to agents as `url_private` references appended to the prompt.
 - For lean worker deployments, this repo includes `Dockerfile.agent-minimal`.
 - CI/CD workflow `.github/workflows/publish-agent-minimal.yml` publishes the minimal agent image to `ghcr.io/<owner>/codex-slack-agent-minimal` on `master` and version tags.
 
