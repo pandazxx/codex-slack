@@ -300,7 +300,7 @@ class MasterService:
                 message="invalid agent name",
                 data={"field": "name"},
             )
-        if not channel_id.startswith("C"):
+        if not channel_id.startswith(("C", "G")):
             return CommandResult(
                 ok=False,
                 code="ERR_INVALID_ARGS",

@@ -368,6 +368,17 @@ def test_load_agent_invalid_name_returns_invalid_args(tmp_path) -> None:
     assert result.data["field"] == "name"
 
 
+def test_load_agent_accepts_private_channel_id_prefix_g(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="G123")
+    assert result.ok is True
+
+
 def test_start_agent_runtime_failure_sets_error_state(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

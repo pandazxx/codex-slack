@@ -25,12 +25,14 @@ v1 Slack model:
 Open **OAuth & Permissions** and add these **Bot Token Scopes**:
 - `app_mentions:read`
 - `channels:history`
+- `groups:history`
 - `chat:write`
 - `commands`
 
 Notes:
 - `app_mentions:read` is required for routed prompts started by mentioning the bot.
-- `channels:history` is required for follow-up thread replies in mapped channels.
+- `channels:history` is required for follow-up thread replies in mapped public channels.
+- `groups:history` is required for follow-up thread replies in mapped private channels.
 - `commands` is required for master slash commands.
 
 ## 4. Enable Event Subscriptions
@@ -39,6 +41,7 @@ Notes:
 3. Under **Subscribe to bot events**, add:
 - `app_mention`
 - `message.channels`
+- `message.groups`
 4. Save changes.
 
 With Socket Mode, no public Request URL is needed.

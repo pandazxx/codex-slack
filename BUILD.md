@@ -17,11 +17,13 @@ Quick checklist:
 2. **OAuth scopes** (bot token):
    - `app_mentions:read`
    - `channels:history`
+   - `groups:history`
    - `chat:write`
    - `commands`
 3. **Event subscriptions**:
    - `app_mention`
    - `message.channels` (for thread replies without repeated mentions)
+   - `message.groups` (for thread replies in private channels)
 4. **Slash commands**:
    - `/codex-status`
    - `/codex-attach`
