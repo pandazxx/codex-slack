@@ -101,6 +101,11 @@ Admin slash commands:
 - `/master-agent-remove <name>`
 - `/master-agent-refresh-auth <name>` (re-seeds the agent workspace `CODEX_HOME/auth.json` from `MASTER_CODEX_AUTH_JSON_PATH`)
 
+Operator notes:
+- Slash-command replies are optimized for readability (status, code, message, and compact data block).
+- For lean worker deployments, this repo includes `Dockerfile.agent-minimal`.
+- CI/CD workflow `.github/workflows/publish-agent-minimal.yml` publishes the minimal agent image to `ghcr.io/<owner>/codex-slack-agent-minimal` on `master` and version tags.
+
 ## Agent Worker Mode (Phase 2 WIP)
 The container can run as a worker (no Slack connection) by setting:
 

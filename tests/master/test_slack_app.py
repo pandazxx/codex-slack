@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 import logging
 
 from src.master.service import CommandResult
@@ -104,10 +102,20 @@ def test_format_command_result_json_payload() -> None:
         "/master-agent-list",
         CommandResult(ok=True, code="OK", message="listed", data={"agents": []}),
     )
-    obj = json.loads(payload)
-    assert obj["ok"] is True
-    assert obj["command"] == "/master-agent-list"
-    assert obj["code"] == "OK"
+    assert ":white_check_mark:" in payload
+    assert "*Code:* `OK`" in payload
+    assert "*Message:* listed" in payload
+    assert "```json" in payload
+    assert '"agents": []' in payload
+
+
+def test_format_command_result_truncates_large_data_payload() -> None:
+    payload = format_command_result(
+        "/master-agent-status",
+        CommandResult(ok=True, code="OK", message="status", data={"blob": "x" * 5000}),
+    )
+    assert "..." in payload
+    assert len(payload) < 1600
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:

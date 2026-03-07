@@ -127,6 +127,7 @@ podman tag codex-slack-bot:latest localhost/codex-slack-bot:latest
 3. Keep base agent behavior by extending, not replacing.
    - Start with:
      - `FROM localhost/codex-slack-bot:latest`
+     - or `FROM ghcr.io/<owner>/codex-slack-agent-minimal:latest` if your org uses the published minimal agent base.
    - Install only project dependencies on top.
    - Do not override `ENTRYPOINT`, container mode env flow, or workspace mount assumptions unless required.
 4. Example Dockerfile:

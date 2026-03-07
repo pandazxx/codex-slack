@@ -49,14 +49,19 @@ def is_admin_channel(channel_id: str, admin_channels: set[str]) -> bool:
 
 
 def format_command_result(command_name: str, result: CommandResult) -> str:
-    payload = {
-        "ok": result.ok,
-        "command": command_name,
-        "code": result.code,
-        "message": result.message,
-        "data": result.data,
-    }
-    return json.dumps(payload, sort_keys=True)
+    status_icon = ":white_check_mark:" if result.ok else ":x:"
+    lines = [
+        f"{status_icon} *{command_name}*",
+        f"*Code:* `{result.code}`",
+        f"*Message:* {result.message}",
+    ]
+    if result.data:
+        data_json = json.dumps(result.data, indent=2, sort_keys=True)
+        if len(data_json) > 1200:
+            data_json = data_json[:1197] + "..."
+        lines.append("*Data:*")
+        lines.append(f"```json\n{data_json}\n```")
+    return "\n".join(lines)
 
 
 def parse_load_text(text: str) -> tuple[str, str, str, str]:
