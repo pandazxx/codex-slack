@@ -4,8 +4,23 @@
 This cycle is documentation-first and bugfix-only. No new feature development is planned.
 
 ## Tutorial 1: Boot a Single Bot Session
-1. Export required env vars: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_CHANNELS`.
-2. Start bot: `python -m src.bot.main --session-id <SESSION_ID>`.
+1. Export required env vars: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_CHANNELS`, `CODEX_SESSION_ID`.
+2. Start bot with Compose (containerized runtime):
+
+```bash
+docker compose up --build -d
+docker compose logs -f
+```
+
+   For Podman:
+
+```bash
+export UID="$(id -u)"
+export GID="$(id -g)"
+podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build -d
+podman compose -f docker-compose.yml -f docker-compose.podman.yml logs -f
+```
+
 3. In Slack, mention the bot in an allowlisted channel.
 4. Confirm response and run `/codex-status`.
 
