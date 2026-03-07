@@ -48,7 +48,63 @@ def is_admin_channel(channel_id: str, admin_channels: set[str]) -> bool:
     return channel_id in admin_channels
 
 
+def _clip(value: object, limit: int = 40) -> str:
+    text = str(value) if value is not None else "-"
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _format_agent_list_table(result: CommandResult) -> str | None:
+    agents = result.data.get("agents")
+    if not isinstance(agents, list):
+        return None
+
+    if not agents:
+        return ":white_check_mark: *No agents loaded.*"
+
+    header = [
+        "name",
+        "state",
+        "channel",
+        "ref",
+        "runtime",
+        "container",
+    ]
+    lines = [" | ".join(header), "-|-|-|-|-|-"]
+    for item in agents:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            " | ".join(
+                [
+                    _clip(item.get("name", "-"), 24),
+                    _clip(item.get("status", "-"), 12),
+                    _clip(item.get("channel_id", "-"), 14),
+                    _clip(item.get("repo_ref", "-"), 12),
+                    _clip(item.get("runtime", "-"), 10),
+                    _clip(item.get("container_name", "-"), 28),
+                ]
+            )
+        )
+
+    return "\n".join(
+        [
+            f":white_check_mark: */master-agent-list*",
+            f"*Total agents:* {len(agents)}",
+            "```",
+            *lines,
+            "```",
+        ]
+    )
+
+
 def format_command_result(command_name: str, result: CommandResult) -> str:
+    if command_name == "/master-agent-list":
+        rendered_table = _format_agent_list_table(result)
+        if rendered_table:
+            return rendered_table
+
     status_icon = ":white_check_mark:" if result.ok else ":x:"
     lines = [
         f"{status_icon} *{command_name}*",
@@ -57,8 +113,8 @@ def format_command_result(command_name: str, result: CommandResult) -> str:
     ]
     if result.data:
         data_json = json.dumps(result.data, indent=2, sort_keys=True)
-        if len(data_json) > 1200:
-            data_json = data_json[:1197] + "..."
+        if len(data_json) > 6000:
+            data_json = data_json[:5997] + "..."
         lines.append("*Data:*")
         lines.append(f"```json\n{data_json}\n```")
     return "\n".join(lines)

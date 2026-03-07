@@ -99,14 +99,14 @@ def test_dispatch_refresh_auth_command() -> None:
 
 def test_format_command_result_json_payload() -> None:
     payload = format_command_result(
-        "/master-agent-list",
-        CommandResult(ok=True, code="OK", message="listed", data={"agents": []}),
+        "/master-agent-start",
+        CommandResult(ok=True, code="OK", message="started", data={"name": "payments-agent"}),
     )
     assert ":white_check_mark:" in payload
     assert "*Code:* `OK`" in payload
-    assert "*Message:* listed" in payload
+    assert "*Message:* started" in payload
     assert "```json" in payload
-    assert '"agents": []' in payload
+    assert '"name": "payments-agent"' in payload
 
 
 def test_format_command_result_truncates_large_data_payload() -> None:
@@ -114,8 +114,35 @@ def test_format_command_result_truncates_large_data_payload() -> None:
         "/master-agent-status",
         CommandResult(ok=True, code="OK", message="status", data={"blob": "x" * 5000}),
     )
-    assert "..." in payload
-    assert len(payload) < 1600
+    assert "..." not in payload
+    assert len(payload) > 3000
+
+
+def test_format_command_result_renders_agent_list_as_table() -> None:
+    payload = format_command_result(
+        "/master-agent-list",
+        CommandResult(
+            ok=True,
+            code="OK",
+            message="agents listed",
+            data={
+                "agents": [
+                    {
+                        "name": "aidotfile-agent",
+                        "status": "running",
+                        "channel_id": "C0123456789",
+                        "repo_ref": "master",
+                        "runtime": "podman",
+                        "container_name": "agent-aidotfile-agent",
+                    }
+                ]
+            },
+        ),
+    )
+    assert "*Total agents:* 1" in payload
+    assert "name | state | channel | ref | runtime | container" in payload
+    assert "aidotfile-agent" in payload
+    assert "```" in payload
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:
