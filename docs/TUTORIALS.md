@@ -61,35 +61,46 @@ Use this flow after master runtime is already deployed and healthy.
 ## Tutorial 6: Project-Specific Image While Preserving Base Agent Setup
 Use this when your project needs extra OS packages, CLI tools, or language runtimes.
 
-1. Add project image files in your repo:
+1. Ensure base agent image exists locally before custom build.
+   - From this repository root, build base image:
+
+```bash
+cd /workspace/repo
+podman build -t codex-slack-bot:latest -f Dockerfile .
+podman tag codex-slack-bot:latest localhost/codex-slack-bot:latest
+```
+
+   - Reason: if base image is missing locally, Podman/Docker tries to pull from a public registry and fails.
+
+2. Add project image files in your repo:
    - `.prj_assistant/image/Dockerfile`
-2. Keep base agent behavior by extending, not replacing.
+3. Keep base agent behavior by extending, not replacing.
    - Start with:
-     - `FROM codex-slack-bot:latest`
+     - `FROM localhost/codex-slack-bot:latest`
    - Install only project dependencies on top.
    - Do not override `ENTRYPOINT`, container mode env flow, or workspace mount assumptions unless required.
-3. Example Dockerfile:
+4. Example Dockerfile:
 
 ```dockerfile
-FROM codex-slack-bot:latest
+FROM localhost/codex-slack-bot:latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     jq ripgrep && \
     rm -rf /var/lib/apt/lists/*
 ```
 
-4. Build locally in project repo before asking admin to start the agent:
+5. Build locally in project repo before asking admin to start the agent:
 
 ```bash
-podman build -t local-<project>-agent -f .prj_assistant/image/Dockerfile .prj_assistant/image
+podman build --pull-never -t local-<project>-agent -f .prj_assistant/image/Dockerfile .prj_assistant/image
 ```
 
-5. Run a smoke test for base behavior compatibility:
+6. Run a smoke test for base behavior compatibility:
    - Container starts successfully.
    - `python -m src.agent.main` is still runnable in image context.
    - Required project tools are present (`jq`, `rg`, language runtime, etc.).
 
-6. Hand off to admin for framework usage:
+7. Hand off to admin for framework usage:
    - Admin runs `/master-agent-load ...` and `/master-agent-start ...`.
    - Master auto-detects `.prj_assistant/image/Dockerfile` and builds `codex-agent-<name>:latest`.
    - Verify `/master-agent-status <name>` shows dockerfile-based image plan.
