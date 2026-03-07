@@ -81,6 +81,13 @@ Expected behavior:
 2. Verify agent status and runtime inspection.
 3. Tail container logs when needed.
 4. Re-run auth refresh or restart agent if auth/runtime drift is detected.
+5. For SSH clone failures:
+   - Ensure `MASTER_SSH_AUTH_SOCK_PATH` points to a live socket (`test -S ...`).
+   - In debug container, `/run/secrets/ssh-auth.sock` must be socket type (`s...`), not regular file (`-...`).
+6. For custom Dockerfiles:
+   - If you switch to `USER root` for package install, switch back to `USER appuser` before image end.
+7. If you remove an agent and still need to clear workspace state:
+   - Delete named volume manually: `podman volume rm agent-workspace-<name>`.
 
 ## Tutorial 5: Member Onboarding for Personal GitHub Projects
 Use this flow after master runtime is already deployed and healthy.

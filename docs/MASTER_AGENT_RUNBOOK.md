@@ -142,8 +142,15 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 - Check stage failure (`preflight`, `repo_sync`, `workspace_prepare`).
 - If `preflight` shows `missing auth source: SSH_AUTH_SOCK or GH token`, ensure `GH_TOKEN` is set on the master container so it is passed into the agent.
 - For SSH-based Git operations, ensure `MASTER_SSH_AUTH_SOCK_PATH` points to a live host SSH agent socket before recreating the agent.
+- Validate that the mounted SSH auth path is a real Unix socket, not a regular file:
+```bash
+test -S "$MASTER_SSH_AUTH_SOCK_PATH" && echo OK || echo BAD
+ls -l "$MASTER_SSH_AUTH_SOCK_PATH"
+```
+- If an exited agent shows `/run/secrets/ssh-auth.sock` as `-rwx...` (regular file) or `ssh-add -l` returns `Connection refused`, the mount source is stale/invalid. Re-export `MASTER_SSH_AUTH_SOCK_PATH` from a live `SSH_AUTH_SOCK`, restart master, then recreate the agent.
 - If you want explicit host verification, also set `MASTER_SSH_KNOWN_HOSTS_PATH`; otherwise the default is to accept all hosts.
 - Fix env/auth and restart agent.
+- If project image Dockerfile uses `USER root` for package install, switch back to `USER appuser` at the end to preserve expected runtime identity and permissions.
 
 ### Codex refresh-token failure
 - If the agent returns `Your refresh token has already been used to generate a new access token`, refresh the host auth source first (for example, `codex login` on the host that owns `MASTER_CODEX_AUTH_JSON_PATH`).
@@ -164,3 +171,8 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 - Registry source of truth: `data/master/agents.json` (persist by mounting host `data/master` into `/opt/codex-slack/data/master` in the master container)
 - Registry lock file: `data/master/agents.json.lock`
 - Command/audit signals are emitted in master logs under `master.audit`.
+- Removing an agent (`/master-agent-remove`) removes container/registry mapping, but does not delete named workspace volume `agent-workspace-<name>`.
+- To remove workspace data explicitly:
+```bash
+podman volume rm agent-workspace-<name>
+```
