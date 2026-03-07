@@ -92,6 +92,10 @@ def format_command_result(command_name: str, result: CommandResult) -> str:
         rendered_table = _format_agent_list_table(result)
         if rendered_table:
             return rendered_table
+    if command_name == "/master-agent-status":
+        rendered_summary = _format_status_summary(result)
+        if rendered_summary:
+            return rendered_summary
 
     status_icon = ":white_check_mark:" if result.ok else ":x:"
     lines = [
@@ -123,6 +127,97 @@ def parse_single_name_text(text: str, command_name: str) -> str:
     return name
 
 
+def parse_status_text(text: str, command_name: str = "/master-agent-status") -> tuple[str, bool]:
+    parts = [part.strip() for part in text.split() if part.strip()]
+    if not parts:
+        raise ValueError(f"usage: {command_name} <name> [--full]")
+    if len(parts) == 1:
+        return parts[0], False
+    if len(parts) == 2 and parts[1] == "--full":
+        return parts[0], True
+    raise ValueError(f"usage: {command_name} <name> [--full]")
+
+
+def wants_full_status(command_name: str, text: str) -> bool:
+    if command_name != "/master-agent-status":
+        return False
+    try:
+        _, is_full = parse_status_text(text, command_name)
+        return is_full
+    except ValueError:
+        return False
+
+
+def _chunk_text(text: str, max_chars: int = 2800) -> list[str]:
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if len(current) + len(line) > max_chars and current:
+            chunks.append(current)
+            current = ""
+        if len(line) > max_chars:
+            for i in range(0, len(line), max_chars):
+                part = line[i : i + max_chars]
+                if len(part) == max_chars:
+                    chunks.append(part)
+                else:
+                    current = part
+            continue
+        current += line
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def format_status_full_chunks(command_name: str, result: CommandResult) -> list[str]:
+    payload = {
+        "ok": result.ok,
+        "command": command_name,
+        "code": result.code,
+        "message": result.message,
+        "data": result.data,
+    }
+    raw = json.dumps(payload, indent=2, sort_keys=True)
+    parts = _chunk_text(raw, max_chars=2800)
+    total = len(parts)
+    return [
+        f":information_source: *{command_name} full output* (part {idx}/{total})\n```json\n{part}\n```"
+        for idx, part in enumerate(parts, start=1)
+    ]
+
+
+def _format_status_summary(result: CommandResult) -> str | None:
+    if not isinstance(result.data, dict):
+        return None
+    record = result.data.get("record")
+    runtime = result.data.get("runtime")
+    if not isinstance(record, dict):
+        return None
+
+    runtime_state = "-"
+    if isinstance(runtime, dict):
+        state = runtime.get("State")
+        if isinstance(state, dict):
+            runtime_state = str(state.get("Status") or state.get("Running") or "-")
+
+    return "\n".join(
+        [
+            ":white_check_mark: */master-agent-status*",
+            f"*Agent:* `{record.get('name', '-')}`",
+            f"*State:* registry=`{record.get('status', '-')}` runtime=`{runtime_state}`",
+            f"*Channel:* `{record.get('channel_id', '-')}`",
+            f"*Branch:* `{record.get('repo_ref', '-')}`",
+            f"*Container:* `{record.get('container_name', '-')}`",
+            f"*Image:* `{record.get('resolved_image') or '-'}`",
+            f"*Last error:* `{record.get('last_error') or '-'}`",
+            "_Use `/master-agent-status <name> --full` for full JSON output._",
+        ]
+    )
+
+
 def dispatch_slash_command(service: MasterService, request: SlackCommandRequest) -> CommandResult:
     if request.command_name == "/master-agent-list":
         return service.list_agents()
@@ -140,7 +235,7 @@ def dispatch_slash_command(service: MasterService, request: SlackCommandRequest)
         return service.stop_agent(name=name)
 
     if request.command_name == "/master-agent-status":
-        name = parse_single_name_text(request.text, request.command_name)
+        name, _ = parse_status_text(request.text)
         return service.status(name=name)
 
     if request.command_name == "/master-agent-remove":
@@ -241,7 +336,11 @@ def _register_command(
                 result.ok,
                 result.code,
             )
-            respond(format_command_result(command_name, result))
+            if command_name == "/master-agent-status" and result.ok and parse_status_text(request.text)[1]:
+                for message in format_status_full_chunks(command_name, result):
+                    respond(message)
+            else:
+                respond(format_command_result(command_name, result))
         except ValueError as exc:
             LOGGER.warning(
                 "master.command_rejected command=%s reason=invalid_args channel=%s user=%s error=%s text=%r",
