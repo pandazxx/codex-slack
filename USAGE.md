@@ -1,5 +1,9 @@
 # Usage Guide
 
+## v2.2 Policy
+- This iteration is maintenance-only: bugfixes, docs, and tutorials.
+- Avoid introducing net-new features during v2.2 unless explicitly approved.
+
 ## Operating Model
 - You own and prepare the local Codex session.
 - The bot attaches to that session and exposes it in Slack.
@@ -27,6 +31,15 @@ Behavior notes:
 - While busy, new prompts wait in queue.
 - Responses are final-only (no streaming chunks).
 
+## Master-Mode Workflow (Quick Path)
+1. Start master: `python -m src.master.main`.
+2. In admin channel, run `/master-agent-load <name> <repo_path> <channel_id> [branch]`.
+3. Run `/master-agent-start <name>`.
+4. Prompt from mapped channel by mentioning master bot.
+5. Validate state with `/master-agent-status <name>`.
+
+Reference tutorials: `docs/TUTORIALS.md`.
+
 ## Command Reference
 
 ### `/codex-status`
@@ -48,6 +61,10 @@ Prints command and mention usage summary.
 
 ### `/codex-conv-cancel`
 Stops the currently running Codex prompt. If no prompt is running, returns a no-op message.
+
+### `/master-agent-refresh-auth <name>`
+Re-seeds agent `CODEX_HOME/auth.json` from configured host auth source.
+The refresh is non-destructive for session state and does not wipe `.codex`.
 
 ## Recovery Playbooks
 
