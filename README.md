@@ -106,6 +106,7 @@ Operator notes:
 - Slash-command replies are optimized for readability (status, code, message, and compact data block).
 - `/master-agent-status <name> --full` returns chunked full JSON output across multiple Slack messages.
 - Image attachments in mapped channel conversations are forwarded to agents as `url_private` references appended to the prompt.
+- For Slack private image fetch, ensure bot scope includes `files:read`.
 - For lean worker deployments, this repo includes `Dockerfile.agent-minimal`.
 - CI/CD workflow `.github/workflows/publish-agent-minimal.yml` publishes the minimal agent image to `ghcr.io/<owner>/codex-slack-agent-minimal` on `master` and version tags.
 

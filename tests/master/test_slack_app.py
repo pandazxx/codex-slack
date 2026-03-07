@@ -241,11 +241,15 @@ def test_status_full_messages_chunk_large_payload() -> None:
 def test_extract_image_urls_only_keeps_image_files() -> None:
     urls = extract_image_urls(
         [
-            {"mimetype": "image/png", "url_private": "https://files.slack.com/a.png"},
+            {
+                "mimetype": "image/png",
+                "url_private": "https://files.slack.com/a.png",
+                "url_private_download": "https://files.slack.com/a-download.png",
+            },
             {"mimetype": "text/plain", "url_private": "https://files.slack.com/readme.txt"},
         ]
     )
-    assert urls == ["https://files.slack.com/a.png"]
+    assert urls == ["https://files.slack.com/a-download.png"]
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:

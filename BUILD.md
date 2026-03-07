@@ -18,6 +18,7 @@ Quick checklist:
    - `app_mentions:read`
    - `channels:history`
    - `groups:history`
+   - `files:read`
    - `chat:write`
    - `commands`
 3. **Event subscriptions**:

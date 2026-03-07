@@ -476,7 +476,7 @@ def create_master_app(
             user_id = event.get("user", "")
             image_urls = extract_image_urls(event.get("files", []))
 
-            if not thread_ts or not text or not user_id:
+            if not thread_ts or not user_id or (not text and not image_urls):
                 return
             if router.consume_marked_mention_event(channel_id=channel_id, ts=event_ts):
                 return
@@ -534,7 +534,7 @@ def extract_image_urls(files: object) -> list[str]:
         mimetype = str(item.get("mimetype", ""))
         if not mimetype.startswith("image/"):
             continue
-        url_private = str(item.get("url_private", "")).strip()
-        if url_private:
-            urls.append(url_private)
+        url = str(item.get("url_private_download") or item.get("url_private") or "").strip()
+        if url:
+            urls.append(url)
     return urls

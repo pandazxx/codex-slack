@@ -67,6 +67,7 @@ def main() -> None:
     dispatcher = PodmanExecDispatcher(
         command_template=settings.dispatch_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
+        slack_bot_token=settings.slack_bot_token,
     )
     router = ChannelRouter(
         registry=registry,

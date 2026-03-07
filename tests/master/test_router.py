@@ -10,7 +10,7 @@ from src.master.router import ChannelRouter, PodmanExecDispatcher, RouteError, R
 
 class FakeDispatcher:
     def __init__(self) -> None:
-        self.calls: list[dict[str, str | None]] = []
+        self.calls: list[dict[str, object]] = []
 
     def send_prompt(
         self,
@@ -21,6 +21,7 @@ class FakeDispatcher:
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
+        image_urls: list[str] | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -30,6 +31,7 @@ class FakeDispatcher:
                 "channel_id": channel_id,
                 "thread_ts": thread_ts,
                 "user_id": user_id,
+                "image_urls": image_urls or [],
             }
         )
         return f"{agent_name}:{prompt}"
@@ -80,13 +82,29 @@ def test_route_prompt_includes_image_urls_and_tracks_usage(tmp_path) -> None:
         image_urls=["https://files.slack.com/abc.png"],
     )
 
-    sent_prompt = dispatcher.calls[0]["prompt"]
-    assert "Attached images:" in sent_prompt
-    assert "https://files.slack.com/abc.png" in sent_prompt
+    assert dispatcher.calls[0]["image_urls"] == ["https://files.slack.com/abc.png"]
 
     usage = router.usage_summary("payments-agent")
     assert usage[0]["prompt_count"] == 1
     assert usage[0]["image_count"] == 1
+
+
+def test_route_prompt_allows_image_only_message(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    response = router.route_prompt(
+        channel_id="CAGENT",
+        text="",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+        image_urls=["https://files.slack.com/only-image.png"],
+    )
+
+    assert response == "payments-agent:"
+    assert dispatcher.calls[0]["image_urls"] == ["https://files.slack.com/only-image.png"]
 
 
 def test_route_prompt_rejects_unmapped_channel(tmp_path) -> None:
@@ -118,6 +136,7 @@ class FailingDispatcher(FakeDispatcher):
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
+        image_urls: list[str] | None = None,
     ) -> str:
         raise RouteError("codex exec failed")
 
