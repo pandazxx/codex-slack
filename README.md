@@ -2,6 +2,11 @@
 
 Connect an existing local Codex session to Slack so channel members can send prompts and receive replies without leaving Slack.
 
+## Version Focus
+- `v2.2` is a housekeeping and session wrap-up cycle.
+- Scope is bugfixes, documentation hardening, and tutorial quality.
+- Net-new features are intentionally out of scope for this cycle.
+
 ## What This Project Does
 - Uses a bot process running inside your local workspace.
 - Attaches that process to one local Codex session (`--session-id`).
@@ -115,6 +120,8 @@ Required env for worker init:
 
 ## Next Reading
 - Build and setup: `BUILD.md`
+- Canonical documentation map: `docs/DOCUMENTATION_INDEX.md`
+- Tutorials and release checklist: `docs/TUTORIALS.md`
 - Detailed Slack app configuration: `docs/SLACK_SETUP.md`
 - Logging configuration: `docs/LOGGING.md`
 - Container runtime: `docs/CONTAINER.md`
