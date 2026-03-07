@@ -32,6 +32,32 @@ Expected behavior:
 3. Tail container logs when needed.
 4. Re-run auth refresh or restart agent if auth/runtime drift is detected.
 
+## Tutorial 5: Member Onboarding for Personal GitHub Projects
+Use this flow after master runtime is already deployed and healthy.
+
+1. Prepare repository access for the agent identity.
+   - If your workspace uses SSH forwarding, ensure the forwarded SSH key has access to your repo (deploy key or machine user).
+   - If token-based auth is used, ensure token owner can read/write your repo.
+2. Apply safe repo policy before first agent run.
+   - Protect `main`/`master`.
+   - Prefer PR-only merges with required checks.
+3. Make your project automation-ready.
+   - Include build/test/lint commands in repo docs.
+   - Ensure tests can run non-interactively.
+4. Send mapping request to master admin.
+   - Provide agent name, repo URL, target Slack channel ID, and default branch.
+   - Example request payload:
+     - name: `alice-api`
+     - repo: `git@github.com:teammate-org/alice-api.git`
+     - channel: `C_ALICE_WORK`
+     - branch: `master`
+5. After admin starts the agent, work only in your mapped Slack channel.
+   - Ask for feature branch workflow and PR creation.
+   - Keep one logical task per thread to retain clean session context.
+6. If access/auth fails, ask admin to run diagnostics.
+   - `/master-agent-status <name>`
+   - `/master-agent-refresh-auth <name>` (non-destructive to Codex session state)
+
 ## Release Wrap-Up Checklist (v2.2)
 - [ ] No net-new features merged.
 - [ ] Bugfixes include tests.
