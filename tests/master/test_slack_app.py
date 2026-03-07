@@ -118,7 +118,7 @@ def test_format_command_result_truncates_large_data_payload() -> None:
     assert len(payload) > 3000
 
 
-def test_format_command_result_renders_agent_list_as_table() -> None:
+def test_format_command_result_renders_agent_list_as_bullets() -> None:
     payload = format_command_result(
         "/master-agent-list",
         CommandResult(
@@ -140,9 +140,10 @@ def test_format_command_result_renders_agent_list_as_table() -> None:
         ),
     )
     assert "*Total agents:* 1" in payload
-    assert "name | state | channel | ref | runtime | container" in payload
+    assert "• *aidotfile-agent*" in payload
+    assert "state=`running`" in payload
     assert "aidotfile-agent" in payload
-    assert "```" in payload
+    assert "container=`agent-aidotfile-agent`" in payload
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:

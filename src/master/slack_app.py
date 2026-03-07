@@ -63,28 +63,18 @@ def _format_agent_list_table(result: CommandResult) -> str | None:
     if not agents:
         return ":white_check_mark: *No agents loaded.*"
 
-    header = [
-        "name",
-        "state",
-        "channel",
-        "ref",
-        "runtime",
-        "container",
-    ]
-    lines = [" | ".join(header), "-|-|-|-|-|-"]
+    lines = []
     for item in agents:
         if not isinstance(item, dict):
             continue
         lines.append(
-            " | ".join(
-                [
-                    _clip(item.get("name", "-"), 24),
-                    _clip(item.get("status", "-"), 12),
-                    _clip(item.get("channel_id", "-"), 14),
-                    _clip(item.get("repo_ref", "-"), 12),
-                    _clip(item.get("runtime", "-"), 10),
-                    _clip(item.get("container_name", "-"), 28),
-                ]
+            (
+                f"• *{_clip(item.get('name', '-'), 24)}*"
+                f" | state=`{_clip(item.get('status', '-'), 12)}`"
+                f" | channel=`{_clip(item.get('channel_id', '-'), 14)}`"
+                f" | ref=`{_clip(item.get('repo_ref', '-'), 12)}`"
+                f" | runtime=`{_clip(item.get('runtime', '-'), 10)}`"
+                f" | container=`{_clip(item.get('container_name', '-'), 28)}`"
             )
         )
 
@@ -92,9 +82,7 @@ def _format_agent_list_table(result: CommandResult) -> str | None:
         [
             f":white_check_mark: */master-agent-list*",
             f"*Total agents:* {len(agents)}",
-            "```",
             *lines,
-            "```",
         ]
     )
 
