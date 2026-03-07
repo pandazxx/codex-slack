@@ -120,6 +120,7 @@ Required env for worker init:
 
 ## Next Reading
 - Build and setup: `BUILD.md`
+- Canonical documentation map: `docs/DOCUMENTATION_INDEX.md`
 - Tutorials and release checklist: `docs/TUTORIALS.md`
 - Detailed Slack app configuration: `docs/SLACK_SETUP.md`
 - Logging configuration: `docs/LOGGING.md`

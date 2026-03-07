@@ -9,7 +9,7 @@ Validate end-to-end v1 behavior for:
 - policy enforcement and failure handling
 
 ## Test Environment
-- Master branch under test: `feat/master-agent-phase1-impl` build.
+- Master branch under test: current `master` (or release candidate tag under validation).
 - One Slack workspace with:
 - admin channel (example channel ID placeholder: `CADMIN`)
 - mapped agent channel (example channel ID placeholder: `CAGENT`)

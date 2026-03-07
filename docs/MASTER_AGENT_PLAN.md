@@ -1,6 +1,7 @@
 # Master-Agent Implementation Plan (Draft)
 
 This is a living phased plan for the master -> agent orchestration feature.
+For current operator-facing behavior and command surface, use `docs/DOCUMENTATION_INDEX.md` and `docs/MASTER_AGENT_RUNBOOK.md`.
 
 ## Design Freeze Status (v1)
 - Status: frozen for implementation.

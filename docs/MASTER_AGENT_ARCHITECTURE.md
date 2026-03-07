@@ -1,4 +1,4 @@
-# Master-Agent Architecture (Draft)
+# Master-Agent Architecture (Draft / Historical Context)
 
 This is a living design document for extending this project from a single Slack-connected agent into a master -> agent orchestration model.
 
@@ -27,16 +27,17 @@ This is a living design document for extending this project from a single Slack-
 - Master should not execute user coding prompts.
 - Agents should not manage other containers.
 
-## Proposed Slack UX (Master)
+## Implemented Slack UX (Master v1)
 - `/master-agent-list`
-- `/master-agent-load <name> <repo> <channel_id>`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch]`
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
-- `/master-agent-rm <name>`
 - `/master-agent-status <name>`
-- `/master-agent-logs <name>`
-- `/master-agent-bind <name> <channel_id>` (optional, if binding is not part of `load`)
-- `/master-agent-unbind <channel_id>` (optional)
+- `/master-agent-remove <name>`
+- `/master-agent-refresh-auth <name>`
+
+Historical note:
+- Earlier options such as `/master-agent-rm`, `/master-agent-logs`, and bind/unbind commands are design artifacts and are not part of the current implemented v1 command set.
 
 ## V1 Master Command Contract (Draft)
 This section defines the initial command surface to support the agreed v1 start flow.

@@ -151,7 +151,7 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 ```text
 /master-agent-refresh-auth <name>
 ```
-- This wipes the agent workspace `.codex` directory in the named volume and re-copies the current host `auth.json` into `/workspace/.codex/auth.json`.
+- This updates `/workspace/.codex/auth.json` in the agent workspace and preserves existing `.codex` session state files.
 - You do not need to remove the agent container for this recovery path.
 
 ### Rate-limited commands
