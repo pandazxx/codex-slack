@@ -29,5 +29,6 @@ Use this page as the source-of-truth map for v2.2 housekeeping.
 The following are design artifacts and may include non-implemented options:
 - `docs/MASTER_AGENT_ARCHITECTURE.md`
 - `docs/MASTER_AGENT_PLAN.md`
+- `docs/V3_0_MULTI_ADAPTER_FRONTEND_PLAN.md`
 
 Treat them as context/history, not operational source-of-truth.
