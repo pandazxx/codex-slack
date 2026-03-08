@@ -7,9 +7,12 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class MasterSettings:
+    frontends: set[str]
     slack_bot_token: str
     slack_app_token: str
+    discord_bot_token: str | None
     admin_channels: set[str]
+    discord_admin_channels: set[str]
     registry_path: str
     thread_state_path: str
     dry_run: bool
@@ -36,9 +39,19 @@ def _parse_bool(raw_value: str) -> bool:
 
 
 def load_master_settings() -> MasterSettings:
+    raw_frontends = os.getenv("MASTER_FRONTENDS", "slack").strip()
+    frontends = {item.strip().lower() for item in raw_frontends.split(",") if item.strip()}
+    if not frontends:
+        frontends = {"slack"}
+    unsupported_frontends = frontends - {"slack", "discord"}
+    if unsupported_frontends:
+        raise ValueError(f"Unsupported frontend(s): {', '.join(sorted(unsupported_frontends))}")
+
     bot_token = os.getenv("SLACK_BOT_TOKEN", "").strip()
     app_token = os.getenv("SLACK_APP_TOKEN", "").strip()
+    discord_bot_token = os.getenv("DISCORD_BOT_TOKEN", "").strip() or None
     admin_channels = _parse_admin_channels(os.getenv("MASTER_ADMIN_CHANNELS", ""))
+    discord_admin_channels = _parse_admin_channels(os.getenv("DISCORD_ADMIN_CHANNELS", ""))
     registry_path = os.getenv("MASTER_REGISTRY_PATH", "data/master/agents.json").strip()
     thread_state_path = os.getenv("MASTER_THREAD_STATE_PATH", "").strip()
     if not thread_state_path:
@@ -73,19 +86,28 @@ def load_master_settings() -> MasterSettings:
         command_rate_limit_window_seconds = 60
 
     missing: list[str] = []
-    if not bot_token:
-        missing.append("SLACK_BOT_TOKEN")
-    if not app_token:
-        missing.append("SLACK_APP_TOKEN")
-    if not admin_channels:
-        missing.append("MASTER_ADMIN_CHANNELS")
+    if "slack" in frontends:
+        if not bot_token:
+            missing.append("SLACK_BOT_TOKEN")
+        if not app_token:
+            missing.append("SLACK_APP_TOKEN")
+        if not admin_channels:
+            missing.append("MASTER_ADMIN_CHANNELS")
+    if "discord" in frontends:
+        if not discord_bot_token:
+            missing.append("DISCORD_BOT_TOKEN")
+        if not discord_admin_channels:
+            missing.append("DISCORD_ADMIN_CHANNELS")
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
     return MasterSettings(
+        frontends=frontends,
         slack_bot_token=bot_token,
         slack_app_token=app_token,
+        discord_bot_token=discord_bot_token,
         admin_channels=admin_channels,
+        discord_admin_channels=discord_admin_channels,
         registry_path=registry_path,
         thread_state_path=thread_state_path,
         dry_run=dry_run,

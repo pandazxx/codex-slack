@@ -23,6 +23,7 @@ class AgentRecord:
     runtime: str
     image_plan: dict[str, Any]
     status: str
+    platform: str = "slack"
     agent_adapter: str = "codex"
     repo_source: str = ""
     repo_ref: str = "main"
@@ -101,8 +102,8 @@ class AgentRegistry:
             self._write_data_unlocked(data)
             return True
 
-    def find_by_channel(self, channel_id: str) -> AgentRecord | None:
+    def find_by_channel(self, channel_id: str, platform: str = "slack") -> AgentRecord | None:
         for record in self.list_agents():
-            if record.channel_id == channel_id:
+            if record.channel_id == channel_id and record.platform == platform:
                 return record
         return None

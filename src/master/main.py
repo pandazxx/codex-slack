@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+from threading import Thread
 
 from dotenv import load_dotenv
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .config import load_master_settings
+from .discord_app import run_discord_frontend
 from .registry import AgentRegistry
 from .router import ChannelRouter, MultiAgentDispatcher, PodmanExecDispatcher
 from .runtime_adapter import PodmanRuntimeAdapter
@@ -36,10 +38,12 @@ def main() -> None:
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup registry_path=%s thread_state_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s default_adapter=%s bot_token=%s app_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        "master.startup frontends=%s registry_path=%s thread_state_path=%s admin_channels=%s discord_admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s default_adapter=%s bot_token=%s app_token=%s discord_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        ",".join(sorted(settings.frontends)),
         settings.registry_path,
         settings.thread_state_path,
         ",".join(sorted(settings.admin_channels)),
+        ",".join(sorted(settings.discord_admin_channels)),
         settings.dry_run,
         settings.agent_base_image,
         settings.agent_codex_auth_json_path or "-",
@@ -50,6 +54,7 @@ def main() -> None:
         settings.default_agent_adapter,
         mask_token(settings.slack_bot_token),
         mask_token(settings.slack_app_token),
+        mask_token(settings.discord_bot_token or ""),
         settings.dispatch_timeout_seconds,
         settings.command_rate_limit_count,
         settings.command_rate_limit_window_seconds,
@@ -92,16 +97,37 @@ def main() -> None:
         window_seconds=settings.command_rate_limit_window_seconds,
     )
 
-    app = create_master_app(
-        bot_token=settings.slack_bot_token,
-        admin_channels=settings.admin_channels,
-        service=service,
-        router=router,
-        rate_limiter=rate_limiter,
-    )
-    logging.getLogger(__name__).info("master.socket_mode_starting")
-    handler = SocketModeHandler(app, settings.slack_app_token)
-    handler.start()
+    threads: list[Thread] = []
+    if "slack" in settings.frontends:
+        app = create_master_app(
+            bot_token=settings.slack_bot_token,
+            admin_channels=settings.admin_channels,
+            service=service,
+            router=router,
+            rate_limiter=rate_limiter,
+        )
+        handler = SocketModeHandler(app, settings.slack_app_token)
+        slack_thread = Thread(target=handler.start, name="frontend-slack", daemon=True)
+        slack_thread.start()
+        threads.append(slack_thread)
+        logging.getLogger(__name__).info("master.frontend_started name=slack")
+
+    if "discord" in settings.frontends:
+        discord_thread = Thread(
+            target=run_discord_frontend,
+            kwargs={"bot_token": settings.discord_bot_token or "", "router": router},
+            name="frontend-discord",
+            daemon=True,
+        )
+        discord_thread.start()
+        threads.append(discord_thread)
+        logging.getLogger(__name__).info("master.frontend_started name=discord")
+
+    if not threads:
+        raise RuntimeError("No frontends enabled")
+
+    for thread in threads:
+        thread.join()
 
 
 if __name__ == "__main__":

@@ -44,6 +44,27 @@ def test_registry_find_by_channel(tmp_path) -> None:
     assert match.name == "payments-api"
 
 
+def test_registry_find_by_channel_is_platform_scoped(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    registry.upsert(
+        AgentRecord(
+            name="payments-discord",
+            repo_path="/tmp/repo",
+            channel_id="123456789012345678",
+            container_name="agent-payments-discord",
+            runtime="podman",
+            image_plan={"type": "default", "image": "codex-slack-bot:latest"},
+            status="loaded",
+            platform="discord",
+        )
+    )
+
+    assert registry.find_by_channel("123456789012345678", platform="slack") is None
+    match = registry.find_by_channel("123456789012345678", platform="discord")
+    assert match is not None
+    assert match.name == "payments-discord"
+
+
 def test_registry_creates_lock_file(tmp_path) -> None:
     registry_path = tmp_path / "agents.json"
     registry = AgentRegistry(registry_path)

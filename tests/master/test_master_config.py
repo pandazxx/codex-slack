@@ -6,9 +6,12 @@ from src.master.config import load_master_settings
 
 
 def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("MASTER_FRONTENDS", "slack,discord")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "discord-token")
     monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123,C999")
+    monkeypatch.setenv("DISCORD_ADMIN_CHANNELS", "123456789012345678")
     monkeypatch.setenv("MASTER_REGISTRY_PATH", "data/master/test.json")
     monkeypatch.setenv("MASTER_THREAD_STATE_PATH", "data/master/thread-state.json")
     monkeypatch.setenv("MASTER_DRY_RUN", "true")
@@ -26,9 +29,12 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     monkeypatch.setenv("MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS", "45")
 
     settings = load_master_settings()
+    assert settings.frontends == {"slack", "discord"}
     assert settings.slack_bot_token == "xoxb-token"
     assert settings.slack_app_token == "xapp-token"
+    assert settings.discord_bot_token == "discord-token"
     assert settings.admin_channels == {"C123", "C999"}
+    assert settings.discord_admin_channels == {"123456789012345678"}
     assert settings.registry_path == "data/master/test.json"
     assert settings.thread_state_path == "data/master/thread-state.json"
     assert settings.dry_run is True
@@ -47,6 +53,7 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
 
 
 def test_load_master_settings_requires_admin_channels(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("MASTER_FRONTENDS", "slack")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
     monkeypatch.delenv("MASTER_ADMIN_CHANNELS", raising=False)
@@ -56,6 +63,7 @@ def test_load_master_settings_requires_admin_channels(monkeypatch) -> None:  # t
 
 
 def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("MASTER_FRONTENDS", "slack")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
     monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123")
@@ -69,10 +77,20 @@ def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -
 
 
 def test_load_master_settings_rejects_unknown_default_agent_adapter(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("MASTER_FRONTENDS", "slack")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
     monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123")
     monkeypatch.setenv("MASTER_DEFAULT_AGENT_ADAPTER", "unknown")
 
     with pytest.raises(ValueError, match="MASTER_DEFAULT_AGENT_ADAPTER"):
+        load_master_settings()
+
+
+def test_load_master_settings_discord_frontend_requires_discord_fields(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("MASTER_FRONTENDS", "discord")
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("DISCORD_ADMIN_CHANNELS", raising=False)
+
+    with pytest.raises(ValueError, match="DISCORD_BOT_TOKEN"):
         load_master_settings()

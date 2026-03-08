@@ -62,9 +62,10 @@ class MasterService:
         repo_path: str,
         channel_id: str,
         repo_ref: str = "main",
+        platform: str = "slack",
         agent_adapter: str | None = None,
     ) -> CommandResult:
-        validation_error = self._validate_load_inputs(name=name, channel_id=channel_id)
+        validation_error = self._validate_load_inputs(name=name, channel_id=channel_id, platform=platform)
         if validation_error:
             self._audit(command="load", agent=name or "-", result=validation_error)
             return validation_error
@@ -96,13 +97,13 @@ class MasterService:
             self._audit(command="load", agent=name, result=result)
             return result
 
-        conflict = self._registry.find_by_channel(channel_id)
+        conflict = self._registry.find_by_channel(channel_id, platform=platform)
         if conflict and conflict.name != name:
             result = CommandResult(
                 ok=False,
                 code="ERR_CHANNEL_CONFLICT",
-                message=f"channel {channel_id} already bound to {conflict.name}",
-                data={"owner": conflict.name},
+                message=f"channel {platform}:{channel_id} already bound to {conflict.name}",
+                data={"owner": conflict.name, "platform": platform},
             )
             self._audit(command="load", agent=name, result=result)
             return result
@@ -119,6 +120,7 @@ class MasterService:
                 runtime=DEFAULT_RUNTIME,
                 image_plan=image_plan,
                 status="loaded",
+                platform=platform,
                 agent_adapter=selected_adapter,
                 repo_source=repo_source,
                 repo_ref=resolved_repo_ref,
@@ -126,6 +128,7 @@ class MasterService:
         else:
             record.repo_path = str(checkout_path)
             record.channel_id = channel_id
+            record.platform = platform
             record.image_plan = image_plan
             record.status = "loaded"
             record.last_error = None
@@ -141,6 +144,7 @@ class MasterService:
             data={
                 "state": saved.status,
                 "image_plan": saved.image_plan,
+                "platform": saved.platform,
                 "channel_id": saved.channel_id,
                 "repo_ref": saved.repo_ref,
                 "agent_adapter": saved.agent_adapter,
@@ -317,7 +321,7 @@ class MasterService:
         self._audit(command="refresh-auth", agent=name, result=result)
         return result
 
-    def _validate_load_inputs(self, *, name: str, channel_id: str) -> CommandResult | None:
+    def _validate_load_inputs(self, *, name: str, channel_id: str, platform: str) -> CommandResult | None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,30}", name):
             return CommandResult(
                 ok=False,
@@ -325,11 +329,25 @@ class MasterService:
                 message="invalid agent name",
                 data={"field": "name"},
             )
-        if not channel_id.startswith(("C", "G")):
+        if platform not in {"slack", "discord"}:
+            return CommandResult(
+                ok=False,
+                code="ERR_INVALID_ARGS",
+                message="invalid platform",
+                data={"field": "platform"},
+            )
+        if platform == "slack" and not channel_id.startswith(("C", "G")):
             return CommandResult(
                 ok=False,
                 code="ERR_INVALID_ARGS",
                 message="invalid channel id",
+                data={"field": "channel_id"},
+            )
+        if platform == "discord" and not re.fullmatch(r"[0-9]{6,}", channel_id):
+            return CommandResult(
+                ok=False,
+                code="ERR_INVALID_ARGS",
+                message="invalid discord channel id",
                 data={"field": "channel_id"},
             )
         return None

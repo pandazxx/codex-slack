@@ -299,46 +299,60 @@ class ChannelRouter:
     def extract_prompt(self, text: str) -> str:
         return MENTION_PATTERN.sub("", text).strip()
 
-    def _thread_key(self, channel_id: str, thread_ts: str) -> str:
+    def _thread_key(self, platform: str, channel_id: str, thread_ts: str) -> str:
+        return f"{platform}:{channel_id}:{thread_ts}"
+
+    def _legacy_thread_key(self, channel_id: str, thread_ts: str) -> str:
         return f"{channel_id}:{thread_ts}"
 
-    def _event_key(self, channel_id: str, ts: str) -> str:
+    def _event_key(self, platform: str, channel_id: str, ts: str) -> str:
+        return f"{platform}:{channel_id}:{ts}"
+
+    def _legacy_event_key(self, channel_id: str, ts: str) -> str:
         return f"{channel_id}:{ts}"
 
-    def track_thread(self, channel_id: str, thread_ts: str | None) -> None:
+    def track_thread(self, channel_id: str, thread_ts: str | None, platform: str = "slack") -> None:
         if not thread_ts:
             return
         with self._state_lock:
-            self._tracked_threads.add(self._thread_key(channel_id, thread_ts))
+            self._tracked_threads.add(self._thread_key(platform, channel_id, thread_ts))
             self._persist_tracked_threads_unlocked()
 
-    def is_tracked_thread(self, channel_id: str, thread_ts: str | None) -> bool:
+    def is_tracked_thread(self, channel_id: str, thread_ts: str | None, platform: str = "slack") -> bool:
         if not thread_ts:
             return False
         with self._state_lock:
-            return self._thread_key(channel_id, thread_ts) in self._tracked_threads
+            return (
+                self._thread_key(platform, channel_id, thread_ts) in self._tracked_threads
+                or self._legacy_thread_key(channel_id, thread_ts) in self._tracked_threads
+            )
 
-    def mark_mention_event(self, channel_id: str, ts: str | None) -> None:
+    def mark_mention_event(self, channel_id: str, ts: str | None, platform: str = "slack") -> None:
         if not ts:
             return
         with self._state_lock:
-            self._recent_mention_events.add(self._event_key(channel_id, ts))
+            self._recent_mention_events.add(self._event_key(platform, channel_id, ts))
             if len(self._recent_mention_events) > 256:
                 self._recent_mention_events = set(list(self._recent_mention_events)[-128:])
 
-    def consume_marked_mention_event(self, channel_id: str, ts: str | None) -> bool:
+    def consume_marked_mention_event(self, channel_id: str, ts: str | None, platform: str = "slack") -> bool:
         if not ts:
             return False
-        key = self._event_key(channel_id, ts)
+        key = self._event_key(platform, channel_id, ts)
+        legacy_key = self._legacy_event_key(channel_id, ts)
         with self._state_lock:
-            if key not in self._recent_mention_events:
-                return False
-            self._recent_mention_events.remove(key)
-            return True
+            if key in self._recent_mention_events:
+                self._recent_mention_events.remove(key)
+                return True
+            if legacy_key in self._recent_mention_events:
+                self._recent_mention_events.remove(legacy_key)
+                return True
+            return False
 
     def route_prompt(
         self,
         *,
+        platform: str = "slack",
         channel_id: str,
         text: str,
         thread_ts: str | None,
@@ -348,9 +362,9 @@ class ChannelRouter:
         if channel_id in self.admin_channels:
             raise RouteSkip("admin channel is reserved for master commands")
 
-        record = self.registry.find_by_channel(channel_id)
+        record = self.registry.find_by_channel(channel_id, platform=platform)
         if not record:
-            raise RouteSkip(f"no mapped agent for channel {channel_id}")
+            raise RouteSkip(f"no mapped agent for channel {platform}:{channel_id}")
 
         prompt = self.extract_prompt(text)
         image_urls = image_urls or []
@@ -381,6 +395,7 @@ class ChannelRouter:
     def route_mention_message(
         self,
         *,
+        platform: str = "slack",
         channel_id: str,
         text: str,
         thread_ts: str | None,
@@ -388,9 +403,10 @@ class ChannelRouter:
         user_id: str | None,
         image_urls: list[str] | None = None,
     ) -> str:
-        self.track_thread(channel_id=channel_id, thread_ts=thread_ts)
-        self.mark_mention_event(channel_id=channel_id, ts=event_ts)
+        self.track_thread(channel_id=channel_id, thread_ts=thread_ts, platform=platform)
+        self.mark_mention_event(channel_id=channel_id, ts=event_ts, platform=platform)
         return self.route_prompt(
+            platform=platform,
             channel_id=channel_id,
             text=text,
             thread_ts=thread_ts,
@@ -401,6 +417,7 @@ class ChannelRouter:
     def route_followup_message(
         self,
         *,
+        platform: str = "slack",
         channel_id: str,
         text: str,
         thread_ts: str | None,
@@ -411,11 +428,12 @@ class ChannelRouter:
         image_urls = image_urls or []
         if not thread_ts or not user_id or (not text and not image_urls):
             return None
-        if self.consume_marked_mention_event(channel_id=channel_id, ts=event_ts):
+        if self.consume_marked_mention_event(channel_id=channel_id, ts=event_ts, platform=platform):
             return None
-        if not self.is_tracked_thread(channel_id=channel_id, thread_ts=thread_ts):
+        if not self.is_tracked_thread(channel_id=channel_id, thread_ts=thread_ts, platform=platform):
             return None
         return self.route_prompt(
+            platform=platform,
             channel_id=channel_id,
             text=text,
             thread_ts=thread_ts,

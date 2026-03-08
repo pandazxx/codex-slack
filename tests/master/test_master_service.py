@@ -113,6 +113,42 @@ def test_load_agent_rejects_unsupported_adapter(tmp_path) -> None:
     assert result.code == "ERR_INVALID_ARGS"
 
 
+def test_load_agent_supports_discord_platform_channel_id(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(
+        name="payments-api",
+        repo_path=str(repo),
+        channel_id="123456789012345678",
+        platform="discord",
+    )
+    assert result.ok is True
+    assert result.data["platform"] == "discord"
+
+
+def test_load_agent_rejects_invalid_discord_channel_id(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(
+        name="payments-api",
+        repo_path=str(repo),
+        channel_id="C123",
+        platform="discord",
+    )
+    assert result.ok is False
+    assert result.code == "ERR_INVALID_ARGS"
+
+
 def test_load_agent_channel_conflict(tmp_path) -> None:
     repo_a = tmp_path / "repo-a"
     repo_b = tmp_path / "repo-b"

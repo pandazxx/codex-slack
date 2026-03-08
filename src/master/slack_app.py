@@ -223,6 +223,7 @@ def create_master_app(
             try:
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
                 response = router.route_mention_message(
+                    platform="slack",
                     channel_id=channel_id,
                     text=text,
                     thread_ts=thread_ts,
@@ -291,6 +292,7 @@ def create_master_app(
                     subtype or "-",
                 )
                 response = router.route_followup_message(
+                    platform="slack",
                     channel_id=channel_id,
                     text=text,
                     thread_ts=thread_ts,

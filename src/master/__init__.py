@@ -9,6 +9,7 @@ __all__ = [
     "command_dispatch",
     "command_format",
     "slack_app",
+    "discord_app",
     "router",
     "main",
 ]

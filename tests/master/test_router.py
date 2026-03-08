@@ -247,6 +247,16 @@ def test_route_followup_message_requires_tracked_thread_and_not_deduped(tmp_path
     assert routed == "payments-agent:follow up"
 
 
+def test_thread_tracking_is_platform_scoped(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    router.track_thread(channel_id="shared", thread_ts="1730000000.1", platform="slack")
+    assert router.is_tracked_thread(channel_id="shared", thread_ts="1730000000.1", platform="slack") is True
+    assert router.is_tracked_thread(channel_id="shared", thread_ts="1730000000.1", platform="discord") is False
+
+
 def test_thread_tracking_persists_across_router_restarts(tmp_path) -> None:
     registry = AgentRegistry(tmp_path / "agents.json")
     dispatcher = FakeDispatcher()
