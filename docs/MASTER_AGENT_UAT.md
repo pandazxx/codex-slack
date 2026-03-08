@@ -1,11 +1,11 @@
-# Master-Agent UAT Test Cases (v1)
+# Master-Agent UAT Test Cases (v3.0)
 
 ## Purpose
-Validate end-to-end v1 behavior for:
+Validate end-to-end current behavior for:
 - containerized deployment and runtime wiring
 - master lifecycle control
 - agent startup and workspace initialization
-- Slack routing and thread continuity
+- Slack and Discord routing and thread continuity
 - policy enforcement and failure handling
 
 ## v3.0 UAT Checklist (Dual Frontend + Dual Adapter)
