@@ -448,7 +448,7 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
-            image_urls = extract_image_urls(event.get("files", []))
+            image_urls = extract_image_urls(event.get("files", []), event_ts)
 
             try:
                 router.track_thread(channel_id=channel_id, thread_ts=thread_ts)
@@ -487,7 +487,7 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
-            image_urls = extract_image_urls(event.get("files", []))
+            image_urls = extract_image_urls(event.get("files", []), event_ts)
             image_urls = select_thread_image_urls(image_urls, subtype)
             if image_urls:
                 LOGGER.info(
@@ -582,12 +582,36 @@ def create_master_app(
     return app
 
 
-def extract_image_urls(files: object) -> list[str]:
+def _file_matches_event_ts(file_item: dict, event_ts: str | None) -> bool:
+    if not event_ts:
+        return True
+    shares = file_item.get("shares")
+    if not isinstance(shares, dict):
+        return True
+
+    for scope in ("public", "private"):
+        channels = shares.get(scope)
+        if not isinstance(channels, dict):
+            continue
+        for entries in channels.values():
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("ts", "")) == event_ts:
+                    return True
+    return False
+
+
+def extract_image_urls(files: object, event_ts: str | None = None) -> list[str]:
     if not isinstance(files, list):
         return []
     urls: list[str] = []
     for item in files:
         if not isinstance(item, dict):
+            continue
+        if not _file_matches_event_ts(item, event_ts):
             continue
         mimetype = str(item.get("mimetype", ""))
         if not mimetype.startswith("image/"):
@@ -599,8 +623,8 @@ def extract_image_urls(files: object) -> list[str]:
 
 
 def select_thread_image_urls(image_urls: list[str], subtype: str | None) -> list[str]:
-    # For file_share thread events Slack can include multiple historical files;
-    # use the most recent URL to represent the current message payload.
+    # Keep all image URLs from the current message payload.
+    # Historical thread files are filtered earlier by event timestamp matching.
     if subtype == "file_share" and image_urls:
-        return [image_urls[-1]]
+        return image_urls
     return image_urls
