@@ -66,16 +66,21 @@ Local orchestrator CLI is available for early master-agent implementation work:
 - `python -m src.master.cli --registry data/master/agents.json --dry-run start <name>`
 - `python -m src.master.cli --registry data/master/agents.json --dry-run status <name>`
 
-## Master Slack Mode (Phase 3 WIP)
+## Master Frontend Mode
 Master control plane Socket Mode entrypoint:
 
 - `python -m src.master.main`
 
 Required env:
 
-- `SLACK_BOT_TOKEN`
-- `SLACK_APP_TOKEN`
+- `MASTER_FRONTEND` (`slack` default, or `discord`)
 - `MASTER_ADMIN_CHANNELS` (comma-separated channel IDs)
+- `MASTER_AGENT_ADAPTER` (`codex` default)
+- For Slack frontend:
+  - `SLACK_BOT_TOKEN`
+  - `SLACK_APP_TOKEN`
+- For Discord frontend:
+  - `DISCORD_BOT_TOKEN`
 - `podman` CLI available inside the master runtime image/container when using real lifecycle operations
 - For rootless Podman socket access in a containerized master, use `--userns=keep-id --security-opt label=disable` and mount `/run/user/<uid>/podman/podman.sock`
 - Optional: `MASTER_AGENT_BASE_IMAGE` (default `codex-slack-bot:latest`; set this to the rebuilt image tag you want agent containers to run, e.g. `codex-slack-v1-uat`)
@@ -84,6 +89,7 @@ Required env:
 - Optional: `MASTER_SSH_KNOWN_HOSTS_PATH` (host path to `known_hosts`; mounted into agents as `/run/secrets/ssh_known_hosts:ro`. If omitted, SSH defaults to `StrictHostKeyChecking=no` with `/dev/null` known hosts.)
 - Optional: `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` (passed into agents and written to repo-local `git config user.name` / `user.email` during worker startup)
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
+- Optional: `MASTER_THREAD_STATE_PATH` (default `data/master/thread_state.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
 - Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec --dangerously-bypass-approvals-and-sandbox resume --last -`)
 - Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
