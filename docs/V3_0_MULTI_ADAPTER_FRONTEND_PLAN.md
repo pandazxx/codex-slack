@@ -196,9 +196,43 @@ Add or revise settings:
   - `DISCORD_APPLICATION_ID`
   - `DISCORD_ADMIN_CHANNELS` (Discord IDs)
 - Agent adapters:
-  - `MASTER_ADAPTERS=codex,claude-code`
-  - `MASTER_CODEX_COMMAND_TEMPLATE`
-  - `MASTER_CLAUDE_COMMAND_TEMPLATE`
+- `MASTER_ADAPTERS=codex,claude-code`
+- `MASTER_CODEX_COMMAND_TEMPLATE`
+- `MASTER_CLAUDE_COMMAND_TEMPLATE`
+
+## Slack vs Discord Mapping
+
+| Concept | Slack | Discord | Notes |
+|---|---|---|---|
+| Workspace/server | Workspace | Guild (Server) | Top-level container |
+| Channel ID | `C...` | Snowflake ID (numeric string) | Persist as string in registry |
+| Admin channel allowlist | `MASTER_ADMIN_CHANNELS` | `DISCORD_ADMIN_CHANNELS` | Keep separate allowlists |
+| Mention trigger | `app_mention` | `on_message` + bot mention | Starts tracked conversation context |
+| Thread identifier | `thread_ts` | message/thread ID | Normalize to internal `thread_id` |
+| Message ID | `ts` | message ID | Used in dedupe keys |
+| Slash commands | Slack Slash Commands | Discord Application Commands | Maintain `/master-agent-*` parity |
+| Reply primitives | `say/respond` | interaction response / message reply | Adapter hides platform differences |
+| Image attachments | `files[]` + `url_private(_download)` | `attachments[]` + `url` | Normalize to `image_urls[]` |
+| Bot token | `SLACK_BOT_TOKEN` | `DISCORD_BOT_TOKEN` | Frontend-specific secret |
+| Event transport | Socket Mode (`SLACK_APP_TOKEN`) | Discord Gateway | Different ingress, same normalized model |
+
+## Discord Prerequisites
+
+| Prerequisite | Required Value / Setup |
+|---|---|
+| Frontend enablement | `MASTER_FRONTENDS=slack,discord` |
+| Discord bot token | `DISCORD_BOT_TOKEN` |
+| Discord application id | `DISCORD_APPLICATION_ID` |
+| Discord admin channels | `DISCORD_ADMIN_CHANNELS` (comma-separated channel IDs) |
+| Agent adapters enabled | `MASTER_ADAPTERS=codex,claude-code` |
+| Claude command template | `MASTER_CLAUDE_COMMAND_TEMPLATE` |
+| Codex command template | `MASTER_CODEX_COMMAND_TEMPLATE` |
+| Gateway intents | Enable Message Content intent and required guild/message intents |
+| OAuth2 scopes | `bot`, `applications.commands` |
+| Bot permissions | View channels, send messages, read message history, thread permissions if threads are used |
+| Command registration | Register Discord application commands for full `/master-agent-*` parity |
+| Channel ID extraction | Enable Discord developer mode to copy channel IDs |
+| Runtime dependency | `discord.py` installed in master runtime image |
 
 ## Delivery Phases
 
@@ -261,4 +295,3 @@ Add or revise settings:
 - [ ] Confirm Discord thread/reply mapping semantics for `thread_id`.
 - [ ] Confirm Claude command template defaults.
 - [ ] Confirm migration behavior for existing `agents.json`.
-
