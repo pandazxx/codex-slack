@@ -13,6 +13,7 @@ from src.master.slack_app import (
     is_supported_thread_subtype,
     parse_load_text,
     parse_status_text,
+    select_thread_image_urls,
 )
 
 
@@ -258,6 +259,14 @@ def test_extract_image_urls_only_keeps_image_files() -> None:
         ]
     )
     assert urls == ["https://files.slack.com/a-download.png"]
+
+
+def test_select_thread_image_urls_uses_latest_for_file_share() -> None:
+    selected = select_thread_image_urls(
+        ["https://files.slack.com/first.png", "https://files.slack.com/second.png"],
+        "file_share",
+    )
+    assert selected == ["https://files.slack.com/second.png"]
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:

@@ -488,6 +488,16 @@ def create_master_app(
             text = event.get("text", "")
             user_id = event.get("user", "")
             image_urls = extract_image_urls(event.get("files", []))
+            image_urls = select_thread_image_urls(image_urls, subtype)
+            if image_urls:
+                LOGGER.info(
+                    "thread image payload channel=%s thread_ts=%s subtype=%s image_count=%d first_image=%s",
+                    channel_id or "-",
+                    thread_ts or "-",
+                    subtype or "-",
+                    len(image_urls),
+                    image_urls[0],
+                )
 
             if not thread_ts or not user_id or (not text and not image_urls):
                 LOGGER.info(
@@ -586,3 +596,11 @@ def extract_image_urls(files: object) -> list[str]:
         if url:
             urls.append(url)
     return urls
+
+
+def select_thread_image_urls(image_urls: list[str], subtype: str | None) -> list[str]:
+    # For file_share thread events Slack can include multiple historical files;
+    # use the most recent URL to represent the current message payload.
+    if subtype == "file_share" and image_urls:
+        return [image_urls[-1]]
+    return image_urls

@@ -204,7 +204,7 @@ class PodmanExecDispatcher:
             parsed = urlparse(url)
             ext = os.path.splitext(parsed.path)[1] or ".bin"
             rel_dir = f".slack_images/{session_id}"
-            rel_path = f"{rel_dir}/{idx}{ext}"
+            rel_path = f"{rel_dir}/{time.time_ns()}-{idx}{ext}"
             target = f"{self.workdir.rstrip('/')}/{rel_path}" if self.workdir else rel_path
             try:
                 self._run_quiet(["podman", "exec", container_name, "sh", "-lc", f"mkdir -p '{self.workdir.rstrip('/')}/{rel_dir}'"])
