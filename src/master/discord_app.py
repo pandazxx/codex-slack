@@ -145,8 +145,10 @@ def run_discord_frontend(
         repo_path: str,
         channel_id: str,
         branch: str = "main",
+        platform: str = "slack",
+        adapter: str = "codex",
     ) -> None:  # type: ignore[no-untyped-def]
-        text = f"{name} {repo_path} {channel_id} {branch}".strip()
+        text = f"{name} {repo_path} {channel_id} {branch} --platform {platform} --adapter {adapter}".strip()
         messages = _run_command(
             command_name="/master-agent-load",
             text=text,

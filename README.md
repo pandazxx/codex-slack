@@ -73,9 +73,14 @@ Master control plane Socket Mode entrypoint:
 
 Required env:
 
-- `SLACK_BOT_TOKEN`
-- `SLACK_APP_TOKEN`
-- `MASTER_ADMIN_CHANNELS` (comma-separated channel IDs)
+- `MASTER_FRONTENDS` (comma-separated: `slack`, `discord`; default `slack`)
+- Slack frontend requires:
+  - `SLACK_BOT_TOKEN`
+  - `SLACK_APP_TOKEN`
+  - `MASTER_ADMIN_CHANNELS` (comma-separated Slack channel IDs)
+- Discord frontend requires:
+  - `DISCORD_BOT_TOKEN`
+  - `DISCORD_ADMIN_CHANNELS` (comma-separated Discord channel IDs)
 - `podman` CLI available inside the master runtime image/container when using real lifecycle operations
 - For rootless Podman socket access in a containerized master, use `--userns=keep-id --security-opt label=disable` and mount `/run/user/<uid>/podman/podman.sock`
 - Optional: `MASTER_AGENT_BASE_IMAGE` (default `codex-slack-bot:latest`; set this to the rebuilt image tag you want agent containers to run, e.g. `codex-slack-v1-uat`)
@@ -95,9 +100,9 @@ Required env:
 - For a Compose-based master runtime, use `docker-compose.master-agent.example.yml` (Podman Compose-oriented example for the v1 master container)
   Set `MASTER_RUNTIME_IMAGE` to override the master container image tag used by that compose example.
 
-Admin slash commands:
+Admin slash commands (Slack + Discord parity):
 - `/master-agent-list`
-- `/master-agent-load <name> <repo_path> <channel_id> [branch]`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
 - `/master-agent-status <name>`
@@ -110,7 +115,7 @@ Operator notes:
 - `/master-agent-status <name> --full` returns chunked full JSON output across multiple Slack messages.
 - Image attachments in mapped channel conversations are forwarded to agents as `url_private` references appended to the prompt.
 - For Slack private image fetch, ensure bot scope includes `files:read`.
-- Agent records now persist an `agent_adapter` field; default is `codex`.
+- Agent records persist `platform` and `agent_adapter` fields (defaults: `slack`, `codex`).
 - For lean worker deployments, this repo includes `Dockerfile.agent-minimal`.
 - CI/CD workflow `.github/workflows/publish-agent-minimal.yml` publishes the minimal agent image to `ghcr.io/<owner>/codex-slack-agent-minimal` on `master` and version tags.
 

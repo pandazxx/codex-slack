@@ -26,12 +26,28 @@ class FakeMasterService:
     def list_agents(self) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="listed", data={"agents": []})
 
-    def load_agent(self, *, name: str, repo_path: str, channel_id: str, repo_ref: str = "main") -> CommandResult:
+    def load_agent(
+        self,
+        *,
+        name: str,
+        repo_path: str,
+        channel_id: str,
+        repo_ref: str = "main",
+        platform: str = "slack",
+        agent_adapter: str | None = None,
+    ) -> CommandResult:
         return CommandResult(
             ok=True,
             code="OK",
             message="loaded",
-            data={"name": name, "repo_path": repo_path, "channel_id": channel_id, "repo_ref": repo_ref},
+            data={
+                "name": name,
+                "repo_path": repo_path,
+                "channel_id": channel_id,
+                "repo_ref": repo_ref,
+                "platform": platform,
+                "agent_adapter": agent_adapter,
+            },
         )
 
     def start_agent(self, *, name: str) -> CommandResult:
@@ -63,13 +79,34 @@ def test_is_supported_thread_subtype_allows_file_share() -> None:
 
 
 def test_parse_load_text_requires_three_args() -> None:
-    name, repo_path, channel_id, repo_ref = parse_load_text("payments /tmp/repo C123")
-    assert (name, repo_path, channel_id, repo_ref) == ("payments", "/tmp/repo", "C123", "main")
+    name, repo_path, channel_id, repo_ref, platform, adapter = parse_load_text("payments /tmp/repo C123")
+    assert (name, repo_path, channel_id, repo_ref, platform, adapter) == ("payments", "/tmp/repo", "C123", "main", "slack", None)
 
 
 def test_parse_load_text_accepts_optional_branch() -> None:
-    name, repo_path, channel_id, repo_ref = parse_load_text("payments /tmp/repo C123 master")
-    assert (name, repo_path, channel_id, repo_ref) == ("payments", "/tmp/repo", "C123", "master")
+    name, repo_path, channel_id, repo_ref, platform, adapter = parse_load_text("payments /tmp/repo C123 master")
+    assert (name, repo_path, channel_id, repo_ref, platform, adapter) == (
+        "payments",
+        "/tmp/repo",
+        "C123",
+        "master",
+        "slack",
+        None,
+    )
+
+
+def test_parse_load_text_accepts_platform_and_adapter_flags() -> None:
+    parsed = parse_load_text(
+        "payments /tmp/repo 123456789012345678 release/1 --platform discord --adapter claude-code"
+    )
+    assert parsed == (
+        "payments",
+        "/tmp/repo",
+        "123456789012345678",
+        "release/1",
+        "discord",
+        "claude-code",
+    )
 
 
 def test_parse_status_text_accepts_full_flag() -> None:
@@ -90,6 +127,21 @@ def test_dispatch_load_command() -> None:
     result = dispatch_slash_command(service, request)
     assert result.ok is True
     assert result.data["name"] == "payments"
+
+
+def test_dispatch_load_command_with_platform_and_adapter_flags() -> None:
+    service = FakeMasterService()
+    request = SlackCommandRequest(
+        command_name="/master-agent-load",
+        text="payments /tmp/repo 123456789012345678 main --platform discord --adapter claude-code",
+        channel_id="CADMIN",
+        user_id="U1",
+    )
+
+    result = dispatch_slash_command(service, request)
+    assert result.ok is True
+    assert result.data["platform"] == "discord"
+    assert result.data["agent_adapter"] == "claude-code"
 
 
 def test_dispatch_list_command() -> None:

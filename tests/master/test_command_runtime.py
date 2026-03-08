@@ -9,7 +9,16 @@ class FakeService:
     def list_agents(self) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="listed", data={"agents": []})
 
-    def load_agent(self, *, name: str, repo_path: str, channel_id: str, repo_ref: str = "main") -> CommandResult:
+    def load_agent(
+        self,
+        *,
+        name: str,
+        repo_path: str,
+        channel_id: str,
+        repo_ref: str = "main",
+        platform: str = "slack",
+        agent_adapter: str | None = None,
+    ) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="loaded", data={"name": name})
 
     def start_agent(self, *, name: str) -> CommandResult:

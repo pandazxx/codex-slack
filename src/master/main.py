@@ -60,6 +60,9 @@ def main() -> None:
         settings.command_rate_limit_window_seconds,
     )
     registry = AgentRegistry(settings.registry_path)
+    migrated = registry.migrate_schema()
+    if migrated:
+        logging.getLogger(__name__).info("master.registry_schema_migrated path=%s", settings.registry_path)
     runtime = PodmanRuntimeAdapter(dry_run=settings.dry_run)
     service = MasterService(
         registry=registry,

@@ -58,26 +58,53 @@ class AgentRegistry:
 
     def _read_data_unlocked(self) -> dict[str, Any]:
         if not self._path.exists():
-            return {"agents": {}}
+            return {"schema_version": 2, "agents": {}}
         raw = json.loads(self._path.read_text(encoding="utf-8"))
         if "agents" not in raw or not isinstance(raw["agents"], dict):
             raise ValueError(f"Invalid registry format in {self._path}")
+        if "schema_version" not in raw:
+            raw["schema_version"] = 1
         return raw
 
     def _write_data_unlocked(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        data["schema_version"] = 2
         self._path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _normalize_agent_item(item: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(item)
+        normalized.setdefault("platform", "slack")
+        normalized.setdefault("agent_adapter", "codex")
+        return normalized
+
+    def migrate_schema(self) -> bool:
+        changed = False
+        with self._file_lock():
+            data = self._read_data_unlocked()
+            if data.get("schema_version") != 2:
+                changed = True
+            for name, item in list(data["agents"].items()):
+                if not isinstance(item, dict):
+                    continue
+                normalized = self._normalize_agent_item(item)
+                if normalized != item:
+                    data["agents"][name] = normalized
+                    changed = True
+            if changed:
+                self._write_data_unlocked(data)
+        return changed
 
     def list_agents(self) -> list[AgentRecord]:
         with self._file_lock():
             data = self._read_data_unlocked()
-        return [AgentRecord(**item) for item in data["agents"].values()]
+        return [AgentRecord(**self._normalize_agent_item(item)) for item in data["agents"].values()]
 
     def get(self, name: str) -> AgentRecord | None:
         with self._file_lock():
             data = self._read_data_unlocked()
         item = data["agents"].get(name)
-        return AgentRecord(**item) if item else None
+        return AgentRecord(**self._normalize_agent_item(item)) if item else None
 
     def upsert(self, record: AgentRecord) -> AgentRecord:
         with self._file_lock():
