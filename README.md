@@ -141,6 +141,7 @@ Required env for worker init:
 - Canonical documentation map: `docs/DOCUMENTATION_INDEX.md`
 - Tutorials and release checklist: `docs/TUTORIALS.md`
 - Detailed Slack app configuration: `docs/SLACK_SETUP.md`
+- Detailed Discord app configuration: `docs/DISCORD_SETUP.md`
 - Logging configuration: `docs/LOGGING.md`
 - Container runtime: `docs/CONTAINER.md`
 - Multi-agent setup (same Slack workspace): `docs/MULTI_AGENT_SETUP.md`

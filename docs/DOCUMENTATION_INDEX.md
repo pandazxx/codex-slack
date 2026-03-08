@@ -6,13 +6,14 @@ Use this page as the source-of-truth map for v2.2 housekeeping.
 - Product overview and command summary: `README.md`
 - Operator runbook (master/agent runtime): `docs/MASTER_AGENT_RUNBOOK.md`
 - Slack app setup for master mode: `docs/SLACK_SETUP.md`
+- Discord app setup for master mode: `docs/DISCORD_SETUP.md`
 - Build/setup for local bot mode: `BUILD.md`
 - Day-to-day usage and troubleshooting: `USAGE.md`
 - Hands-on tutorials and checklists: `docs/TUTORIALS.md`
 
 ## Canonical Master Command Set (Implemented)
 - `/master-agent-list`
-- `/master-agent-load <name> <repo_path> <channel_id> [branch]`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
 - `/master-agent-status <name>`
