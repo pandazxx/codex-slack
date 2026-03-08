@@ -62,7 +62,7 @@ podman compose -f docker-compose.yml -f docker-compose.podman.yml logs -f
 ## Tutorial 2: Master Agent Command Flow
 1. Start master: `python -m src.master.main` with `MASTER_ADMIN_CHANNELS` configured.
 2. Load an agent:
-   - `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`
+   - `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
 3. Start agent:
    - `/master-agent-start <name>`
 4. In the mapped channel, mention the master bot with a prompt.

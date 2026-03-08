@@ -108,7 +108,7 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 ## Agent Lifecycle (Admin Channel)
 1. Load mapping and image plan:
 ```text
-/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]
+/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]
 ```
 2. Start agent:
 ```text

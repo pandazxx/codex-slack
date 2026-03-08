@@ -79,32 +79,28 @@ def test_is_supported_thread_subtype_allows_file_share() -> None:
 
 
 def test_parse_load_text_requires_three_args() -> None:
-    name, repo_path, channel_id, repo_ref, platform, adapter = parse_load_text("payments /tmp/repo C123")
-    assert (name, repo_path, channel_id, repo_ref, platform, adapter) == ("payments", "/tmp/repo", "C123", "main", "slack", None)
+    name, repo_path, channel_id, repo_ref, adapter = parse_load_text("payments /tmp/repo C123")
+    assert (name, repo_path, channel_id, repo_ref, adapter) == ("payments", "/tmp/repo", "C123", "main", None)
 
 
 def test_parse_load_text_accepts_optional_branch() -> None:
-    name, repo_path, channel_id, repo_ref, platform, adapter = parse_load_text("payments /tmp/repo C123 master")
-    assert (name, repo_path, channel_id, repo_ref, platform, adapter) == (
+    name, repo_path, channel_id, repo_ref, adapter = parse_load_text("payments /tmp/repo C123 master")
+    assert (name, repo_path, channel_id, repo_ref, adapter) == (
         "payments",
         "/tmp/repo",
         "C123",
         "master",
-        "slack",
         None,
     )
 
 
-def test_parse_load_text_accepts_platform_and_adapter_flags() -> None:
-    parsed = parse_load_text(
-        "payments /tmp/repo 123456789012345678 release/1 --platform discord --adapter claude-code"
-    )
+def test_parse_load_text_accepts_adapter_flag() -> None:
+    parsed = parse_load_text("payments /tmp/repo C123 release/1 --adapter claude-code")
     assert parsed == (
         "payments",
         "/tmp/repo",
-        "123456789012345678",
+        "C123",
         "release/1",
-        "discord",
         "claude-code",
     )
 
@@ -133,14 +129,15 @@ def test_dispatch_load_command_with_platform_and_adapter_flags() -> None:
     service = FakeMasterService()
     request = SlackCommandRequest(
         command_name="/master-agent-load",
-        text="payments /tmp/repo 123456789012345678 main --platform discord --adapter claude-code",
+        text="payments /tmp/repo C123 main --adapter claude-code",
         channel_id="CADMIN",
         user_id="U1",
+        platform="slack",
     )
 
     result = dispatch_slash_command(service, request)
     assert result.ok is True
-    assert result.data["platform"] == "discord"
+    assert result.data["platform"] == "slack"
     assert result.data["agent_adapter"] == "claude-code"
 
 

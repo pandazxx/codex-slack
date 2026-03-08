@@ -67,7 +67,8 @@ For each command:
 5. Save.
 
 Load command syntax:
-- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
+- Platform is inferred as `slack` because the command runs in Slack.
 
 ## 6. Install App to Workspace
 1. Open **Install App**.
@@ -127,7 +128,7 @@ python -m src.master.main
 3. Confirm a JSON response is posted.
 4. Run (branch optional; defaults to `main`, then falls back to `master`):
 ```text
-/master-agent-load <name> <repo_path> <agent_channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]
+/master-agent-load <name> <repo_path> <agent_channel_id> [branch] [--adapter codex|claude-code]
 ```
 5. Run:
 ```text

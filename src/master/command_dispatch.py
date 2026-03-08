@@ -11,27 +11,21 @@ class MasterCommandRequest:
     text: str
     channel_id: str
     user_id: str
+    platform: str = "slack"
 
 
-def parse_load_text(text: str) -> tuple[str, str, str, str, str, str | None]:
+def parse_load_text(text: str) -> tuple[str, str, str, str, str | None]:
     parts = [part.strip() for part in text.split() if part.strip()]
     if len(parts) < 3:
         raise ValueError(
-            "usage: /master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]"
+            "usage: /master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]"
         )
     name, repo_path, channel_id = parts[0], parts[1], parts[2]
     repo_ref = "main"
-    platform = "slack"
     adapter: str | None = None
     idx = 3
     while idx < len(parts):
         token = parts[idx]
-        if token == "--platform":
-            if idx + 1 >= len(parts):
-                raise ValueError("usage: /master-agent-load ... --platform <slack|discord>")
-            platform = parts[idx + 1].strip().lower()
-            idx += 2
-            continue
         if token == "--adapter":
             if idx + 1 >= len(parts):
                 raise ValueError("usage: /master-agent-load ... --adapter <codex|claude-code>")
@@ -42,11 +36,11 @@ def parse_load_text(text: str) -> tuple[str, str, str, str, str, str | None]:
             raise ValueError(f"unknown option: {token}")
         if repo_ref != "main":
             raise ValueError(
-                "usage: /master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]"
+                "usage: /master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]"
             )
         repo_ref = token
         idx += 1
-    return name, repo_path, channel_id, repo_ref, platform, adapter
+    return name, repo_path, channel_id, repo_ref, adapter
 
 
 def parse_single_name_text(text: str, command_name: str) -> str:
@@ -77,13 +71,13 @@ def dispatch_command(service: MasterService, request: MasterCommandRequest) -> C
         return service.list_agents()
 
     if request.command_name == "/master-agent-load":
-        name, repo_path, channel_id, repo_ref, platform, agent_adapter = parse_load_text(request.text)
+        name, repo_path, channel_id, repo_ref, agent_adapter = parse_load_text(request.text)
         return service.load_agent(
             name=name,
             repo_path=repo_path,
             channel_id=channel_id,
             repo_ref=repo_ref,
-            platform=platform,
+            platform=request.platform,
             agent_adapter=agent_adapter,
         )
 

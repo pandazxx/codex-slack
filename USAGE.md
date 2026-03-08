@@ -33,7 +33,7 @@ Behavior notes:
 
 ## Master-Mode Workflow (Quick Path)
 1. Start master: `python -m src.master.main`.
-2. In admin channel, run `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`.
+2. In admin channel, run `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`.
 3. Run `/master-agent-start <name>`.
 4. Prompt from mapped channel by mentioning master bot.
 5. Validate state with `/master-agent-status <name>`.

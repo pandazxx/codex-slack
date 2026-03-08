@@ -44,11 +44,11 @@ Expected:
 Steps:
 1. In Slack admin channel:
 ```text
-/master-agent-load slack-agent REPO_URL C0123456789 main --platform slack --adapter codex
+/master-agent-load slack-agent REPO_URL C0123456789 main --adapter codex
 ```
 2. In Slack admin channel:
 ```text
-/master-agent-load discord-agent REPO_URL 123456789012345678 main --platform discord --adapter claude-code
+/master-agent-load discord-agent REPO_URL C0987654321 main --adapter claude-code
 ```
 
 Expected:
@@ -112,7 +112,7 @@ Steps:
 ```
 3. Try invalid platform:
 ```text
-/master-agent-load x REPO_URL C123 main --platform unknown
+/master-agent-load x REPO_URL C123 main --unknown value
 ```
 
 Expected:

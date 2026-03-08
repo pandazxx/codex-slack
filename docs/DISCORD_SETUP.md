@@ -38,7 +38,7 @@ Use the generated URL to invite the bot to your server.
 ## 4. Collect Required IDs
 Enable Discord developer mode and copy IDs for:
 - Admin channels (for `DISCORD_ADMIN_CHANNELS`)
-- Agent channels (for `/master-agent-load ... --platform discord`)
+- Agent channels (for `/master-agent-load ...`; platform is inferred as `discord`)
 
 ## 5. Configure Master Environment
 ```dotenv

@@ -110,7 +110,7 @@ v3 compose changes to apply:
 
 Admin slash commands (Slack + Discord parity):
 - `/master-agent-list`
-- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
 - `/master-agent-status <name>`

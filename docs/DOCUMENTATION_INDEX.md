@@ -13,7 +13,7 @@ Use this page as the source-of-truth map for v3.0.
 
 ## Canonical Master Command Set (Implemented)
 - `/master-agent-list`
-- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
 - `/master-agent-status <name>`

@@ -19,7 +19,12 @@ class FakeService:
         platform: str = "slack",
         agent_adapter: str | None = None,
     ) -> CommandResult:
-        return CommandResult(ok=True, code="OK", message="loaded", data={"name": name})
+        return CommandResult(
+            ok=True,
+            code="OK",
+            message="loaded",
+            data={"name": name, "platform": platform, "agent_adapter": agent_adapter},
+        )
 
     def start_agent(self, *, name: str) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="started", data={"name": name})
@@ -61,6 +66,7 @@ class FakeRouter:
 
 def test_execute_master_command_rejects_non_admin_channel() -> None:
     messages = execute_master_command(
+        platform="slack",
         command_name="/master-agent-list",
         text="",
         channel_id="CNO",
@@ -74,6 +80,7 @@ def test_execute_master_command_rejects_non_admin_channel() -> None:
 
 def test_execute_master_command_handles_status_full_chunks() -> None:
     messages = execute_master_command(
+        platform="slack",
         command_name="/master-agent-status",
         text="payments --full",
         channel_id="CADMIN",
@@ -87,6 +94,7 @@ def test_execute_master_command_handles_status_full_chunks() -> None:
 
 def test_execute_master_command_handles_usage_with_router() -> None:
     messages = execute_master_command(
+        platform="slack",
         command_name="/master-agent-usage",
         text="payments",
         channel_id="CADMIN",
@@ -102,6 +110,7 @@ def test_execute_master_command_handles_usage_with_router() -> None:
 def test_execute_master_command_applies_rate_limit() -> None:
     limiter = CommandRateLimiter(max_calls=1, window_seconds=60)
     first = execute_master_command(
+        platform="slack",
         command_name="/master-agent-list",
         text="",
         channel_id="CADMIN",
@@ -111,6 +120,7 @@ def test_execute_master_command_applies_rate_limit() -> None:
         rate_limiter=limiter,
     )
     second = execute_master_command(
+        platform="slack",
         command_name="/master-agent-list",
         text="",
         channel_id="CADMIN",
@@ -121,3 +131,17 @@ def test_execute_master_command_applies_rate_limit() -> None:
     )
     assert "No agents loaded" in first[0]
     assert "ERR_RATE_LIMITED" in second[0]
+
+
+def test_execute_master_command_infers_platform_from_frontend_context() -> None:
+    messages = execute_master_command(
+        platform="discord",
+        command_name="/master-agent-load",
+        text="payments /tmp/repo 123456789012345678 --adapter claude-code",
+        channel_id="123456789012345678",
+        user_id="U1",
+        admin_channels={"123456789012345678"},
+        service=FakeService(),
+    )
+    assert "platform\": \"discord\"" in messages[0]
+    assert "agent_adapter\": \"claude-code\"" in messages[0]

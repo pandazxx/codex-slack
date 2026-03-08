@@ -123,7 +123,7 @@ Invariants:
 ## Command Parity Plan (Slack + Discord)
 Target same command set on both frontends:
 - `/master-agent-list`
-- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
 - `/master-agent-status <name> [--full]`

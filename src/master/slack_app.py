@@ -74,6 +74,7 @@ def _register_command(
         channel_id = command.get("channel_id", "")
         user_id = command.get("user_id", "")
         messages = execute_master_command(
+            platform="slack",
             command_name=command_name,
             text=text,
             channel_id=channel_id,

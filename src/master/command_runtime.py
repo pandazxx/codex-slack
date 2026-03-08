@@ -25,6 +25,7 @@ def is_admin_channel(channel_id: str, admin_channels: set[str]) -> bool:
 
 def execute_master_command(
     *,
+    platform: str,
     command_name: str,
     text: str,
     channel_id: str,
@@ -39,6 +40,7 @@ def execute_master_command(
         text=text,
         channel_id=channel_id,
         user_id=user_id,
+        platform=platform,
     )
     LOGGER.info(
         "master.command_received command=%s channel=%s user=%s",
