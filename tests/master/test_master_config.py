@@ -10,6 +10,7 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
     monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123,C999")
     monkeypatch.setenv("MASTER_REGISTRY_PATH", "data/master/test.json")
+    monkeypatch.setenv("MASTER_THREAD_STATE_PATH", "data/master/thread-state.json")
     monkeypatch.setenv("MASTER_DRY_RUN", "true")
     monkeypatch.setenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-v1-uat")
     monkeypatch.setenv("MASTER_CODEX_AUTH_JSON_PATH", "/host/secrets/codex-auth.json")
@@ -27,6 +28,7 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     assert settings.slack_app_token == "xapp-token"
     assert settings.admin_channels == {"C123", "C999"}
     assert settings.registry_path == "data/master/test.json"
+    assert settings.thread_state_path == "data/master/thread-state.json"
     assert settings.dry_run is True
     assert settings.agent_base_image == "codex-slack-v1-uat"
     assert settings.agent_codex_auth_json_path == "/host/secrets/codex-auth.json"
@@ -57,4 +59,5 @@ def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -
 
     settings = load_master_settings()
 
+    assert settings.thread_state_path == "data/master/thread_state.json"
     assert settings.dispatch_command_template == "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"

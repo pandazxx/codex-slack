@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -10,6 +11,7 @@ class MasterSettings:
     slack_app_token: str
     admin_channels: set[str]
     registry_path: str
+    thread_state_path: str
     dry_run: bool
     agent_base_image: str
     agent_codex_auth_json_path: str | None
@@ -36,6 +38,9 @@ def load_master_settings() -> MasterSettings:
     app_token = os.getenv("SLACK_APP_TOKEN", "").strip()
     admin_channels = _parse_admin_channels(os.getenv("MASTER_ADMIN_CHANNELS", ""))
     registry_path = os.getenv("MASTER_REGISTRY_PATH", "data/master/agents.json").strip()
+    thread_state_path = os.getenv("MASTER_THREAD_STATE_PATH", "").strip()
+    if not thread_state_path:
+        thread_state_path = str(Path(registry_path).with_name("thread_state.json"))
     dry_run = _parse_bool(os.getenv("MASTER_DRY_RUN", "false"))
     agent_base_image = os.getenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-bot:latest").strip() or "codex-slack-bot:latest"
     agent_codex_auth_json_path = os.getenv("MASTER_CODEX_AUTH_JSON_PATH", "").strip() or None
@@ -75,6 +80,7 @@ def load_master_settings() -> MasterSettings:
         slack_app_token=app_token,
         admin_channels=admin_channels,
         registry_path=registry_path,
+        thread_state_path=thread_state_path,
         dry_run=dry_run,
         agent_base_image=agent_base_image,
         agent_codex_auth_json_path=agent_codex_auth_json_path,

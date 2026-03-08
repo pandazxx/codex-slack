@@ -6,11 +6,15 @@ from src.master.slack_app import (
     CommandRateLimiter,
     SlackCommandRequest,
     dispatch_slash_command,
+    extract_image_urls,
+    format_forward_ack,
     format_status_full_chunks,
     format_command_result,
     is_admin_channel,
+    is_supported_thread_subtype,
     parse_load_text,
     parse_status_text,
+    select_thread_image_urls,
 )
 
 
@@ -45,6 +49,13 @@ class FakeMasterService:
 def test_is_admin_channel() -> None:
     assert is_admin_channel("C1", {"C1", "C2"}) is True
     assert is_admin_channel("C9", {"C1", "C2"}) is False
+
+
+def test_is_supported_thread_subtype_allows_file_share() -> None:
+    assert is_supported_thread_subtype(None) is True
+    assert is_supported_thread_subtype("") is True
+    assert is_supported_thread_subtype("file_share") is True
+    assert is_supported_thread_subtype("bot_message") is False
 
 
 def test_parse_load_text_requires_three_args() -> None:
@@ -190,6 +201,32 @@ def test_format_command_result_renders_agent_list_as_bullets() -> None:
     assert "container=`agent-aidotfile-agent`" in payload
 
 
+def test_format_command_result_renders_usage_bullets() -> None:
+    payload = format_command_result(
+        "/master-agent-usage",
+        CommandResult(
+            ok=True,
+            code="OK",
+            message="usage listed",
+            data={
+                "usage": [
+                    {
+                        "agent_name": "aidotfile-agent",
+                        "prompt_count": 3,
+                        "image_count": 1,
+                        "prompt_chars": 1200,
+                        "response_chars": 2400,
+                        "avg_latency_ms": 412.5,
+                    }
+                ]
+            },
+        ),
+    )
+    assert ":bar_chart: */master-agent-usage*" in payload
+    assert "prompts=`3`" in payload
+    assert "images=`1`" in payload
+
+
 def test_status_full_messages_chunk_large_payload() -> None:
     result = CommandResult(
         ok=True,
@@ -209,6 +246,74 @@ def test_status_full_messages_chunk_large_payload() -> None:
     assert len(messages) >= 2
     assert "full output" in messages[0]
     assert "part 1/" in messages[0]
+
+
+def test_extract_image_urls_only_keeps_image_files() -> None:
+    urls = extract_image_urls(
+        [
+            {
+                "mimetype": "image/png",
+                "url_private": "https://files.slack.com/a.png",
+                "url_private_download": "https://files.slack.com/a-download.png",
+            },
+            {"mimetype": "text/plain", "url_private": "https://files.slack.com/readme.txt"},
+        ]
+    )
+    assert urls == ["https://files.slack.com/a-download.png"]
+
+
+def test_extract_image_urls_filters_by_matching_event_ts_when_shares_present() -> None:
+    urls = extract_image_urls(
+        [
+            {
+                "mimetype": "image/png",
+                "url_private": "https://files.slack.com/a.png",
+                "shares": {
+                    "private": {
+                        "C123": [
+                            {"ts": "1000.001"},
+                        ]
+                    }
+                },
+            },
+            {
+                "mimetype": "image/png",
+                "url_private": "https://files.slack.com/b.png",
+                "shares": {
+                    "private": {
+                        "C123": [
+                            {"ts": "1000.002"},
+                        ]
+                    }
+                },
+            },
+        ],
+        "1000.002",
+    )
+    assert urls == ["https://files.slack.com/b.png"]
+
+
+def test_extract_image_urls_keeps_file_without_shares_metadata() -> None:
+    urls = extract_image_urls(
+        [{"mimetype": "image/png", "url_private": "https://files.slack.com/no-shares.png"}],
+        "1000.010",
+    )
+    assert urls == ["https://files.slack.com/no-shares.png"]
+
+
+def test_select_thread_image_urls_keeps_all_for_file_share() -> None:
+    selected = select_thread_image_urls(
+        ["https://files.slack.com/first.png", "https://files.slack.com/second.png"],
+        "file_share",
+    )
+    assert selected == ["https://files.slack.com/first.png", "https://files.slack.com/second.png"]
+
+
+def test_format_forward_ack_contains_text_and_image_counts() -> None:
+    payload = format_forward_ack(text="hello", image_count=2)
+    assert "Received message and forwarded to agent." in payload
+    assert "text_chars=`5`" in payload
+    assert "images=`2`" in payload
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:

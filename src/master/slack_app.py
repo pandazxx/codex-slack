@@ -87,11 +87,39 @@ def _format_agent_list_table(result: CommandResult) -> str | None:
     )
 
 
+def _format_agent_usage(result: CommandResult) -> str | None:
+    usage = result.data.get("usage")
+    if not isinstance(usage, list):
+        return None
+    if not usage:
+        return ":white_check_mark: *No usage recorded yet.*"
+
+    lines = [":bar_chart: */master-agent-usage*"]
+    for item in usage:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            (
+                f"• *{_clip(item.get('agent_name', '-'), 24)}*"
+                f" | prompts=`{item.get('prompt_count', 0)}`"
+                f" | images=`{item.get('image_count', 0)}`"
+                f" | prompt_chars=`{item.get('prompt_chars', 0)}`"
+                f" | response_chars=`{item.get('response_chars', 0)}`"
+                f" | avg_ms=`{item.get('avg_latency_ms', 0)}`"
+            )
+        )
+    return "\n".join(lines)
+
+
 def format_command_result(command_name: str, result: CommandResult) -> str:
     if command_name == "/master-agent-list":
         rendered_table = _format_agent_list_table(result)
         if rendered_table:
             return rendered_table
+    if command_name == "/master-agent-usage":
+        rendered_usage = _format_agent_usage(result)
+        if rendered_usage:
+            return rendered_usage
     if command_name == "/master-agent-status":
         rendered_summary = _format_status_summary(result)
         if rendered_summary:
@@ -125,6 +153,17 @@ def parse_single_name_text(text: str, command_name: str) -> str:
     if not name:
         raise ValueError(f"usage: {command_name} <name>")
     return name
+
+
+def parse_optional_name_text(text: str) -> str | None:
+    value = text.strip()
+    return value or None
+
+
+def is_supported_thread_subtype(subtype: str | None) -> bool:
+    if not subtype:
+        return True
+    return subtype in {"file_share"}
 
 
 def parse_status_text(text: str, command_name: str = "/master-agent-status") -> tuple[str, bool]:
@@ -255,6 +294,7 @@ def _register_command(
     command_name: str,
     admin_channels: set[str],
     service: MasterService,
+    router: ChannelRouter | None = None,
     rate_limiter: CommandRateLimiter | None = None,
 ) -> None:
     @app.command(command_name)
@@ -320,6 +360,25 @@ def _register_command(
             return
 
         try:
+            if command_name == "/master-agent-usage":
+                if router is None:
+                    result = CommandResult(
+                        ok=False,
+                        code="ERR_INTERNAL",
+                        message="usage router is not configured",
+                        data={},
+                    )
+                else:
+                    selected_agent = parse_optional_name_text(request.text)
+                    result = CommandResult(
+                        ok=True,
+                        code="OK",
+                        message="usage listed",
+                        data={"usage": router.usage_summary(selected_agent)},
+                    )
+            else:
+                result = dispatch_slash_command(service, request)
+
             LOGGER.info(
                 "master.command_dispatch_start command=%s channel=%s user=%s text=%r",
                 command_name,
@@ -327,7 +386,6 @@ def _register_command(
                 request.user_id or "-",
                 request.text,
             )
-            result = dispatch_slash_command(service, request)
             LOGGER.info(
                 "master.command_dispatch_done command=%s channel=%s user=%s ok=%s code=%s",
                 command_name,
@@ -390,15 +448,18 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
+            image_urls = extract_image_urls(event.get("files", []), event_ts)
 
             try:
                 router.track_thread(channel_id=channel_id, thread_ts=thread_ts)
                 router.mark_mention_event(channel_id=channel_id, ts=event_ts)
+                say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
                 response = router.route_prompt(
                     channel_id=channel_id,
                     text=text,
                     thread_ts=thread_ts,
                     user_id=user_id,
+                    image_urls=image_urls,
                 )
                 say(text=response, thread_ts=thread_ts)
             except RouteSkip as exc:
@@ -412,7 +473,14 @@ def create_master_app(
 
         @app.event("message")
         def on_thread_message(event: dict, say) -> None:  # type: ignore[no-untyped-def]
-            if event.get("subtype"):
+            subtype = event.get("subtype")
+            if not is_supported_thread_subtype(subtype):
+                LOGGER.info(
+                    "thread message ignored: unsupported subtype channel=%s thread_ts=%s subtype=%s",
+                    event.get("channel", "-"),
+                    event.get("thread_ts", "-"),
+                    subtype,
+                )
                 return
 
             channel_id = event.get("channel", "")
@@ -420,22 +488,70 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
+            image_urls = extract_image_urls(event.get("files", []), event_ts)
+            image_urls = select_thread_image_urls(image_urls, subtype)
+            if image_urls:
+                LOGGER.info(
+                    "thread image payload channel=%s thread_ts=%s subtype=%s image_count=%d first_image=%s",
+                    channel_id or "-",
+                    thread_ts or "-",
+                    subtype or "-",
+                    len(image_urls),
+                    image_urls[0],
+                )
 
-            if not thread_ts or not text or not user_id:
+            if not thread_ts or not user_id or (not text and not image_urls):
+                LOGGER.info(
+                    "thread message ignored: missing payload channel=%s thread_ts=%s user=%s text_chars=%d image_count=%d",
+                    channel_id or "-",
+                    thread_ts or "-",
+                    user_id or "-",
+                    len(text),
+                    len(image_urls),
+                )
                 return
             if router.consume_marked_mention_event(channel_id=channel_id, ts=event_ts):
+                LOGGER.info(
+                    "thread message ignored: deduped mention event channel=%s ts=%s",
+                    channel_id,
+                    event_ts or "-",
+                )
                 return
             if not router.is_tracked_thread(channel_id=channel_id, thread_ts=thread_ts):
+                LOGGER.info(
+                    "thread message ignored: untracked thread channel=%s thread_ts=%s image_count=%d",
+                    channel_id,
+                    thread_ts,
+                    len(image_urls),
+                )
                 return
 
             try:
+                say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
+                LOGGER.info(
+                    "thread route dispatch_start channel=%s thread_ts=%s user=%s text_chars=%d image_count=%d subtype=%s",
+                    channel_id,
+                    thread_ts,
+                    user_id,
+                    len(text),
+                    len(image_urls),
+                    subtype or "-",
+                )
                 response = router.route_prompt(
                     channel_id=channel_id,
                     text=text,
                     thread_ts=thread_ts,
                     user_id=user_id,
+                    image_urls=image_urls,
                 )
                 say(text=response, thread_ts=thread_ts)
+                LOGGER.info(
+                    "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d",
+                    channel_id,
+                    thread_ts,
+                    user_id,
+                    len(response),
+                )
             except RouteSkip as exc:
                 LOGGER.info("thread route skipped for channel=%s reason=%s", channel_id, exc)
             except RouteError as exc:
@@ -451,6 +567,7 @@ def create_master_app(
         "/master-agent-start",
         "/master-agent-stop",
         "/master-agent-status",
+        "/master-agent-usage",
         "/master-agent-remove",
         "/master-agent-refresh-auth",
     ):
@@ -459,8 +576,65 @@ def create_master_app(
             command_name=command_name,
             admin_channels=admin_channels,
             service=service,
+            router=router,
             rate_limiter=rate_limiter,
         )
         LOGGER.info("master.command_registered command=%s", command_name)
 
     return app
+
+
+def _file_matches_event_ts(file_item: dict, event_ts: str | None) -> bool:
+    if not event_ts:
+        return True
+    shares = file_item.get("shares")
+    if not isinstance(shares, dict):
+        return True
+
+    for scope in ("public", "private"):
+        channels = shares.get(scope)
+        if not isinstance(channels, dict):
+            continue
+        for entries in channels.values():
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("ts", "")) == event_ts:
+                    return True
+    return False
+
+
+def extract_image_urls(files: object, event_ts: str | None = None) -> list[str]:
+    if not isinstance(files, list):
+        return []
+    urls: list[str] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        if not _file_matches_event_ts(item, event_ts):
+            continue
+        mimetype = str(item.get("mimetype", ""))
+        if not mimetype.startswith("image/"):
+            continue
+        url = str(item.get("url_private_download") or item.get("url_private") or "").strip()
+        if url:
+            urls.append(url)
+    return urls
+
+
+def select_thread_image_urls(image_urls: list[str], subtype: str | None) -> list[str]:
+    # Keep all image URLs from the current message payload.
+    # Historical thread files are filtered earlier by event timestamp matching.
+    if subtype == "file_share" and image_urls:
+        return image_urls
+    return image_urls
+
+
+def format_forward_ack(*, text: str, image_count: int) -> str:
+    text_chars = len(text)
+    return (
+        ":incoming_envelope: Received message and forwarded to agent. "
+        f"text_chars=`{text_chars}` images=`{image_count}`"
+    )

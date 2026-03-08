@@ -10,7 +10,7 @@ from src.master.router import ChannelRouter, PodmanExecDispatcher, RouteError, R
 
 class FakeDispatcher:
     def __init__(self) -> None:
-        self.calls: list[dict[str, str | None]] = []
+        self.calls: list[dict[str, object]] = []
 
     def send_prompt(
         self,
@@ -21,6 +21,7 @@ class FakeDispatcher:
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
+        image_urls: list[str] | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -30,6 +31,7 @@ class FakeDispatcher:
                 "channel_id": channel_id,
                 "thread_ts": thread_ts,
                 "user_id": user_id,
+                "image_urls": image_urls or [],
             }
         )
         return f"{agent_name}:{prompt}"
@@ -66,6 +68,45 @@ def test_route_prompt_for_mapped_channel(tmp_path) -> None:
     assert dispatcher.calls[0]["container_name"] == "agent-payments"
 
 
+def test_route_prompt_includes_image_urls_and_tracks_usage(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    router.route_prompt(
+        channel_id="CAGENT",
+        text="<@U123> investigate this",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+        image_urls=["https://files.slack.com/abc.png"],
+    )
+
+    assert dispatcher.calls[0]["image_urls"] == ["https://files.slack.com/abc.png"]
+
+    usage = router.usage_summary("payments-agent")
+    assert usage[0]["prompt_count"] == 1
+    assert usage[0]["image_count"] == 1
+
+
+def test_route_prompt_allows_image_only_message(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    response = router.route_prompt(
+        channel_id="CAGENT",
+        text="",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+        image_urls=["https://files.slack.com/only-image.png"],
+    )
+
+    assert response == "payments-agent:"
+    assert dispatcher.calls[0]["image_urls"] == ["https://files.slack.com/only-image.png"]
+
+
 def test_route_prompt_rejects_unmapped_channel(tmp_path) -> None:
     registry = AgentRegistry(tmp_path / "agents.json")
     dispatcher = FakeDispatcher()
@@ -95,6 +136,7 @@ class FailingDispatcher(FakeDispatcher):
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
+        image_urls: list[str] | None = None,
     ) -> str:
         raise RouteError("codex exec failed")
 
@@ -120,6 +162,28 @@ def test_thread_tracking_and_mention_dedupe(tmp_path) -> None:
     router.mark_mention_event(channel_id="CAGENT", ts="1730000000.1111")
     assert router.consume_marked_mention_event(channel_id="CAGENT", ts="1730000000.1111") is True
     assert router.consume_marked_mention_event(channel_id="CAGENT", ts="1730000000.1111") is False
+
+
+def test_thread_tracking_persists_across_router_restarts(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    dispatcher = FakeDispatcher()
+    state_path = tmp_path / "thread_state.json"
+    router = ChannelRouter(
+        registry=registry,
+        dispatcher=dispatcher,
+        admin_channels={"CADMIN"},
+        tracked_threads_path=str(state_path),
+    )
+
+    router.track_thread(channel_id="CAGENT", thread_ts="1730000000.9999")
+
+    restarted = ChannelRouter(
+        registry=registry,
+        dispatcher=dispatcher,
+        admin_channels={"CADMIN"},
+        tracked_threads_path=str(state_path),
+    )
+    assert restarted.is_tracked_thread(channel_id="CAGENT", thread_ts="1730000000.9999") is True
 
 
 def test_podman_exec_dispatcher_includes_exit_and_output_details(monkeypatch) -> None:  # type: ignore[no-untyped-def]

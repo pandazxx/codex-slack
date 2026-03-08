@@ -68,6 +68,9 @@ podman compose -f docker-compose.yml -f docker-compose.podman.yml logs -f
 4. In the mapped channel, mention the master bot with a prompt.
 5. Validate runtime state:
    - `/master-agent-status <name>`
+6. Optional:
+   - Attach images in the thread; image `url_private` references are appended to the routed prompt.
+   - Check usage counters with `/master-agent-usage <name>`.
 
 ## Tutorial 3: Safe Auth Refresh
 Use `/master-agent-refresh-auth <name>` when rotating Codex auth.

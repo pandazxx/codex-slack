@@ -77,6 +77,17 @@ Stops the currently running Codex prompt. If no prompt is running, returns a no-
 Re-seeds agent `CODEX_HOME/auth.json` from configured host auth source.
 The refresh is non-destructive for session state and does not wipe `.codex`.
 
+### `/master-agent-status <name> --full`
+Returns full status JSON split across multiple Slack messages.
+Use this when compact status summary is not enough.
+
+### `/master-agent-usage [name]`
+Shows per-agent usage counters from master runtime memory:
+- prompt count
+- prompt/response character volume
+- image attachment count
+- average latency
+
 ## Recovery Playbooks
 
 ### Bot reports degraded/error

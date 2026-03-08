@@ -36,8 +36,9 @@ def main() -> None:
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup registry_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s bot_token=%s app_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        "master.startup registry_path=%s thread_state_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s bot_token=%s app_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
         settings.registry_path,
+        settings.thread_state_path,
         ",".join(sorted(settings.admin_channels)),
         settings.dry_run,
         settings.agent_base_image,
@@ -67,11 +68,13 @@ def main() -> None:
     dispatcher = PodmanExecDispatcher(
         command_template=settings.dispatch_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
+        slack_bot_token=settings.slack_bot_token,
     )
     router = ChannelRouter(
         registry=registry,
         dispatcher=dispatcher,
         admin_channels=settings.admin_channels,
+        tracked_threads_path=settings.thread_state_path,
     )
     rate_limiter = CommandRateLimiter(
         max_calls=settings.command_rate_limit_count,
