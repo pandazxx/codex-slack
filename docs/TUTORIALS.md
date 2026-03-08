@@ -1,7 +1,7 @@
 # Tutorials
 
-## v2.2 Housekeeping Scope
-This cycle is documentation-first and bugfix-only. No new feature development is planned.
+## v3.0 Delivery Scope
+This cycle introduces dual frontend and dual adapter support for master-agent runtime.
 
 ## Tutorial 1: Boot a Single Bot Session
 1. Export required env vars: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_CHANNELS`, `CODEX_SESSION_ID`.
@@ -62,7 +62,7 @@ podman compose -f docker-compose.yml -f docker-compose.podman.yml logs -f
 ## Tutorial 2: Master Agent Command Flow
 1. Start master: `python -m src.master.main` with `MASTER_ADMIN_CHANNELS` configured.
 2. Load an agent:
-   - `/master-agent-load <name> <repo_path> <channel_id> [branch]`
+   - `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`
 3. Start agent:
    - `/master-agent-start <name>`
 4. In the mapped channel, mention the master bot with a prompt.
@@ -170,9 +170,9 @@ podman build -t local-<project>-agent -f .prj_assistant/image/Dockerfile .prj_as
    - Master auto-detects `.prj_assistant/image/Dockerfile` and builds `codex-agent-<name>:latest`.
    - Verify `/master-agent-status <name>` shows dockerfile-based image plan.
 
-## Release Wrap-Up Checklist (v2.2)
-- [ ] No net-new features merged.
-- [ ] Bugfixes include tests.
+## Release Wrap-Up Checklist (v3.0)
+- [ ] Dual frontend flows validated (Slack + Discord).
+- [ ] Dual adapter flows validated (`codex` + `claude-code`).
 - [ ] README and USAGE reflect current command behavior.
 - [ ] Tutorials validated against current `master`.
 - [ ] Release candidate notes drafted.

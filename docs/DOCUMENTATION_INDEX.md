@@ -1,6 +1,6 @@
 # Documentation Index (Canonical References)
 
-Use this page as the source-of-truth map for v2.2 housekeeping.
+Use this page as the source-of-truth map for v3.0.
 
 ## Current Source of Truth
 - Product overview and command summary: `README.md`
@@ -17,6 +17,7 @@ Use this page as the source-of-truth map for v2.2 housekeeping.
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
 - `/master-agent-status <name>`
+- `/master-agent-usage [name]`
 - `/master-agent-remove <name>`
 - `/master-agent-refresh-auth <name>`
 

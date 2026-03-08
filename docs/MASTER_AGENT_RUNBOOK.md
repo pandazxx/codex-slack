@@ -1,13 +1,13 @@
-# Master-Agent Runbook (v1)
+# Master-Agent Runbook (v3.0)
 
 ## Scope
-Operational guide for the master->agent v1 stack:
-- master in container (Slack + orchestration)
+Operational guide for the master->agent v3.0 stack:
+- master in container (Slack + Discord + orchestration)
 - agent worker containers (no direct Slack connection)
 - Podman host socket control path
 
 See `docs/MASTER_AGENT_UAT.md` for step-by-step user acceptance test cases.
-Containerized UAT is required for v1 sign-off; functional Slack-only checks are not sufficient.
+Containerized UAT is required for v3.0 sign-off.
 
 ## Prerequisites
 - Host Podman service socket mounted into master container.
@@ -17,8 +17,10 @@ Containerized UAT is required for v1 sign-off; functional Slack-only checks are 
 - Provide `MASTER_CODEX_AUTH_JSON_PATH` as a host path to the shared Codex `auth.json`; v1 forwards only this auth file to agents, not Codex session directories.
 - Provide `MASTER_SSH_AUTH_SOCK_PATH` as a host path to the SSH agent socket for private repo checkout and push over SSH.
 - Optional: provide `MASTER_SSH_KNOWN_HOSTS_PATH` as a host path to `known_hosts` for explicit SSH host verification. If omitted, master and agents default to `StrictHostKeyChecking=no` with `/dev/null` known hosts.
-- Slack app configured with command/event scopes.
-- `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS` set.
+- Slack and/or Discord frontend configured.
+- `MASTER_FRONTENDS` set (`slack`, `discord`, or `slack,discord`).
+- For Slack frontend: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS`.
+- For Discord frontend: `DISCORD_BOT_TOKEN`, `DISCORD_ADMIN_CHANNELS`.
 - Shared auth refs available to agents (`SSH_AUTH_SOCK` and/or `GH_TOKEN_FILE`).
 
 ## Master Startup
@@ -33,13 +35,18 @@ podman run --rm \
   -e SSH_AUTH_SOCK=/ssh-agent \
   -e MASTER_GIT_USER_NAME='Your Name' \
   -e MASTER_GIT_USER_EMAIL='you@example.com' \
+  -e MASTER_FRONTENDS=slack,discord \
   -e MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json \
   -e MASTER_SSH_AUTH_SOCK_PATH=/absolute/host/path/ssh-agent.sock \
   -e MASTER_SSH_KNOWN_HOSTS_PATH=/absolute/host/path/known_hosts \
   -e MASTER_ADMIN_CHANNELS=<admin_channel_id> \
+  -e DISCORD_ADMIN_CHANNELS=<discord_admin_channel_id> \
+  -e DISCORD_BOT_TOKEN=... \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
-  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -' \
+  -e MASTER_DEFAULT_AGENT_ADAPTER=codex \
+  -e MASTER_CODEX_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -' \
+  -e MASTER_CLAUDE_COMMAND_TEMPLATE='claude -p' \
   -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
   -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
@@ -64,7 +71,12 @@ export MASTER_ADMIN_CHANNELS="<admin_channel_id>"
 export MASTER_AGENT_BASE_IMAGE="codex-slack-v1-uat"
 export MASTER_GIT_USER_NAME="Your Name"
 export MASTER_GIT_USER_EMAIL="you@example.com"
-export MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'
+export MASTER_FRONTENDS="slack,discord"
+export DISCORD_BOT_TOKEN="..."
+export DISCORD_ADMIN_CHANNELS="<discord_admin_channel_id>"
+export MASTER_DEFAULT_AGENT_ADAPTER="codex"
+export MASTER_CODEX_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'
+export MASTER_CLAUDE_COMMAND_TEMPLATE='claude -p'
 mkdir -p "${MASTER_DATA_DIR}"
 podman compose -f docker-compose.master-agent.example.yml up --build -d
 podman compose -f docker-compose.master-agent.example.yml logs -f
@@ -83,6 +95,7 @@ If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it must also be a host filesystem path 
 If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`.
 If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup so commits do not require manual setup.
 Default is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'`.
+Default adapter is `MASTER_DEFAULT_AGENT_ADAPTER=codex`.
 Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
 The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
 2. Verify startup logs include:
@@ -95,7 +108,7 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 ## Agent Lifecycle (Admin Channel)
 1. Load mapping and image plan:
 ```text
-/master-agent-load <name> <repo_path> <channel_id>
+/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]
 ```
 2. Start agent:
 ```text

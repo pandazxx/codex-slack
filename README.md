@@ -100,6 +100,14 @@ Required env:
 - For a Compose-based master runtime, use `docker-compose.master-agent.example.yml` (Podman Compose-oriented example for the v1 master container)
   Set `MASTER_RUNTIME_IMAGE` to override the master container image tag used by that compose example.
 
+v3 compose changes to apply:
+- Add `MASTER_FRONTENDS` (`slack`, `discord`, or `slack,discord`).
+- For Discord frontend add `DISCORD_BOT_TOKEN` and `DISCORD_ADMIN_CHANNELS`.
+- Add `MASTER_DEFAULT_AGENT_ADAPTER` (`codex` default) and optional adapter templates:
+  - `MASTER_CODEX_COMMAND_TEMPLATE`
+  - `MASTER_CLAUDE_COMMAND_TEMPLATE`
+- Keep Slack vars (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS`) only if Slack frontend is enabled.
+
 Admin slash commands (Slack + Discord parity):
 - `/master-agent-list`
 - `/master-agent-load <name> <repo_path> <channel_id> [branch] [--platform slack|discord] [--adapter codex|claude-code]`
