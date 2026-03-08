@@ -164,6 +164,28 @@ def test_thread_tracking_and_mention_dedupe(tmp_path) -> None:
     assert router.consume_marked_mention_event(channel_id="CAGENT", ts="1730000000.1111") is False
 
 
+def test_thread_tracking_persists_across_router_restarts(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    dispatcher = FakeDispatcher()
+    state_path = tmp_path / "thread_state.json"
+    router = ChannelRouter(
+        registry=registry,
+        dispatcher=dispatcher,
+        admin_channels={"CADMIN"},
+        tracked_threads_path=str(state_path),
+    )
+
+    router.track_thread(channel_id="CAGENT", thread_ts="1730000000.9999")
+
+    restarted = ChannelRouter(
+        registry=registry,
+        dispatcher=dispatcher,
+        admin_channels={"CADMIN"},
+        tracked_threads_path=str(state_path),
+    )
+    assert restarted.is_tracked_thread(channel_id="CAGENT", thread_ts="1730000000.9999") is True
+
+
 def test_podman_exec_dispatcher_includes_exit_and_output_details(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     dispatcher = PodmanExecDispatcher()
 

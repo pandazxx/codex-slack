@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import logging
 import os
+from pathlib import Path
 import re
 import subprocess
 import tempfile
@@ -250,10 +252,14 @@ class ChannelRouter:
     registry: AgentRegistry
     dispatcher: AgentDispatcher
     admin_channels: set[str]
+    tracked_threads_path: str | None = None
     _tracked_threads: set[str] = field(default_factory=set, init=False, repr=False)
     _recent_mention_events: set[str] = field(default_factory=set, init=False, repr=False)
     _usage_by_agent: dict[str, dict[str, float]] = field(default_factory=dict, init=False, repr=False)
     _state_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._tracked_threads = self._load_tracked_threads()
 
     def extract_prompt(self, text: str) -> str:
         return MENTION_PATTERN.sub("", text).strip()
@@ -269,6 +275,7 @@ class ChannelRouter:
             return
         with self._state_lock:
             self._tracked_threads.add(self._thread_key(channel_id, thread_ts))
+            self._persist_tracked_threads_unlocked()
 
     def is_tracked_thread(self, channel_id: str, thread_ts: str | None) -> bool:
         if not thread_ts:
@@ -334,6 +341,35 @@ class ChannelRouter:
             elapsed_ms=elapsed_ms,
         )
         return response
+
+    def _load_tracked_threads(self) -> set[str]:
+        path = (self.tracked_threads_path or "").strip()
+        if not path:
+            return set()
+        state_path = Path(path)
+        if not state_path.exists():
+            return set()
+        try:
+            raw = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("router.thread_state_load_failed path=%s error=%s", path, exc)
+            return set()
+        entries = raw.get("tracked_threads")
+        if not isinstance(entries, list):
+            return set()
+        return {str(item) for item in entries if isinstance(item, str)}
+
+    def _persist_tracked_threads_unlocked(self) -> None:
+        path = (self.tracked_threads_path or "").strip()
+        if not path:
+            return
+        state_path = Path(path)
+        payload = {"tracked_threads": sorted(self._tracked_threads)}
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("router.thread_state_persist_failed path=%s error=%s", path, exc)
 
     def _record_usage(
         self,
