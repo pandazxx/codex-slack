@@ -160,6 +160,12 @@ def parse_optional_name_text(text: str) -> str | None:
     return value or None
 
 
+def is_supported_thread_subtype(subtype: str | None) -> bool:
+    if not subtype:
+        return True
+    return subtype in {"file_share"}
+
+
 def parse_status_text(text: str, command_name: str = "/master-agent-status") -> tuple[str, bool]:
     parts = [part.strip() for part in text.split() if part.strip()]
     if not parts:
@@ -466,7 +472,14 @@ def create_master_app(
 
         @app.event("message")
         def on_thread_message(event: dict, say) -> None:  # type: ignore[no-untyped-def]
-            if event.get("subtype"):
+            subtype = event.get("subtype")
+            if not is_supported_thread_subtype(subtype):
+                LOGGER.info(
+                    "thread message ignored: unsupported subtype channel=%s thread_ts=%s subtype=%s",
+                    event.get("channel", "-"),
+                    event.get("thread_ts", "-"),
+                    subtype,
+                )
                 return
 
             channel_id = event.get("channel", "")
@@ -477,13 +490,41 @@ def create_master_app(
             image_urls = extract_image_urls(event.get("files", []))
 
             if not thread_ts or not user_id or (not text and not image_urls):
+                LOGGER.info(
+                    "thread message ignored: missing payload channel=%s thread_ts=%s user=%s text_chars=%d image_count=%d",
+                    channel_id or "-",
+                    thread_ts or "-",
+                    user_id or "-",
+                    len(text),
+                    len(image_urls),
+                )
                 return
             if router.consume_marked_mention_event(channel_id=channel_id, ts=event_ts):
+                LOGGER.info(
+                    "thread message ignored: deduped mention event channel=%s ts=%s",
+                    channel_id,
+                    event_ts or "-",
+                )
                 return
             if not router.is_tracked_thread(channel_id=channel_id, thread_ts=thread_ts):
+                LOGGER.info(
+                    "thread message ignored: untracked thread channel=%s thread_ts=%s image_count=%d",
+                    channel_id,
+                    thread_ts,
+                    len(image_urls),
+                )
                 return
 
             try:
+                LOGGER.info(
+                    "thread route dispatch_start channel=%s thread_ts=%s user=%s text_chars=%d image_count=%d subtype=%s",
+                    channel_id,
+                    thread_ts,
+                    user_id,
+                    len(text),
+                    len(image_urls),
+                    subtype or "-",
+                )
                 response = router.route_prompt(
                     channel_id=channel_id,
                     text=text,
@@ -492,6 +533,13 @@ def create_master_app(
                     image_urls=image_urls,
                 )
                 say(text=response, thread_ts=thread_ts)
+                LOGGER.info(
+                    "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d",
+                    channel_id,
+                    thread_ts,
+                    user_id,
+                    len(response),
+                )
             except RouteSkip as exc:
                 LOGGER.info("thread route skipped for channel=%s reason=%s", channel_id, exc)
             except RouteError as exc:

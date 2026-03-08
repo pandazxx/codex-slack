@@ -10,6 +10,7 @@ from src.master.slack_app import (
     format_status_full_chunks,
     format_command_result,
     is_admin_channel,
+    is_supported_thread_subtype,
     parse_load_text,
     parse_status_text,
 )
@@ -46,6 +47,13 @@ class FakeMasterService:
 def test_is_admin_channel() -> None:
     assert is_admin_channel("C1", {"C1", "C2"}) is True
     assert is_admin_channel("C9", {"C1", "C2"}) is False
+
+
+def test_is_supported_thread_subtype_allows_file_share() -> None:
+    assert is_supported_thread_subtype(None) is True
+    assert is_supported_thread_subtype("") is True
+    assert is_supported_thread_subtype("file_share") is True
+    assert is_supported_thread_subtype("bot_message") is False
 
 
 def test_parse_load_text_requires_three_args() -> None:
