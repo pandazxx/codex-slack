@@ -342,6 +342,51 @@ class ChannelRouter:
         )
         return response
 
+    def route_mention_message(
+        self,
+        *,
+        channel_id: str,
+        text: str,
+        thread_ts: str | None,
+        event_ts: str | None,
+        user_id: str | None,
+        image_urls: list[str] | None = None,
+    ) -> str:
+        self.track_thread(channel_id=channel_id, thread_ts=thread_ts)
+        self.mark_mention_event(channel_id=channel_id, ts=event_ts)
+        return self.route_prompt(
+            channel_id=channel_id,
+            text=text,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            image_urls=image_urls,
+        )
+
+    def route_followup_message(
+        self,
+        *,
+        channel_id: str,
+        text: str,
+        thread_ts: str | None,
+        event_ts: str | None,
+        user_id: str | None,
+        image_urls: list[str] | None = None,
+    ) -> str | None:
+        image_urls = image_urls or []
+        if not thread_ts or not user_id or (not text and not image_urls):
+            return None
+        if self.consume_marked_mention_event(channel_id=channel_id, ts=event_ts):
+            return None
+        if not self.is_tracked_thread(channel_id=channel_id, thread_ts=thread_ts):
+            return None
+        return self.route_prompt(
+            channel_id=channel_id,
+            text=text,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            image_urls=image_urls,
+        )
+
     def _load_tracked_threads(self) -> set[str]:
         path = (self.tracked_threads_path or "").strip()
         if not path:

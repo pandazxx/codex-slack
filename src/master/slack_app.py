@@ -8,18 +8,18 @@ import time
 
 from slack_bolt import App
 
+from .command_dispatch import (
+    MasterCommandRequest as SlackCommandRequest,
+    dispatch_command as dispatch_slash_command,
+    parse_load_text,
+    parse_optional_name_text,
+    parse_single_name_text,
+    parse_status_text,
+)
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import CommandResult, MasterService
 
 LOGGER = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class SlackCommandRequest:
-    command_name: str
-    text: str
-    channel_id: str
-    user_id: str
 
 
 @dataclass
@@ -140,41 +140,10 @@ def format_command_result(command_name: str, result: CommandResult) -> str:
     return "\n".join(lines)
 
 
-def parse_load_text(text: str) -> tuple[str, str, str, str]:
-    parts = [part.strip() for part in text.split() if part.strip()]
-    if len(parts) not in {3, 4}:
-        raise ValueError("usage: /master-agent-load <name> <repo_path> <channel_id> [branch]")
-    repo_ref = parts[3] if len(parts) == 4 else "main"
-    return parts[0], parts[1], parts[2], repo_ref
-
-
-def parse_single_name_text(text: str, command_name: str) -> str:
-    name = text.strip()
-    if not name:
-        raise ValueError(f"usage: {command_name} <name>")
-    return name
-
-
-def parse_optional_name_text(text: str) -> str | None:
-    value = text.strip()
-    return value or None
-
-
 def is_supported_thread_subtype(subtype: str | None) -> bool:
     if not subtype:
         return True
     return subtype in {"file_share"}
-
-
-def parse_status_text(text: str, command_name: str = "/master-agent-status") -> tuple[str, bool]:
-    parts = [part.strip() for part in text.split() if part.strip()]
-    if not parts:
-        raise ValueError(f"usage: {command_name} <name> [--full]")
-    if len(parts) == 1:
-        return parts[0], False
-    if len(parts) == 2 and parts[1] == "--full":
-        return parts[0], True
-    raise ValueError(f"usage: {command_name} <name> [--full]")
 
 
 def wants_full_status(command_name: str, text: str) -> bool:
@@ -255,37 +224,6 @@ def _format_status_summary(result: CommandResult) -> str | None:
             "_Use `/master-agent-status <name> --full` for full JSON output._",
         ]
     )
-
-
-def dispatch_slash_command(service: MasterService, request: SlackCommandRequest) -> CommandResult:
-    if request.command_name == "/master-agent-list":
-        return service.list_agents()
-
-    if request.command_name == "/master-agent-load":
-        name, repo_path, channel_id, repo_ref = parse_load_text(request.text)
-        return service.load_agent(name=name, repo_path=repo_path, channel_id=channel_id, repo_ref=repo_ref)
-
-    if request.command_name == "/master-agent-start":
-        name = parse_single_name_text(request.text, request.command_name)
-        return service.start_agent(name=name)
-
-    if request.command_name == "/master-agent-stop":
-        name = parse_single_name_text(request.text, request.command_name)
-        return service.stop_agent(name=name)
-
-    if request.command_name == "/master-agent-status":
-        name, _ = parse_status_text(request.text)
-        return service.status(name=name)
-
-    if request.command_name == "/master-agent-remove":
-        name = parse_single_name_text(request.text, request.command_name)
-        return service.remove_agent(name=name)
-
-    if request.command_name == "/master-agent-refresh-auth":
-        name = parse_single_name_text(request.text, request.command_name)
-        return service.refresh_agent_auth(name=name)
-
-    return CommandResult(ok=False, code="ERR_INVALID_ARGS", message=f"unsupported command: {request.command_name}", data={})
 
 
 def _register_command(
@@ -451,13 +389,12 @@ def create_master_app(
             image_urls = extract_image_urls(event.get("files", []), event_ts)
 
             try:
-                router.track_thread(channel_id=channel_id, thread_ts=thread_ts)
-                router.mark_mention_event(channel_id=channel_id, ts=event_ts)
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
-                response = router.route_prompt(
+                response = router.route_mention_message(
                     channel_id=channel_id,
                     text=text,
                     thread_ts=thread_ts,
+                    event_ts=event_ts,
                     user_id=user_id,
                     image_urls=image_urls,
                 )
@@ -510,24 +447,8 @@ def create_master_app(
                     len(image_urls),
                 )
                 return
-            if router.consume_marked_mention_event(channel_id=channel_id, ts=event_ts):
-                LOGGER.info(
-                    "thread message ignored: deduped mention event channel=%s ts=%s",
-                    channel_id,
-                    event_ts or "-",
-                )
-                return
-            if not router.is_tracked_thread(channel_id=channel_id, thread_ts=thread_ts):
-                LOGGER.info(
-                    "thread message ignored: untracked thread channel=%s thread_ts=%s image_count=%d",
-                    channel_id,
-                    thread_ts,
-                    len(image_urls),
-                )
-                return
 
             try:
-                say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
                 LOGGER.info(
                     "thread route dispatch_start channel=%s thread_ts=%s user=%s text_chars=%d image_count=%d subtype=%s",
                     channel_id,
@@ -537,13 +458,23 @@ def create_master_app(
                     len(image_urls),
                     subtype or "-",
                 )
-                response = router.route_prompt(
+                response = router.route_followup_message(
                     channel_id=channel_id,
                     text=text,
                     thread_ts=thread_ts,
+                    event_ts=event_ts,
                     user_id=user_id,
                     image_urls=image_urls,
                 )
+                if response is None:
+                    LOGGER.info(
+                        "thread message ignored: untracked_or_deduped channel=%s thread_ts=%s image_count=%d",
+                        channel_id,
+                        thread_ts,
+                        len(image_urls),
+                    )
+                    return
+                say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
                 say(text=response, thread_ts=thread_ts)
                 LOGGER.info(
                     "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d",

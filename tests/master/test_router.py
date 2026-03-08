@@ -164,6 +164,65 @@ def test_thread_tracking_and_mention_dedupe(tmp_path) -> None:
     assert router.consume_marked_mention_event(channel_id="CAGENT", ts="1730000000.1111") is False
 
 
+def test_route_mention_message_tracks_thread_and_routes(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    response = router.route_mention_message(
+        channel_id="CAGENT",
+        text="<@U1> hello",
+        thread_ts="1730000000.5000",
+        event_ts="1730000000.5000",
+        user_id="U1",
+        image_urls=[],
+    )
+
+    assert response == "payments-agent:hello"
+    assert router.is_tracked_thread(channel_id="CAGENT", thread_ts="1730000000.5000") is True
+    assert router.consume_marked_mention_event(channel_id="CAGENT", ts="1730000000.5000") is True
+
+
+def test_route_followup_message_requires_tracked_thread_and_not_deduped(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    skipped = router.route_followup_message(
+        channel_id="CAGENT",
+        text="follow up",
+        thread_ts="1730000000.7000",
+        event_ts="1730000000.7001",
+        user_id="U1",
+        image_urls=[],
+    )
+    assert skipped is None
+
+    router.track_thread(channel_id="CAGENT", thread_ts="1730000000.7000")
+    router.mark_mention_event(channel_id="CAGENT", ts="1730000000.7002")
+    deduped = router.route_followup_message(
+        channel_id="CAGENT",
+        text="follow up",
+        thread_ts="1730000000.7000",
+        event_ts="1730000000.7002",
+        user_id="U1",
+        image_urls=[],
+    )
+    assert deduped is None
+
+    routed = router.route_followup_message(
+        channel_id="CAGENT",
+        text="follow up",
+        thread_ts="1730000000.7000",
+        event_ts="1730000000.7003",
+        user_id="U1",
+        image_urls=[],
+    )
+    assert routed == "payments-agent:follow up"
+
+
 def test_thread_tracking_persists_across_router_restarts(tmp_path) -> None:
     registry = AgentRegistry(tmp_path / "agents.json")
     dispatcher = FakeDispatcher()
