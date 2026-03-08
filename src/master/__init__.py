@@ -7,6 +7,7 @@ __all__ = [
     "service",
     "cli",
     "command_dispatch",
+    "command_format",
     "slack_app",
     "router",
     "main",
