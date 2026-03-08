@@ -13,6 +13,8 @@ from .runtime_adapter import RuntimeAdapter
 
 DEFAULT_IMAGE = "codex-slack-bot:latest"
 DEFAULT_RUNTIME = "podman"
+DEFAULT_AGENT_ADAPTER = "codex"
+SUPPORTED_AGENT_ADAPTERS = {"codex", "claude-code"}
 LOGGER = logging.getLogger(__name__)
 
 
@@ -35,6 +37,7 @@ class MasterService:
         agent_ssh_known_hosts_path: str | None = None,
         git_user_name: str | None = None,
         git_user_email: str | None = None,
+        default_agent_adapter: str = DEFAULT_AGENT_ADAPTER,
     ) -> None:
         self._registry = registry
         self._runtime = runtime
@@ -44,6 +47,7 @@ class MasterService:
         self._agent_ssh_known_hosts_path = agent_ssh_known_hosts_path
         self._git_user_name = git_user_name
         self._git_user_email = git_user_email
+        self._default_agent_adapter = default_agent_adapter if default_agent_adapter in SUPPORTED_AGENT_ADAPTERS else DEFAULT_AGENT_ADAPTER
 
     def list_agents(self) -> CommandResult:
         agents = [agent.to_dict() for agent in self._registry.list_agents()]
@@ -51,11 +55,28 @@ class MasterService:
         self._audit(command="list", agent="-", result=result)
         return result
 
-    def load_agent(self, *, name: str, repo_path: str, channel_id: str, repo_ref: str = "main") -> CommandResult:
+    def load_agent(
+        self,
+        *,
+        name: str,
+        repo_path: str,
+        channel_id: str,
+        repo_ref: str = "main",
+        agent_adapter: str | None = None,
+    ) -> CommandResult:
         validation_error = self._validate_load_inputs(name=name, channel_id=channel_id)
         if validation_error:
             self._audit(command="load", agent=name or "-", result=validation_error)
             return validation_error
+        if agent_adapter and agent_adapter not in SUPPORTED_AGENT_ADAPTERS:
+            result = CommandResult(
+                ok=False,
+                code="ERR_INVALID_ARGS",
+                message=f"unsupported agent adapter: {agent_adapter}",
+                data={"field": "agent_adapter", "supported": sorted(SUPPORTED_AGENT_ADAPTERS)},
+            )
+            self._audit(command="load", agent=name or "-", result=result)
+            return result
 
         try:
             self._clear_cached_checkout(name)
@@ -88,6 +109,7 @@ class MasterService:
 
         image_plan = self._resolve_image_plan(str(checkout_path))
         record = self._registry.get(name)
+        selected_adapter = agent_adapter or (record.agent_adapter if record else self._default_agent_adapter)
         if not record:
             record = AgentRecord(
                 name=name,
@@ -97,6 +119,7 @@ class MasterService:
                 runtime=DEFAULT_RUNTIME,
                 image_plan=image_plan,
                 status="loaded",
+                agent_adapter=selected_adapter,
                 repo_source=repo_source,
                 repo_ref=resolved_repo_ref,
             )
@@ -108,6 +131,7 @@ class MasterService:
             record.last_error = None
             record.repo_source = repo_source
             record.repo_ref = resolved_repo_ref
+            record.agent_adapter = selected_adapter
 
         saved = self._registry.upsert(record)
         result = CommandResult(
@@ -119,6 +143,7 @@ class MasterService:
                 "image_plan": saved.image_plan,
                 "channel_id": saved.channel_id,
                 "repo_ref": saved.repo_ref,
+                "agent_adapter": saved.agent_adapter,
             },
         )
         self._audit(command="load", agent=name, result=result)

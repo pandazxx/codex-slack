@@ -32,6 +32,7 @@ class AgentDispatcher(Protocol):
     def send_prompt(
         self,
         *,
+        agent_adapter: str = "codex",
         agent_name: str,
         container_name: str,
         prompt: str,
@@ -82,6 +83,7 @@ class PodmanExecDispatcher:
     def send_prompt(
         self,
         *,
+        agent_adapter: str = "codex",
         agent_name: str,
         container_name: str,
         prompt: str,
@@ -247,6 +249,39 @@ class PodmanExecDispatcher:
             raise RouteError(f"command failed ({' '.join(cmd)}): {self._clip(completed.stderr)}")
 
 
+@dataclass(frozen=True)
+class MultiAgentDispatcher:
+    dispatchers: dict[str, AgentDispatcher]
+    default_adapter: str = "codex"
+
+    def send_prompt(
+        self,
+        *,
+        agent_adapter: str = "codex",
+        agent_name: str,
+        container_name: str,
+        prompt: str,
+        channel_id: str,
+        thread_ts: str | None,
+        user_id: str | None,
+        image_urls: list[str] | None = None,
+    ) -> str:
+        selected = (agent_adapter or self.default_adapter).strip().lower()
+        dispatcher = self.dispatchers.get(selected) or self.dispatchers.get(self.default_adapter)
+        if dispatcher is None:
+            raise RouteError(f"unsupported agent adapter: {agent_adapter}")
+        return dispatcher.send_prompt(
+            agent_adapter=selected,
+            agent_name=agent_name,
+            container_name=container_name,
+            prompt=prompt,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            image_urls=image_urls,
+        )
+
+
 @dataclass
 class ChannelRouter:
     registry: AgentRegistry
@@ -324,6 +359,7 @@ class ChannelRouter:
 
         started_at = time.perf_counter()
         response = self.dispatcher.send_prompt(
+            agent_adapter=record.agent_adapter,
             agent_name=record.name,
             container_name=record.container_name,
             prompt=prompt,

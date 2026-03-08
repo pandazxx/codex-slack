@@ -7,7 +7,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .config import load_master_settings
 from .registry import AgentRegistry
-from .router import ChannelRouter, PodmanExecDispatcher
+from .router import ChannelRouter, MultiAgentDispatcher, PodmanExecDispatcher
 from .runtime_adapter import PodmanRuntimeAdapter
 from .service import MasterService
 from .slack_app import CommandRateLimiter, create_master_app
@@ -36,7 +36,7 @@ def main() -> None:
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup registry_path=%s thread_state_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s bot_token=%s app_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        "master.startup registry_path=%s thread_state_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s default_adapter=%s bot_token=%s app_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
         settings.registry_path,
         settings.thread_state_path,
         ",".join(sorted(settings.admin_channels)),
@@ -47,6 +47,7 @@ def main() -> None:
         settings.agent_ssh_known_hosts_path or "-",
         settings.git_user_name or "-",
         settings.git_user_email or "-",
+        settings.default_agent_adapter,
         mask_token(settings.slack_bot_token),
         mask_token(settings.slack_app_token),
         settings.dispatch_timeout_seconds,
@@ -64,11 +65,21 @@ def main() -> None:
         agent_ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
         git_user_name=settings.git_user_name,
         git_user_email=settings.git_user_email,
+        default_agent_adapter=settings.default_agent_adapter,
     )
-    dispatcher = PodmanExecDispatcher(
-        command_template=settings.dispatch_command_template,
+    codex_dispatcher = PodmanExecDispatcher(
+        command_template=settings.codex_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
         slack_bot_token=settings.slack_bot_token,
+    )
+    claude_dispatcher = PodmanExecDispatcher(
+        command_template=settings.claude_command_template,
+        timeout_seconds=settings.dispatch_timeout_seconds,
+        slack_bot_token=settings.slack_bot_token,
+    )
+    dispatcher = MultiAgentDispatcher(
+        dispatchers={"codex": codex_dispatcher, "claude-code": claude_dispatcher},
+        default_adapter=settings.default_agent_adapter,
     )
     router = ChannelRouter(
         registry=registry,

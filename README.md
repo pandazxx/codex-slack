@@ -85,7 +85,10 @@ Required env:
 - Optional: `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` (passed into agents and written to repo-local `git config user.name` / `user.email` during worker startup)
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
-- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec --dangerously-bypass-approvals-and-sandbox resume --last -`)
+- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (legacy/default fallback for Codex template)
+- Optional: `MASTER_CODEX_COMMAND_TEMPLATE` (default `codex exec --dangerously-bypass-approvals-and-sandbox resume --last -`)
+- Optional: `MASTER_CLAUDE_COMMAND_TEMPLATE` (default `claude -p`)
+- Optional: `MASTER_DEFAULT_AGENT_ADAPTER` (`codex` default, supported: `codex`, `claude-code`)
 - Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
 - Optional: `MASTER_COMMAND_RATE_LIMIT_COUNT` (default `20`)
 - Optional: `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
@@ -107,6 +110,7 @@ Operator notes:
 - `/master-agent-status <name> --full` returns chunked full JSON output across multiple Slack messages.
 - Image attachments in mapped channel conversations are forwarded to agents as `url_private` references appended to the prompt.
 - For Slack private image fetch, ensure bot scope includes `files:read`.
+- Agent records now persist an `agent_adapter` field; default is `codex`.
 - For lean worker deployments, this repo includes `Dockerfile.agent-minimal`.
 - CI/CD workflow `.github/workflows/publish-agent-minimal.yml` publishes the minimal agent image to `ghcr.io/<owner>/codex-slack-agent-minimal` on `master` and version tags.
 

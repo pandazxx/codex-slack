@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 from src.master.registry import AgentRecord, AgentRegistry
-from src.master.router import ChannelRouter, PodmanExecDispatcher, RouteError, RouteSkip
+from src.master.router import ChannelRouter, MultiAgentDispatcher, PodmanExecDispatcher, RouteError, RouteSkip
 
 
 class FakeDispatcher:
@@ -15,6 +15,7 @@ class FakeDispatcher:
     def send_prompt(
         self,
         *,
+        agent_adapter: str = "codex",
         agent_name: str,
         container_name: str,
         prompt: str,
@@ -26,6 +27,7 @@ class FakeDispatcher:
         self.calls.append(
             {
                 "agent_name": agent_name,
+                "agent_adapter": agent_adapter,
                 "container_name": container_name,
                 "prompt": prompt,
                 "channel_id": channel_id,
@@ -66,6 +68,7 @@ def test_route_prompt_for_mapped_channel(tmp_path) -> None:
 
     assert response == "payments-agent:hello world"
     assert dispatcher.calls[0]["container_name"] == "agent-payments"
+    assert dispatcher.calls[0]["agent_adapter"] == "codex"
 
 
 def test_route_prompt_includes_image_urls_and_tracks_usage(tmp_path) -> None:
@@ -87,6 +90,26 @@ def test_route_prompt_includes_image_urls_and_tracks_usage(tmp_path) -> None:
     usage = router.usage_summary("payments-agent")
     assert usage[0]["prompt_count"] == 1
     assert usage[0]["image_count"] == 1
+
+
+def test_route_prompt_uses_recorded_claude_adapter(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    record = registry.get("payments-agent")
+    assert record is not None
+    record.agent_adapter = "claude-code"
+    registry.upsert(record)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    router.route_prompt(
+        channel_id="CAGENT",
+        text="<@U123> hello adapter",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert dispatcher.calls[0]["agent_adapter"] == "claude-code"
 
 
 def test_route_prompt_allows_image_only_message(tmp_path) -> None:
@@ -130,6 +153,7 @@ class FailingDispatcher(FakeDispatcher):
     def send_prompt(
         self,
         *,
+        agent_adapter: str = "codex",
         agent_name: str,
         container_name: str,
         prompt: str,
@@ -376,3 +400,23 @@ def test_podman_exec_dispatcher_does_not_inject_resume_for_last_template(monkeyp
     )
 
     assert seen["cmd"][-1] == "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
+
+
+def test_multi_agent_dispatcher_selects_adapter_by_name() -> None:
+    codex = FakeDispatcher()
+    claude = FakeDispatcher()
+    dispatcher = MultiAgentDispatcher(dispatchers={"codex": codex, "claude-code": claude}, default_adapter="codex")
+
+    response = dispatcher.send_prompt(
+        agent_adapter="claude-code",
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert response == "payments-agent:hello"
+    assert len(codex.calls) == 0
+    assert len(claude.calls) == 1

@@ -70,6 +70,47 @@ def test_load_agent_detects_dockerfile_plan(tmp_path) -> None:
     result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
     assert result.ok is True
     assert result.data["image_plan"]["type"] == "dockerfile"
+    assert result.data["agent_adapter"] == "codex"
+
+
+def test_load_agent_supports_explicit_claude_adapter(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(
+        name="payments-api",
+        repo_path=str(repo),
+        channel_id="C123",
+        agent_adapter="claude-code",
+    )
+    assert result.ok is True
+    assert result.data["agent_adapter"] == "claude-code"
+
+    record = registry.get("payments-api")
+    assert record is not None
+    assert record.agent_adapter == "claude-code"
+
+
+def test_load_agent_rejects_unsupported_adapter(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(
+        name="payments-api",
+        repo_path=str(repo),
+        channel_id="C123",
+        agent_adapter="unknown",
+    )
+    assert result.ok is False
+    assert result.code == "ERR_INVALID_ARGS"
 
 
 def test_load_agent_channel_conflict(tmp_path) -> None:

@@ -23,6 +23,7 @@ class AgentRecord:
     runtime: str
     image_plan: dict[str, Any]
     status: str
+    agent_adapter: str = "codex"
     repo_source: str = ""
     repo_ref: str = "main"
     resolved_image: str | None = None
