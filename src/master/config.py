@@ -7,8 +7,6 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class MasterSettings:
-    frontend: str
-    discord_bot_token: str | None
     slack_bot_token: str
     slack_app_token: str
     admin_channels: set[str]
@@ -23,7 +21,6 @@ class MasterSettings:
     git_user_email: str | None
     dispatch_command_template: str
     dispatch_timeout_seconds: int | None
-    agent_adapter: str
     command_rate_limit_count: int
     command_rate_limit_window_seconds: int
 
@@ -37,11 +34,6 @@ def _parse_bool(raw_value: str) -> bool:
 
 
 def load_master_settings() -> MasterSettings:
-    frontend = os.getenv("MASTER_FRONTEND", "slack").strip().lower() or "slack"
-    if frontend not in {"slack", "discord"}:
-        raise ValueError("MASTER_FRONTEND must be one of: slack, discord")
-
-    discord_bot_token = os.getenv("DISCORD_BOT_TOKEN", "").strip() or None
     bot_token = os.getenv("SLACK_BOT_TOKEN", "").strip()
     app_token = os.getenv("SLACK_APP_TOKEN", "").strip()
     admin_channels = _parse_admin_channels(os.getenv("MASTER_ADMIN_CHANNELS", ""))
@@ -64,9 +56,6 @@ def load_master_settings() -> MasterSettings:
     dispatch_timeout_seconds = int(raw_dispatch_timeout) if raw_dispatch_timeout else None
     if dispatch_timeout_seconds is not None and dispatch_timeout_seconds <= 0:
         dispatch_timeout_seconds = None
-    agent_adapter = os.getenv("MASTER_AGENT_ADAPTER", "codex").strip().lower() or "codex"
-    if agent_adapter not in {"codex"}:
-        raise ValueError("MASTER_AGENT_ADAPTER must be one of: codex")
     raw_rate_limit_count = os.getenv("MASTER_COMMAND_RATE_LIMIT_COUNT", "20").strip()
     raw_rate_limit_window = os.getenv("MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS", "60").strip()
     command_rate_limit_count = int(raw_rate_limit_count) if raw_rate_limit_count else 20
@@ -77,21 +66,16 @@ def load_master_settings() -> MasterSettings:
         command_rate_limit_window_seconds = 60
 
     missing: list[str] = []
-    if frontend == "slack":
-        if not bot_token:
-            missing.append("SLACK_BOT_TOKEN")
-        if not app_token:
-            missing.append("SLACK_APP_TOKEN")
-    elif frontend == "discord" and not discord_bot_token:
-        missing.append("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        missing.append("SLACK_BOT_TOKEN")
+    if not app_token:
+        missing.append("SLACK_APP_TOKEN")
     if not admin_channels:
         missing.append("MASTER_ADMIN_CHANNELS")
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
     return MasterSettings(
-        frontend=frontend,
-        discord_bot_token=discord_bot_token,
         slack_bot_token=bot_token,
         slack_app_token=app_token,
         admin_channels=admin_channels,
@@ -106,7 +90,6 @@ def load_master_settings() -> MasterSettings:
         git_user_email=git_user_email,
         dispatch_command_template=dispatch_command_template,
         dispatch_timeout_seconds=dispatch_timeout_seconds,
-        agent_adapter=agent_adapter,
         command_rate_limit_count=command_rate_limit_count,
         command_rate_limit_window_seconds=command_rate_limit_window_seconds,
     )

@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .config import load_master_settings
-from .discord_app import run_discord_frontend
 from .registry import AgentRegistry
 from .router import ChannelRouter, PodmanExecDispatcher
 from .runtime_adapter import PodmanRuntimeAdapter
@@ -37,9 +36,7 @@ def main() -> None:
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup frontend=%s adapter=%s registry_path=%s thread_state_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s bot_token=%s app_token=%s discord_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
-        settings.frontend,
-        settings.agent_adapter,
+        "master.startup registry_path=%s thread_state_path=%s admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s bot_token=%s app_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
         settings.registry_path,
         settings.thread_state_path,
         ",".join(sorted(settings.admin_channels)),
@@ -52,7 +49,6 @@ def main() -> None:
         settings.git_user_email or "-",
         mask_token(settings.slack_bot_token),
         mask_token(settings.slack_app_token),
-        mask_token(settings.discord_bot_token or ""),
         settings.dispatch_timeout_seconds,
         settings.command_rate_limit_count,
         settings.command_rate_limit_window_seconds,
@@ -69,8 +65,6 @@ def main() -> None:
         git_user_name=settings.git_user_name,
         git_user_email=settings.git_user_email,
     )
-    if settings.agent_adapter != "codex":
-        raise ValueError(f"Unsupported MASTER_AGENT_ADAPTER: {settings.agent_adapter}")
     dispatcher = PodmanExecDispatcher(
         command_template=settings.dispatch_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
@@ -87,23 +81,16 @@ def main() -> None:
         window_seconds=settings.command_rate_limit_window_seconds,
     )
 
-    if settings.frontend == "slack":
-        app = create_master_app(
-            bot_token=settings.slack_bot_token,
-            admin_channels=settings.admin_channels,
-            service=service,
-            router=router,
-            rate_limiter=rate_limiter,
-        )
-        logging.getLogger(__name__).info("master.socket_mode_starting")
-        handler = SocketModeHandler(app, settings.slack_app_token)
-        handler.start()
-        return
-
-    if not settings.discord_bot_token:
-        raise ValueError("DISCORD_BOT_TOKEN is required when MASTER_FRONTEND=discord")
-    logging.getLogger(__name__).info("master.discord_mode_starting")
-    run_discord_frontend(bot_token=settings.discord_bot_token, router=router)
+    app = create_master_app(
+        bot_token=settings.slack_bot_token,
+        admin_channels=settings.admin_channels,
+        service=service,
+        router=router,
+        rate_limiter=rate_limiter,
+    )
+    logging.getLogger(__name__).info("master.socket_mode_starting")
+    handler = SocketModeHandler(app, settings.slack_app_token)
+    handler.start()
 
 
 if __name__ == "__main__":
