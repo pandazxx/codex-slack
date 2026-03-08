@@ -8,6 +8,7 @@ __all__ = [
     "cli",
     "command_dispatch",
     "command_format",
+    "command_runtime",
     "slack_app",
     "discord_app",
     "router",

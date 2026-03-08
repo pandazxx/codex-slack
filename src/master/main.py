@@ -115,7 +115,13 @@ def main() -> None:
     if "discord" in settings.frontends:
         discord_thread = Thread(
             target=run_discord_frontend,
-            kwargs={"bot_token": settings.discord_bot_token or "", "router": router},
+            kwargs={
+                "bot_token": settings.discord_bot_token or "",
+                "admin_channels": settings.discord_admin_channels,
+                "service": service,
+                "router": router,
+                "rate_limiter": rate_limiter,
+            },
             name="frontend-discord",
             daemon=True,
         )

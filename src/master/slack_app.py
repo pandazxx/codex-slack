@@ -11,8 +11,6 @@ from .command_dispatch import (
     MasterCommandRequest as SlackCommandRequest,
     dispatch_command as dispatch_slash_command,
     parse_load_text,
-    parse_optional_name_text,
-    parse_single_name_text,
     parse_status_text,
 )
 from .command_format import (
@@ -20,6 +18,7 @@ from .command_format import (
     format_status_full_chunks,
     wants_full_status,
 )
+from .command_runtime import execute_master_command
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import CommandResult, MasterService
 
@@ -71,127 +70,21 @@ def _register_command(
     def on_command(ack, respond, command: dict) -> None:  # type: ignore[no-untyped-def]
         ack()
 
-        request = SlackCommandRequest(
+        text = command.get("text", "")
+        channel_id = command.get("channel_id", "")
+        user_id = command.get("user_id", "")
+        messages = execute_master_command(
             command_name=command_name,
-            text=command.get("text", ""),
-            channel_id=command.get("channel_id", ""),
-            user_id=command.get("user_id", ""),
+            text=text,
+            channel_id=channel_id,
+            user_id=user_id,
+            admin_channels=admin_channels,
+            service=service,
+            router=router,
+            rate_limiter=rate_limiter,
         )
-        LOGGER.info(
-            "master.command_received command=%s channel=%s user=%s",
-            command_name,
-            request.channel_id,
-            request.user_id or "-",
-        )
-
-        if not is_admin_channel(request.channel_id, admin_channels):
-            LOGGER.warning(
-                "master.command_rejected command=%s reason=non_admin_channel channel=%s user=%s admin_channels=%s",
-                command_name,
-                request.channel_id or "-",
-                request.user_id or "-",
-                ",".join(sorted(admin_channels)),
-            )
-            respond(
-                format_command_result(
-                    command_name,
-                    CommandResult(
-                        ok=False,
-                        code="ERR_INVALID_ARGS",
-                        message="command allowed in admin channel only",
-                        data={"channel_id": request.channel_id},
-                    ),
-                )
-            )
-            return
-
-        limiter_key = f"{request.channel_id}:{request.user_id}"
-        if rate_limiter and not rate_limiter.allow(limiter_key):
-            LOGGER.warning(
-                "master.command_rejected command=%s reason=rate_limited channel=%s user=%s key=%s max_calls=%d window_seconds=%d",
-                command_name,
-                request.channel_id or "-",
-                request.user_id or "-",
-                limiter_key,
-                rate_limiter.max_calls,
-                rate_limiter.window_seconds,
-            )
-            respond(
-                format_command_result(
-                    command_name,
-                    CommandResult(
-                        ok=False,
-                        code="ERR_RATE_LIMITED",
-                        message="command rate limited",
-                        data={"window_seconds": rate_limiter.window_seconds, "max_calls": rate_limiter.max_calls},
-                    ),
-                )
-            )
-            return
-
-        try:
-            if command_name == "/master-agent-usage":
-                if router is None:
-                    result = CommandResult(
-                        ok=False,
-                        code="ERR_INTERNAL",
-                        message="usage router is not configured",
-                        data={},
-                    )
-                else:
-                    selected_agent = parse_optional_name_text(request.text)
-                    result = CommandResult(
-                        ok=True,
-                        code="OK",
-                        message="usage listed",
-                        data={"usage": router.usage_summary(selected_agent)},
-                    )
-            else:
-                result = dispatch_slash_command(service, request)
-
-            LOGGER.info(
-                "master.command_dispatch_start command=%s channel=%s user=%s text=%r",
-                command_name,
-                request.channel_id or "-",
-                request.user_id or "-",
-                request.text,
-            )
-            LOGGER.info(
-                "master.command_dispatch_done command=%s channel=%s user=%s ok=%s code=%s",
-                command_name,
-                request.channel_id or "-",
-                request.user_id or "-",
-                result.ok,
-                result.code,
-            )
-            if command_name == "/master-agent-status" and result.ok and parse_status_text(request.text)[1]:
-                for message in format_status_full_chunks(command_name, result):
-                    respond(message)
-            else:
-                respond(format_command_result(command_name, result))
-        except ValueError as exc:
-            LOGGER.warning(
-                "master.command_rejected command=%s reason=invalid_args channel=%s user=%s error=%s text=%r",
-                command_name,
-                request.channel_id or "-",
-                request.user_id or "-",
-                str(exc),
-                request.text,
-            )
-            respond(
-                format_command_result(
-                    command_name,
-                    CommandResult(ok=False, code="ERR_INVALID_ARGS", message=str(exc), data={}),
-                )
-            )
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.exception("master slash command failed: %s", command_name)
-            respond(
-                format_command_result(
-                    command_name,
-                    CommandResult(ok=False, code="ERR_INTERNAL", message=str(exc), data={}),
-                )
-            )
+        for message in messages:
+            respond(message)
 
 
 def create_master_app(
