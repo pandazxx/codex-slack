@@ -453,6 +453,7 @@ def create_master_app(
             try:
                 router.track_thread(channel_id=channel_id, thread_ts=thread_ts)
                 router.mark_mention_event(channel_id=channel_id, ts=event_ts)
+                say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
                 response = router.route_prompt(
                     channel_id=channel_id,
                     text=text,
@@ -526,6 +527,7 @@ def create_master_app(
                 return
 
             try:
+                say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
                 LOGGER.info(
                     "thread route dispatch_start channel=%s thread_ts=%s user=%s text_chars=%d image_count=%d subtype=%s",
                     channel_id,
@@ -628,3 +630,11 @@ def select_thread_image_urls(image_urls: list[str], subtype: str | None) -> list
     if subtype == "file_share" and image_urls:
         return image_urls
     return image_urls
+
+
+def format_forward_ack(*, text: str, image_count: int) -> str:
+    text_chars = len(text)
+    return (
+        ":incoming_envelope: Received message and forwarded to agent. "
+        f"text_chars=`{text_chars}` images=`{image_count}`"
+    )

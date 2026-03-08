@@ -7,6 +7,7 @@ from src.master.slack_app import (
     SlackCommandRequest,
     dispatch_slash_command,
     extract_image_urls,
+    format_forward_ack,
     format_status_full_chunks,
     format_command_result,
     is_admin_channel,
@@ -306,6 +307,13 @@ def test_select_thread_image_urls_keeps_all_for_file_share() -> None:
         "file_share",
     )
     assert selected == ["https://files.slack.com/first.png", "https://files.slack.com/second.png"]
+
+
+def test_format_forward_ack_contains_text_and_image_counts() -> None:
+    payload = format_forward_ack(text="hello", image_count=2)
+    assert "Received message and forwarded to agent." in payload
+    assert "text_chars=`5`" in payload
+    assert "images=`2`" in payload
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:
