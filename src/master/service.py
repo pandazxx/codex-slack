@@ -375,6 +375,7 @@ class MasterService:
         gh_token = os.getenv("GH_TOKEN", "").strip()
         github_token = os.getenv("GITHUB_TOKEN", "").strip()
         openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
         if gh_token:
             env["GH_TOKEN"] = gh_token
@@ -382,6 +383,8 @@ class MasterService:
             env["GITHUB_TOKEN"] = github_token
         if openai_api_key:
             env["OPENAI_API_KEY"] = openai_api_key
+        if anthropic_api_key:
+            env["ANTHROPIC_API_KEY"] = anthropic_api_key
         if self._git_user_name:
             env["AGENT_GIT_USER_NAME"] = self._git_user_name
         if self._git_user_email:

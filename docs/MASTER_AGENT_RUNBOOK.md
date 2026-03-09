@@ -14,6 +14,7 @@ Containerized UAT is required for v3.0 sign-off.
 - For rootless Podman, mount `/run/user/<uid>/podman/podman.sock` and run the master container with `--userns=keep-id --security-opt label=disable`.
 - `podman` CLI installed inside the master image/container.
 - Provide `GH_TOKEN` on the master container so it can be forwarded into agent workers for repo access.
+- For `claude-code` adapter agents, provide `ANTHROPIC_API_KEY` on the master container so it can be forwarded into workers.
 - Provide `MASTER_CODEX_AUTH_JSON_PATH` as a host path to the shared Codex `auth.json`; v1 forwards only this auth file to agents, not Codex session directories.
 - Provide `MASTER_SSH_AUTH_SOCK_PATH` as a host path to the SSH agent socket for private repo checkout and push over SSH.
 - Optional: provide `MASTER_SSH_KNOWN_HOSTS_PATH` as a host path to `known_hosts` for explicit SSH host verification. If omitted, master and agents default to `StrictHostKeyChecking=no` with `/dev/null` known hosts.

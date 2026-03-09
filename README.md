@@ -97,6 +97,10 @@ Required env:
 - Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
 - Optional: `MASTER_COMMAND_RATE_LIMIT_COUNT` (default `20`)
 - Optional: `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
+- Optional auth pass-through env from master to agents:
+  - `GH_TOKEN` / `GITHUB_TOKEN`
+  - `OPENAI_API_KEY` (Codex/OpenAI tooling)
+  - `ANTHROPIC_API_KEY` (Claude Code tooling)
 - For a Compose-based master runtime, use `docker-compose.master-agent.example.yml` (Podman Compose-oriented example for the v1 master container)
   Set `MASTER_RUNTIME_IMAGE` to override the master container image tag used by that compose example.
 
