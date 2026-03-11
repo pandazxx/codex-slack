@@ -213,6 +213,7 @@ def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> No
 
     monkeypatch.setenv("GH_TOKEN", "gh-token-value")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
 
     registry = AgentRegistry(tmp_path / "agents.json")
@@ -229,7 +230,8 @@ def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> No
     assert env["CODEX_HOME"] == "/workspace/.codex"
     assert env["GH_TOKEN"] == "gh-token-value"
     assert env["OPENAI_API_KEY"] == "openai-key"
-    assert env["ANTHROPIC_API_KEY"] == "anthropic-key"
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+    assert "ANTHROPIC_API_KEY" not in env
 
 
 def test_start_agent_passes_git_identity_to_agent(tmp_path) -> None:

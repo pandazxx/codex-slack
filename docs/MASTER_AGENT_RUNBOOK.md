@@ -14,7 +14,8 @@ Containerized UAT is required for v3.0 sign-off.
 - For rootless Podman, mount `/run/user/<uid>/podman/podman.sock` and run the master container with `--userns=keep-id --security-opt label=disable`.
 - `podman` CLI installed inside the master image/container.
 - Provide `GH_TOKEN` on the master container so it can be forwarded into agent workers for repo access.
-- For `claude-code` adapter agents, provide `ANTHROPIC_API_KEY` on the master container so it can be forwarded into workers.
+- For `claude-code` adapter agents, prefer `CLAUDE_CODE_OAUTH_TOKEN` on the master container for headless subscription auth.
+- Use `ANTHROPIC_API_KEY` only for Claude Console/API billing flows, and only when `CLAUDE_CODE_OAUTH_TOKEN` is absent.
 - Provide `MASTER_CODEX_AUTH_JSON_PATH` as a host path to the shared Codex `auth.json`; v1 forwards only this auth file to agents, not Codex session directories.
 - Provide `MASTER_SSH_AUTH_SOCK_PATH` as a host path to the SSH agent socket for private repo checkout and push over SSH.
 - Optional: provide `MASTER_SSH_KNOWN_HOSTS_PATH` as a host path to `known_hosts` for explicit SSH host verification. If omitted, master and agents default to `StrictHostKeyChecking=no` with `/dev/null` known hosts.
@@ -33,6 +34,7 @@ podman run --rm \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
   -e GH_TOKEN \
+  -e CLAUDE_CODE_OAUTH_TOKEN \
   -e SSH_AUTH_SOCK=/ssh-agent \
   -e MASTER_GIT_USER_NAME='Your Name' \
   -e MASTER_GIT_USER_EMAIL='you@example.com' \
@@ -72,6 +74,7 @@ export MASTER_ADMIN_CHANNELS="<admin_channel_id>"
 export MASTER_AGENT_BASE_IMAGE="codex-slack-v1-uat"
 export MASTER_GIT_USER_NAME="Your Name"
 export MASTER_GIT_USER_EMAIL="you@example.com"
+export CLAUDE_CODE_OAUTH_TOKEN="..."
 export MASTER_FRONTENDS="slack,discord"
 export DISCORD_BOT_TOKEN="..."
 export DISCORD_ADMIN_CHANNELS="<discord_admin_channel_id>"
@@ -97,6 +100,11 @@ If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `S
 If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup so commits do not require manual setup.
 Default is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'`.
 Default adapter is `MASTER_DEFAULT_AGENT_ADAPTER=codex`.
+For Claude subscription auth in headless containers, generate `CLAUDE_CODE_OAUTH_TOKEN` on the host with:
+```bash
+claude setup-token
+```
+Then export that token into the master container environment. If `CLAUDE_CODE_OAUTH_TOKEN` is present, the master prefers it over `ANTHROPIC_API_KEY` when building agent env.
 Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
 The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
 2. Verify startup logs include:

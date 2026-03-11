@@ -60,6 +60,7 @@ MASTER_DRY_RUN=false
 MASTER_DEFAULT_AGENT_ADAPTER=codex
 MASTER_CODEX_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox resume --last -
 MASTER_CLAUDE_COMMAND_TEMPLATE=claude -p
+CLAUDE_CODE_OAUTH_TOKEN=...
 MASTER_AGENT_TIMEOUT_SECONDS=120
 MASTER_COMMAND_RATE_LIMIT_COUNT=20
 MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60
@@ -68,6 +69,7 @@ MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60
 Notes:
 - To run Discord only, set `MASTER_FRONTENDS=discord` and omit Slack tokens.
 - If both frontends are enabled, both Slack and Discord admin channel allowlists are required.
+- For `claude-code` subscription auth in containers, generate `CLAUDE_CODE_OAUTH_TOKEN` on the host with `claude setup-token` and pass it to master.
 
 ## 6. Start Master
 ```bash
