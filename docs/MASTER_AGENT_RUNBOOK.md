@@ -85,28 +85,40 @@ mkdir -p "${MASTER_DATA_DIR}"
 podman compose -f docker-compose.master-agent.example.yml up --build -d
 podman compose -f docker-compose.master-agent.example.yml logs -f
 ```
-The compose example is intended for Podman Compose and already includes `userns_mode: keep-id`, `security_opt: [label=disable]`, and `x-podman.in_pod: false`.
+The compose example is intended for Podman Compose and already includes:
+- `userns_mode: keep-id`
+- `security_opt: [label=disable]`
+- `x-podman.in_pod: false`
+
 It also reads the master container image from `MASTER_RUNTIME_IMAGE` (default `codex-slack-v1-uat`) so you can swap tags without editing the compose file.
+
 For non-container local debugging, you can also run:
 ```bash
 python -m src.master.main
 ```
-Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent containers. If this is left unset, default-image agents still start from `codex-slack-bot:latest`.
-`MASTER_CODEX_AUTH_JSON_PATH` must be a host filesystem path visible to host Podman because the master uses the host Podman socket. It is mounted into each agent as `/run/secrets/codex_auth.json:ro`.
-`MASTER_SSH_AUTH_SOCK_PATH` must be a host filesystem path visible to host Podman. It is mounted into each agent as `/run/secrets/ssh-auth.sock`.
-The master container itself also needs the same socket mounted separately (for example `-v /absolute/host/path/ssh-agent.sock:/ssh-agent`) with `SSH_AUTH_SOCK=/ssh-agent` so `/master-agent-load` can clone private repos over SSH.
-If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it must also be a host filesystem path visible to host Podman and is mounted into each agent as `/run/secrets/ssh_known_hosts:ro`.
-If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`.
-If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup so commits do not require manual setup.
-Default is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'`.
-Default adapter is `MASTER_DEFAULT_AGENT_ADAPTER=codex`.
-For Claude subscription auth in headless containers, generate `CLAUDE_CODE_OAUTH_TOKEN` on the host with:
+
+Important env notes:
+- Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent containers. If unset, default-image agents still start from `codex-slack-bot:latest`.
+- `MASTER_CODEX_AUTH_JSON_PATH` must be a host filesystem path visible to host Podman. It is mounted into each agent as `/run/secrets/codex_auth.json:ro`.
+- `MASTER_SSH_AUTH_SOCK_PATH` must be a host filesystem path visible to host Podman. It is mounted into each agent as `/run/secrets/ssh-auth.sock`.
+- The master container itself also needs the same SSH socket mounted separately, for example `-v /absolute/host/path/ssh-agent.sock:/ssh-agent`, with `SSH_AUTH_SOCK=/ssh-agent` so `/master-agent-load` can clone private repos over SSH.
+- If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it must also be host-visible and is mounted into each agent as `/run/secrets/ssh_known_hosts:ro`.
+- If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`.
+- If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup.
+- Default command template is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'`.
+- Default adapter is `MASTER_DEFAULT_AGENT_ADAPTER=codex`.
+
+Claude subscription auth in headless containers:
+- Generate `CLAUDE_CODE_OAUTH_TOKEN` on the host with:
 ```bash
 claude setup-token
 ```
-Then export that token into the master container environment. If `CLAUDE_CODE_OAUTH_TOKEN` is present, the master prefers it over `ANTHROPIC_API_KEY` when building agent env.
-Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
-The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
+- Export that token into the master container environment.
+- If `CLAUDE_CODE_OAUTH_TOKEN` is present, the master prefers it over `ANTHROPIC_API_KEY` when building agent env.
+
+Persistence notes:
+- Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
+- The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
 2. Verify startup logs include:
 - loaded admin channels
 - registry path
