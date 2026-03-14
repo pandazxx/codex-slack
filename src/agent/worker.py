@@ -119,6 +119,10 @@ def stage_repo_sync(settings: WorkerSettings) -> Path:
 
 
 def stage_workspace_prepare(settings: WorkerSettings) -> None:
+    home_dir = Path(os.getenv("HOME", "/home/appuser")).expanduser()
+    home_dir.mkdir(parents=True, exist_ok=True)
+    xdg_config_home = Path(os.getenv("XDG_CONFIG_HOME", str(home_dir / ".config"))).expanduser()
+    xdg_config_home.mkdir(parents=True, exist_ok=True)
     codex_home = Path(settings.codex_home)
     codex_home.mkdir(parents=True, exist_ok=True)
     repo_dir = Path(settings.workspace_path) / settings.repo_dir_name

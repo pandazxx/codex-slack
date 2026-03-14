@@ -5,7 +5,14 @@ import subprocess
 import pytest
 
 from src.master.registry import AgentRecord, AgentRegistry
-from src.master.router import ChannelRouter, MultiAgentDispatcher, PodmanExecDispatcher, RouteError, RouteSkip
+from src.master.router import (
+    ChannelRouter,
+    ClaudeCodeDispatcher,
+    MultiAgentDispatcher,
+    PodmanExecDispatcher,
+    RouteError,
+    RouteSkip,
+)
 
 
 class FakeDispatcher:
@@ -19,6 +26,7 @@ class FakeDispatcher:
         agent_name: str,
         container_name: str,
         prompt: str,
+        platform: str = "slack",
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
@@ -30,6 +38,7 @@ class FakeDispatcher:
                 "agent_adapter": agent_adapter,
                 "container_name": container_name,
                 "prompt": prompt,
+                "platform": platform,
                 "channel_id": channel_id,
                 "thread_ts": thread_ts,
                 "user_id": user_id,
@@ -157,6 +166,7 @@ class FailingDispatcher(FakeDispatcher):
         agent_name: str,
         container_name: str,
         prompt: str,
+        platform: str = "slack",
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
@@ -430,3 +440,81 @@ def test_multi_agent_dispatcher_selects_adapter_by_name() -> None:
     assert response == "payments-agent:hello"
     assert len(codex.calls) == 0
     assert len(claude.calls) == 1
+
+
+def test_claude_dispatcher_adds_stable_session_id(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        platform="slack",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert seen["cmd"][-1].startswith("claude -p --session-id ")
+
+
+def test_claude_dispatcher_uses_same_session_id_for_same_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="first",
+        platform="discord",
+        channel_id="123456789",
+        thread_ts="55555",
+        user_id="U123",
+    )
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="second",
+        platform="discord",
+        channel_id="123456789",
+        thread_ts="55555",
+        user_id="U123",
+    )
+
+    assert seen[0][-1] == seen[1][-1]
+
+
+def test_claude_dispatcher_respects_explicit_session_placeholder(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = ClaudeCodeDispatcher(command_template="claude -p --session-id {session_id}")
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        platform="slack",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert seen["cmd"][-1].count("--session-id") == 1

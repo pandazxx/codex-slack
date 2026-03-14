@@ -9,7 +9,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from .config import load_master_settings
 from .discord_app import run_discord_frontend
 from .registry import AgentRegistry
-from .router import ChannelRouter, MultiAgentDispatcher, PodmanExecDispatcher
+from .router import ChannelRouter, ClaudeCodeDispatcher, MultiAgentDispatcher, PodmanExecDispatcher
 from .runtime_adapter import PodmanRuntimeAdapter
 from .service import MasterService
 from .slack_app import CommandRateLimiter, create_master_app
@@ -80,7 +80,7 @@ def main() -> None:
         timeout_seconds=settings.dispatch_timeout_seconds,
         slack_bot_token=settings.slack_bot_token,
     )
-    claude_dispatcher = PodmanExecDispatcher(
+    claude_dispatcher = ClaudeCodeDispatcher(
         command_template=settings.claude_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
         slack_bot_token=settings.slack_bot_token,

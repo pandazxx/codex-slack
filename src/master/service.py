@@ -366,6 +366,8 @@ class MasterService:
     def _build_agent_env(self, record: AgentRecord) -> dict[str, str]:
         env = {
             "CODEX_CONTAINER_MODE": "agent-worker",
+            "HOME": "/workspace/home",
+            "XDG_CONFIG_HOME": "/workspace/home/.config",
             "CODEX_HOME": "/workspace/.codex",
             "AGENT_REPO_URL": record.repo_source or record.repo_path,
             "AGENT_REPO_REF": record.repo_ref,

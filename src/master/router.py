@@ -11,6 +11,7 @@ import tempfile
 from threading import Lock
 import time
 from typing import Protocol
+from uuid import NAMESPACE_URL, uuid5
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -36,6 +37,7 @@ class AgentDispatcher(Protocol):
         agent_name: str,
         container_name: str,
         prompt: str,
+        platform: str = "slack",
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
@@ -87,6 +89,7 @@ class PodmanExecDispatcher:
         agent_name: str,
         container_name: str,
         prompt: str,
+        platform: str = "slack",
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
@@ -261,6 +264,7 @@ class MultiAgentDispatcher:
         agent_name: str,
         container_name: str,
         prompt: str,
+        platform: str = "slack",
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
@@ -275,11 +279,142 @@ class MultiAgentDispatcher:
             agent_name=agent_name,
             container_name=container_name,
             prompt=prompt,
+            platform=platform,
             channel_id=channel_id,
             thread_ts=thread_ts,
             user_id=user_id,
             image_urls=image_urls,
         )
+
+
+@dataclass(frozen=True)
+class ClaudeCodeDispatcher(PodmanExecDispatcher):
+    command_template: str = "claude -p"
+
+    def _session_uuid(self, *, platform: str, channel_id: str, thread_ts: str | None) -> str:
+        source = f"{platform}:{channel_id}:{thread_ts or channel_id}"
+        return str(uuid5(NAMESPACE_URL, source))
+
+    def _render_command(self, *, platform: str, channel_id: str, thread_ts: str | None) -> tuple[str, str]:
+        session_id = self._session_uuid(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
+        if "{session_id}" in self.command_template:
+            return self.command_template.format(session_id=session_id), session_id
+
+        stripped = self.command_template.rstrip()
+        if "--session-id" in stripped or "--resume" in stripped or " -r " in f" {stripped} ":
+            return stripped, session_id
+        return f"{stripped} --session-id {session_id}", session_id
+
+    def send_prompt(
+        self,
+        *,
+        agent_adapter: str = "claude-code",
+        agent_name: str,
+        container_name: str,
+        prompt: str,
+        platform: str = "slack",
+        channel_id: str,
+        thread_ts: str | None,
+        user_id: str | None,
+        image_urls: list[str] | None = None,
+    ) -> str:
+        rendered_command, session_id = self._render_command(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
+        image_urls = image_urls or []
+        staged_paths, passthrough_urls = self._stage_images(
+            container_name=container_name,
+            session_id=session_id,
+            image_urls=image_urls,
+        )
+        effective_prompt = prompt
+        if staged_paths or passthrough_urls:
+            lines: list[str] = []
+            for path in staged_paths:
+                lines.append(f"- local file: {path}")
+            for url in passthrough_urls:
+                lines.append(f"- remote url: {url}")
+            prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
+            effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
+
+        cmd = ["podman", "exec", "-i"]
+        if self.codex_home:
+            cmd.extend(["-e", f"CODEX_HOME={self.codex_home}"])
+        if self.workdir:
+            cmd.extend(["--workdir", self.workdir])
+        cmd.extend([container_name, "sh", "-lc", rendered_command])
+        LOGGER.info(
+            "router.dispatch_start agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s session_id=%s agent_command=%r",
+            agent_name,
+            container_name,
+            platform,
+            channel_id,
+            thread_ts or "-",
+            user_id or "-",
+            len(prompt),
+            self.workdir or "-",
+            session_id,
+            rendered_command,
+        )
+        try:
+            completed = subprocess.run(
+                cmd,
+                input=effective_prompt,
+                text=True,
+                capture_output=True,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            LOGGER.warning(
+                "router.dispatch_failed agent=%s container=%s platform=%s channel=%s reason=timeout timeout_seconds=%s",
+                agent_name,
+                container_name,
+                platform,
+                channel_id,
+                self.timeout_seconds,
+            )
+            raise RouteError(f"dispatch timed out after {self.timeout_seconds}s") from exc
+        except FileNotFoundError as exc:
+            LOGGER.warning(
+                "router.dispatch_failed agent=%s container=%s platform=%s channel=%s reason=missing_binary error=%s",
+                agent_name,
+                container_name,
+                platform,
+                channel_id,
+                exc,
+            )
+            raise RouteError("podman CLI is not available in the master runtime") from exc
+
+        if completed.returncode != 0:
+            stderr_text = self._clip(completed.stderr)
+            stdout_text = self._clip(completed.stdout)
+            LOGGER.warning(
+                "router.dispatch_failed agent=%s container=%s platform=%s channel=%s exit_code=%s stderr=%r stdout=%r",
+                agent_name,
+                container_name,
+                platform,
+                channel_id,
+                completed.returncode,
+                stderr_text,
+                stdout_text,
+            )
+            details: list[str] = [f"exit={completed.returncode}"]
+            if stderr_text:
+                details.append(f"stderr={stderr_text}")
+            if stdout_text:
+                details.append(f"stdout={stdout_text}")
+            raise RouteError(f"dispatch failed ({', '.join(details)})")
+        response = completed.stdout.strip()
+        LOGGER.info(
+            "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s response_chars=%d",
+            agent_name,
+            container_name,
+            platform,
+            channel_id,
+            thread_ts or "-",
+            user_id or "-",
+            len(response),
+        )
+        return response
 
 
 @dataclass
@@ -377,6 +512,7 @@ class ChannelRouter:
             agent_name=record.name,
             container_name=record.container_name,
             prompt=prompt,
+            platform=platform,
             channel_id=channel_id,
             thread_ts=thread_ts,
             user_id=user_id,
