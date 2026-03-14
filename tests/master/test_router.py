@@ -465,7 +465,7 @@ def test_claude_dispatcher_adds_stable_session_id(monkeypatch) -> None:  # type:
     assert seen["cmd"][-1].startswith("claude -p --session-id ")
 
 
-def test_claude_dispatcher_uses_same_session_id_for_same_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_claude_dispatcher_uses_same_session_id_for_same_channel(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
     seen: list[list[str]] = []
 
@@ -490,7 +490,7 @@ def test_claude_dispatcher_uses_same_session_id_for_same_thread(monkeypatch) -> 
         prompt="second",
         platform="discord",
         channel_id="123456789",
-        thread_ts="55555",
+        thread_ts="99999",
         user_id="U123",
     )
 

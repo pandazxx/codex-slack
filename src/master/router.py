@@ -292,7 +292,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
     command_template: str = "claude -p"
 
     def _session_uuid(self, *, platform: str, channel_id: str, thread_ts: str | None) -> str:
-        source = f"{platform}:{channel_id}:{thread_ts or channel_id}"
+        del thread_ts
+        source = f"{platform}:{channel_id}"
         return str(uuid5(NAMESPACE_URL, source))
 
     def _render_command(self, *, platform: str, channel_id: str, thread_ts: str | None) -> tuple[str, str]:
