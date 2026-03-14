@@ -314,14 +314,28 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         thread_ts: str | None,
     ) -> tuple[str, str]:
         session_id = self._session_uuid(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
-        resume_flag = "--resume" if action == "resume" else "--session-id"
-        if "{session_id}" in self.command_template or "{resume_flag}" in self.command_template:
-            return self.command_template.format(session_id=session_id, resume_flag=resume_flag), session_id
+        rendered = self.command_template.rstrip()
+        if "{session_id}" in rendered or "{resume_flag}" in rendered:
+            rendered = rendered.format(
+                session_id=session_id,
+                resume_flag="--resume" if action == "resume" else "--session-id",
+            )
+        return self._apply_resume_action(command=rendered, action=action, session_id=session_id), session_id
 
-        stripped = self.command_template.rstrip()
-        if "--session-id" in stripped or "--resume" in stripped or " -r " in f" {stripped} ":
-            return stripped, session_id
-        return f"{stripped} {resume_flag} {session_id}", session_id
+    @staticmethod
+    def _apply_resume_action(*, command: str, action: str, session_id: str) -> str:
+        desired = f"--resume {session_id}" if action == "resume" else f"--session-id {session_id}"
+        matched = bool(
+            re.search(r"--session-id(?:=|\s+)\S+", command)
+            or re.search(r"--resume(?:=|\s+)\S+", command)
+            or re.search(r"(?:^|\s)-r\s+\S+", command)
+        )
+        rendered = re.sub(r"--session-id(?:=|\s+)\S+", desired, command)
+        rendered = re.sub(r"--resume(?:=|\s+)\S+", desired, rendered)
+        rendered = re.sub(r"(?:^|\s)-r\s+\S+", lambda match: f"{match.group(0)[0]}{desired}", rendered)
+        if matched:
+            return rendered
+        return f"{command.rstrip()} {desired}"
 
     def _load_known_sessions(self) -> dict[str, str]:
         path = (self.session_state_path or "").strip()

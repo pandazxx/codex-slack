@@ -570,10 +570,10 @@ def test_claude_dispatcher_retries_resume_when_session_already_exists(monkeypatc
 
 def test_claude_dispatcher_respects_explicit_session_placeholder(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     dispatcher = ClaudeCodeDispatcher(command_template="claude -p --session-id {session_id}")
-    seen: dict[str, object] = {}
+    seen: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        seen["cmd"] = cmd
+        seen.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
@@ -587,5 +587,15 @@ def test_claude_dispatcher_respects_explicit_session_placeholder(monkeypatch) ->
         thread_ts="1730000000.1234",
         user_id="U123",
     )
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="second",
+        platform="slack",
+        channel_id="CAGENT",
+        thread_ts="1730000001.1234",
+        user_id="U123",
+    )
 
-    assert seen["cmd"][-1].count("--session-id") == 1
+    assert seen[0][-1].count("--session-id") == 1
+    assert " --resume " in seen[1][-1]
