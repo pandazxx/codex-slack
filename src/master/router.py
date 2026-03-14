@@ -290,52 +290,101 @@ class MultiAgentDispatcher:
 @dataclass(frozen=True)
 class ClaudeCodeDispatcher(PodmanExecDispatcher):
     command_template: str = "claude -p"
+    session_state_path: str | None = None
+    _session_lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
+    _known_sessions: dict[str, str] = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_known_sessions", self._load_known_sessions())
+
+    def _session_key(self, *, platform: str, channel_id: str) -> str:
+        return f"{platform}:{channel_id}"
 
     def _session_uuid(self, *, platform: str, channel_id: str, thread_ts: str | None) -> str:
         del thread_ts
-        source = f"{platform}:{channel_id}"
+        source = self._session_key(platform=platform, channel_id=channel_id)
         return str(uuid5(NAMESPACE_URL, source))
 
-    def _render_command(self, *, platform: str, channel_id: str, thread_ts: str | None) -> tuple[str, str]:
+    def _render_command(
+        self,
+        *,
+        action: str,
+        platform: str,
+        channel_id: str,
+        thread_ts: str | None,
+    ) -> tuple[str, str]:
         session_id = self._session_uuid(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
-        if "{session_id}" in self.command_template:
-            return self.command_template.format(session_id=session_id), session_id
+        resume_flag = "--resume" if action == "resume" else "--session-id"
+        if "{session_id}" in self.command_template or "{resume_flag}" in self.command_template:
+            return self.command_template.format(session_id=session_id, resume_flag=resume_flag), session_id
 
         stripped = self.command_template.rstrip()
         if "--session-id" in stripped or "--resume" in stripped or " -r " in f" {stripped} ":
             return stripped, session_id
-        return f"{stripped} --session-id {session_id}", session_id
+        return f"{stripped} {resume_flag} {session_id}", session_id
 
-    def send_prompt(
+    def _load_known_sessions(self) -> dict[str, str]:
+        path = (self.session_state_path or "").strip()
+        if not path:
+            return {}
+        state_path = Path(path)
+        if not state_path.exists():
+            return {}
+        try:
+            raw = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("router.claude_session_state_load_failed path=%s error=%s", path, exc)
+            return {}
+        entries = raw.get("sessions")
+        if not isinstance(entries, dict):
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in entries.items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+
+    def _persist_known_sessions_unlocked(self) -> None:
+        path = (self.session_state_path or "").strip()
+        if not path:
+            return
+        state_path = Path(path)
+        payload = {"sessions": dict(sorted(self._known_sessions.items()))}
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("router.claude_session_state_persist_failed path=%s error=%s", path, exc)
+
+    @staticmethod
+    def _should_retry_with_resume(stderr_text: str) -> bool:
+        lowered = stderr_text.lower()
+        return "already in use" in lowered
+
+    @staticmethod
+    def _should_retry_with_create(stderr_text: str) -> bool:
+        lowered = stderr_text.lower()
+        return (
+            "no session" in lowered
+            or "not found" in lowered
+            or "does not exist" in lowered
+            or "unknown session" in lowered
+        )
+
+    def _execute_prompt(
         self,
         *,
-        agent_adapter: str = "claude-code",
+        rendered_command: str,
+        session_id: str,
         agent_name: str,
         container_name: str,
         prompt: str,
-        platform: str = "slack",
+        platform: str,
         channel_id: str,
         thread_ts: str | None,
         user_id: str | None,
-        image_urls: list[str] | None = None,
-    ) -> str:
-        rendered_command, session_id = self._render_command(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
-        image_urls = image_urls or []
-        staged_paths, passthrough_urls = self._stage_images(
-            container_name=container_name,
-            session_id=session_id,
-            image_urls=image_urls,
-        )
-        effective_prompt = prompt
-        if staged_paths or passthrough_urls:
-            lines: list[str] = []
-            for path in staged_paths:
-                lines.append(f"- local file: {path}")
-            for url in passthrough_urls:
-                lines.append(f"- remote url: {url}")
-            prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
-            effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
-
+        effective_prompt: str,
+    ) -> subprocess.CompletedProcess[str]:
         cmd = ["podman", "exec", "-i"]
         if self.codex_home:
             cmd.extend(["-e", f"CODEX_HOME={self.codex_home}"])
@@ -355,14 +404,67 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             session_id,
             rendered_command,
         )
+        return subprocess.run(
+            cmd,
+            input=effective_prompt,
+            text=True,
+            capture_output=True,
+            timeout=self.timeout_seconds,
+            check=False,
+        )
+
+    def send_prompt(
+        self,
+        *,
+        agent_adapter: str = "claude-code",
+        agent_name: str,
+        container_name: str,
+        prompt: str,
+        platform: str = "slack",
+        channel_id: str,
+        thread_ts: str | None,
+        user_id: str | None,
+        image_urls: list[str] | None = None,
+    ) -> str:
+        session_key = self._session_key(platform=platform, channel_id=channel_id)
+        session_id = self._session_uuid(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
+        with self._session_lock:
+            session_known = self._known_sessions.get(session_key) == session_id
+        image_urls = image_urls or []
+        staged_paths, passthrough_urls = self._stage_images(
+            container_name=container_name,
+            session_id=session_id,
+            image_urls=image_urls,
+        )
+        effective_prompt = prompt
+        if staged_paths or passthrough_urls:
+            lines: list[str] = []
+            for path in staged_paths:
+                lines.append(f"- local file: {path}")
+            for url in passthrough_urls:
+                lines.append(f"- remote url: {url}")
+            prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
+            effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
+
+        initial_action = "resume" if session_known else "create"
+        rendered_command, session_id = self._render_command(
+            action=initial_action,
+            platform=platform,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+        )
         try:
-            completed = subprocess.run(
-                cmd,
-                input=effective_prompt,
-                text=True,
-                capture_output=True,
-                timeout=self.timeout_seconds,
-                check=False,
+            completed = self._execute_prompt(
+                rendered_command=rendered_command,
+                session_id=session_id,
+                agent_name=agent_name,
+                container_name=container_name,
+                prompt=prompt,
+                platform=platform,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                user_id=user_id,
+                effective_prompt=effective_prompt,
             )
         except subprocess.TimeoutExpired as exc:
             LOGGER.warning(
@@ -387,6 +489,38 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
 
         if completed.returncode != 0:
             stderr_text = self._clip(completed.stderr)
+            retry_action: str | None = None
+            if initial_action == "create" and self._should_retry_with_resume(stderr_text):
+                retry_action = "resume"
+            elif initial_action == "resume" and self._should_retry_with_create(stderr_text):
+                retry_action = "create"
+            if retry_action:
+                rendered_command, session_id = self._render_command(
+                    action=retry_action,
+                    platform=platform,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                )
+                try:
+                    completed = self._execute_prompt(
+                        rendered_command=rendered_command,
+                        session_id=session_id,
+                        agent_name=agent_name,
+                        container_name=container_name,
+                        prompt=prompt,
+                        platform=platform,
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        user_id=user_id,
+                        effective_prompt=effective_prompt,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise RouteError(f"dispatch timed out after {self.timeout_seconds}s") from exc
+                except FileNotFoundError as exc:
+                    raise RouteError("podman CLI is not available in the master runtime") from exc
+
+        if completed.returncode != 0:
+            stderr_text = self._clip(completed.stderr)
             stdout_text = self._clip(completed.stdout)
             LOGGER.warning(
                 "router.dispatch_failed agent=%s container=%s platform=%s channel=%s exit_code=%s stderr=%r stdout=%r",
@@ -404,6 +538,10 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             if stdout_text:
                 details.append(f"stdout={stdout_text}")
             raise RouteError(f"dispatch failed ({', '.join(details)})")
+
+        with self._session_lock:
+            self._known_sessions[session_key] = session_id
+            self._persist_known_sessions_unlocked()
         response = completed.stdout.strip()
         LOGGER.info(
             "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s response_chars=%d",
