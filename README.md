@@ -102,6 +102,7 @@ Required env:
   - `OPENAI_API_KEY` (Codex/OpenAI tooling)
   - `CLAUDE_CODE_OAUTH_TOKEN` (preferred for headless Claude Code subscription auth)
   - `ANTHROPIC_API_KEY` (Claude Console/API billing path; used only when OAuth token is absent)
+- If you use `claude-code` agents, rebuild the base image from this branch so the container includes the `claude` CLI. Older images only include `codex` and will fail with `sh: 1: claude: not found`.
 - For a Compose-based master runtime, use `docker-compose.master-agent.example.yml` (Podman Compose-oriented example for the v1 master container)
   Set `MASTER_RUNTIME_IMAGE` to override the master container image tag used by that compose example.
 

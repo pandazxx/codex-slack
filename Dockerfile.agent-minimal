@@ -1,6 +1,7 @@
 FROM python:3.11-slim
 
 ARG CODEX_NPM_PACKAGE=@openai/codex
+ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -18,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g ${CODEX_NPM_PACKAGE}
+RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
 
 RUN useradd -m -u 1000 -s /bin/bash appuser
 USER appuser

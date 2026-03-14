@@ -107,6 +107,7 @@ Important env notes:
 - If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup.
 - Default command template is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'`.
 - Default adapter is `MASTER_DEFAULT_AGENT_ADAPTER=codex`.
+- If you use the `claude-code` adapter, rebuild the base image from this branch so the agent container includes the `claude` CLI binary.
 
 Claude subscription auth in headless containers:
 - Generate `CLAUDE_CODE_OAUTH_TOKEN` on the host with:
