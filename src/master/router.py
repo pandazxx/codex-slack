@@ -69,26 +69,15 @@ class PodmanExecDispatcher:
     def _render_command(self, *, channel_id: str, thread_ts: str | None) -> tuple[str, str]:
         session_id = self._session_id(channel_id=channel_id, thread_ts=thread_ts)
         if "{session_id}" in self.command_template:
-            rendered = self.command_template.format(session_id=session_id)
-            return self._ensure_claude_permission_bypass(rendered), session_id
+            return self.command_template.format(session_id=session_id), session_id
 
         stripped = self.command_template.rstrip()
         if "--last" in stripped:
-            return self._ensure_claude_permission_bypass(stripped), session_id
+            return stripped, session_id
         if stripped.endswith(" -"):
-            rendered = f"{stripped[:-2]} resume {session_id} -"
-            return self._ensure_claude_permission_bypass(rendered), session_id
+            return f"{stripped[:-2]} resume {session_id} -", session_id
 
-        return self._ensure_claude_permission_bypass(self.command_template), session_id
-
-    @staticmethod
-    def _ensure_claude_permission_bypass(command: str) -> str:
-        stripped = command.rstrip()
-        if not (stripped == "claude" or stripped.startswith("claude ")):
-            return command
-        if "--dangerously-skip-permissions" in stripped:
-            return stripped
-        return f"{stripped} --dangerously-skip-permissions"
+        return self.command_template, session_id
 
     def send_prompt(
         self,
