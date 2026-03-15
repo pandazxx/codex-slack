@@ -107,7 +107,7 @@ def run_discord_frontend(
                 return
 
             response = await asyncio.to_thread(
-                router.route_followup_message,
+                router.accept_followup_message,
                 platform="discord",
                 channel_id=channel_id,
                 text=text,
@@ -116,10 +116,19 @@ def run_discord_frontend(
                 user_id=user_id,
                 image_urls=image_urls,
             )
-            if response is None:
+            if not response:
                 return
             await message.reply(format_forward_ack(text=text, image_count=len(image_urls)), mention_author=False)
-            await message.reply(response, mention_author=False)
+            routed = await asyncio.to_thread(
+                router.route_prompt,
+                platform="discord",
+                channel_id=channel_id,
+                text=text,
+                thread_ts=thread_ts,
+                user_id=user_id,
+                image_urls=image_urls,
+            )
+            await message.reply(routed, mention_author=False)
         except RouteSkip as exc:
             LOGGER.info("discord route skipped for channel=%s reason=%s", channel_id, exc)
         except RouteError as exc:

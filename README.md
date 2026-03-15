@@ -92,7 +92,7 @@ Required env:
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
 - Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (legacy/default fallback for Codex template)
 - Optional: `MASTER_CODEX_COMMAND_TEMPLATE` (default `codex exec --dangerously-bypass-approvals-and-sandbox resume --last -`)
-- Optional: `MASTER_CLAUDE_COMMAND_TEMPLATE` (default `claude -p`)
+- Optional: `MASTER_CLAUDE_COMMAND_TEMPLATE` (default `claude -p --dangerously-skip-permissions`)
 - Optional: `MASTER_DEFAULT_AGENT_ADAPTER` (`codex` default, supported: `codex`, `claude-code`)
 - Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
 - Optional: `MASTER_COMMAND_RATE_LIMIT_COUNT` (default `20`)

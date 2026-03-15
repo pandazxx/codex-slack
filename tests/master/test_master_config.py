@@ -73,6 +73,7 @@ def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -
 
     assert settings.thread_state_path == "data/master/thread_state.json"
     assert settings.codex_command_template == "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
+    assert settings.claude_command_template == "claude -p --dangerously-skip-permissions"
     assert settings.default_agent_adapter == "codex"
 
 

@@ -68,7 +68,10 @@ def load_master_settings() -> MasterSettings:
         "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -",
     ).strip()
     codex_command_template = os.getenv("MASTER_CODEX_COMMAND_TEMPLATE", default_command_template).strip()
-    claude_command_template = os.getenv("MASTER_CLAUDE_COMMAND_TEMPLATE", "claude -p").strip()
+    claude_command_template = os.getenv(
+        "MASTER_CLAUDE_COMMAND_TEMPLATE",
+        "claude -p --dangerously-skip-permissions",
+    ).strip()
     default_agent_adapter = os.getenv("MASTER_DEFAULT_AGENT_ADAPTER", "codex").strip().lower() or "codex"
     if default_agent_adapter not in {"codex", "claude-code"}:
         raise ValueError("MASTER_DEFAULT_AGENT_ADAPTER must be one of: codex, claude-code")

@@ -257,6 +257,36 @@ def test_route_followup_message_requires_tracked_thread_and_not_deduped(tmp_path
     assert routed == "payments-agent:follow up"
 
 
+def test_accept_followup_message_allows_ack_before_dispatch(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    router.track_thread(channel_id="CAGENT", thread_ts="1730000000.7000")
+
+    accepted = router.accept_followup_message(
+        channel_id="CAGENT",
+        text="follow up",
+        thread_ts="1730000000.7000",
+        event_ts="1730000000.7003",
+        user_id="U1",
+        image_urls=[],
+    )
+
+    assert accepted is True
+
+    response = router.route_prompt(
+        channel_id="CAGENT",
+        text="follow up",
+        thread_ts="1730000000.7000",
+        user_id="U1",
+        image_urls=[],
+    )
+
+    assert response == "payments-agent:follow up"
+
+
 def test_thread_tracking_is_platform_scoped(tmp_path) -> None:
     registry = AgentRegistry(tmp_path / "agents.json")
     dispatcher = FakeDispatcher()

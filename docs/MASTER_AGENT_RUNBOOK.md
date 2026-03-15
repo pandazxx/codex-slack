@@ -49,7 +49,7 @@ podman run --rm \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
   -e MASTER_DEFAULT_AGENT_ADAPTER=codex \
   -e MASTER_CODEX_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -' \
-  -e MASTER_CLAUDE_COMMAND_TEMPLATE='claude -p' \
+  -e MASTER_CLAUDE_COMMAND_TEMPLATE='claude -p --dangerously-skip-permissions' \
   -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
   -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
@@ -80,7 +80,7 @@ export DISCORD_BOT_TOKEN="..."
 export DISCORD_ADMIN_CHANNELS="<discord_admin_channel_id>"
 export MASTER_DEFAULT_AGENT_ADAPTER="codex"
 export MASTER_CODEX_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'
-export MASTER_CLAUDE_COMMAND_TEMPLATE='claude -p'
+export MASTER_CLAUDE_COMMAND_TEMPLATE='claude -p --dangerously-skip-permissions'
 mkdir -p "${MASTER_DATA_DIR}"
 podman compose -f docker-compose.master-agent.example.yml up --build -d
 podman compose -f docker-compose.master-agent.example.yml logs -f

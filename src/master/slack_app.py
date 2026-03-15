@@ -185,7 +185,7 @@ def create_master_app(
                     len(image_urls),
                     subtype or "-",
                 )
-                response = router.route_followup_message(
+                should_route = router.accept_followup_message(
                     platform="slack",
                     channel_id=channel_id,
                     text=text,
@@ -194,7 +194,7 @@ def create_master_app(
                     user_id=user_id,
                     image_urls=image_urls,
                 )
-                if response is None:
+                if not should_route:
                     LOGGER.info(
                         "thread message ignored: untracked_or_deduped channel=%s thread_ts=%s image_count=%d",
                         channel_id,
@@ -203,6 +203,14 @@ def create_master_app(
                     )
                     return
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
+                response = router.route_prompt(
+                    platform="slack",
+                    channel_id=channel_id,
+                    text=text,
+                    thread_ts=thread_ts,
+                    user_id=user_id,
+                    image_urls=image_urls,
+                )
                 say(text=response, thread_ts=thread_ts)
                 LOGGER.info(
                     "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d",
