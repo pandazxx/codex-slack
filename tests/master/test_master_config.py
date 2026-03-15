@@ -17,6 +17,8 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     monkeypatch.setenv("MASTER_DRY_RUN", "true")
     monkeypatch.setenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-v1-uat")
     monkeypatch.setenv("MASTER_CODEX_AUTH_JSON_PATH", "/host/secrets/codex-auth.json")
+    monkeypatch.setenv("MASTER_CODEX_CONFIG_DIR_PATH", "/host/config/codex")
+    monkeypatch.setenv("MASTER_CLAUDE_CONFIG_DIR_PATH", "/host/config/claude")
     monkeypatch.setenv("MASTER_SSH_AUTH_SOCK_PATH", "/run/user/1000/keyring/ssh")
     monkeypatch.setenv("MASTER_SSH_KNOWN_HOSTS_PATH", "/home/tester/.ssh/known_hosts")
     monkeypatch.setenv("MASTER_GIT_USER_NAME", "Test User")
@@ -40,6 +42,8 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     assert settings.dry_run is True
     assert settings.agent_base_image == "codex-slack-v1-uat"
     assert settings.agent_codex_auth_json_path == "/host/secrets/codex-auth.json"
+    assert settings.agent_codex_config_dir_path == "/host/config/codex"
+    assert settings.agent_claude_config_dir_path == "/host/config/claude"
     assert settings.agent_ssh_auth_sock_path == "/run/user/1000/keyring/ssh"
     assert settings.agent_ssh_known_hosts_path == "/home/tester/.ssh/known_hosts"
     assert settings.git_user_name == "Test User"

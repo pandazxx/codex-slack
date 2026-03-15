@@ -188,6 +188,63 @@ def test_stage_workspace_prepare_sets_repo_local_git_identity(tmp_path, monkeypa
     assert email_result.stdout.strip() == "agent@example.com"
 
 
+def test_stage_workspace_prepare_applies_global_and_repo_codex_config(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    repo_path = Path(_create_local_repo(tmp_path / "src"))
+    global_codex = tmp_path / "global-codex"
+    global_codex.mkdir()
+    (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
+    (global_codex / "global-only.txt").write_text("global\n", encoding="utf-8")
+
+    repo_codex = repo_path / ".codex"
+    repo_codex.mkdir()
+    (repo_codex / "config.toml").write_text("source = 'repo'\n", encoding="utf-8")
+    (repo_codex / "repo-only.txt").write_text("repo\n", encoding="utf-8")
+
+    monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
+
+    codex_home = tmp_path / "codex-home"
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path),
+        repo_url=str(repo_path),
+        repo_ref="main",
+        repo_dir_name="src",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(codex_home),
+        ready_poll_seconds=0.1,
+    )
+
+    stage_workspace_prepare(settings)
+
+    assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'repo'\n"
+    assert (codex_home / "global-only.txt").read_text(encoding="utf-8") == "global\n"
+    assert (codex_home / "repo-only.txt").read_text(encoding="utf-8") == "repo\n"
+
+
+def test_stage_workspace_prepare_applies_global_claude_config_to_home(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    repo_path = Path(_create_local_repo(tmp_path / "src"))
+    global_claude = tmp_path / "global-claude"
+    global_claude.mkdir()
+    (global_claude / "settings.json").write_text('{"theme":"global"}\n', encoding="utf-8")
+
+    home_dir = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", str(global_claude))
+
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path),
+        repo_url=str(repo_path),
+        repo_ref="main",
+        repo_dir_name="src",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex"),
+        ready_poll_seconds=0.1,
+    )
+
+    stage_workspace_prepare(settings)
+
+    assert (home_dir / ".claude" / "settings.json").read_text(encoding="utf-8") == '{"theme":"global"}\n'
+
+
 def test_load_worker_settings_uses_writable_default_status_path(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.delenv("AGENT_STATUS_FILE", raising=False)
 

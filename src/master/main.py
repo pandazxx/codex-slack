@@ -39,7 +39,7 @@ def main() -> None:
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup frontends=%s registry_path=%s thread_state_path=%s admin_channels=%s discord_admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s default_adapter=%s bot_token=%s app_token=%s discord_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        "master.startup frontends=%s registry_path=%s thread_state_path=%s admin_channels=%s discord_admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s codex_config_dir_path=%s claude_config_dir_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s default_adapter=%s bot_token=%s app_token=%s discord_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
         ",".join(sorted(settings.frontends)),
         settings.registry_path,
         settings.thread_state_path,
@@ -48,6 +48,8 @@ def main() -> None:
         settings.dry_run,
         settings.agent_base_image,
         settings.agent_codex_auth_json_path or "-",
+        settings.agent_codex_config_dir_path or "-",
+        settings.agent_claude_config_dir_path or "-",
         settings.agent_ssh_auth_sock_path or "-",
         settings.agent_ssh_known_hosts_path or "-",
         settings.git_user_name or "-",
@@ -70,6 +72,8 @@ def main() -> None:
         runtime=runtime,
         default_image=settings.agent_base_image,
         agent_codex_auth_json_path=settings.agent_codex_auth_json_path,
+        agent_codex_config_dir_path=settings.agent_codex_config_dir_path,
+        agent_claude_config_dir_path=settings.agent_claude_config_dir_path,
         agent_ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
         agent_ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
         git_user_name=settings.git_user_name,

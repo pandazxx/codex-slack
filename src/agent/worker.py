@@ -72,6 +72,21 @@ def _run_git(args: list[str], cwd: str | None = None) -> subprocess.CompletedPro
     return completed
 
 
+def _copy_tree(src: Path, dst: Path, *, overwrite: bool) -> None:
+    if not src.exists() or not src.is_dir():
+        return
+    dst.mkdir(parents=True, exist_ok=True)
+    for entry in src.iterdir():
+        target = dst / entry.name
+        if entry.is_dir():
+            _copy_tree(entry, target, overwrite=overwrite)
+            continue
+        if target.exists() and not overwrite:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(entry.read_bytes())
+
+
 def stage_preflight(settings: WorkerSettings) -> None:
     workspace = Path(settings.workspace_path)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -126,6 +141,18 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
     codex_home = Path(settings.codex_home)
     codex_home.mkdir(parents=True, exist_ok=True)
     repo_dir = Path(settings.workspace_path) / settings.repo_dir_name
+    global_codex_config_raw = os.getenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", "").strip()
+    global_claude_config_raw = os.getenv("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", "").strip()
+    repo_codex_dir = repo_dir / ".codex"
+    home_claude_dir = home_dir / ".claude"
+
+    if global_codex_config_raw:
+        _copy_tree(Path(global_codex_config_raw), codex_home, overwrite=False)
+    if repo_codex_dir.exists() and repo_codex_dir.is_dir():
+        _copy_tree(repo_codex_dir, codex_home, overwrite=True)
+    if global_claude_config_raw:
+        _copy_tree(Path(global_claude_config_raw), home_claude_dir, overwrite=False)
+
     git_user_name = os.getenv("AGENT_GIT_USER_NAME", "").strip()
     git_user_email = os.getenv("AGENT_GIT_USER_EMAIL", "").strip()
 

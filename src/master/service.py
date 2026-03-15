@@ -15,6 +15,8 @@ DEFAULT_IMAGE = "codex-slack-bot:latest"
 DEFAULT_RUNTIME = "podman"
 DEFAULT_AGENT_ADAPTER = "codex"
 SUPPORTED_AGENT_ADAPTERS = {"codex", "claude-code"}
+GLOBAL_CODEX_CONFIG_MOUNT = "/run/secrets/master_codex_config"
+GLOBAL_CLAUDE_CONFIG_MOUNT = "/run/secrets/master_claude_config"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -33,6 +35,8 @@ class MasterService:
         runtime: RuntimeAdapter,
         default_image: str = DEFAULT_IMAGE,
         agent_codex_auth_json_path: str | None = None,
+        agent_codex_config_dir_path: str | None = None,
+        agent_claude_config_dir_path: str | None = None,
         agent_ssh_auth_sock_path: str | None = None,
         agent_ssh_known_hosts_path: str | None = None,
         git_user_name: str | None = None,
@@ -43,6 +47,8 @@ class MasterService:
         self._runtime = runtime
         self._default_image = default_image
         self._agent_codex_auth_json_path = agent_codex_auth_json_path
+        self._agent_codex_config_dir_path = agent_codex_config_dir_path
+        self._agent_claude_config_dir_path = agent_claude_config_dir_path
         self._agent_ssh_auth_sock_path = agent_ssh_auth_sock_path
         self._agent_ssh_known_hosts_path = agent_ssh_known_hosts_path
         self._git_user_name = git_user_name
@@ -390,6 +396,10 @@ class MasterService:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = claude_code_oauth_token
         elif anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = anthropic_api_key
+        if self._agent_codex_config_dir_path:
+            env["AGENT_GLOBAL_CODEX_CONFIG_DIR"] = GLOBAL_CODEX_CONFIG_MOUNT
+        if self._agent_claude_config_dir_path:
+            env["AGENT_GLOBAL_CLAUDE_CONFIG_DIR"] = GLOBAL_CLAUDE_CONFIG_MOUNT
         if self._git_user_name:
             env["AGENT_GIT_USER_NAME"] = self._git_user_name
         if self._git_user_email:
@@ -404,6 +414,10 @@ class MasterService:
         mounts: list[str] = []
         if self._agent_codex_auth_json_path:
             mounts.append(f"{self._agent_codex_auth_json_path}:/run/secrets/codex_auth.json:ro")
+        if self._agent_codex_config_dir_path:
+            mounts.append(f"{self._agent_codex_config_dir_path}:{GLOBAL_CODEX_CONFIG_MOUNT}:ro")
+        if self._agent_claude_config_dir_path:
+            mounts.append(f"{self._agent_claude_config_dir_path}:{GLOBAL_CLAUDE_CONFIG_MOUNT}:ro")
         if self._agent_ssh_auth_sock_path:
             mounts.append(f"{self._agent_ssh_auth_sock_path}:/run/secrets/ssh-auth.sock")
         if self._agent_ssh_known_hosts_path:

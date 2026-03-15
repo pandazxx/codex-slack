@@ -18,6 +18,8 @@ class MasterSettings:
     dry_run: bool
     agent_base_image: str
     agent_codex_auth_json_path: str | None
+    agent_codex_config_dir_path: str | None
+    agent_claude_config_dir_path: str | None
     agent_ssh_auth_sock_path: str | None
     agent_ssh_known_hosts_path: str | None
     git_user_name: str | None
@@ -59,6 +61,8 @@ def load_master_settings() -> MasterSettings:
     dry_run = _parse_bool(os.getenv("MASTER_DRY_RUN", "false"))
     agent_base_image = os.getenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-bot:latest").strip() or "codex-slack-bot:latest"
     agent_codex_auth_json_path = os.getenv("MASTER_CODEX_AUTH_JSON_PATH", "").strip() or None
+    agent_codex_config_dir_path = os.getenv("MASTER_CODEX_CONFIG_DIR_PATH", "").strip() or None
+    agent_claude_config_dir_path = os.getenv("MASTER_CLAUDE_CONFIG_DIR_PATH", "").strip() or None
     agent_ssh_auth_sock_path = os.getenv("MASTER_SSH_AUTH_SOCK_PATH", "").strip() or None
     agent_ssh_known_hosts_path = os.getenv("MASTER_SSH_KNOWN_HOSTS_PATH", "").strip() or None
     git_user_name = os.getenv("MASTER_GIT_USER_NAME", "").strip() or None
@@ -116,6 +120,8 @@ def load_master_settings() -> MasterSettings:
         dry_run=dry_run,
         agent_base_image=agent_base_image,
         agent_codex_auth_json_path=agent_codex_auth_json_path,
+        agent_codex_config_dir_path=agent_codex_config_dir_path,
+        agent_claude_config_dir_path=agent_claude_config_dir_path,
         agent_ssh_auth_sock_path=agent_ssh_auth_sock_path,
         agent_ssh_known_hosts_path=agent_ssh_known_hosts_path,
         git_user_name=git_user_name,

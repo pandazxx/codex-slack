@@ -85,6 +85,8 @@ Required env:
 - For rootless Podman socket access in a containerized master, use `--userns=keep-id --security-opt label=disable` and mount `/run/user/<uid>/podman/podman.sock`
 - Optional: `MASTER_AGENT_BASE_IMAGE` (default `codex-slack-bot:latest`; set this to the rebuilt image tag you want agent containers to run, e.g. `codex-slack-v1-uat`)
 - Optional: `MASTER_CODEX_AUTH_JSON_PATH` (host path to the shared Codex `auth.json`; mounted into agents as `/run/secrets/codex_auth.json:ro`)
+- Optional: `MASTER_CODEX_CONFIG_DIR_PATH` (host path to a global Codex config directory; seeded into each agent before repo-local `.codex` overrides are applied)
+- Optional: `MASTER_CLAUDE_CONFIG_DIR_PATH` (host path to a global Claude config directory; seeded into each agent home before repo-level `.claude` config is considered)
 - Optional: `MASTER_SSH_AUTH_SOCK_PATH` (host path to the SSH agent socket; mounted into agents as `/run/secrets/ssh-auth.sock`)
 - Optional: `MASTER_SSH_KNOWN_HOSTS_PATH` (host path to `known_hosts`; mounted into agents as `/run/secrets/ssh_known_hosts:ro`. If omitted, SSH defaults to `StrictHostKeyChecking=no` with `/dev/null` known hosts.)
 - Optional: `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` (passed into agents and written to repo-local `git config user.name` / `user.email` during worker startup)
