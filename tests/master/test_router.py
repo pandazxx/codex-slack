@@ -317,3 +317,47 @@ def test_podman_exec_dispatcher_does_not_inject_resume_for_last_template(monkeyp
     )
 
     assert seen["cmd"][-1] == "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
+
+
+def test_podman_exec_dispatcher_injects_claude_permission_bypass(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = PodmanExecDispatcher(command_template="claude -p")
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert seen["cmd"][-1] == "claude -p --dangerously-skip-permissions"
+
+
+def test_podman_exec_dispatcher_preserves_existing_claude_permission_bypass(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = PodmanExecDispatcher(command_template="claude -p --dangerously-skip-permissions --session-id {session_id}")
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert seen["cmd"][-1].count("--dangerously-skip-permissions") == 1
