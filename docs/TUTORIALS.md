@@ -170,6 +170,79 @@ podman build -t local-<project>-agent -f .prj_assistant/image/Dockerfile .prj_as
    - Master auto-detects `.prj_assistant/image/Dockerfile` and builds `codex-agent-<name>:latest`.
    - Verify `/master-agent-status <name>` shows dockerfile-based image plan.
 
+## Tutorial 7: Global Codex and Claude Defaults with Repo-Level Overrides
+Use this when you want master to provide shared default agent configuration while still allowing individual repos to override it with `.codex/` or `.claude/`.
+
+1. Prepare global default directories on the master host.
+   - Example layout:
+
+```text
+/opt/codex-slack/config/codex/
+  config.toml
+  instructions.md
+
+/opt/codex-slack/config/claude/
+  settings.json
+  hooks/
+```
+
+2. Export master env vars for those directories.
+
+```bash
+export MASTER_CODEX_CONFIG_DIR_PATH=/opt/codex-slack/config/codex
+export MASTER_CLAUDE_CONFIG_DIR_PATH=/opt/codex-slack/config/claude
+```
+
+3. Start or restart master with those env vars applied.
+   - Master mounts both directories read-only into each agent container.
+   - Worker seeds them into writable agent locations during startup.
+
+4. Understand the precedence model.
+   - Codex:
+     - master global defaults seed into agent runtime `CODEX_HOME`
+     - repo `.codex/` overlays on top and wins for conflicting files
+   - Claude:
+     - master global defaults seed into agent home `~/.claude`
+     - repo `.claude/` remains the project-level override source
+
+5. Add repo-level overrides only where needed.
+   - Example repo layout:
+
+```text
+my-project/
+  .codex/
+    config.toml
+  .claude/
+    settings.json
+```
+
+6. Expected runtime behavior.
+   - If repo `.codex/config.toml` exists, it overrides the global Codex `config.toml`.
+   - If repo has no `.codex/`, the global Codex defaults still apply.
+   - Global Claude defaults always seed into agent home.
+   - Repo `.claude/` provides project-specific Claude behavior without removing the global defaults.
+
+7. Start the agent normally.
+   - `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
+   - `/master-agent-start <name>`
+
+8. Validate the effective config inside the running agent if needed.
+   - Codex runtime config:
+     - `podman exec -it agent-<name> sh -lc 'ls -la /workspace/.codex'`
+   - Claude home config:
+     - `podman exec -it agent-<name> sh -lc 'ls -la /workspace/home/.claude'`
+   - Repo overrides:
+     - `podman exec -it agent-<name> sh -lc 'ls -la /workspace/repo/.codex /workspace/repo/.claude 2>/dev/null || true'`
+
+9. Keep the ownership model clear.
+   - Master-owned directories:
+     - `MASTER_CODEX_CONFIG_DIR_PATH`
+     - `MASTER_CLAUDE_CONFIG_DIR_PATH`
+   - Project-owned overrides:
+     - repo `.codex/`
+     - repo `.claude/`
+   - Project repos should override only what they need, not duplicate the full global config tree.
+
 ## Release Wrap-Up Checklist (v3.0)
 - [ ] Dual frontend flows validated (Slack + Discord).
 - [ ] Dual adapter flows validated (`codex` + `claude-code`).
