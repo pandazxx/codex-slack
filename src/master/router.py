@@ -390,6 +390,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         *,
         rendered_command: str,
         session_id: str,
+        session_known: bool,
+        action: str,
         agent_name: str,
         container_name: str,
         prompt: str,
@@ -406,7 +408,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             cmd.extend(["--workdir", self.workdir])
         cmd.extend([container_name, "sh", "-lc", rendered_command])
         LOGGER.info(
-            "router.dispatch_start agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s session_id=%s agent_command=%r",
+            "router.dispatch_start agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s session_id=%s claude_session_known=%s claude_action=%s agent_command=%r",
             agent_name,
             container_name,
             platform,
@@ -416,6 +418,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             len(prompt),
             self.workdir or "-",
             session_id,
+            session_known,
+            action,
             rendered_command,
         )
         return subprocess.run(
@@ -461,6 +465,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
 
         initial_action = "resume" if session_known else "create"
+        retry_action: str | None = None
         rendered_command, session_id = self._render_command(
             action=initial_action,
             platform=platform,
@@ -471,6 +476,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             completed = self._execute_prompt(
                 rendered_command=rendered_command,
                 session_id=session_id,
+                session_known=session_known,
+                action=initial_action,
                 agent_name=agent_name,
                 container_name=container_name,
                 prompt=prompt,
@@ -503,12 +510,25 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
 
         if completed.returncode != 0:
             stderr_text = self._clip(completed.stderr)
-            retry_action: str | None = None
             if initial_action == "create" and self._should_retry_with_resume(stderr_text):
                 retry_action = "resume"
             elif initial_action == "resume" and self._should_retry_with_create(stderr_text):
                 retry_action = "create"
             if retry_action:
+                LOGGER.info(
+                    "router.dispatch_retry agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s session_id=%s claude_session_known=%s claude_action=%s claude_retry_action=%s retry_reason=%r",
+                    agent_name,
+                    container_name,
+                    platform,
+                    channel_id,
+                    thread_ts or "-",
+                    user_id or "-",
+                    session_id,
+                    session_known,
+                    initial_action,
+                    retry_action,
+                    stderr_text,
+                )
                 rendered_command, session_id = self._render_command(
                     action=retry_action,
                     platform=platform,
@@ -519,6 +539,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                     completed = self._execute_prompt(
                         rendered_command=rendered_command,
                         session_id=session_id,
+                        session_known=session_known,
+                        action=retry_action,
                         agent_name=agent_name,
                         container_name=container_name,
                         prompt=prompt,
@@ -537,11 +559,14 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             stderr_text = self._clip(completed.stderr)
             stdout_text = self._clip(completed.stdout)
             LOGGER.warning(
-                "router.dispatch_failed agent=%s container=%s platform=%s channel=%s exit_code=%s stderr=%r stdout=%r",
+                "router.dispatch_failed agent=%s container=%s platform=%s channel=%s session_id=%s claude_session_known=%s claude_action=%s exit_code=%s stderr=%r stdout=%r",
                 agent_name,
                 container_name,
                 platform,
                 channel_id,
+                session_id,
+                session_known,
+                retry_action or initial_action,
                 completed.returncode,
                 stderr_text,
                 stdout_text,
@@ -558,13 +583,16 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             self._persist_known_sessions_unlocked()
         response = completed.stdout.strip()
         LOGGER.info(
-            "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s response_chars=%d",
+            "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s session_id=%s claude_session_known=%s claude_action=%s response_chars=%d",
             agent_name,
             container_name,
             platform,
             channel_id,
             thread_ts or "-",
             user_id or "-",
+            session_id,
+            session_known,
+            retry_action or initial_action,
             len(response),
         )
         return response
