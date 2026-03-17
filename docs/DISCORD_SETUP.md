@@ -175,6 +175,9 @@ Discord exposes command parity with Slack:
 Notes:
 - `platform` is inferred automatically from where the command is executed.
 - If you run `/master-agent-load` in Discord, the platform is `discord`.
+- In Discord admin channels, master also accepts plain text command messages for convenience:
+  - `/master-agent-list`
+  - `@bot /master-agent-list`
 
 ## 9. Verify Discord Routing
 1. In a Discord admin channel, run `/master-agent-list`.

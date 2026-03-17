@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from .command_runtime import execute_master_command
@@ -10,6 +11,7 @@ from .service import MasterService
 from .slack_app import format_forward_ack
 
 LOGGER = logging.getLogger(__name__)
+DISCORD_COMMAND_PATTERN = re.compile(r"^<@!?\d+>\s*")
 
 
 def _extract_image_urls(attachments: list[Any]) -> list[str]:
@@ -22,6 +24,16 @@ def _extract_image_urls(attachments: list[Any]) -> list[str]:
         if url:
             urls.append(url)
     return urls
+
+
+def parse_admin_message_command(text: str) -> tuple[str, str] | None:
+    stripped = DISCORD_COMMAND_PATTERN.sub("", text.strip())
+    if not stripped.startswith("/master-agent-"):
+        return None
+    parts = stripped.split(maxsplit=1)
+    command_name = parts[0]
+    args_text = parts[1] if len(parts) > 1 else ""
+    return command_name, args_text
 
 
 def run_discord_frontend(
@@ -89,6 +101,19 @@ def run_discord_frontend(
         thread_ts = str(getattr(reference, "message_id", "") or message.id)
 
         try:
+            admin_message_command = parse_admin_message_command(text) if channel_id in admin_channels else None
+            if admin_message_command is not None:
+                command_name, args_text = admin_message_command
+                messages = _run_command(
+                    command_name=command_name,
+                    text=args_text,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                )
+                for reply in messages:
+                    await message.reply(reply, mention_author=False)
+                return
+
             if is_mention:
                 say_thread = thread_ts
                 say_text = format_forward_ack(text=text, image_count=len(image_urls))
