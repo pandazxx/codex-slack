@@ -12,7 +12,20 @@ v3 Discord model:
 1. Open `https://discord.com/developers/applications`.
 2. Click **New Application**.
 3. Set application name (for example `codex-master`).
-4. Open **Bot** and create/add the bot user.
+4. Open **Bot** in the left sidebar.
+5. Click **Add Bot** if the application does not already have one.
+6. Confirm the bot creation prompt.
+7. In the same **Bot** page:
+   - keep **Public Bot** enabled unless you want to restrict invites manually
+   - disable **Require OAuth2 Code Grant** unless you have a specific reason to use it
+8. In **Bot > Token**:
+   - click **Reset Token** if this is a new bot or you need a fresh token
+   - copy the token immediately
+   - store it as `DISCORD_BOT_TOKEN`
+
+Notes:
+- Discord will only show the full bot token when you create or reset it.
+- If you lose it, reset it and update your master runtime env.
 
 ## 2. Configure Bot Intents
 In **Bot > Privileged Gateway Intents**, enable:
@@ -35,12 +48,56 @@ Recommended bot permissions:
 
 Use the generated URL to invite the bot to your server.
 
-## 4. Collect Required IDs
-Enable Discord developer mode and copy IDs for:
-- Admin channels (for `DISCORD_ADMIN_CHANNELS`)
-- Agent channels (for `/master-agent-load ...`; platform is inferred as `discord`)
+## 4. Create Admin and Agent Channels
+Recommended channel layout:
+- One admin channel for control-plane commands
+- One or more agent channels for routed conversations
 
-## 5. Configure Master Environment
+Example:
+- `#agent-admin`
+- `#agent-api`
+- `#agent-docs`
+
+Suggested setup:
+1. In your Discord server, click **Add Channel**.
+2. Create a private or restricted text channel for admin operations, for example `agent-admin`.
+3. Create one text channel per agent workstream, for example:
+   - `agent-api`
+   - `agent-docs`
+   - `agent-ops`
+4. Add the bot to any private channels you want it to use.
+5. Make sure the bot can:
+   - view the channel
+   - send messages
+   - read message history
+   - create/send thread replies if your workflow uses replies/threads
+
+Usage model:
+- Admin channel:
+  - only for `/master-agent-*` command execution
+- Agent channel:
+  - mapped to one agent
+  - used for prompt routing and follow-up replies
+
+## 5. Enable Developer Mode and Copy Channel IDs
+To obtain channel IDs for `DISCORD_ADMIN_CHANNELS` and `/master-agent-load`:
+1. In Discord, open **User Settings**.
+2. Open **Advanced**.
+3. Enable **Developer Mode**.
+4. Return to your server.
+5. Right-click the admin channel and choose **Copy Channel ID**.
+6. Right-click each agent channel and choose **Copy Channel ID**.
+
+Use those IDs as follows:
+- `DISCORD_ADMIN_CHANNELS=<admin_channel_id>`
+- `/master-agent-load <name> <repo_path> <agent_channel_id> [branch] [--adapter ...]`
+
+Example:
+```dotenv
+DISCORD_ADMIN_CHANNELS=123456789012345678
+```
+
+## 6. Configure Master Environment
 ```dotenv
 MASTER_FRONTENDS=slack,discord
 
@@ -71,7 +128,7 @@ Notes:
 - If both frontends are enabled, both Slack and Discord admin channel allowlists are required.
 - For `claude-code` subscription auth in containers, generate `CLAUDE_CODE_OAUTH_TOKEN` on the host with `claude setup-token` and pass it to master.
 
-## 6. Start Master
+## 7. Start Master
 ```bash
 python -m src.master.main
 ```
@@ -81,7 +138,7 @@ On startup, master will:
 - start Slack and/or Discord frontend workers based on `MASTER_FRONTENDS`
 - sync Discord application commands when Discord frontend is enabled
 
-## 7. Discord Command Parity
+## 8. Discord Command Parity
 Discord exposes command parity with Slack:
 - `/master-agent-list`
 - `/master-agent-load`
@@ -97,26 +154,28 @@ Discord exposes command parity with Slack:
 - `repo_path`
 - `channel_id`
 - `branch` (optional)
-- `platform` (`slack` or `discord`)
 - `adapter` (`codex` or `claude-code`)
 
-## 8. Verify Discord Routing
+Notes:
+- `platform` is inferred automatically from where the command is executed.
+- If you run `/master-agent-load` in Discord, the platform is `discord`.
+
+## 9. Verify Discord Routing
 1. In a Discord admin channel, run `/master-agent-list`.
 2. Run `/master-agent-load` with:
-- `platform=discord`
 - `channel_id=<target_discord_channel_id>`
 3. Run `/master-agent-start <name>`.
 4. In the mapped channel, mention the bot with a prompt.
 5. Reply in-thread or reply-to-message without re-mentioning.
 6. Confirm replies are routed and agent output is posted back.
 
-## 9. Channel Usage Rules
+## 10. Channel Usage Rules
 - `DISCORD_ADMIN_CHANNELS` are control-plane channels only.
 - Non-admin mapped channels are for routed prompts.
 - One channel maps to one agent.
 - One agent maps to one channel.
 
-## 10. Common Discord Errors
+## 11. Common Discord Errors
 - `Missing Access` / command not visible:
   - Bot lacks required permissions or app command sync not complete.
 - Mention messages ignored:
