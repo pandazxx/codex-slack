@@ -72,6 +72,22 @@ Suggested setup:
    - read message history
    - create/send thread replies if your workflow uses replies/threads
 
+How to add the bot to a channel:
+1. Invite the bot to the server first using the OAuth2 URL from **OAuth2 > URL Generator**.
+2. For normal channels:
+   - ensure the bot's role has server/channel permissions to view and send messages
+3. For private channels:
+   - open the channel
+   - click **Edit Channel**
+   - open **Permissions** or **Members**
+   - add the bot or its role explicitly
+   - grant at least:
+     - **View Channel**
+     - **Send Messages**
+     - **Read Message History**
+     - **Send Messages in Threads** if you use replies/threads
+4. Test by mentioning the bot in that channel after master is running.
+
 Usage model:
 - Admin channel:
   - only for `/master-agent-*` command execution
