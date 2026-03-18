@@ -36,6 +36,44 @@ def parse_admin_message_command(text: str) -> tuple[str, str] | None:
     return command_name, args_text
 
 
+async def sync_registered_commands(*, tree, client, admin_channels: set[str], discord_module) -> None:  # type: ignore[no-untyped-def]
+    guild_ids: set[int] = set()
+    for raw_channel_id in admin_channels:
+        try:
+            channel_id = int(raw_channel_id)
+        except ValueError:
+            LOGGER.warning("master.discord_admin_channel_invalid channel_id=%s", raw_channel_id)
+            continue
+
+        channel = client.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await client.fetch_channel(channel_id)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning(
+                    "master.discord_admin_channel_lookup_failed channel_id=%s error=%s",
+                    raw_channel_id,
+                    exc,
+                )
+                continue
+
+        guild = getattr(channel, "guild", None)
+        guild_id = getattr(guild, "id", None)
+        if guild_id is None:
+            LOGGER.warning("master.discord_admin_channel_missing_guild channel_id=%s", raw_channel_id)
+            continue
+        guild_ids.add(int(guild_id))
+
+    for guild_id in sorted(guild_ids):
+        guild = discord_module.Object(id=guild_id)
+        tree.copy_global_to(guild=guild)
+        await tree.sync(guild=guild)
+        LOGGER.info("master.discord_commands_synced guild_id=%s scope=guild", guild_id)
+
+    await tree.sync()
+    LOGGER.info("master.discord_commands_synced scope=global")
+
+
 def run_discord_frontend(
     *,
     bot_token: str,
@@ -82,8 +120,12 @@ def run_discord_frontend(
     @client.event
     async def on_ready() -> None:  # type: ignore[no-untyped-def]
         LOGGER.info("master.discord_ready user=%s", getattr(client.user, "id", "-"))
-        await tree.sync()
-        LOGGER.info("master.discord_commands_synced")
+        await sync_registered_commands(
+            tree=tree,
+            client=client,
+            admin_channels=admin_channels,
+            discord_module=discord,
+        )
 
     @client.event
     async def on_message(message) -> None:  # type: ignore[no-untyped-def]

@@ -153,6 +153,7 @@ On startup, master will:
 - initialize shared router/service state
 - start Slack and/or Discord frontend workers based on `MASTER_FRONTENDS`
 - sync Discord application commands when Discord frontend is enabled
+- copy global commands into the admin-channel guild for faster slash-command availability
 
 ## 8. Discord Command Parity
 Discord exposes command parity with Slack:
