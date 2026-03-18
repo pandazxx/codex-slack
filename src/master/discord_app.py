@@ -117,6 +117,18 @@ def run_discord_frontend(
             rate_limiter=rate_limiter,  # type: ignore[arg-type]
         )
 
+    async def _execute_and_send(interaction, *, command_name: str, text: str) -> None:  # type: ignore[no-untyped-def]
+        if not interaction.response.is_done():
+            await interaction.response.defer(thinking=True)
+        messages = await asyncio.to_thread(
+            _run_command,
+            command_name=command_name,
+            text=text,
+            channel_id=str(interaction.channel_id),
+            user_id=str(interaction.user.id),
+        )
+        await _send_messages(interaction, messages)
+
     @client.event
     async def on_ready() -> None:  # type: ignore[no-untyped-def]
         LOGGER.info("master.discord_ready user=%s", getattr(client.user, "id", "-"))
@@ -207,13 +219,7 @@ def run_discord_frontend(
 
     @tree.command(name="master-agent-list", description="List all agents")
     async def cmd_list(interaction) -> None:  # type: ignore[no-untyped-def]
-        messages = _run_command(
-            command_name="/master-agent-list",
-            text="",
-            channel_id=str(interaction.channel_id),
-            user_id=str(interaction.user.id),
-        )
-        await _send_messages(interaction, messages)
+        await _execute_and_send(interaction, command_name="/master-agent-list", text="")
 
     @tree.command(name="master-agent-load", description="Load an agent mapping")
     async def cmd_load(
@@ -225,73 +231,31 @@ def run_discord_frontend(
         adapter: str = "codex",
     ) -> None:  # type: ignore[no-untyped-def]
         text = f"{name} {repo_path} {channel_id} {branch} --adapter {adapter}".strip()
-        messages = _run_command(
-            command_name="/master-agent-load",
-            text=text,
-            channel_id=str(interaction.channel_id),
-            user_id=str(interaction.user.id),
-        )
-        await _send_messages(interaction, messages)
+        await _execute_and_send(interaction, command_name="/master-agent-load", text=text)
 
     @tree.command(name="master-agent-start", description="Start an agent")
     async def cmd_start(interaction, name: str) -> None:  # type: ignore[no-untyped-def]
-        messages = _run_command(
-            command_name="/master-agent-start",
-            text=name,
-            channel_id=str(interaction.channel_id),
-            user_id=str(interaction.user.id),
-        )
-        await _send_messages(interaction, messages)
+        await _execute_and_send(interaction, command_name="/master-agent-start", text=name)
 
     @tree.command(name="master-agent-stop", description="Stop an agent")
     async def cmd_stop(interaction, name: str) -> None:  # type: ignore[no-untyped-def]
-        messages = _run_command(
-            command_name="/master-agent-stop",
-            text=name,
-            channel_id=str(interaction.channel_id),
-            user_id=str(interaction.user.id),
-        )
-        await _send_messages(interaction, messages)
+        await _execute_and_send(interaction, command_name="/master-agent-stop", text=name)
 
     @tree.command(name="master-agent-status", description="Show agent status")
     async def cmd_status(interaction, name: str, full: bool = False) -> None:  # type: ignore[no-untyped-def]
         text = f"{name} --full" if full else name
-        messages = _run_command(
-            command_name="/master-agent-status",
-            text=text,
-            channel_id=str(interaction.channel_id),
-            user_id=str(interaction.user.id),
-        )
-        await _send_messages(interaction, messages)
+        await _execute_and_send(interaction, command_name="/master-agent-status", text=text)
 
     @tree.command(name="master-agent-usage", description="Show agent usage")
     async def cmd_usage(interaction, name: str = "") -> None:  # type: ignore[no-untyped-def]
-        messages = _run_command(
-            command_name="/master-agent-usage",
-            text=name,
-            channel_id=str(interaction.channel_id),
-            user_id=str(interaction.user.id),
-        )
-        await _send_messages(interaction, messages)
+        await _execute_and_send(interaction, command_name="/master-agent-usage", text=name)
 
     @tree.command(name="master-agent-remove", description="Remove an agent")
     async def cmd_remove(interaction, name: str) -> None:  # type: ignore[no-untyped-def]
-        messages = _run_command(
-            command_name="/master-agent-remove",
-            text=name,
-            channel_id=str(interaction.channel_id),
-            user_id=str(interaction.user.id),
-        )
-        await _send_messages(interaction, messages)
+        await _execute_and_send(interaction, command_name="/master-agent-remove", text=name)
 
     @tree.command(name="master-agent-refresh-auth", description="Refresh agent auth in workspace")
     async def cmd_refresh_auth(interaction, name: str) -> None:  # type: ignore[no-untyped-def]
-        messages = _run_command(
-            command_name="/master-agent-refresh-auth",
-            text=name,
-            channel_id=str(interaction.channel_id),
-            user_id=str(interaction.user.id),
-        )
-        await _send_messages(interaction, messages)
+        await _execute_and_send(interaction, command_name="/master-agent-refresh-auth", text=name)
 
     client.run(bot_token)
