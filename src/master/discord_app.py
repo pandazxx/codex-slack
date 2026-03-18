@@ -12,6 +12,7 @@ from .slack_app import format_forward_ack
 
 LOGGER = logging.getLogger(__name__)
 DISCORD_COMMAND_PATTERN = re.compile(r"^<@!?\d+>\s*")
+DISCORD_MESSAGE_LIMIT = 2000
 
 
 def _extract_image_urls(attachments: list[Any]) -> list[str]:
@@ -34,6 +35,23 @@ def parse_admin_message_command(text: str) -> tuple[str, str] | None:
     command_name = parts[0]
     args_text = parts[1] if len(parts) > 1 else ""
     return command_name, args_text
+
+
+def split_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip("\n")
+    if remaining:
+        chunks.append(remaining)
+    return [chunk for chunk in chunks if chunk]
 
 
 async def sync_registered_commands(*, tree, client, admin_channels: set[str], discord_module) -> None:  # type: ignore[no-untyped-def]
@@ -95,14 +113,21 @@ def run_discord_frontend(
     tree = discord.app_commands.CommandTree(client)
 
     async def _send_messages(interaction, messages: list[str]) -> None:  # type: ignore[no-untyped-def]
-        if not messages:
+        expanded: list[str] = []
+        for message in messages:
+            expanded.extend(split_discord_message(message))
+        if not expanded:
             return
         if interaction.response.is_done():
-            await interaction.followup.send(messages[0])
+            await interaction.followup.send(expanded[0])
         else:
-            await interaction.response.send_message(messages[0])
-        for message in messages[1:]:
+            await interaction.response.send_message(expanded[0])
+        for message in expanded[1:]:
             await interaction.followup.send(message)
+
+    async def _reply_message_chunks(message, text: str) -> None:  # type: ignore[no-untyped-def]
+        for chunk in split_discord_message(text):
+            await message.reply(chunk, mention_author=False)
 
     def _run_command(*, command_name: str, text: str, channel_id: str, user_id: str) -> list[str]:
         return execute_master_command(
@@ -165,13 +190,13 @@ def run_discord_frontend(
                     user_id=user_id,
                 )
                 for reply in messages:
-                    await message.reply(reply, mention_author=False)
+                    await _reply_message_chunks(message, reply)
                 return
 
             if is_mention:
                 say_thread = thread_ts
                 say_text = format_forward_ack(text=text, image_count=len(image_urls))
-                await message.reply(say_text, mention_author=False)
+                await _reply_message_chunks(message, say_text)
                 response = await asyncio.to_thread(
                     router.route_mention_message,
                     platform="discord",
@@ -182,7 +207,7 @@ def run_discord_frontend(
                     user_id=user_id,
                     image_urls=image_urls,
                 )
-                await message.reply(response, mention_author=False)
+                await _reply_message_chunks(message, response)
                 return
 
             response = await asyncio.to_thread(
@@ -197,7 +222,7 @@ def run_discord_frontend(
             )
             if not response:
                 return
-            await message.reply(format_forward_ack(text=text, image_count=len(image_urls)), mention_author=False)
+            await _reply_message_chunks(message, format_forward_ack(text=text, image_count=len(image_urls)))
             routed = await asyncio.to_thread(
                 router.route_prompt,
                 platform="discord",
@@ -207,15 +232,15 @@ def run_discord_frontend(
                 user_id=user_id,
                 image_urls=image_urls,
             )
-            await message.reply(routed, mention_author=False)
+            await _reply_message_chunks(message, routed)
         except RouteSkip as exc:
             LOGGER.info("discord route skipped for channel=%s reason=%s", channel_id, exc)
         except RouteError as exc:
             LOGGER.warning("discord route failed for channel=%s error=%s", channel_id, exc)
-            await message.reply(f"Error: {exc}", mention_author=False)
+            await _reply_message_chunks(message, f"Error: {exc}")
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("master discord message handling failed")
-            await message.reply(f"Error: {exc}", mention_author=False)
+            await _reply_message_chunks(message, f"Error: {exc}")
 
     @tree.command(name="master-agent-list", description="List all agents")
     async def cmd_list(interaction) -> None:  # type: ignore[no-untyped-def]

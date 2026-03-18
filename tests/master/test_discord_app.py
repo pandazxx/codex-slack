@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from src.master.discord_app import parse_admin_message_command
+from src.master.discord_app import split_discord_message
 from src.master.discord_app import sync_registered_commands
 
 
@@ -19,6 +20,18 @@ def test_parse_admin_message_command_accepts_mention_prefixed_command() -> None:
 
 def test_parse_admin_message_command_rejects_non_command_text() -> None:
     assert parse_admin_message_command("hello there") is None
+
+
+def test_split_discord_message_returns_single_chunk_when_short() -> None:
+    assert split_discord_message("hello") == ["hello"]
+
+
+def test_split_discord_message_chunks_long_payload() -> None:
+    text = ("a" * 1990) + "\n" + ("b" * 50)
+    chunks = split_discord_message(text, limit=2000)
+    assert len(chunks) == 2
+    assert chunks[0] == "a" * 1990
+    assert chunks[1] == "b" * 50
 
 
 def test_sync_registered_commands_copies_global_commands_to_admin_guild() -> None:
