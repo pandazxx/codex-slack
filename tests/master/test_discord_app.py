@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from src.master.discord_app import label_discord_chunks
 from src.master.discord_app import parse_admin_message_command
 from src.master.discord_app import split_discord_message
 from src.master.discord_app import sync_registered_commands
@@ -32,6 +33,11 @@ def test_split_discord_message_chunks_long_payload() -> None:
     assert len(chunks) == 2
     assert chunks[0] == "a" * 1990
     assert chunks[1] == "b" * 50
+
+
+def test_label_discord_chunks_adds_part_headers() -> None:
+    chunks = label_discord_chunks(["alpha", "beta"])
+    assert chunks == ["[1/2]\nalpha", "[2/2]\nbeta"]
 
 
 def test_sync_registered_commands_copies_global_commands_to_admin_guild() -> None:

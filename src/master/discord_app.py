@@ -12,7 +12,7 @@ from .slack_app import format_forward_ack
 
 LOGGER = logging.getLogger(__name__)
 DISCORD_COMMAND_PATTERN = re.compile(r"^<@!?\d+>\s*")
-DISCORD_MESSAGE_LIMIT = 2000
+DISCORD_MESSAGE_LIMIT = 1900
 
 
 def _extract_image_urls(attachments: list[Any]) -> list[str]:
@@ -52,6 +52,17 @@ def split_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list
     if remaining:
         chunks.append(remaining)
     return [chunk for chunk in chunks if chunk]
+
+
+def label_discord_chunks(chunks: list[str]) -> list[str]:
+    if len(chunks) <= 1:
+        return chunks
+    total = len(chunks)
+    width = len(str(total))
+    labeled: list[str] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        labeled.append(f"[{idx:0{width}d}/{total}]\n{chunk}")
+    return labeled
 
 
 async def sync_registered_commands(*, tree, client, admin_channels: set[str], discord_module) -> None:  # type: ignore[no-untyped-def]
@@ -115,7 +126,7 @@ def run_discord_frontend(
     async def _send_messages(interaction, messages: list[str]) -> None:  # type: ignore[no-untyped-def]
         expanded: list[str] = []
         for message in messages:
-            expanded.extend(split_discord_message(message))
+            expanded.extend(label_discord_chunks(split_discord_message(message)))
         if not expanded:
             return
         if interaction.response.is_done():
@@ -126,7 +137,7 @@ def run_discord_frontend(
             await interaction.followup.send(message)
 
     async def _reply_message_chunks(message, text: str) -> None:  # type: ignore[no-untyped-def]
-        for chunk in split_discord_message(text):
+        for chunk in label_discord_chunks(split_discord_message(text)):
             await message.reply(chunk, mention_author=False)
 
     def _run_command(*, command_name: str, text: str, channel_id: str, user_id: str) -> list[str]:
