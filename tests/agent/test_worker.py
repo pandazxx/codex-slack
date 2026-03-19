@@ -188,12 +188,42 @@ def test_stage_workspace_prepare_sets_repo_local_git_identity(tmp_path, monkeypa
     assert email_result.stdout.strip() == "agent@example.com"
 
 
-def test_stage_workspace_prepare_applies_global_and_repo_codex_config(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_stage_workspace_prepare_applies_global_codex_config_as_user_scope(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Global (master) Codex config is installed into CODEX_HOME as user-scope."""
     repo_path = Path(_create_local_repo(tmp_path / "src"))
     global_codex = tmp_path / "global-codex"
     global_codex.mkdir()
     (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
     (global_codex / "global-only.txt").write_text("global\n", encoding="utf-8")
+
+    monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
+
+    codex_home = tmp_path / "codex-home"
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path),
+        repo_url=str(repo_path),
+        repo_ref="main",
+        repo_dir_name="src",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(codex_home),
+        ready_poll_seconds=0.1,
+    )
+
+    stage_workspace_prepare(settings)
+
+    # Global config lands in CODEX_HOME (user scope).
+    assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'global'\n"
+    assert (codex_home / "global-only.txt").read_text(encoding="utf-8") == "global\n"
+
+
+def test_stage_workspace_prepare_leaves_repo_codex_as_project_scope(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Repo .codex/ is NOT copied into CODEX_HOME; it stays in the repo dir as project-scope
+    config, which Codex reads naturally from the working directory and which takes precedence
+    over user-scope settings in CODEX_HOME."""
+    repo_path = Path(_create_local_repo(tmp_path / "src"))
+    global_codex = tmp_path / "global-codex"
+    global_codex.mkdir()
+    (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
 
     repo_codex = repo_path / ".codex"
     repo_codex.mkdir()
@@ -215,9 +245,43 @@ def test_stage_workspace_prepare_applies_global_and_repo_codex_config(tmp_path, 
 
     stage_workspace_prepare(settings)
 
-    assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'repo'\n"
-    assert (codex_home / "global-only.txt").read_text(encoding="utf-8") == "global\n"
-    assert (codex_home / "repo-only.txt").read_text(encoding="utf-8") == "repo\n"
+    # Global config stays at user scope; repo config is NOT promoted into CODEX_HOME.
+    assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'global'\n"
+    assert not (codex_home / "repo-only.txt").exists()
+    # Repo's .codex/ is untouched in place (Codex reads it as project scope from CWD).
+    assert (repo_path / ".codex" / "config.toml").read_text(encoding="utf-8") == "source = 'repo'\n"
+
+
+def test_stage_workspace_prepare_leaves_repo_claude_as_project_scope(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Repo .claude/ is NOT copied to ~/.claude/; Claude Code reads it as project-scope config
+    from the working directory, which takes precedence over user-scope settings in ~/.claude/."""
+    repo_path = Path(_create_local_repo(tmp_path / "src"))
+    repo_claude = repo_path / ".claude"
+    repo_claude.mkdir()
+    (repo_claude / "settings.json").write_text('{"source":"repo"}\n', encoding="utf-8")
+    (repo_claude / "CLAUDE.md").write_text("# Project instructions\n", encoding="utf-8")
+
+    home_dir = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.delenv("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", raising=False)
+
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path),
+        repo_url=str(repo_path),
+        repo_ref="main",
+        repo_dir_name="src",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex"),
+        ready_poll_seconds=0.1,
+    )
+
+    stage_workspace_prepare(settings)
+
+    # Repo .claude/ stays in the repo (project scope); nothing is copied into ~/.claude/.
+    assert not (home_dir / ".claude" / "settings.json").exists()
+    assert not (home_dir / ".claude" / "CLAUDE.md").exists()
+    # Repo files are untouched.
+    assert (repo_path / ".claude" / "settings.json").read_text(encoding="utf-8") == '{"source":"repo"}\n'
 
 
 def test_stage_workspace_prepare_applies_global_claude_config_to_home(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

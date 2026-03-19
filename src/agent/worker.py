@@ -148,8 +148,9 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
 
     if global_codex_config_raw:
         _copy_tree(Path(global_codex_config_raw), codex_home, overwrite=False)
-    if repo_codex_dir.exists() and repo_codex_dir.is_dir():
-        _copy_tree(repo_codex_dir, codex_home, overwrite=True)
+    # repo_codex_dir (.codex/ in the cloned repo) is intentionally left in place.
+    # Codex reads it as project-scope config from the working directory, which takes
+    # precedence over user-scope settings in CODEX_HOME per the Codex scope hierarchy.
     if global_claude_config_raw:
         _copy_tree(Path(global_claude_config_raw), home_claude_dir, overwrite=False)
 
