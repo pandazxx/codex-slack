@@ -1,10 +1,11 @@
 # Documentation Index (Canonical References)
 
-Use this page as the source-of-truth map for v3.0.
+Use this page as the source-of-truth map for v3.x.
 
 ## Current Source of Truth
 - Product overview and command summary: `README.md`
 - Operator runbook (master/agent runtime): `docs/MASTER_AGENT_RUNBOOK.md`
+- CD daemon design and operator guide: `docs/CD_DAEMON.md`
 - Slack app setup for master mode: `docs/SLACK_SETUP.md`
 - Discord app setup for master mode: `docs/DISCORD_SETUP.md`
 - Build/setup for local bot mode: `BUILD.md`
