@@ -70,6 +70,52 @@ directly when running the daemon container.
 | `CD_HEALTH_CHECK_DELAY_SECONDS` | no | `30` | Seconds to wait after container start before checking health. |
 | `CD_ROLLBACK_ON_FAILURE` | no | `true` | Auto-roll back when health check fails. |
 | `CD_DRY_RUN` | no | `false` | Log all actions without executing any subprocess commands. |
+| `CD_NOTIFY_SLACK_WEBHOOK_URL` | no | — | Slack incoming-webhook URL. When set, the daemon POSTs `{"text": "..."}` on deploy/rollback events. |
+| `CD_NOTIFY_DISCORD_WEBHOOK_URL` | no | — | Discord incoming-webhook URL. When set, the daemon POSTs `{"content": "..."}` on deploy/rollback events. |
+
+---
+
+## Notifications
+
+The daemon can POST a plain-text message to Slack and/or Discord incoming webhooks
+simultaneously at the following events:
+
+| Event | Message |
+|-------|---------|
+| Deploy succeeded | ✅ deployed `<image>:<tag>` successfully |
+| Deploy command failed | ❌ deploy failed for `<image>:<tag>` |
+| Health check failed (rollback queued) | ⚠️ health check failed — rolling back… |
+| Rollback completed | 🔄 rolled back `<container>` to `<previous_digest>` |
+| Rollback also unhealthy | 🆘 rollback also unhealthy — manual intervention required |
+
+Both webhooks are called in parallel threads with a 15-second join timeout so a slow
+or unreachable webhook does not block the daemon's main loop.  All errors are logged
+and swallowed; a broken webhook URL never causes a missed deploy.
+
+When `CD_DRY_RUN=true` the notification is only logged, not POSTed.
+
+### Slack setup
+
+Create an incoming webhook in the Slack app settings
+("Incoming Webhooks" → "Add New Webhook to Workspace").
+The URL looks like `https://hooks.slack.com/services/T.../B.../...`.
+
+```bash
+# .env.staging (add to your existing variables)
+CD_NOTIFY_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../...
+```
+
+### Discord setup
+
+In your Discord server, go to **Channel Settings → Integrations → Webhooks → New Webhook**,
+copy the URL.  The URL looks like `https://discord.com/api/webhooks/<id>/<token>`.
+
+```bash
+CD_NOTIFY_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>
+```
+
+Both variables can be set at the same time; the daemon notifies all configured
+destinations for every event.
 
 ---
 

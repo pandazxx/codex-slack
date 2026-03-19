@@ -26,6 +26,8 @@ def _settings(**kwargs) -> CdSettings:  # type: ignore[no-untyped-def]
         health_check_delay_seconds=1,
         rollback_on_failure=True,
         dry_run=True,
+        notify_slack_webhook_url=None,
+        notify_discord_webhook_url=None,
     )
     defaults.update(kwargs)
     return CdSettings(**defaults)

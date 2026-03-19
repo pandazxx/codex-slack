@@ -30,6 +30,10 @@ class CdSettings:
     rollback_on_failure: bool
     # Skip all side-effecting commands (pull / deploy / rollback).
     dry_run: bool
+    # Optional Slack incoming-webhook URL for deploy/rollback notifications.
+    notify_slack_webhook_url: str | None
+    # Optional Discord incoming-webhook URL for deploy/rollback notifications.
+    notify_discord_webhook_url: str | None
 
 
 def _bool(raw: str) -> bool:
@@ -52,6 +56,8 @@ def load_cd_settings() -> CdSettings:
     health_check_delay_seconds = int(os.getenv("CD_HEALTH_CHECK_DELAY_SECONDS", "30"))
     rollback_on_failure = _bool(os.getenv("CD_ROLLBACK_ON_FAILURE", "true"))
     dry_run = _bool(os.getenv("CD_DRY_RUN", "false"))
+    notify_slack_webhook_url = os.getenv("CD_NOTIFY_SLACK_WEBHOOK_URL", "").strip() or None
+    notify_discord_webhook_url = os.getenv("CD_NOTIFY_DISCORD_WEBHOOK_URL", "").strip() or None
 
     return CdSettings(
         image=image,
@@ -66,4 +72,6 @@ def load_cd_settings() -> CdSettings:
         health_check_delay_seconds=health_check_delay_seconds,
         rollback_on_failure=rollback_on_failure,
         dry_run=dry_run,
+        notify_slack_webhook_url=notify_slack_webhook_url,
+        notify_discord_webhook_url=notify_discord_webhook_url,
     )

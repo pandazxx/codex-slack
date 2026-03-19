@@ -10,6 +10,7 @@ from .deploy import (
     pull_image,
     rollback_image,
 )
+from .notify import notify
 from .state import CdState, load_state, make_deployed_state, make_failed_state, save_state
 
 LOGGER = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ def run_once(settings: CdSettings, state: CdState) -> CdState:
 
     if not deploy_ok:
         LOGGER.error("cd.deploy_failed image=%s", new_digest)
+        notify(settings, f":x: CD deploy failed for `{image_ref}` — digest `{new_digest}`.")
         failed_state = make_failed_state(state)
         if settings.rollback_on_failure and previous_digest:
             _do_rollback(settings=settings, image_ref=previous_digest, current_state=failed_state)
@@ -74,6 +76,7 @@ def run_once(settings: CdSettings, state: CdState) -> CdState:
             image_ref,
             new_digest,
         )
+        notify(settings, f":white_check_mark: CD deployed `{image_ref}` successfully (digest `{new_digest}`).")
         return new_state
 
     # Health check failed.
@@ -81,6 +84,11 @@ def run_once(settings: CdSettings, state: CdState) -> CdState:
         "cd.health_check_failed image=%s digest=%s",
         image_ref,
         new_digest,
+    )
+    notify(
+        settings,
+        f":warning: CD health check failed after deploying `{image_ref}` (digest `{new_digest}`)."
+        + (" Rolling back..." if settings.rollback_on_failure and previous_digest else ""),
     )
     failed_state = make_failed_state(state)
     if settings.rollback_on_failure and previous_digest:
@@ -90,6 +98,10 @@ def run_once(settings: CdSettings, state: CdState) -> CdState:
             current_state=failed_state,
         )
         if rolled_back:
+            notify(
+                settings,
+                f":arrows_counterclockwise: CD rolled back `{settings.container_name}` to `{previous_digest}`.",
+            )
             # Restore state to the last known-good digest.
             return make_deployed_state(
                 new_digest=previous_digest,
@@ -115,6 +127,10 @@ def _do_rollback(*, settings: CdSettings, image_ref: str, current_state: CdState
                 "cd.rollback_also_unhealthy image=%s consecutive_failures=%d",
                 image_ref,
                 current_state.consecutive_failures + 1,
+            )
+            notify(
+                settings,
+                f":sos: CD rollback also unhealthy for `{image_ref}` — manual intervention required.",
             )
             return False
     return ok
