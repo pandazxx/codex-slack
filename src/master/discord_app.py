@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
 from typing import Any
@@ -13,6 +14,7 @@ from .slack_app import format_forward_ack
 LOGGER = logging.getLogger(__name__)
 DISCORD_COMMAND_PATTERN = re.compile(r"^<@!?\d+>\s*")
 DISCORD_MESSAGE_LIMIT = 1900
+DISCORD_FILE_THRESHOLD = 4000  # send as file attachment above this length
 
 
 def _extract_image_urls(attachments: list[Any]) -> list[str]:
@@ -46,12 +48,19 @@ def split_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list
     while len(remaining) > limit:
         split_at = remaining.rfind("\n", 0, limit)
         if split_at <= 0:
+            # No newline found — split at last space to avoid mid-word cuts.
+            split_at = remaining.rfind(" ", 0, limit)
+        if split_at <= 0:
             split_at = limit
         chunks.append(remaining[:split_at].rstrip())
-        remaining = remaining[split_at:].lstrip("\n")
+        remaining = remaining[split_at:].lstrip("\n").lstrip(" ")
     if remaining:
         chunks.append(remaining)
     return [chunk for chunk in chunks if chunk]
+
+
+def _make_file(text: str, filename: str = "response.txt"):  # type: ignore[no-untyped-def]
+    return io.BytesIO(text.encode("utf-8")), filename
 
 
 def label_discord_chunks(chunks: list[str]) -> list[str]:
@@ -129,14 +138,23 @@ def run_discord_frontend(
             expanded.extend(label_discord_chunks(split_discord_message(message)))
         if not expanded:
             return
+        first, rest = expanded[0], expanded[1:]
         if interaction.response.is_done():
-            await interaction.followup.send(expanded[0])
+            await interaction.followup.send(first)
         else:
-            await interaction.response.send_message(expanded[0])
-        for message in expanded[1:]:
-            await interaction.followup.send(message)
+            await interaction.response.send_message(first)
+        for msg in rest:
+            await interaction.followup.send(msg)
 
     async def _reply_message_chunks(message, text: str) -> None:  # type: ignore[no-untyped-def]
+        if len(text) > DISCORD_FILE_THRESHOLD:
+            buf, fname = _make_file(text)
+            await message.reply(
+                f"Response is too long ({len(text):,} chars) — sending as file.",
+                file=discord.File(buf, filename=fname),
+                mention_author=False,
+            )
+            return
         for chunk in label_discord_chunks(split_discord_message(text)):
             await message.reply(chunk, mention_author=False)
 
