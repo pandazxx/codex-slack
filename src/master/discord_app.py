@@ -17,6 +17,39 @@ DISCORD_MESSAGE_LIMIT = 1900
 DISCORD_FILE_THRESHOLD = 4000  # send as file attachment above this length
 
 
+_TEXT_MIME_PREFIXES = ("text/",)
+_TEXT_EXTENSIONS = {".txt", ".log", ".md", ".json", ".yaml", ".yml", ".toml", ".sh", ".py", ".js", ".ts", ".csv"}
+_TEXT_ATTACHMENT_SIZE_LIMIT = 512 * 1024  # 512 KB
+
+
+def _is_text_attachment(attachment: Any) -> bool:
+    content_type = str(getattr(attachment, "content_type", "") or "").split(";")[0].strip()
+    if any(content_type.startswith(p) for p in _TEXT_MIME_PREFIXES):
+        return True
+    filename = str(getattr(attachment, "filename", "") or "")
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return ext in _TEXT_EXTENSIONS
+
+
+async def _read_text_attachments(attachments: list[Any]) -> str:
+    """Download text/file attachments and return their contents joined as a string."""
+    parts: list[str] = []
+    for attachment in attachments:
+        if not _is_text_attachment(attachment):
+            continue
+        size = getattr(attachment, "size", 0) or 0
+        if size > _TEXT_ATTACHMENT_SIZE_LIMIT:
+            parts.append(f"[attachment {attachment.filename}: too large to include ({size:,} bytes)]")
+            continue
+        try:
+            raw = await attachment.read()
+            text = raw.decode("utf-8", errors="replace")
+            parts.append(f"[attachment: {attachment.filename}]\n{text}")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("discord.text_attachment_read_failed filename=%s error=%s", getattr(attachment, "filename", "?"), exc)
+    return "\n\n".join(parts)
+
+
 def _extract_image_urls(attachments: list[Any]) -> list[str]:
     urls: list[str] = []
     for item in attachments:
@@ -203,6 +236,9 @@ def run_discord_frontend(
         text = str(message.content or "")
         user_id = str(message.author.id)
         image_urls = _extract_image_urls(list(message.attachments))
+        text_attachment_content = await _read_text_attachments(list(message.attachments))
+        if text_attachment_content:
+            text = f"{text}\n\n{text_attachment_content}".strip()
         is_mention = client.user is not None and client.user.mentioned_in(message)
 
         reference = getattr(message, "reference", None)
