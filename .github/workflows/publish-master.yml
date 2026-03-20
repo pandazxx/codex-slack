@@ -15,8 +15,6 @@ on:
   push:
     branches:
       - master
-    tags:
-      - "v*"
     paths:
       - "Dockerfile"
       - "docker/entrypoint.sh"
