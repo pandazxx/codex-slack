@@ -13,6 +13,10 @@ name: Publish Master Image
 
 on:
   push:
+    branches:
+      - master
+    tags:
+      - "v*"
     paths:
       - "Dockerfile"
       - "docker/entrypoint.sh"
