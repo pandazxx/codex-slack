@@ -191,6 +191,18 @@ def run_discord_frontend(
         for chunk in label_discord_chunks(split_discord_message(text)):
             await message.reply(chunk, mention_author=False)
 
+    async def _reply_in_thread(thread, text: str) -> None:  # type: ignore[no-untyped-def]
+        """Send a message directly into a thread channel (no reply reference)."""
+        if len(text) > DISCORD_FILE_THRESHOLD:
+            buf, fname = _make_file(text)
+            await thread.send(
+                f"Response is too long ({len(text):,} chars) — sending as file.",
+                file=discord.File(buf, filename=fname),
+            )
+            return
+        for chunk in label_discord_chunks(split_discord_message(text)):
+            await thread.send(chunk)
+
     def _run_command(*, command_name: str, text: str, channel_id: str, user_id: str) -> list[str]:
         return execute_master_command(
             platform="discord",
@@ -231,7 +243,6 @@ def run_discord_frontend(
         if message.author.bot:
             return
 
-        channel_id = str(message.channel.id)
         event_ts = str(message.id)
         text = str(message.content or "")
         user_id = str(message.author.id)
@@ -241,33 +252,70 @@ def run_discord_frontend(
             text = f"{text}\n\n{text_attachment_content}".strip()
         is_mention = client.user is not None and client.user.mentioned_in(message)
 
-        reference = getattr(message, "reference", None)
-        thread_ts = str(getattr(reference, "message_id", "") or message.id)
+        # Discord threads have a stable channel.id and a parent_id pointing to
+        # the origin channel.  Map these to Slack equivalents:
+        #   channel_id → parent channel (used for agent registry lookup)
+        #   thread_ts  → thread channel id (stable thread identifier)
+        # For regular channels a mention creates a new thread, so followup
+        # messages inside it are routed without requiring another @mention.
+        is_thread = isinstance(message.channel, discord.Thread)
+        if is_thread:
+            channel_id = str(message.channel.parent_id)
+            thread_ts = str(message.channel.id)
+        else:
+            channel_id = str(message.channel.id)
+            thread_ts = None  # set below after thread creation on mention
 
         try:
-            admin_message_command = parse_admin_message_command(text) if channel_id in admin_channels else None
+            admin_channel_id = thread_ts if is_thread else channel_id
+            admin_message_command = (
+                parse_admin_message_command(text) if admin_channel_id in admin_channels else None
+            )
             if admin_message_command is not None:
                 command_name, args_text = admin_message_command
                 messages = _run_command(
                     command_name=command_name,
                     text=args_text,
-                    channel_id=channel_id,
+                    channel_id=admin_channel_id,
                     user_id=user_id,
                 )
                 for reply in messages:
                     await _reply_message_chunks(message, reply)
                 return
 
-            if is_mention:
-                say_thread = thread_ts
+            if is_mention and not is_thread:
+                # Mention in a regular channel — ack, spin up a thread, respond there.
                 say_text = format_forward_ack(text=text, image_count=len(image_urls))
-                await _reply_message_chunks(message, say_text)
+                ack_msg = await message.reply(say_text, mention_author=False)
+                prompt_preview = DISCORD_COMMAND_PATTERN.sub("", text).strip()[:60] or "conversation"
+                thread = await ack_msg.create_thread(
+                    name=f"Agent: {prompt_preview}",
+                    auto_archive_duration=1440,
+                )
+                thread_ts = str(thread.id)
                 response = await asyncio.to_thread(
                     router.route_mention_message,
                     platform="discord",
                     channel_id=channel_id,
                     text=text,
-                    thread_ts=say_thread,
+                    thread_ts=thread_ts,
+                    event_ts=event_ts,
+                    user_id=user_id,
+                    image_urls=image_urls,
+                )
+                await _reply_in_thread(thread, response)
+                return
+
+            if is_mention and is_thread:
+                # Mention inside an existing thread — re-track and respond in thread.
+                say_text = format_forward_ack(text=text, image_count=len(image_urls))
+                await message.reply(say_text, mention_author=False)
+                response = await asyncio.to_thread(
+                    router.route_mention_message,
+                    platform="discord",
+                    channel_id=channel_id,
+                    text=text,
+                    thread_ts=thread_ts,
                     event_ts=event_ts,
                     user_id=user_id,
                     image_urls=image_urls,
@@ -275,7 +323,10 @@ def run_discord_frontend(
                 await _reply_message_chunks(message, response)
                 return
 
-            response = await asyncio.to_thread(
+            # Followup in a thread without @mention.
+            if not is_thread:
+                return
+            accepted = await asyncio.to_thread(
                 router.accept_followup_message,
                 platform="discord",
                 channel_id=channel_id,
@@ -285,7 +336,7 @@ def run_discord_frontend(
                 user_id=user_id,
                 image_urls=image_urls,
             )
-            if not response:
+            if not accepted:
                 return
             await _reply_message_chunks(message, format_forward_ack(text=text, image_count=len(image_urls)))
             routed = await asyncio.to_thread(
