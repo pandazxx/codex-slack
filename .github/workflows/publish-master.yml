@@ -13,8 +13,6 @@ name: Publish Master Image
 
 on:
   push:
-    branches:
-      - master
     paths:
       - "Dockerfile"
       - "docker/entrypoint.sh"
