@@ -128,6 +128,9 @@ class PodmanExecDispatcher:
             cmd.extend(["-e", f"CODEX_HOME={self.codex_home}"])
         if self.workdir:
             cmd.extend(["--workdir", self.workdir])
+        cmd.extend(["-e", f"AGENT_FRONTEND={platform}"])
+        cmd.extend(["-e", f"AGENT_CHANNEL_ID={channel_id}"])
+        cmd.extend(["-e", f"AGENT_ADAPTER={agent_adapter}"])
         cmd.extend([container_name, "sh", "-lc", rendered_command])
         LOGGER.info(
             "router.dispatch_start agent=%s container=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s codex_home=%s session_id=%s agent_command=%r",
@@ -418,6 +421,9 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             cmd.extend(["-e", f"CODEX_HOME={self.codex_home}"])
         if self.workdir:
             cmd.extend(["--workdir", self.workdir])
+        cmd.extend(["-e", f"AGENT_FRONTEND={platform}"])
+        cmd.extend(["-e", f"AGENT_CHANNEL_ID={channel_id}"])
+        cmd.extend(["-e", f"AGENT_ADAPTER={agent_adapter}"])
         cmd.extend([container_name, "sh", "-lc", rendered_command])
         LOGGER.info(
             "router.dispatch_start agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s session_id=%s claude_session_known=%s claude_action=%s agent_command=%r",
