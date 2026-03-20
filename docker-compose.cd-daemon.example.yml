@@ -30,6 +30,9 @@ x-podman:
 
 services:
   codex-slack-cd-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: ${MASTER_RUNTIME_IMAGE:-ghcr.io/pandazxx/codex-slack-master:latest}
     container_name: codex-slack-cd-daemon
     restart: unless-stopped
