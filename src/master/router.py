@@ -292,6 +292,7 @@ class MultiAgentDispatcher:
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        claude_model: str | None = None,
     ) -> str:
         selected = (agent_adapter or self.default_adapter).strip().lower()
         dispatcher = self.dispatchers.get(selected) or self.dispatchers.get(self.default_adapter)
@@ -307,6 +308,7 @@ class MultiAgentDispatcher:
             thread_ts=thread_ts,
             user_id=user_id,
             image_urls=image_urls,
+            claude_model=claude_model,
         )
 
 
