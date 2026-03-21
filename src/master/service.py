@@ -530,3 +530,4 @@ class MasterService:
         if completed.returncode != 0:
             LOGGER.error("master.run_git_failed cmd=%r returncode=%d stderr=%s", " ".join(args), completed.returncode, completed.stderr.strip())
             raise RuntimeError(completed.stderr.strip() or f"git command failed: {' '.join(args)}")
+        LOGGER.info("master.run_git_ok cmd=%r", " ".join(args))
