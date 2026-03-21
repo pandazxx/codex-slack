@@ -468,10 +468,14 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
 
         parts: list[str] = []
         input_tokens = usage.get("input_tokens", 0)
+        cache_creation = usage.get("cache_creation_input_tokens", 0)
         cache_read = usage.get("cache_read_input_tokens", 0)
         output_tokens = usage.get("output_tokens", 0)
+        total_ctx = input_tokens + cache_creation + cache_read + output_tokens
         if input_tokens or output_tokens:
             parts.append(f"in={input_tokens:,} cache_hit={cache_read:,} out={output_tokens:,}")
+        if total_ctx:
+            parts.append(f"ctx={total_ctx:,}")
         if cost is not None:
             parts.append(f"cost=${cost:.4f}")
 
