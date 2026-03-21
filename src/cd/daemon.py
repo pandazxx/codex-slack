@@ -49,6 +49,11 @@ def run_once(settings: CdSettings, state: CdState) -> CdState:
         new_digest,
     )
 
+    notify(
+        settings,
+        f":rocket: CD deploying new image `{image_ref}` (digest `{new_digest}`).",
+    )
+
     previous_digest = state.deployed_digest
 
     deploy_ok = deploy_image(
@@ -120,21 +125,26 @@ def _do_rollback(*, settings: CdSettings, image_ref: str, current_state: CdState
         env_file=settings.env_file,
         dry_run=settings.dry_run,
     )
-    if ok:
-        # Give the rolled-back container a moment to come up, then verify.
-        healthy = check_health(settings.container_name, settings.health_check_delay_seconds)
-        if not healthy:
-            LOGGER.error(
-                "cd.rollback_also_unhealthy image=%s consecutive_failures=%d",
-                image_ref,
-                current_state.consecutive_failures + 1,
-            )
-            notify(
-                settings,
-                f":sos: CD rollback also unhealthy for `{image_ref}` — manual intervention required.",
-            )
-            return False
-    return ok
+    if not ok:
+        notify(
+            settings,
+            f":x: CD rollback failed to pull/deploy `{image_ref}` — manual intervention required.",
+        )
+        return False
+    # Give the rolled-back container a moment to come up, then verify.
+    healthy = check_health(settings.container_name, settings.health_check_delay_seconds)
+    if not healthy:
+        LOGGER.error(
+            "cd.rollback_also_unhealthy image=%s consecutive_failures=%d",
+            image_ref,
+            current_state.consecutive_failures + 1,
+        )
+        notify(
+            settings,
+            f":sos: CD rollback also unhealthy for `{image_ref}` — manual intervention required.",
+        )
+        return False
+    return True
 
 
 def run_loop(settings: CdSettings) -> None:
@@ -158,8 +168,18 @@ def run_loop(settings: CdSettings) -> None:
         state.deployed_at or "-",
     )
 
+    notify(
+        settings,
+        f":satellite: CD daemon started — tracking `{settings.image}:{settings.image_tag}`"
+        f", container `{settings.container_name}`.",
+    )
+
     LOGGER.info("cd.startup_restart container=%s", settings.container_name)
-    restart_container(settings.container_name, dry_run=settings.dry_run)
+    restarted = restart_container(settings.container_name, dry_run=settings.dry_run)
+    if restarted:
+        notify(settings, f":arrows_counterclockwise: CD startup: restarted `{settings.container_name}` successfully.")
+    else:
+        notify(settings, f":x: CD startup: failed to restart `{settings.container_name}` — check daemon logs.")
 
     while True:
         try:
