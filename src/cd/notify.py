@@ -25,6 +25,13 @@ def post_webhook(url: str, payload: dict) -> None:  # type: ignore[type-arg]
     try:
         with urllib.request.urlopen(req, timeout=10):
             pass
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode(errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+        LOGGER.warning("cd.notify_failed url=%s status=%s body=%s", url, exc.code, body)
     except (urllib.error.URLError, OSError) as exc:
         LOGGER.warning("cd.notify_failed url=%s error=%s", url, exc)
 
