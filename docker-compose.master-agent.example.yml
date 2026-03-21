@@ -14,17 +14,17 @@ services:
     security_opt:
       - label=disable
     environment:
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:?SLACK_BOT_TOKEN is required}
-      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:?SLACK_APP_TOKEN is required}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
       GH_TOKEN: ${GH_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       SSH_AUTH_SOCK: /ssh-agent
       MASTER_GIT_USER_NAME: ${MASTER_GIT_USER_NAME:-}
       MASTER_GIT_USER_EMAIL: ${MASTER_GIT_USER_EMAIL:-}
-      MASTER_CODEX_AUTH_JSON_PATH: ${MASTER_CODEX_AUTH_JSON_PATH:?MASTER_CODEX_AUTH_JSON_PATH is required}
-      MASTER_SSH_AUTH_SOCK_PATH: ${MASTER_SSH_AUTH_SOCK_PATH:?MASTER_SSH_AUTH_SOCK_PATH is required}
+      MASTER_CODEX_AUTH_JSON_PATH: ${MASTER_CODEX_AUTH_JSON_PATH:-}
+      MASTER_SSH_AUTH_SOCK_PATH: ${MASTER_SSH_AUTH_SOCK_PATH:-}
       MASTER_SSH_KNOWN_HOSTS_PATH: ${MASTER_SSH_KNOWN_HOSTS_PATH:-}
-      MASTER_ADMIN_CHANNELS: ${MASTER_ADMIN_CHANNELS:?MASTER_ADMIN_CHANNELS is required}
+      MASTER_ADMIN_CHANNELS: ${MASTER_ADMIN_CHANNELS:-}
       MASTER_AGENT_BASE_IMAGE: ${MASTER_AGENT_BASE_IMAGE:-codex-slack-v1-uat}
       MASTER_REGISTRY_PATH: /opt/codex-slack/data/master/agents.json
       MASTER_AGENT_COMMAND_TEMPLATE: ${MASTER_AGENT_COMMAND_TEMPLATE:-codex exec --dangerously-bypass-approvals-and-sandbox -}
@@ -35,7 +35,7 @@ services:
       CONTAINER_HOST: unix:///run/podman/podman.sock
     volumes:
       - ${MASTER_DATA_DIR:-./data/master}:/opt/codex-slack/data/master
-      - ${MASTER_SSH_AUTH_SOCK_PATH:?MASTER_SSH_AUTH_SOCK_PATH is required}:/ssh-agent
-      - ${PODMAN_SOCKET_PATH:?PODMAN_SOCKET_PATH is required}:/run/podman/podman.sock
+      - ${MASTER_SSH_AUTH_SOCK_PATH:-/dev/null}:/ssh-agent
+      - ${PODMAN_SOCKET_PATH:-/run/user/1000/podman/podman.sock}:/run/podman/podman.sock
     stdin_open: true
     tty: true
