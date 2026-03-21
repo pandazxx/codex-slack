@@ -67,6 +67,10 @@ For each command:
 4. Add a short description.
 5. Save.
 
+Load command syntax:
+- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
+- Platform is inferred as `slack` because the command runs in Slack.
+
 ## 6. Install App to Workspace
 1. Open **Install App**.
 2. Click **Install to Workspace**.
@@ -101,10 +105,12 @@ curl -sS -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
 ```dotenv
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
+MASTER_FRONTENDS=slack
 MASTER_ADMIN_CHANNELS=C01234567
 MASTER_REGISTRY_PATH=data/master/agents.json
 MASTER_DRY_RUN=false
 MASTER_AGENT_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox resume --last -
+MASTER_DEFAULT_AGENT_ADAPTER=codex
 # The router injects a stable per-thread `resume <session_id>` automatically for standard `... -` templates.
 MASTER_AGENT_TIMEOUT_SECONDS=120
 MASTER_COMMAND_RATE_LIMIT_COUNT=20
@@ -125,7 +131,7 @@ python -m src.master.main
 3. Confirm a JSON response is posted.
 4. Run (branch optional; defaults to `main`, then falls back to `master`):
 ```text
-/master-agent-load <name> <repo_path> <agent_channel_id> [branch]
+/master-agent-load <name> <repo_path> <agent_channel_id> [branch] [--adapter codex|claude-code]
 ```
 5. Run:
 ```text

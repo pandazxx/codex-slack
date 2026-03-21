@@ -1,12 +1,135 @@
-# Master-Agent UAT Test Cases (v1)
+# Master-Agent UAT Test Cases (v3.0)
 
 ## Purpose
-Validate end-to-end v1 behavior for:
+Validate end-to-end current behavior for:
 - containerized deployment and runtime wiring
 - master lifecycle control
 - agent startup and workspace initialization
-- Slack routing and thread continuity
+- Slack and Discord routing and thread continuity
 - policy enforcement and failure handling
+
+## v3.0 UAT Checklist (Dual Frontend + Dual Adapter)
+Use this checklist for current `feat/v3.0` validation. It is additive to v1 tests.
+
+### UAT-v3-001: Frontend Startup Matrix
+Preconditions:
+- Build/runtime includes `discord.py`.
+- Valid tokens and admin channels are available.
+
+Steps:
+1. Run with `MASTER_FRONTENDS=slack`.
+2. Run with `MASTER_FRONTENDS=discord`.
+3. Run with `MASTER_FRONTENDS=slack,discord`.
+
+Expected:
+- Enabled frontends start without crashing.
+- Disabled frontend tokens are not required.
+- Startup logs show which frontend workers are running.
+
+### UAT-v3-002: Registry Schema Migration
+Preconditions:
+- Existing `agents.json` created before v3.0 (missing `schema_version`, `platform`, `agent_adapter`).
+
+Steps:
+1. Start master once.
+2. Inspect `MASTER_REGISTRY_PATH`.
+
+Expected:
+- Registry is migrated to `schema_version=2`.
+- Existing agents are backfilled with:
+  - `platform=slack`
+  - `agent_adapter=codex`
+
+### UAT-v3-003: Platform-Aware Agent Load (Slack Command)
+Steps:
+1. In Slack admin channel:
+```text
+/master-agent-load slack-agent REPO_URL C0123456789 main --adapter codex
+```
+2. In Slack admin channel:
+```text
+/master-agent-load discord-agent REPO_URL C0987654321 main --adapter claude-code
+```
+
+Expected:
+- Both loads succeed with `ok=true`.
+- Response payload contains `platform` and `agent_adapter`.
+- Invalid combinations are rejected (for example Discord platform with Slack-style channel ID).
+
+### UAT-v3-004: Discord Command Parity
+Steps:
+1. In Discord admin channel, run:
+- `/master-agent-list`
+- `/master-agent-status`
+- `/master-agent-usage`
+- `/master-agent-start`
+- `/master-agent-stop`
+- `/master-agent-remove`
+- `/master-agent-refresh-auth`
+
+Expected:
+- Command behavior and response semantics match Slack command flow.
+- Admin-channel enforcement uses `DISCORD_ADMIN_CHANNELS`.
+
+### UAT-v3-005: Adapter Routing Selection
+Preconditions:
+- One agent loaded with `--adapter codex`.
+- One agent loaded with `--adapter claude-code`.
+
+Steps:
+1. Send a routed prompt to each mapped channel.
+2. Inspect master logs for dispatch command selection.
+
+Expected:
+- Codex-mapped agent uses Codex command template.
+- Claude-mapped agent uses Claude command template.
+- No cross-adapter leakage between agents.
+
+### UAT-v3-006: Cross-Frontend Concurrent Routing
+Preconditions:
+- `MASTER_FRONTENDS=slack,discord`.
+- One Slack-mapped agent and one Discord-mapped agent are running.
+
+Steps:
+1. Send prompt in Slack mapped channel.
+2. Send prompt in Discord mapped channel.
+3. Send follow-up message in each thread/reply context.
+
+Expected:
+- Both platforms route concurrently without blocking each other.
+- Follow-up continuity works per platform thread key.
+- Usage metrics increment for both flows.
+
+### UAT-v3-007: Load Command Option Validation
+Steps:
+1. Try unknown option:
+```text
+/master-agent-load x REPO_URL C123 main --unknown foo
+```
+2. Try invalid adapter:
+```text
+/master-agent-load x REPO_URL C123 main --adapter unknown
+```
+3. Try invalid platform:
+```text
+/master-agent-load x REPO_URL C123 main --unknown value
+```
+
+Expected:
+- Command returns `ERR_INVALID_ARGS` with actionable error text.
+
+### UAT-v3-008: Backward Compatibility (Legacy Slack Loads)
+Steps:
+1. Run legacy syntax in Slack:
+```text
+/master-agent-load legacy-agent REPO_URL C0123456789
+```
+
+Expected:
+- Load still succeeds.
+- Defaults are applied:
+  - `platform=slack`
+  - `agent_adapter=codex`
 
 ## Test Environment
 - Master branch under test: current `master` (or release candidate tag under validation).

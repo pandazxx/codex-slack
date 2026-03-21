@@ -72,6 +72,21 @@ def _run_git(args: list[str], cwd: str | None = None) -> subprocess.CompletedPro
     return completed
 
 
+def _copy_tree(src: Path, dst: Path, *, overwrite: bool) -> None:
+    if not src.exists() or not src.is_dir():
+        return
+    dst.mkdir(parents=True, exist_ok=True)
+    for entry in src.iterdir():
+        target = dst / entry.name
+        if entry.is_dir():
+            _copy_tree(entry, target, overwrite=overwrite)
+            continue
+        if target.exists() and not overwrite:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(entry.read_bytes())
+
+
 def stage_preflight(settings: WorkerSettings) -> None:
     workspace = Path(settings.workspace_path)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -119,9 +134,26 @@ def stage_repo_sync(settings: WorkerSettings) -> Path:
 
 
 def stage_workspace_prepare(settings: WorkerSettings) -> None:
+    home_dir = Path(os.getenv("HOME", "/home/appuser")).expanduser()
+    home_dir.mkdir(parents=True, exist_ok=True)
+    xdg_config_home = Path(os.getenv("XDG_CONFIG_HOME", str(home_dir / ".config"))).expanduser()
+    xdg_config_home.mkdir(parents=True, exist_ok=True)
     codex_home = Path(settings.codex_home)
     codex_home.mkdir(parents=True, exist_ok=True)
     repo_dir = Path(settings.workspace_path) / settings.repo_dir_name
+    global_codex_config_raw = os.getenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", "").strip()
+    global_claude_config_raw = os.getenv("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", "").strip()
+    repo_codex_dir = repo_dir / ".codex"
+    home_claude_dir = home_dir / ".claude"
+
+    if global_codex_config_raw:
+        _copy_tree(Path(global_codex_config_raw), codex_home, overwrite=False)
+    # repo_codex_dir (.codex/ in the cloned repo) is intentionally left in place.
+    # Codex reads it as project-scope config from the working directory, which takes
+    # precedence over user-scope settings in CODEX_HOME per the Codex scope hierarchy.
+    if global_claude_config_raw:
+        _copy_tree(Path(global_claude_config_raw), home_claude_dir, overwrite=False)
+
     git_user_name = os.getenv("AGENT_GIT_USER_NAME", "").strip()
     git_user_email = os.getenv("AGENT_GIT_USER_EMAIL", "").strip()
 
