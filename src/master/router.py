@@ -303,7 +303,7 @@ class MultiAgentDispatcher:
 
 @dataclass(frozen=True)
 class ClaudeCodeDispatcher(PodmanExecDispatcher):
-    command_template: str = "claude -p"
+    command_template: str = "claude -p --output-format json"
     session_state_path: str | None = None
     _session_lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
     _known_sessions: dict[str, str] = field(default_factory=dict, init=False, repr=False, compare=False)
@@ -449,6 +449,35 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             timeout=self.timeout_seconds,
             check=False,
         )
+
+    @staticmethod
+    def _parse_response(raw: str) -> str:
+        """Extract text result from claude --output-format json output.
+
+        Appends a compact usage footer (tokens + cost) when available.
+        Falls back to returning raw output as-is if JSON parsing fails.
+        """
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return raw  # plain text mode or unparseable — return as-is
+
+        result = str(data.get("result") or "").strip()
+        usage = data.get("usage") or {}
+        cost = data.get("total_cost_usd")
+
+        parts: list[str] = []
+        input_tokens = usage.get("input_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        if input_tokens or output_tokens:
+            parts.append(f"in={input_tokens:,} cache_hit={cache_read:,} out={output_tokens:,}")
+        if cost is not None:
+            parts.append(f"cost=${cost:.4f}")
+
+        if parts:
+            result = f"{result}\n\n`[{' | '.join(parts)}]`"
+        return result
 
     def send_prompt(
         self,
@@ -602,7 +631,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         with self._session_lock:
             self._known_sessions[session_key] = session_id
             self._persist_known_sessions_unlocked()
-        response = completed.stdout.strip()
+        response = self._parse_response(completed.stdout.strip())
         LOGGER.info(
             "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s session_id=%s claude_session_known=%s claude_action=%s response_chars=%d",
             agent_name,

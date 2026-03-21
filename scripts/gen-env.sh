@@ -101,7 +101,7 @@ $(e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS "60")
 $(e MASTER_DEFAULT_AGENT_ADAPTER           "codex")
 $(e MASTER_AGENT_COMMAND_TEMPLATE         "codex exec --dangerously-bypass-approvals-and-sandbox -")
 $(e MASTER_CODEX_COMMAND_TEMPLATE         "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -")
-$(e MASTER_CLAUDE_COMMAND_TEMPLATE        "claude -p --dangerously-skip-permissions")
+$(e MASTER_CLAUDE_COMMAND_TEMPLATE        "claude -p --output-format json --dangerously-skip-permissions")
 
 # =============================================================================
 # CD daemon — image tracking
