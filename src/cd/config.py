@@ -1,7 +1,20 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _log(name: str, value: str | None, *, secret: bool = False) -> None:
+    if value is None:
+        LOGGER.info("cd.env_load %s=(unset)", name)
+    elif secret:
+        masked = f"{value[:4]}...{value[-4:]}" if len(value) > 8 else "***"
+        LOGGER.info("cd.env_load %s=%s", name, masked)
+    else:
+        LOGGER.info("cd.env_load %s=%r", name, value)
 
 
 @dataclass(frozen=True)
@@ -58,6 +71,22 @@ def load_cd_settings() -> CdSettings:
     dry_run = _bool(os.getenv("CD_DRY_RUN", "false"))
     notify_slack_webhook_url = os.getenv("CD_NOTIFY_SLACK_WEBHOOK_URL", "").strip() or None
     notify_discord_webhook_url = os.getenv("CD_NOTIFY_DISCORD_WEBHOOK_URL", "").strip() or None
+
+    _log("CD_IMAGE", image)
+    _log("CD_IMAGE_TAG", image_tag)
+    _log("CD_CONTAINER_NAME", container_name)
+    _log("CD_COMPOSE_FILE", compose_file)
+    _log("CD_COMPOSE_SERVICE", compose_service)
+    _log("CD_COMPOSE_BINARY", compose_binary)
+    _log("CD_ENV_FILE", env_file)
+    _log("CD_STATE_FILE", state_file)
+    _log("CD_POLL_INTERVAL_SECONDS", str(poll_interval_seconds))
+    _log("CD_HEALTH_CHECK_DELAY_SECONDS", str(health_check_delay_seconds))
+    _log("CD_ROLLBACK_ON_FAILURE", str(rollback_on_failure))
+    _log("CD_DRY_RUN", str(dry_run))
+    _log("CD_NOTIFY_SLACK_WEBHOOK_URL", notify_slack_webhook_url, secret=True)
+    _log("CD_NOTIFY_DISCORD_WEBHOOK_URL", notify_discord_webhook_url, secret=True)
+    LOGGER.info("cd.env_load done")
 
     return CdSettings(
         image=image,
