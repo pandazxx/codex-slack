@@ -457,9 +457,11 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         Appends a compact usage footer (tokens + cost) when available.
         Falls back to returning raw output as-is if JSON parsing fails.
         """
+        LOGGER.debug("router.parse_response_raw first_100=%r is_json_start=%s", raw[:100], raw.lstrip().startswith("{"))
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
+            LOGGER.warning("router.parse_response_not_json first_100=%r", raw[:100])
             return raw  # plain text mode or unparseable — return as-is
 
         result = str(data.get("result") or "").strip()
@@ -492,6 +494,9 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
 
         if parts:
             result = f"{result}\n\n`[{' | '.join(parts)}]`"
+            LOGGER.info("router.parse_response_footer footer=%r", parts)
+        else:
+            LOGGER.warning("router.parse_response_no_footer usage=%r cost=%r", usage, cost)
         return result
 
     def send_prompt(
@@ -507,6 +512,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         user_id: str | None,
         image_urls: list[str] | None = None,
     ) -> str:
+        LOGGER.info("router.claude_command_template template=%r", self.command_template)
         session_key = self._session_key(platform=platform, channel_id=channel_id)
         session_id = self._session_uuid(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
         with self._session_lock:
