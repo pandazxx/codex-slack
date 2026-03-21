@@ -20,6 +20,11 @@ LOGGER = logging.getLogger(__name__)
 MENTION_PATTERN = re.compile(r"<@[^>]+>")
 
 
+def _inject_claude_model(command: str, model: str) -> str:
+    """Insert --model <model> right after 'claude' in the command string."""
+    return re.sub(r"\bclaude\b", f"claude --model {model}", command, count=1)
+
+
 class RouteError(RuntimeError):
     pass
 
@@ -39,6 +44,7 @@ class AgentDispatcher(Protocol):
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        claude_model: str | None = None,
     ) -> str:
         ...
 
@@ -89,8 +95,11 @@ class PodmanExecDispatcher:
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        claude_model: str | None = None,
     ) -> str:
         rendered_command, session_id = self._render_command(channel_id=channel_id, thread_ts=thread_ts)
+        if claude_model:
+            rendered_command = _inject_claude_model(rendered_command, claude_model)
         image_urls = image_urls or []
         staged_paths, passthrough_urls = self._stage_images(
             container_name=container_name,
@@ -331,6 +340,7 @@ class ChannelRouter:
             thread_ts=thread_ts,
             user_id=user_id,
             image_urls=image_urls,
+            claude_model=record.claude_model,
         )
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         self._record_usage(

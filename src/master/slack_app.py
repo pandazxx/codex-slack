@@ -160,6 +160,15 @@ def parse_optional_name_text(text: str) -> str | None:
     return value or None
 
 
+def parse_set_model_text(text: str) -> tuple[str, str | None]:
+    parts = [part.strip() for part in text.split() if part.strip()]
+    if len(parts) == 1:
+        return parts[0], None  # clear model
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    raise ValueError("usage: /master-agent-set-model <name> [model]")
+
+
 def is_supported_thread_subtype(subtype: str | None) -> bool:
     if not subtype:
         return True
@@ -284,6 +293,10 @@ def dispatch_slash_command(service: MasterService, request: SlackCommandRequest)
     if request.command_name == "/master-agent-refresh-auth":
         name = parse_single_name_text(request.text, request.command_name)
         return service.refresh_agent_auth(name=name)
+
+    if request.command_name == "/master-agent-set-model":
+        name, model = parse_set_model_text(request.text)
+        return service.set_agent_model(name=name, model=model)
 
     return CommandResult(ok=False, code="ERR_INVALID_ARGS", message=f"unsupported command: {request.command_name}", data={})
 
@@ -570,6 +583,7 @@ def create_master_app(
         "/master-agent-usage",
         "/master-agent-remove",
         "/master-agent-refresh-auth",
+        "/master-agent-set-model",
     ):
         _register_command(
             app,

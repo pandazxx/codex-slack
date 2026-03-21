@@ -27,6 +27,7 @@ class AgentRecord:
     repo_ref: str = "main"
     resolved_image: str | None = None
     last_error: str | None = None
+    claude_model: str | None = None
     created_at: str = ""
     updated_at: str = ""
 

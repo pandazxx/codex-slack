@@ -31,6 +31,7 @@ class MasterService:
         runtime: RuntimeAdapter,
         default_image: str = DEFAULT_IMAGE,
         agent_codex_auth_json_path: str | None = None,
+        agent_claude_config_dir_path: str | None = None,
         agent_ssh_auth_sock_path: str | None = None,
         agent_ssh_known_hosts_path: str | None = None,
         git_user_name: str | None = None,
@@ -40,6 +41,7 @@ class MasterService:
         self._runtime = runtime
         self._default_image = default_image
         self._agent_codex_auth_json_path = agent_codex_auth_json_path
+        self._agent_claude_config_dir_path = agent_claude_config_dir_path
         self._agent_ssh_auth_sock_path = agent_ssh_auth_sock_path
         self._agent_ssh_known_hosts_path = agent_ssh_known_hosts_path
         self._git_user_name = git_user_name
@@ -292,6 +294,24 @@ class MasterService:
         self._audit(command="refresh-auth", agent=name, result=result)
         return result
 
+    def set_agent_model(self, *, name: str, model: str | None) -> CommandResult:
+        record = self._registry.get(name)
+        if not record:
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="set-model", agent=name, result=result)
+            return result
+
+        record.claude_model = model
+        self._registry.upsert(record)
+        result = CommandResult(
+            ok=True,
+            code="OK",
+            message=f"model set to {model!r} for {name}" if model else f"model cleared for {name}",
+            data={"name": name, "claude_model": model},
+        )
+        self._audit(command="set-model", agent=name, result=result)
+        return result
+
     def _validate_load_inputs(self, *, name: str, channel_id: str) -> CommandResult | None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,30}", name):
             return CommandResult(
@@ -346,6 +366,8 @@ class MasterService:
         if self._agent_ssh_auth_sock_path:
             env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
             env["GIT_SSH_COMMAND"] = self._agent_git_ssh_command()
+        if self._agent_claude_config_dir_path:
+            env["CLAUDE_CONFIG_DIR"] = "/run/secrets/master_claude_config"
 
         return env
 
@@ -353,6 +375,8 @@ class MasterService:
         mounts: list[str] = []
         if self._agent_codex_auth_json_path:
             mounts.append(f"{self._agent_codex_auth_json_path}:/run/secrets/codex_auth.json:ro")
+        if self._agent_claude_config_dir_path:
+            mounts.append(f"{self._agent_claude_config_dir_path}:/run/secrets/master_claude_config:ro")
         if self._agent_ssh_auth_sock_path:
             mounts.append(f"{self._agent_ssh_auth_sock_path}:/run/secrets/ssh-auth.sock")
         if self._agent_ssh_known_hosts_path:

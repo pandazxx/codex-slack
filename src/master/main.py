@@ -60,6 +60,7 @@ def main() -> None:
         runtime=runtime,
         default_image=settings.agent_base_image,
         agent_codex_auth_json_path=settings.agent_codex_auth_json_path,
+        agent_claude_config_dir_path=settings.agent_claude_config_dir_path,
         agent_ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
         agent_ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
         git_user_name=settings.git_user_name,
