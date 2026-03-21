@@ -19,7 +19,10 @@ def post_webhook(url: str, payload: dict) -> None:  # type: ignore[type-arg]
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "codex-slack-cd/1.0",
+        },
         method="POST",
     )
     try:
