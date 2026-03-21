@@ -466,6 +466,13 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         usage = data.get("usage") or {}
         cost = data.get("total_cost_usd")
 
+        # context_window is nested under modelUsage keyed by model name.
+        context_window: int | None = None
+        for model_data in (data.get("modelUsage") or {}).values():
+            if isinstance(model_data, dict) and model_data.get("contextWindow"):
+                context_window = int(model_data["contextWindow"])
+                break
+
         parts: list[str] = []
         input_tokens = usage.get("input_tokens", 0)
         cache_creation = usage.get("cache_creation_input_tokens", 0)
@@ -475,7 +482,11 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         if input_tokens or output_tokens:
             parts.append(f"in={input_tokens:,} cache_hit={cache_read:,} out={output_tokens:,}")
         if total_ctx:
-            parts.append(f"ctx={total_ctx:,}")
+            ctx_str = f"ctx={total_ctx:,}"
+            if context_window:
+                pct = total_ctx / context_window * 100
+                ctx_str += f"/{context_window // 1000}k ({pct:.1f}%)"
+            parts.append(ctx_str)
         if cost is not None:
             parts.append(f"cost=${cost:.4f}")
 
