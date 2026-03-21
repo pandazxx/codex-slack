@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from dotenv import load_dotenv
 
@@ -18,6 +19,11 @@ def configure_logging() -> None:
 
 def main() -> None:
     load_dotenv()
+    # If CD_ENV_FILE points to a specific env file (e.g. .env.staging), load it
+    # into the daemon's own process so daemon-level vars like CD_NOTIFY_* are visible.
+    env_file = os.getenv("CD_ENV_FILE", "").strip()
+    if env_file:
+        load_dotenv(env_file, override=True)
     configure_logging()
     settings = load_cd_settings()
     run_loop(settings)
