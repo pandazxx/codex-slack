@@ -45,9 +45,9 @@ def pull_image(image_ref: str) -> str | None:
     completed = _run(["podman", "pull", image_ref])
     if completed.returncode != 0:
         LOGGER.warning(
-            "cd.pull_failed image=%s stderr=%s",
+            "cd.pull_failed image=%s\nSTDERR:\n%s",
             image_ref,
-            completed.stderr.strip()[:300],
+            completed.stderr.strip(),
         )
         return None
     digest = get_image_repo_digest(image_ref)
@@ -97,10 +97,10 @@ def deploy_image(
     completed = _run(cmd, extra_env={"MASTER_RUNTIME_IMAGE": image_ref})
     if completed.returncode != 0:
         LOGGER.warning(
-            "cd.deploy_failed image=%s stderr=%s stdout=%s",
+            "cd.deploy_failed image=%s\nSTDERR:\n%s\nSTDOUT:\n%s",
             image_ref,
-            completed.stderr.strip()[:300],
-            completed.stdout.strip()[:300],
+            completed.stderr.strip(),
+            completed.stdout.strip(),
         )
         return False
     LOGGER.info("cd.deploy_done image=%s", image_ref)
@@ -143,9 +143,9 @@ def rollback_image(
         completed = _run(["podman", "pull", image_ref])
         if completed.returncode != 0:
             LOGGER.error(
-                "cd.rollback_pull_failed image=%s stderr=%s",
+                "cd.rollback_pull_failed image=%s\nSTDERR:\n%s",
                 image_ref,
-                completed.stderr.strip()[:300],
+                completed.stderr.strip(),
             )
             return False
 
