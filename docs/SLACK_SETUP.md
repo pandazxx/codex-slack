@@ -58,6 +58,7 @@ Create these commands in **Slash Commands**:
 - `/master-agent-usage`
 - `/master-agent-remove`
 - `/master-agent-refresh-auth`
+- `/master-agent-set-model`
 
 For each command:
 1. Click **Create New Command**.
@@ -108,6 +109,8 @@ MASTER_AGENT_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sand
 MASTER_AGENT_TIMEOUT_SECONDS=120
 MASTER_COMMAND_RATE_LIMIT_COUNT=20
 MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60
+# Optional: mount host ~/.claude directory into agents so claude reads settings.json from there
+# MASTER_CLAUDE_CONFIG_DIR_PATH=/home/user/.claude
 ```
 
 ## 10. Verify Master Slack Integration
@@ -132,9 +135,14 @@ python -m src.master.main
 ```text
 /master-agent-refresh-auth <name>
 ```
-7. In the mapped agent channel, mention the bot with a prompt.
-8. Reply in the same thread without mentioning the bot again.
-9. Confirm master routes both messages to the mapped agent.
+7. To override the claude model for a specific agent (takes effect immediately, no restart needed):
+```text
+/master-agent-set-model <name> claude-opus-4-5
+```
+Omit the model to clear the override and revert to the default.
+8. In the mapped agent channel, mention the bot with a prompt.
+9. Reply in the same thread without mentioning the bot again.
+10. Confirm master routes both messages to the mapped agent.
 
 ## 11. Channel Usage Rules
 - Admin channels are for master slash commands only.

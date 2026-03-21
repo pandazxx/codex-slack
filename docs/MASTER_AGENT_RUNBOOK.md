@@ -17,6 +17,7 @@ Containerized UAT is required for v1 sign-off; functional Slack-only checks are 
 - Provide `MASTER_CODEX_AUTH_JSON_PATH` as a host path to the shared Codex `auth.json`; v1 forwards only this auth file to agents, not Codex session directories.
 - Provide `MASTER_SSH_AUTH_SOCK_PATH` as a host path to the SSH agent socket for private repo checkout and push over SSH.
 - Optional: provide `MASTER_SSH_KNOWN_HOSTS_PATH` as a host path to `known_hosts` for explicit SSH host verification. If omitted, master and agents default to `StrictHostKeyChecking=no` with `/dev/null` known hosts.
+- Optional: provide `MASTER_CLAUDE_CONFIG_DIR_PATH` as a host path to a directory containing `settings.json` (typically `~/.claude`). Mounted into each agent as `/run/secrets/master_claude_config:ro` with `CLAUDE_CONFIG_DIR` set so claude picks up the model and other settings from there. Editing the host file takes effect on the next prompt dispatch without any restart.
 - Slack app configured with command/event scopes.
 - `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS` set.
 - Shared auth refs available to agents (`SSH_AUTH_SOCK` and/or `GH_TOKEN_FILE`).
@@ -59,6 +60,7 @@ export PODMAN_SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
 export MASTER_DATA_DIR="$(pwd)/data/master"
 export MASTER_RUNTIME_IMAGE="codex-slack-v1-uat"
 export MASTER_CODEX_AUTH_JSON_PATH="${HOME}/.codex/auth.json"
+export MASTER_CLAUDE_CONFIG_DIR_PATH="${HOME}/.claude"   # optional: share claude settings with agents
 export MASTER_SSH_AUTH_SOCK_PATH="${SSH_AUTH_SOCK}"
 export MASTER_ADMIN_CHANNELS="<admin_channel_id>"
 export MASTER_AGENT_BASE_IMAGE="codex-slack-v1-uat"
@@ -113,6 +115,14 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 5. Refresh the agent's persisted Codex auth after renewing the host auth file:
 ```text
 /master-agent-refresh-auth <name>
+```
+6. Override the claude model for a specific agent (persisted in registry, no restart needed):
+```text
+/master-agent-set-model <name> claude-opus-4-5
+```
+Omit the model argument to clear the override:
+```text
+/master-agent-set-model <name>
 ```
 
 ## Routing Validation
