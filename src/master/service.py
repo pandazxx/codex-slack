@@ -433,10 +433,15 @@ class MasterService:
         env = os.environ.copy()
         if self._agent_ssh_auth_sock_path:
             env["SSH_AUTH_SOCK"] = "/ssh-agent"
+            LOGGER.info("master.git_env ssh_auth_sock=/ssh-agent (from %s)", self._agent_ssh_auth_sock_path)
+        else:
+            LOGGER.info("master.git_env ssh_auth_sock=none (MASTER_AGENT_SSH_AUTH_SOCK_PATH not set)")
         if self._agent_ssh_known_hosts_path:
             env["GIT_SSH_COMMAND"] = f"ssh -o UserKnownHostsFile={self._agent_ssh_known_hosts_path}"
+            LOGGER.info("master.git_env GIT_SSH_COMMAND=ssh -o UserKnownHostsFile=%s", self._agent_ssh_known_hosts_path)
         else:
             env["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+            LOGGER.info("master.git_env GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=no (no known_hosts configured)")
         return env
 
     def _resolve_image_plan(self, repo_path: str) -> dict[str, str]:
@@ -457,12 +462,17 @@ class MasterService:
 
         local_path = Path(candidate)
         if local_path.exists():
-            return str(local_path.resolve())
+            resolved = str(local_path.resolve())
+            LOGGER.info("master.repo_source input=%r resolved=local path=%s", repo_input, resolved)
+            return resolved
 
         if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", candidate):
-            return f"https://github.com/{candidate}.git"
+            url = f"https://github.com/{candidate}.git"
+            LOGGER.info("master.repo_source input=%r resolved=github url=%s", repo_input, url)
+            return url
 
         if candidate.startswith(("https://", "http://", "ssh://", "git@", "file://")):
+            LOGGER.info("master.repo_source input=%r resolved=explicit url=%s", repo_input, candidate)
             return candidate
 
         raise ValueError("unsupported repo source")
@@ -478,13 +488,16 @@ class MasterService:
     def _checkout_repo_source(self, *, name: str, repo_source: str, repo_ref: str) -> Path:
         source_path = Path(repo_source)
         if source_path.exists():
+            LOGGER.info("master.checkout agent=%s source=local path=%s ref=%s", name, repo_source, repo_ref)
             return source_path
 
         checkout_root = self._registry.path.parent / "repo-cache"
         checkout_root.mkdir(parents=True, exist_ok=True)
         checkout_path = checkout_root / name
 
+        LOGGER.info("master.checkout agent=%s source=remote url=%s ref=%s dest=%s", name, repo_source, repo_ref, checkout_path)
         self._run_git(["git", "clone", "--branch", repo_ref, repo_source, str(checkout_path)])
+        LOGGER.info("master.checkout_done agent=%s dest=%s", name, checkout_path)
         return checkout_path
 
     def _checkout_repo_source_with_fallback(self, *, name: str, repo_source: str, repo_ref: str) -> tuple[Path, str]:
@@ -504,13 +517,16 @@ class MasterService:
         raise last_error
 
     def _run_git(self, args: list[str], cwd: Path | None = None) -> None:
+        env = self._master_git_env()
+        LOGGER.info("master.run_git cmd=%r cwd=%s GIT_SSH_COMMAND=%r", " ".join(args), cwd or ".", env.get("GIT_SSH_COMMAND", "-"))
         completed = subprocess.run(
             args,
             cwd=str(cwd) if cwd else None,
             text=True,
             capture_output=True,
-            env=self._master_git_env(),
+            env=env,
             check=False,
         )
         if completed.returncode != 0:
+            LOGGER.error("master.run_git_failed cmd=%r returncode=%d stderr=%s", " ".join(args), completed.returncode, completed.stderr.strip())
             raise RuntimeError(completed.stderr.strip() or f"git command failed: {' '.join(args)}")
