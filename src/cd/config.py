@@ -49,7 +49,7 @@ def load_cd_settings() -> CdSettings:
     container_name = os.getenv("CD_CONTAINER_NAME", "codex-slack-master").strip()
     compose_file = os.getenv("CD_COMPOSE_FILE", "docker-compose.master-agent.example.yml").strip()
     compose_service = os.getenv("CD_COMPOSE_SERVICE", "codex-slack-master").strip()
-    compose_binary = os.getenv("CD_COMPOSE_BINARY", "docker compose").strip()
+    compose_binary = os.getenv("CD_COMPOSE_BINARY", "podman-compose").strip()
     env_file = os.getenv("CD_ENV_FILE", "").strip() or None
     state_file = os.getenv("CD_STATE_FILE", "data/cd/state.json").strip()
     poll_interval_seconds = int(os.getenv("CD_POLL_INTERVAL_SECONDS", "300"))

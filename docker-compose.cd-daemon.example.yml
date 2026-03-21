@@ -60,8 +60,8 @@ services:
 
       # ---- Optional -------------------------------------------------------
       CD_COMPOSE_SERVICE: ${CD_COMPOSE_SERVICE:-codex-slack-master}
-      # "docker compose" (v2) or "podman-compose"
-      CD_COMPOSE_BINARY: ${CD_COMPOSE_BINARY:-docker compose}
+      # "podman-compose" (recommended) or "docker compose" (v2)
+      CD_COMPOSE_BINARY: ${CD_COMPOSE_BINARY:-podman-compose}
       # Path to the .env file used by the master compose project.
       CD_ENV_FILE: ${CD_ENV_FILE:-/opt/codex-slack/.env}
       # Where the daemon persists its deploy state.

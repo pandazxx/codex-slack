@@ -115,7 +115,7 @@ $(e CD_CONTAINER_NAME        "codex-slack-master")
 # =============================================================================
 $(e CD_COMPOSE_FILE          "/opt/codex-slack/docker-compose.master-agent.example.yml")
 $(e CD_COMPOSE_SERVICE       "codex-slack-master")
-$(e CD_COMPOSE_BINARY        "docker compose")
+$(e CD_COMPOSE_BINARY        "podman-compose")
 $(e CD_ENV_FILE              "/opt/codex-slack/.env")
 $(e CD_STATE_FILE            "/opt/codex-slack/data/cd/state.json")
 
