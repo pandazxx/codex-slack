@@ -107,6 +107,34 @@ def deploy_image(
     return True
 
 
+def restart_container(container_name: str, *, dry_run: bool) -> bool:
+    """Restart *container_name* in-place (same image, same config).
+
+    Used on CD daemon startup to ensure the master picks up the latest env.
+    Returns True on success or when the container does not exist (nothing to restart).
+    """
+    if dry_run:
+        LOGGER.info("cd.restart_dry_run container=%s", container_name)
+        return True
+
+    status = get_container_status(container_name)
+    if status is None:
+        LOGGER.info("cd.restart_skipped container=%s reason=not_found", container_name)
+        return True
+
+    LOGGER.info("cd.restart_start container=%s current_status=%s", container_name, status)
+    completed = _run(["podman", "restart", container_name])
+    if completed.returncode != 0:
+        LOGGER.error(
+            "cd.restart_failed container=%s\nSTDERR:\n%s",
+            container_name,
+            completed.stderr.strip(),
+        )
+        return False
+    LOGGER.info("cd.restart_done container=%s", container_name)
+    return True
+
+
 def check_health(container_name: str, delay_seconds: int) -> bool:
     """Wait *delay_seconds* then check the container is still running.
 

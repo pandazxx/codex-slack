@@ -8,6 +8,7 @@ from .deploy import (
     check_health,
     deploy_image,
     pull_image,
+    restart_container,
     rollback_image,
 )
 from .notify import notify
@@ -156,6 +157,9 @@ def run_loop(settings: CdSettings) -> None:
         state.previous_digest or "-",
         state.deployed_at or "-",
     )
+
+    LOGGER.info("cd.startup_restart container=%s", settings.container_name)
+    restart_container(settings.container_name, dry_run=settings.dry_run)
 
     while True:
         try:
