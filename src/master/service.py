@@ -207,6 +207,12 @@ class MasterService:
         record.last_error = None
         self._registry.upsert(record)
 
+        if self._on_agent_start:
+            try:
+                self._on_agent_start(record.platform, record.channel_id)
+            except Exception:  # noqa: BLE001
+                LOGGER.warning("service.on_agent_start_callback_failed agent=%s", name)
+
         result = CommandResult(
             ok=True,
             code="OK",
