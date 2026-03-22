@@ -425,8 +425,10 @@ class MasterService:
         if self._agent_ssh_auth_sock_path:
             env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
             env["GIT_SSH_COMMAND"] = self._agent_git_ssh_command()
-        if self._agent_claude_config_dir_path:
-            env["CLAUDE_CONFIG_DIR"] = "/run/secrets/master_claude_config"
+        # CLAUDE_CONFIG_DIR is intentionally NOT set here. The entrypoint copies
+        # /run/secrets/master_claude_config into ~/.claude/ so claude can write
+        # session data there. Pointing CLAUDE_CONFIG_DIR at the read-only mount
+        # causes claude to hang on its first write attempt.
 
         return env
 

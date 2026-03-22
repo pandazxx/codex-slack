@@ -29,6 +29,15 @@ if [[ -d "/run/secrets/codex_sessions" ]] && (
   cp -a /run/secrets/codex_sessions/. "${CODEX_HOME_PATH}/sessions/"
 fi
 
+# Copy global claude config into ~/.claude/ so claude has a writable config dir.
+# The mount at /run/secrets/master_claude_config is read-only; pointing
+# CLAUDE_CONFIG_DIR there causes claude to hang on first write.
+CLAUDE_HOME="${HOME:-/workspace/home}/.claude"
+if [[ -d "/run/secrets/master_claude_config" ]]; then
+  mkdir -p "${CLAUDE_HOME}"
+  cp -a /run/secrets/master_claude_config/. "${CLAUDE_HOME}/"
+fi
+
 if [[ -n "${GIT_USER_NAME:-}" ]]; then
   git config --global user.name "${GIT_USER_NAME}"
 fi
