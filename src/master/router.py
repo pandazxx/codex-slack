@@ -414,8 +414,10 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         if total_ctx:
             ctx_str = f"ctx={total_ctx:,}"
             if context_window:
+                ctx_str += f"/{context_window // 1000}k"
                 pct = total_ctx / context_window * 100
-                ctx_str += f"/{context_window // 1000}k ({pct:.1f}%)"
+                if pct <= 100:
+                    ctx_str += f" ({pct:.1f}%)"
             parts.append(ctx_str)
         if cost is not None:
             parts.append(f"cost=${cost:.4f}")
