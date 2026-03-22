@@ -4,6 +4,8 @@ import logging
 from threading import Thread
 
 from dotenv import load_dotenv
+
+from ..logging_utils import LocalTimeFormatter
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .config import load_master_settings
@@ -16,11 +18,9 @@ from .slack_app import CommandRateLimiter, create_master_app
 
 
 def configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        handlers=[logging.StreamHandler()],
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(LocalTimeFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
 
 
 def mask_token(token: str) -> str:

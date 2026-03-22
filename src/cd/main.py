@@ -5,16 +5,16 @@ import os
 
 from dotenv import load_dotenv
 
+from ..logging_utils import LocalTimeFormatter
+
 from .config import load_cd_settings
 from .daemon import run_loop
 
 
 def configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        handlers=[logging.StreamHandler()],
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(LocalTimeFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
 
 
 def main() -> None:
