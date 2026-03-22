@@ -91,6 +91,11 @@ def load_master_settings() -> MasterSettings:
     _log_env("MASTER_CODEX_CONFIG_DIR_PATH", os.getenv("MASTER_CODEX_CONFIG_DIR_PATH"))
     agent_claude_config_dir_path = os.getenv("MASTER_CLAUDE_CONFIG_DIR_PATH", "").strip() or None
     _log_env("MASTER_CLAUDE_CONFIG_DIR_PATH", os.getenv("MASTER_CLAUDE_CONFIG_DIR_PATH"))
+    if not agent_claude_config_dir_path:
+        _local = Path("config/claude-global")
+        if _local.is_dir():
+            agent_claude_config_dir_path = str(_local.resolve())
+            LOGGER.info("master.env MASTER_CLAUDE_CONFIG_DIR_PATH=<auto-detected> path=%s", agent_claude_config_dir_path)
     agent_ssh_auth_sock_path = os.getenv("MASTER_SSH_AUTH_SOCK_PATH", "").strip() or None
     _log_env("MASTER_SSH_AUTH_SOCK_PATH", os.getenv("MASTER_SSH_AUTH_SOCK_PATH"))
     agent_ssh_known_hosts_path = os.getenv("MASTER_SSH_KNOWN_HOSTS_PATH", "").strip() or None
