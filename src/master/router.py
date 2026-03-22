@@ -397,6 +397,24 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             LOGGER.warning("router.claude_session_state_persist_failed path=%s error=%s", path, exc)
 
     @staticmethod
+    def _session_exists_in_container(container_name: str, session_id: str) -> bool:
+        """Return True if a claude session file for session_id exists in the agent container.
+
+        Uses a quick podman exec find rather than relying on in-memory state,
+        so stale sessions (e.g. after container/volume recreation) are detected
+        before attempting --resume, avoiding an unnecessary failed invocation.
+        """
+        try:
+            completed = subprocess.run(
+                ["podman", "exec", container_name, "find",
+                 "/workspace/home/.claude", "-name", f"*{session_id}*"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            return bool(completed.stdout.strip())
+        except Exception:  # noqa: BLE001
+            return False
+
+    @staticmethod
     def _should_retry_with_resume(stderr_text: str) -> bool:
         lowered = stderr_text.lower()
         return "already in use" in lowered
@@ -546,6 +564,16 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
             effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
 
+        if session_known:
+            session_known = self._session_exists_in_container(container_name, session_id)
+            if not session_known:
+                LOGGER.info(
+                    "router.session_not_found_in_container agent=%s container=%s session_id=%s — falling back to create",
+                    agent_name, container_name, session_id,
+                )
+                with self._session_lock:
+                    self._known_sessions.pop(session_key, None)
+                    self._persist_known_sessions_unlocked()
         initial_action = "resume" if session_known else "create"
         retry_action: str | None = None
         rendered_command, session_id = self._render_command(
