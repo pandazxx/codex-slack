@@ -522,6 +522,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        claude_model: str | None = None,
     ) -> str:
         LOGGER.info("router.claude_command_template template=%r", self.command_template)
         session_key = self._session_key(platform=platform, channel_id=channel_id)
