@@ -47,12 +47,22 @@ def preprocess_for_discord(text: str) -> str:
 
 
 def _convert_markdown_tables(text: str) -> str:
-    """Convert markdown pipe tables to fixed-width monospace code blocks."""
+    """Convert markdown pipe tables to fixed-width monospace code blocks.
+
+    Tables already inside a code block are left untouched to avoid
+    double-nesting fences.
+    """
     lines = text.splitlines()
     result: list[str] = []
     i = 0
+    in_code_block = False
     while i < len(lines):
-        if _MD_TABLE_ROW.match(lines[i].strip()):
+        if lines[i].strip().startswith("```"):
+            in_code_block = not in_code_block
+            result.append(lines[i])
+            i += 1
+            continue
+        if not in_code_block and _MD_TABLE_ROW.match(lines[i].strip()):
             table_lines: list[str] = [lines[i]]
             j = i + 1
             while j < len(lines) and _MD_TABLE_ROW.match(lines[j].strip()):
