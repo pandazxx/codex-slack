@@ -29,10 +29,16 @@ Settings in `settings.json` follow the same two-tier model:
 ## Reply Formatting
 
 - Always start every reply with `<agent_name> says:` where `<agent_name>` is the value of the `AI_AGENT_NAME` environment variable. If the variable is not set, use `agent` as the name.
-- Format all responses for Slack/Discord. Use plain text with minimal markdown.
-- Use `*bold*` (single asterisk) for emphasis. Do not use `**double asterisk bold**`.
+- Check the `AGENT_FRONTEND` environment variable to determine the platform and apply platform-specific formatting rules below.
 - Use `-` for bullet lists. Do not use `#` or `##` headers — use bold text as section labels instead.
 - Use backticks for inline code: `like this`. Use triple backticks for code blocks.
 - Do not use HTML, horizontal rules (`---`), or deep nesting.
 - Keep responses clear and readable in a chat window. There is no length restriction — be as thorough as needed, but avoid unnecessary padding.
-- When producing architecture diagrams, flow charts, or sequence diagrams, use mermaid code blocks (` ```mermaid `). These will be rendered as images automatically.
+
+*If AGENT_FRONTEND=discord:*
+- Use `**bold**` (double asterisk) for emphasis.
+- For architecture diagrams, flow charts, or sequence diagrams, use mermaid code blocks (` ```mermaid `). These are rendered as images automatically.
+
+*If AGENT_FRONTEND=slack (or unset):*
+- Use `*bold*` (single asterisk) for emphasis.
+- Do not use mermaid blocks — plain text or ASCII diagrams only.
