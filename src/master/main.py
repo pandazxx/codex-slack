@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from threading import Thread
 
 from dotenv import load_dotenv
@@ -89,7 +88,6 @@ def main() -> None:
         command_template=settings.claude_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
         slack_bot_token=settings.slack_bot_token,
-        session_state_path=str(Path(settings.thread_state_path).with_name("claude_session_state.json")),
     )
     dispatcher = MultiAgentDispatcher(
         dispatchers={"codex": codex_dispatcher, "claude-code": claude_dispatcher},
