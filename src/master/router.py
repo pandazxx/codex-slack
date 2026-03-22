@@ -407,6 +407,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         return (
             "no session" in lowered
             or "not found" in lowered
+            or "no conversation" in lowered
             or "does not exist" in lowered
             or "unknown session" in lowered
         )
