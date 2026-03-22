@@ -46,6 +46,7 @@ cat > "$DEST" <<EOF
 # =============================================================================
 $(e UID  "$_UID")
 $(e GID  "$_GID")
+$(e TZ   "$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo 'UTC')")
 
 # =============================================================================
 # Paths
