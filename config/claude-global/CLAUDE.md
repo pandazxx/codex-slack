@@ -28,6 +28,7 @@ Settings in `settings.json` follow the same two-tier model:
 
 ## Reply Formatting
 
+- Always start every reply with `<agent_name> says:` where `<agent_name>` is the value of the `AI_AGENT_NAME` environment variable. If the variable is not set, use `agent` as the name.
 - Format all responses for Slack/Discord. Use plain text with minimal markdown.
 - Use `*bold*` (single asterisk) for emphasis. Do not use `**double asterisk bold**`.
 - Use `-` for bullet lists. Do not use `#` or `##` headers — use bold text as section labels instead.
