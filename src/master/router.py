@@ -553,6 +553,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             channel_id=channel_id,
             thread_ts=thread_ts,
         )
+        if claude_model:
+            rendered_command = _inject_claude_model(rendered_command, claude_model)
         try:
             completed = self._execute_prompt(
                 rendered_command=rendered_command,
@@ -617,6 +619,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                     channel_id=channel_id,
                     thread_ts=thread_ts,
                 )
+                if claude_model:
+                    rendered_command = _inject_claude_model(rendered_command, claude_model)
                 try:
                     completed = self._execute_prompt(
                         rendered_command=rendered_command,
