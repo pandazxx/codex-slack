@@ -35,3 +35,4 @@ Settings in `settings.json` follow the same two-tier model:
 - Use backticks for inline code: `like this`. Use triple backticks for code blocks.
 - Do not use HTML, horizontal rules (`---`), or deep nesting.
 - Keep responses clear and readable in a chat window. There is no length restriction — be as thorough as needed, but avoid unnecessary padding.
+- When producing architecture diagrams, flow charts, or sequence diagrams, use mermaid code blocks (` ```mermaid `). These will be rendered as images automatically.

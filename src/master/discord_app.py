@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import logging
 import re
 from typing import Any
+from urllib.request import Request, urlopen
 
 from .command_runtime import execute_master_command
 from .router import ChannelRouter, RouteError, RouteSkip
@@ -14,12 +16,109 @@ from .slack_app import format_forward_ack
 LOGGER = logging.getLogger(__name__)
 DISCORD_COMMAND_PATTERN = re.compile(r"^<@!?\d+>\s*")
 DISCORD_MESSAGE_LIMIT = 1900
-DISCORD_FILE_THRESHOLD = 4000  # send as file attachment above this length
+DISCORD_FILE_THRESHOLD = 8000  # send as file attachment above this length
+
+_MERMAID_FENCE = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
+_MD_TABLE_ROW = re.compile(r"^\|.+\|$")
+_MD_TABLE_SEP = re.compile(r"^\|[\s\-:|]+\|$")
 
 
 _TEXT_MIME_PREFIXES = ("text/",)
 _TEXT_EXTENSIONS = {".txt", ".log", ".md", ".json", ".yaml", ".yml", ".toml", ".sh", ".py", ".js", ".ts", ".csv"}
 _TEXT_ATTACHMENT_SIZE_LIMIT = 512 * 1024  # 512 KB
+
+
+def preprocess_for_discord(text: str) -> str:
+    """Convert agent markdown to Discord-compatible format.
+
+    Replaces # headers (not rendered by Discord) with bold text and strips
+    horizontal rules which render as literal dashes.
+    """
+    lines: list[str] = []
+    for line in text.splitlines():
+        m = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if m:
+            lines.append(f"**{m.group(2).strip()}**")
+            continue
+        if re.match(r"^-{3,}$", line.strip()):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _convert_markdown_tables(text: str) -> str:
+    """Convert markdown pipe tables to fixed-width monospace code blocks."""
+    lines = text.splitlines()
+    result: list[str] = []
+    i = 0
+    while i < len(lines):
+        if _MD_TABLE_ROW.match(lines[i].strip()):
+            table_lines: list[str] = [lines[i]]
+            j = i + 1
+            while j < len(lines) and _MD_TABLE_ROW.match(lines[j].strip()):
+                table_lines.append(lines[j])
+                j += 1
+            # Require at least header + separator + one data row, with a valid separator
+            if len(table_lines) >= 3 and _MD_TABLE_SEP.match(table_lines[1].strip()):
+                rows = [
+                    [cell.strip() for cell in row.strip().strip("|").split("|")]
+                    for row in table_lines
+                    if not _MD_TABLE_SEP.match(row.strip())
+                ]
+                if rows:
+                    col_count = max(len(row) for row in rows)
+                    rows = [row + [""] * (col_count - len(row)) for row in rows]
+                    widths = [max(len(row[c]) for row in rows) for c in range(col_count)]
+                    formatted: list[str] = []
+                    for ridx, row in enumerate(rows):
+                        formatted.append("  ".join(cell.ljust(widths[c]) for c, cell in enumerate(row)).rstrip())
+                        if ridx == 0:
+                            formatted.append("  ".join("-" * widths[c] for c in range(col_count)))
+                    result.append("```\n" + "\n".join(formatted) + "\n```")
+                    i = j
+                    continue
+        result.append(lines[i])
+        i += 1
+    return "\n".join(result)
+
+
+def _fetch_mermaid_image(diagram: str) -> bytes | None:
+    """Render a mermaid diagram to PNG via mermaid.ink. Returns PNG bytes or None on failure."""
+    encoded = base64.urlsafe_b64encode(diagram.encode()).decode().rstrip("=")
+    url = f"https://mermaid.ink/img/{encoded}"
+    try:
+        req = Request(url, headers={"User-Agent": "codex-slack/1.0"})
+        with urlopen(req, timeout=10) as resp:
+            return bytes(resp.read())
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("discord.mermaid_render_failed url=%s error=%s", url, exc)
+        return None
+
+
+async def _render_mermaid_blocks(text: str) -> tuple[str, list[io.BytesIO]]:
+    """Extract mermaid code blocks, render via mermaid.ink, return (cleaned_text, png_buffers).
+
+    Blocks that fail to render are left unchanged in the text.
+    """
+    matches = list(_MERMAID_FENCE.finditer(text))
+    if not matches:
+        return text, []
+
+    buffers: list[io.BytesIO] = []
+    replacements: list[tuple[int, int]] = []
+
+    for match in matches:
+        diagram = match.group(1).strip()
+        png = await asyncio.to_thread(_fetch_mermaid_image, diagram)
+        if png is not None:
+            buffers.append(io.BytesIO(png))
+            replacements.append((match.start(), match.end()))
+
+    result = text
+    for start, end in reversed(replacements):
+        result = result[:start] + result[end:]
+
+    return result.strip(), buffers
 
 
 def _is_text_attachment(attachment: Any) -> bool:
@@ -92,19 +191,9 @@ def split_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list
     return [chunk for chunk in chunks if chunk]
 
 
-def _make_file(text: str, filename: str = "response.txt"):  # type: ignore[no-untyped-def]
+def _make_file(text: str, filename: str = "response.md"):  # type: ignore[no-untyped-def]
     return io.BytesIO(text.encode("utf-8")), filename
 
-
-def label_discord_chunks(chunks: list[str]) -> list[str]:
-    if len(chunks) <= 1:
-        return chunks
-    total = len(chunks)
-    width = len(str(total))
-    labeled: list[str] = []
-    for idx, chunk in enumerate(chunks, start=1):
-        labeled.append(f"[{idx:0{width}d}/{total}]\n{chunk}")
-    return labeled
 
 
 async def sync_registered_commands(*, tree, client, admin_channels: set[str], discord_module) -> None:  # type: ignore[no-untyped-def]
@@ -168,7 +257,7 @@ def run_discord_frontend(
     async def _send_messages(interaction, messages: list[str]) -> None:  # type: ignore[no-untyped-def]
         expanded: list[str] = []
         for message in messages:
-            expanded.extend(label_discord_chunks(split_discord_message(message)))
+            expanded.extend(split_discord_message(message))
         if not expanded:
             return
         first, rest = expanded[0], expanded[1:]
@@ -180,6 +269,9 @@ def run_discord_frontend(
             await interaction.followup.send(msg)
 
     async def _reply_message_chunks(message, text: str) -> None:  # type: ignore[no-untyped-def]
+        text = preprocess_for_discord(text)
+        text = _convert_markdown_tables(text)
+        text, mermaid_buffers = await _render_mermaid_blocks(text)
         if len(text) > DISCORD_FILE_THRESHOLD:
             buf, fname = _make_file(text)
             await message.reply(
@@ -187,21 +279,28 @@ def run_discord_frontend(
                 file=discord.File(buf, filename=fname),
                 mention_author=False,
             )
-            return
-        for chunk in label_discord_chunks(split_discord_message(text)):
-            await message.reply(chunk, mention_author=False)
+        else:
+            for chunk in split_discord_message(text):
+                await message.reply(chunk, mention_author=False)
+        for idx, buf in enumerate(mermaid_buffers, start=1):
+            await message.reply(file=discord.File(buf, filename=f"diagram-{idx}.png"), mention_author=False)
 
     async def _reply_in_thread(thread, text: str) -> None:  # type: ignore[no-untyped-def]
         """Send a message directly into a thread channel (no reply reference)."""
+        text = preprocess_for_discord(text)
+        text = _convert_markdown_tables(text)
+        text, mermaid_buffers = await _render_mermaid_blocks(text)
         if len(text) > DISCORD_FILE_THRESHOLD:
             buf, fname = _make_file(text)
             await thread.send(
                 f"Response is too long ({len(text):,} chars) — sending as file.",
                 file=discord.File(buf, filename=fname),
             )
-            return
-        for chunk in label_discord_chunks(split_discord_message(text)):
-            await thread.send(chunk)
+        else:
+            for chunk in split_discord_message(text):
+                await thread.send(chunk)
+        for idx, buf in enumerate(mermaid_buffers, start=1):
+            await thread.send(file=discord.File(buf, filename=f"diagram-{idx}.png"))
 
     def _run_command(*, command_name: str, text: str, channel_id: str, user_id: str) -> list[str]:
         return execute_master_command(
