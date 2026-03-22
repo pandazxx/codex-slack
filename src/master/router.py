@@ -280,6 +280,16 @@ class MultiAgentDispatcher:
     dispatchers: dict[str, AgentDispatcher]
     default_adapter: str = "codex"
 
+    def clear_session(self, *, platform: str, channel_id: str) -> None:
+        """Invalidate the claude session for *channel_id* on all claude-code dispatchers.
+
+        Called when an agent container is recreated so the next message starts a
+        fresh session instead of attempting to resume a now-nonexistent one.
+        """
+        for dispatcher in self.dispatchers.values():
+            if isinstance(dispatcher, ClaudeCodeDispatcher):
+                dispatcher.clear_session(platform=platform, channel_id=channel_id)
+
     def send_prompt(
         self,
         *,
@@ -321,6 +331,15 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_known_sessions", self._load_known_sessions())
+
+    def clear_session(self, *, platform: str, channel_id: str) -> None:
+        """Remove the stored session for *channel_id* so the next dispatch creates fresh."""
+        key = self._session_key(platform=platform, channel_id=channel_id)
+        with self._session_lock:
+            if key in self._known_sessions:
+                del self._known_sessions[key]
+                self._persist_known_sessions_unlocked()
+                LOGGER.info("router.session_cleared platform=%s channel=%s", platform, channel_id)
 
     def _session_key(self, *, platform: str, channel_id: str) -> str:
         return f"{platform}:{channel_id}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import logging
 import os
@@ -42,6 +43,7 @@ class MasterService:
         git_user_name: str | None = None,
         git_user_email: str | None = None,
         default_agent_adapter: str = DEFAULT_AGENT_ADAPTER,
+        on_agent_start: Callable[[str, str], None] | None = None,
     ) -> None:
         self._registry = registry
         self._runtime = runtime
@@ -54,6 +56,7 @@ class MasterService:
         self._git_user_name = git_user_name
         self._git_user_email = git_user_email
         self._default_agent_adapter = default_agent_adapter if default_agent_adapter in SUPPORTED_AGENT_ADAPTERS else DEFAULT_AGENT_ADAPTER
+        self._on_agent_start = on_agent_start
 
     def list_agents(self) -> CommandResult:
         agents = [agent.to_dict() for agent in self._registry.list_agents()]
@@ -184,6 +187,8 @@ class MasterService:
                 mounts=self._build_agent_mounts(),
             )
             self._runtime.start_agent(record.container_name)
+            if self._on_agent_start:
+                self._on_agent_start(record.platform, record.channel_id)
         except Exception as exc:  # noqa: BLE001
             record.status = "error"
             record.last_error = str(exc)

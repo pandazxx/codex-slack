@@ -67,19 +67,6 @@ def main() -> None:
     if migrated:
         logging.getLogger(__name__).info("master.registry_schema_migrated path=%s", settings.registry_path)
     runtime = PodmanRuntimeAdapter(dry_run=settings.dry_run)
-    service = MasterService(
-        registry=registry,
-        runtime=runtime,
-        default_image=settings.agent_base_image,
-        agent_codex_auth_json_path=settings.agent_codex_auth_json_path,
-        agent_codex_config_dir_path=settings.agent_codex_config_dir_path,
-        agent_claude_config_dir_path=settings.agent_claude_config_dir_path,
-        agent_ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
-        agent_ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
-        git_user_name=settings.git_user_name,
-        git_user_email=settings.git_user_email,
-        default_agent_adapter=settings.default_agent_adapter,
-    )
     codex_dispatcher = PodmanExecDispatcher(
         command_template=settings.codex_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
@@ -94,6 +81,20 @@ def main() -> None:
     dispatcher = MultiAgentDispatcher(
         dispatchers={"codex": codex_dispatcher, "claude-code": claude_dispatcher},
         default_adapter=settings.default_agent_adapter,
+    )
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        default_image=settings.agent_base_image,
+        agent_codex_auth_json_path=settings.agent_codex_auth_json_path,
+        agent_codex_config_dir_path=settings.agent_codex_config_dir_path,
+        agent_claude_config_dir_path=settings.agent_claude_config_dir_path,
+        agent_ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
+        agent_ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
+        git_user_name=settings.git_user_name,
+        git_user_email=settings.git_user_email,
+        default_agent_adapter=settings.default_agent_adapter,
+        on_agent_start=dispatcher.clear_session,
     )
     router = ChannelRouter(
         registry=registry,
