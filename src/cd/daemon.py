@@ -7,6 +7,7 @@ from .config import CdSettings
 from .deploy import (
     check_health,
     deploy_image,
+    force_recreate_container,
     pull_image,
     restart_container,
     rollback_image,
@@ -174,12 +175,27 @@ def run_loop(settings: CdSettings) -> None:
         f", container `{settings.container_name}`.",
     )
 
-    LOGGER.info("cd.startup_restart container=%s", settings.container_name)
-    restarted = restart_container(settings.container_name, dry_run=settings.dry_run)
-    if restarted:
-        notify(settings, f":arrows_counterclockwise: CD startup: restarted `{settings.container_name}` successfully.")
+    if state.deployed_digest:
+        LOGGER.info("cd.startup_force_recreate container=%s image=%s", settings.container_name, state.deployed_digest)
+        recreated = force_recreate_container(
+            image_ref=state.deployed_digest,
+            compose_binary=settings.compose_binary,
+            compose_file=settings.compose_file,
+            compose_service=settings.compose_service,
+            env_file=settings.env_file,
+            dry_run=settings.dry_run,
+        )
+        if recreated:
+            notify(settings, f":arrows_counterclockwise: CD startup: force-recreated `{settings.container_name}` (image `{state.deployed_digest}`).")
+        else:
+            notify(settings, f":x: CD startup: force-recreate failed for `{settings.container_name}` — check daemon logs.")
     else:
-        notify(settings, f":x: CD startup: failed to restart `{settings.container_name}` — check daemon logs.")
+        LOGGER.info("cd.startup_restart container=%s reason=no_deployed_digest", settings.container_name)
+        restarted = restart_container(settings.container_name, dry_run=settings.dry_run)
+        if restarted:
+            notify(settings, f":arrows_counterclockwise: CD startup: restarted `{settings.container_name}` successfully.")
+        else:
+            notify(settings, f":x: CD startup: failed to restart `{settings.container_name}` — check daemon logs.")
 
     while True:
         try:

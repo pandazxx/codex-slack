@@ -107,6 +107,37 @@ def deploy_image(
     return True
 
 
+def force_recreate_container(
+    *,
+    image_ref: str,
+    compose_binary: str,
+    compose_file: str,
+    compose_service: str,
+    env_file: str | None,
+    dry_run: bool,
+) -> bool:
+    """Tear down and re-create *compose_service* using the currently deployed *image_ref*.
+
+    Unlike restart_container (which does ``podman restart`` in-place), this runs
+    ``compose up --force-recreate`` so updated env files and volume mounts take effect.
+    Returns True on success.
+    """
+    LOGGER.info("cd.force_recreate_start image=%s", image_ref)
+    ok = deploy_image(
+        image_ref=image_ref,
+        compose_binary=compose_binary,
+        compose_file=compose_file,
+        compose_service=compose_service,
+        env_file=env_file,
+        dry_run=dry_run,
+    )
+    if ok:
+        LOGGER.info("cd.force_recreate_done image=%s", image_ref)
+    else:
+        LOGGER.error("cd.force_recreate_failed image=%s", image_ref)
+    return ok
+
+
 def restart_container(container_name: str, *, dry_run: bool) -> bool:
     """Restart *container_name* in-place (same image, same config).
 
