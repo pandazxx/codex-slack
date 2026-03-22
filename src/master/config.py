@@ -94,7 +94,14 @@ def load_master_settings() -> MasterSettings:
     if not agent_claude_config_dir_path:
         _local = Path("config/claude-global")
         if _local.is_dir():
-            agent_claude_config_dir_path = str(_local.resolve())
+            # Prefer the host-side path so podman can resolve it when mounting
+            # into agent containers (agent mounts are resolved by the HOST daemon,
+            # not inside this master container).
+            _project_dir = os.getenv("MASTER_PROJECT_DIR", "").strip()
+            if _project_dir:
+                agent_claude_config_dir_path = str(Path(_project_dir) / "config/claude-global")
+            else:
+                agent_claude_config_dir_path = str(_local.resolve())
             LOGGER.info("master.env MASTER_CLAUDE_CONFIG_DIR_PATH=<auto-detected> path=%s", agent_claude_config_dir_path)
     agent_ssh_auth_sock_path = os.getenv("MASTER_SSH_AUTH_SOCK_PATH", "").strip() or None
     _log_env("MASTER_SSH_AUTH_SOCK_PATH", os.getenv("MASTER_SSH_AUTH_SOCK_PATH"))

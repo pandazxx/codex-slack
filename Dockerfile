@@ -37,6 +37,7 @@ COPY --chown=appuser:appuser requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=appuser:appuser src ./src
+COPY --chown=appuser:appuser config ./config
 COPY --chown=appuser:appuser docs ./docs
 COPY --chown=appuser:appuser README.md BUILD.md USAGE.md ./
 COPY --chown=appuser:appuser docker/entrypoint.sh /usr/local/bin/bot-entrypoint
