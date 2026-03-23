@@ -1,6 +1,4 @@
-Reformat the draft text provided in the arguments so it is ready to send on the current platform.
-
-$ARGUMENTS
+Reformat a draft reply so it is ready to send on the current platform.
 
 Read the `AGENT_FRONTEND` environment variable and apply the matching rules:
 
@@ -24,4 +22,4 @@ In both cases:
 - Do not add `#`/`##` headers — use bold labels instead
 - Prefix the reply with `<AI_AGENT_NAME> says:` (using the env var; fall back to `agent` if unset)
 
-Output only the reformatted reply, ready to send. Do not add any explanation or preamble.
+The draft to reformat is whatever the user provided in their request. Output only the reformatted reply, ready to send — no explanation or preamble.

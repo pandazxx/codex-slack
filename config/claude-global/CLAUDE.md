@@ -45,12 +45,12 @@ Settings in `settings.json` follow the same two-tier model:
 
 ## Skills
 
-The following slash commands are available. Invoke them by typing `/skill-name` (with optional arguments after a space).
+Named procedures for common tasks. When the user asks you to perform any of the following, use the Skill tool with the matching skill name. The skill will expand into detailed steps for you to execute using your available tools (Bash, Read, Write, etc.).
 
-- `/commit` — stage all changes, write a Conventional Commit message, and push.
-- `/pr` — open a pull request against `master` with an auto-generated title and checklist body.
-- `/tag [name]` — create and push a git tag; proposes the next version if no name is given.
-- `/reply-formatter <draft>` — reformat a draft reply for the current platform (`AGENT_FRONTEND`).
+- `commit` — stage all changes, write a Conventional Commit message, and push. Use when asked to commit, save, or push changes.
+- `pr` — open a pull request against `master` with an auto-generated title and checklist body. Use when asked to open or create a PR.
+- `tag` — create and push a git tag; proposes the next version if no name is given. Use when asked to tag a release or cut a tag.
+- `reply-formatter` — reformat a draft reply for the current platform (`AGENT_FRONTEND`). Use when asked to format or reformat a reply before sending.
 
 ## Subagents
 

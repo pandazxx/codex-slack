@@ -12,4 +12,4 @@ Stage and commit all current changes, then push to the remote branch.
 6. Push: `git push`
 7. Report the commit SHA and confirm the push succeeded.
 
-$ARGUMENTS
+If the user specified which files to stage or provided a commit message hint, use that context in steps 3–4.
