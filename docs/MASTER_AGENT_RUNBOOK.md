@@ -151,7 +151,12 @@ Persistence notes:
 ```text
 /master-agent-refresh-auth <name>
 ```
-6. Override the claude model for a specific agent (persisted in registry, no restart needed):
+6. Push updated global Claude config (CLAUDE.md / settings.json) to a running agent without restart:
+```text
+/master-agent-refresh-config <name>
+```
+This copies the current contents of `MASTER_CLAUDE_CONFIG_DIR_PATH` into the agent's workspace volume at `~/.claude/`. The agent picks up the new config on its next Claude invocation. No container restart required.
+7. Override the claude model for a specific agent (persisted in registry, no restart needed):
 ```text
 /master-agent-set-model <name> claude-opus-4-5
 ```
