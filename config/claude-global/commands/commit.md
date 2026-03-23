@@ -1,6 +1,7 @@
 ---
 description: Stage and commit all changes with a conventional commit message, then push
 argumentHint: "[scope or hint for the commit message]"
+model: claude-haiku-4-5-20251001
 ---
 
 Stage and commit all current changes, then push to the remote branch.
@@ -15,6 +16,13 @@ Stage and commit all current changes, then push to the remote branch.
    - Add a body paragraph if the *why* is not obvious from the subject
 5. Commit: `git commit -m "..."`
 6. Push: `git push`
-7. Report the commit SHA and confirm the push succeeded.
+7. Keep the workspace clean after committing:
+   - Run `git status` again — there must be no uncommitted changes, untracked files, or modified files remaining.
+   - If any files are left untracked and are not needed (build artefacts, temp files, editor files, etc.), add them to `.gitignore` and commit that change too.
+   - If untracked files are needed but should not be committed yet, flag them to the user explicitly.
+8. Report:
+   - Commit SHA (full 40-char hash from `git rev-parse HEAD`)
+   - Remote branch name
+   - If the remote is GitHub, the direct URL to the commit: `https://github.com/<owner>/<repo>/commit/<sha>` (derive `<owner>/<repo>` from `git remote get-url origin`)
 
 If the user provided a scope, hint, or specific files in the arguments, use that context in steps 3–4.
