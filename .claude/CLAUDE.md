@@ -79,7 +79,26 @@ docs/
 ### Feature development
 
 1. *User opens a feature branch* — `git checkout -b feat/<name>`. This is the trigger to begin work.
+
 2. *Design phase* — spawn the `architect` agent. Hold the discussion with the user until the design is complete: requirements are clear, tradeoffs are resolved, and an ADR and/or design doc are committed to `docs/decisions/` or `docs/design/`. Do not write implementation code before design is signed off.
-3. *Implementation* — build on the feature branch. Commit frequently with the `commit` skill.
-4. *Documentation* — spawn the `doc-writer` agent to update README, guides, and references to match the new state.
-5. *Pull request* — use the `pr` skill to open a PR against `master` for review.
+
+3. *Build and test authoring (parallel)* — once design is signed off, two tracks run concurrently:
+   - `engineer` agent implements the feature on the branch, committing incrementally with the `commit` skill.
+   - `tester` agent authors test cases and test code in `tests/` and a test plan in `docs/test-plans/`, based on the design doc.
+
+4. *Test execution loop* — `tester` agent runs the full test suite. If any tests fail, `engineer` fixes them. Repeat until all tests are green.
+
+5. *User manual testing* — `tester` agent commits all test work and instructs the user on what to verify manually. User performs manual testing and provides feedback.
+
+6. *Feedback loop* — based on user feedback:
+   - Trivial change (wording, minor behaviour) → back to step 3.
+   - Non-trivial change (scope, design, new tradeoff) → back to step 2; `architect` re-enters to update the design and ADR before any further implementation.
+   - Repeat steps 2–6 until the user is satisfied.
+
+7. *Review* — spawn the `reviewer` agent (or request a human reviewer via PR). `engineer` fixes all review issues. `tester` runs the test suite again to confirm nothing regressed.
+
+8. *Documentation* — spawn the `doc-writer` agent to update README, guides, references, and knowledge-base to reflect the completed feature.
+
+9. *Release candidate* — use the `tag` skill to create an RC tag (e.g. `v1.2.0-rc1`). Use the `pr` skill to open a PR against `master`.
+
+10. *Merge* — user reviews the PR and merges. No squashing without explicit instruction — preserve the commit history.
