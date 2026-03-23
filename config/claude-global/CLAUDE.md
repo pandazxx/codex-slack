@@ -56,6 +56,7 @@ Named procedures for common tasks, defined in `~/.claude/commands/`. Invoke them
 
 Specialised agents defined in `~/.claude/agents/`. Spawn them with the Agent tool when you need focused help. Each runs in isolation and does not modify code unless its description says so.
 
+- `architect` — principal engineer: plans solutions, evaluates tradeoffs, and produces ADRs (MADR v4) and design documents. Use when designing a new system or documenting a significant decision.
 - `doc-writer` — write or update documentation without touching implementation files.
 - `debugger` — root-cause analysis for errors; returns a diagnosis and recommended fix.
 - `test-runner` — run the test suite and return a structured pass/fail summary.
