@@ -10,6 +10,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .config import load_master_settings
 from .discord_app import run_discord_frontend
+from .dispatch_guard import install_sigterm_handler
 from .registry import AgentRegistry
 from .router import ChannelRouter, ClaudeCodeDispatcher, MultiAgentDispatcher, PodmanExecDispatcher
 from .runtime_adapter import PodmanRuntimeAdapter
@@ -35,6 +36,7 @@ def mask_token(token: str) -> str:
 def main() -> None:
     load_dotenv()
     configure_logging()
+    install_sigterm_handler()
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(

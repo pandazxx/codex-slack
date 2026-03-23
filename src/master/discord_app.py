@@ -9,6 +9,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from .command_runtime import execute_master_command
+from .dispatch_guard import in_flight_dispatch, is_shutting_down
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import MasterService
 from .slack_app import format_forward_ack
@@ -351,6 +352,9 @@ def run_discord_frontend(
     async def on_message(message) -> None:  # type: ignore[no-untyped-def]
         if message.author.bot:
             return
+        if is_shutting_down():
+            LOGGER.info("master.shutting_down dropping discord message")
+            return
 
         event_ts = str(message.id)
         text = str(message.content or "")
@@ -403,16 +407,17 @@ def run_discord_frontend(
                 )
                 thread_ts = str(thread.id)
                 async with thread.typing():
-                    response = await asyncio.to_thread(
-                        router.route_mention_message,
-                        platform="discord",
-                        channel_id=channel_id,
-                        text=text,
-                        thread_ts=thread_ts,
-                        event_ts=event_ts,
-                        user_id=user_id,
-                        image_urls=image_urls,
-                    )
+                    with in_flight_dispatch():
+                        response = await asyncio.to_thread(
+                            router.route_mention_message,
+                            platform="discord",
+                            channel_id=channel_id,
+                            text=text,
+                            thread_ts=thread_ts,
+                            event_ts=event_ts,
+                            user_id=user_id,
+                            image_urls=image_urls,
+                        )
                 await _reply_in_thread(thread, response)
                 return
 
@@ -421,16 +426,17 @@ def run_discord_frontend(
                 say_text = format_forward_ack(text=text, image_count=len(image_urls))
                 await message.reply(say_text, mention_author=False)
                 async with message.channel.typing():
-                    response = await asyncio.to_thread(
-                        router.route_mention_message,
-                        platform="discord",
-                        channel_id=channel_id,
-                        text=text,
-                        thread_ts=thread_ts,
-                        event_ts=event_ts,
-                        user_id=user_id,
-                        image_urls=image_urls,
-                    )
+                    with in_flight_dispatch():
+                        response = await asyncio.to_thread(
+                            router.route_mention_message,
+                            platform="discord",
+                            channel_id=channel_id,
+                            text=text,
+                            thread_ts=thread_ts,
+                            event_ts=event_ts,
+                            user_id=user_id,
+                            image_urls=image_urls,
+                        )
                 await _reply_message_chunks(message, response)
                 return
 
@@ -451,15 +457,16 @@ def run_discord_frontend(
                 return
             await _reply_message_chunks(message, format_forward_ack(text=text, image_count=len(image_urls)))
             async with message.channel.typing():
-                routed = await asyncio.to_thread(
-                    router.route_prompt,
-                    platform="discord",
-                    channel_id=channel_id,
-                    text=text,
-                    thread_ts=thread_ts,
-                    user_id=user_id,
-                    image_urls=image_urls,
-                )
+                with in_flight_dispatch():
+                    routed = await asyncio.to_thread(
+                        router.route_prompt,
+                        platform="discord",
+                        channel_id=channel_id,
+                        text=text,
+                        thread_ts=thread_ts,
+                        user_id=user_id,
+                        image_urls=image_urls,
+                    )
             await _reply_message_chunks(message, routed)
         except RouteSkip as exc:
             LOGGER.info("discord route skipped for channel=%s reason=%s", channel_id, exc)

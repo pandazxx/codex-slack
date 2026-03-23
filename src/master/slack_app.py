@@ -19,6 +19,7 @@ from .command_format import (
     wants_full_status,
 )
 from .command_runtime import execute_master_command
+from .dispatch_guard import in_flight_dispatch, is_shutting_down
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import CommandResult, MasterService
 
@@ -103,6 +104,9 @@ def create_master_app(
     if router is not None:
         @app.event("app_mention")
         def on_mention(event: dict, say, client) -> None:  # type: ignore[no-untyped-def]
+            if is_shutting_down():
+                LOGGER.info("master.shutting_down dropping mention")
+                return
             channel_id = event.get("channel", "")
             thread_ts = event.get("thread_ts") or event.get("ts")
             event_ts = event.get("ts")
@@ -114,15 +118,16 @@ def create_master_app(
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
                 client.reactions_add(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
                 try:
-                    response = router.route_mention_message(
-                        platform="slack",
-                        channel_id=channel_id,
-                        text=text,
-                        thread_ts=thread_ts,
-                        event_ts=event_ts,
-                        user_id=user_id,
-                        image_urls=image_urls,
-                    )
+                    with in_flight_dispatch():
+                        response = router.route_mention_message(
+                            platform="slack",
+                            channel_id=channel_id,
+                            text=text,
+                            thread_ts=thread_ts,
+                            event_ts=event_ts,
+                            user_id=user_id,
+                            image_urls=image_urls,
+                        )
                     say(text=response, thread_ts=thread_ts)
                 finally:
                     client.reactions_remove(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
@@ -137,6 +142,9 @@ def create_master_app(
 
         @app.event("message")
         def on_thread_message(event: dict, say, client) -> None:  # type: ignore[no-untyped-def]
+            if is_shutting_down():
+                LOGGER.info("master.shutting_down dropping thread message")
+                return
             subtype = event.get("subtype")
             if not is_supported_thread_subtype(subtype):
                 LOGGER.info(
@@ -204,14 +212,15 @@ def create_master_app(
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
                 client.reactions_add(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
                 try:
-                    response = router.route_prompt(
-                        platform="slack",
-                        channel_id=channel_id,
-                        text=text,
-                        thread_ts=thread_ts,
-                        user_id=user_id,
-                        image_urls=image_urls,
-                    )
+                    with in_flight_dispatch():
+                        response = router.route_prompt(
+                            platform="slack",
+                            channel_id=channel_id,
+                            text=text,
+                            thread_ts=thread_ts,
+                            user_id=user_id,
+                            image_urls=image_urls,
+                        )
                     say(text=response, thread_ts=thread_ts)
                     LOGGER.info(
                         "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d",

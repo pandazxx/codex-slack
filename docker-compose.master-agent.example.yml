@@ -53,5 +53,6 @@ services:
       - ${MASTER_PROJECT_DIR:-.}/config/claude-global:/opt/codex-slack/config/claude-global:ro
       - ${MASTER_SSH_AUTH_SOCK_PATH:-/dev/null}:/ssh-agent
       - ${PODMAN_SOCKET_PATH:-/run/user/1000/podman/podman.sock}:/run/podman/podman.sock
+    stop_grace_period: 5m
     stdin_open: true
     tty: true
