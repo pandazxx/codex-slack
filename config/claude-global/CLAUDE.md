@@ -42,3 +42,21 @@ Settings in `settings.json` follow the same two-tier model:
 *If AGENT_FRONTEND=slack (or unset):*
 - Use `*bold*` (single asterisk) for emphasis.
 - Do not use mermaid blocks — plain text or ASCII diagrams only.
+
+## Skills
+
+The following slash commands are available. Invoke them by typing `/skill-name` (with optional arguments after a space).
+
+- `/commit` — stage all changes, write a Conventional Commit message, and push.
+- `/pr` — open a pull request against `master` with an auto-generated title and checklist body.
+- `/tag [name]` — create and push a git tag; proposes the next version if no name is given.
+- `/reply-formatter <draft>` — reformat a draft reply for the current platform (`AGENT_FRONTEND`).
+
+## Subagents
+
+When you need specialised help, use the Agent tool with one of these subagent types. Each runs as an isolated subprocess with full tool access unless noted.
+
+- `doc-writer`: Generates and updates documentation — README files, inline docstrings, changelogs, and architecture notes. Reads current code state and writes clear, accurate docs. Does **not** modify implementation code. (Tools: Read, Grep, Glob, Write)
+- `debugger`: Given an error message or unexpected behaviour, performs systematic root-cause analysis — reads logs, traces call stacks, inspects relevant state, and identifies the root cause. Returns a diagnosis and a recommended fix for you to apply. Does **not** modify code. (Tools: Read, Grep, Glob, Bash)
+- `test-runner`: Runs the project test suite (auto-detects `pytest`, `npm test`, `go test`, `cargo test`, etc.), parses output, and returns a structured summary of passes, failures, and errors with relevant stack traces. Does **not** modify code. (Tools: Read, Bash)
+- `housekeeper`: Scans the codebase for dead code, duplicate functions, unused imports, stale comments, and TODO/FIXME items. Returns a prioritised list of cleanup opportunities with file and line references. Does **not** make changes — reports findings for you to act on. (Tools: Read, Grep, Glob)
