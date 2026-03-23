@@ -45,18 +45,18 @@ Settings in `settings.json` follow the same two-tier model:
 
 ## Skills
 
-Named procedures for common tasks. When the user asks you to perform any of the following, use the Skill tool with the matching skill name. The skill will expand into detailed steps for you to execute using your available tools (Bash, Read, Write, etc.).
+Named procedures for common tasks, defined in `~/.claude/commands/`. Invoke them with the Skill tool (non-interactive mode) or `/skill-name` (interactive mode). Pass any relevant context as the argument.
 
-- `commit` — stage all changes, write a Conventional Commit message, and push. Use when asked to commit, save, or push changes.
-- `pr` — open a pull request against `master` with an auto-generated title and checklist body. Use when asked to open or create a PR.
-- `tag` — create and push a git tag; proposes the next version if no name is given. Use when asked to tag a release or cut a tag.
-- `reply-formatter` — reformat a draft reply for the current platform (`AGENT_FRONTEND`). Use when asked to format or reformat a reply before sending.
+- `commit` — stage all changes, write a Conventional Commit message, and push.
+- `pr` — open a pull request against `master` with an auto-generated title and checklist body.
+- `tag` — create and push a git tag; proposes the next version if no name is given.
+- `reply-formatter` — reformat a draft reply for the current platform (`AGENT_FRONTEND`).
 
 ## Subagents
 
-When you need specialised help, use the Agent tool with one of these subagent types. Each runs as an isolated subprocess with full tool access unless noted.
+Specialised agents defined in `~/.claude/agents/`. Spawn them with the Agent tool when you need focused help. Each runs in isolation and does not modify code unless its description says so.
 
-- `doc-writer`: Generates and updates documentation — README files, inline docstrings, changelogs, and architecture notes. Reads current code state and writes clear, accurate docs. Does **not** modify implementation code. (Tools: Read, Grep, Glob, Write)
-- `debugger`: Given an error message or unexpected behaviour, performs systematic root-cause analysis — reads logs, traces call stacks, inspects relevant state, and identifies the root cause. Returns a diagnosis and a recommended fix for you to apply. Does **not** modify code. (Tools: Read, Grep, Glob, Bash)
-- `test-runner`: Runs the project test suite (auto-detects `pytest`, `npm test`, `go test`, `cargo test`, etc.), parses output, and returns a structured summary of passes, failures, and errors with relevant stack traces. Does **not** modify code. (Tools: Read, Bash)
-- `housekeeper`: Scans the codebase for dead code, duplicate functions, unused imports, stale comments, and TODO/FIXME items. Returns a prioritised list of cleanup opportunities with file and line references. Does **not** make changes — reports findings for you to act on. (Tools: Read, Grep, Glob)
+- `doc-writer` — write or update documentation without touching implementation files.
+- `debugger` — root-cause analysis for errors; returns a diagnosis and recommended fix.
+- `test-runner` — run the test suite and return a structured pass/fail summary.
+- `housekeeper` — scan for dead code, unused imports, TODOs, and duplicate logic; returns a prioritised cleanup list.

@@ -1,6 +1,11 @@
+---
+description: Create and push a git tag; proposes the next version if no name is given
+argumentHint: "[tag name, e.g. v1.2.3]"
+---
+
 Create and push a git tag on the current commit.
 
-If the user specified a tag name, use it directly and skip to the creation step.
+If the user provided a tag name in the arguments, use it directly and skip to the creation step.
 
 If no tag name was given:
 1. Run `git tag --sort=-version:refname | head -10` to see recent tags.

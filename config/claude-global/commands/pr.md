@@ -1,3 +1,8 @@
+---
+description: Open a pull request against master with an auto-generated title and checklist body
+argumentHint: "[title or description hints]"
+---
+
 Create a pull request from the current branch targeting `master` (or `main` if `master` does not exist).
 
 1. Run `git status` — if there are uncommitted changes, commit them first (follow the commit procedure).
@@ -18,4 +23,4 @@ Create a pull request from the current branch targeting `master` (or `main` if `
 7. Run: `gh pr create --base master --title "<title>" --body "<body>"`
 8. Report the PR URL.
 
-If the user provided a specific title, description hints, or target base branch, use that context when drafting.
+If the user provided a specific title, description hints, or base branch in the arguments, use that context when drafting.

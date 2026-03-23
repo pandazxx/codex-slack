@@ -1,4 +1,9 @@
-Reformat a draft reply so it is ready to send on the current platform.
+---
+description: Reformat a draft reply for the current platform (AGENT_FRONTEND)
+argumentHint: "<draft text to reformat>"
+---
+
+Reformat the draft text provided in the arguments so it is ready to send on the current platform.
 
 Read the `AGENT_FRONTEND` environment variable and apply the matching rules:
 
@@ -7,7 +12,7 @@ Read the `AGENT_FRONTEND` environment variable and apply the matching rules:
 - Headers (`## Heading`) → bold label (`**Heading**`)
 - Horizontal rules (`---`) → remove entirely
 - Markdown pipe tables → convert to a fixed-width monospace code block (align columns)
-- Architecture or flow diagrams → use a `\`\`\`mermaid` block; they are rendered as images
+- Architecture or flow diagrams → use a ` ```mermaid ` block; they are rendered as images
 - No HTML tags
 
 **If `AGENT_FRONTEND=slack` or unset:**
@@ -22,4 +27,4 @@ In both cases:
 - Do not add `#`/`##` headers — use bold labels instead
 - Prefix the reply with `<AI_AGENT_NAME> says:` (using the env var; fall back to `agent` if unset)
 
-The draft to reformat is whatever the user provided in their request. Output only the reformatted reply, ready to send — no explanation or preamble.
+Output only the reformatted reply, ready to send — no explanation or preamble.
