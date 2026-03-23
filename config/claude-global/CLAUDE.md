@@ -1,90 +1,116 @@
 # Global Agent Instructions
 
-This file is installed at *user scope* (`~/.claude/CLAUDE.md`) and applies to every project
-this agent works on. Individual repositories can extend or override these defaults by placing
-a `.claude/CLAUDE.md` file in the repository root (project scope). Claude Code concatenates
-all in-scope CLAUDE.md files, so project-scope instructions are appended after these and
-take effect alongside them.
-
-Settings in `settings.json` follow the same two-tier model:
-- *User scope* (`~/.claude/settings.json`) — this file, managed by the master deployment.
-- *Project scope* (`.claude/settings.json` in the repo) — per-project overrides that take
-  precedence over user-scope values for any key they define.
-
 ## Environment
 
-This agent runs inside a container. Users do not have direct access to the workspace filesystem. The primary interfaces for delivering work are:
+This agent runs inside a container. Users do not have direct access to the workspace. The primary interfaces are:
 
-- *GitHub* — commits, pull requests, issues, and tags are the canonical way to surface completed work. Always push and open a PR so the user can review changes.
-- *Reply* — the chat reply is the only real-time channel to the user. Use it to report progress, ask questions, share links (PR URL, commit URL, issue URL), and summarise what was done.
+- *GitHub* — commits, pull requests, issues, and tags are the canonical output. Always push and open a PR for the user to review.
+- *Reply* — the only real-time channel. Report progress, ask questions, and share links (PR, commit, issue URLs) here.
 
-Never assume the user can inspect files locally. If something is important for the user to see, include it in the reply or commit it to the repo.
+Never assume the user can inspect files locally.
 
 ## Git Workflow
 
-- *Never* commit directly to `master` or `main`. Always check your current branch before making any commits.
-- If you are on `master` or `main`, create a new feature branch first: `git checkout -b <descriptive-branch-name>`.
-- Name branches clearly after the work being done, e.g. `feat/add-login`, `fix/null-pointer`, `refactor/cleanup-auth`.
-- After completing your changes on a feature branch, push the branch and open a pull request targeting `master` or `main`.
-- Use `gh pr create --base master --fill` (or `--base main`) to submit the PR.
-
-## Committing and Pushing Changes
-
-- After every meaningful set of changes, stage, commit, and push.
-- Do not leave work uncommitted. Every code change must be committed and pushed before you consider the task done.
-- Write concise, descriptive commit messages that explain *what* changed and *why*.
-- Example: `git add -p && git commit -m "fix: handle null session in auth middleware" && git push`.
+- Never commit directly to `master` or `main`. Create a feature branch first.
+- Name branches after the work: `feat/`, `fix/`, `refactor/`, `docs/`, etc.
+- Use the `commit` skill to stage, write, and push. Use the `pr` skill to open a PR against `master`.
+- Every code change must be committed and pushed before the task is considered done.
 
 ## Reply Formatting
 
-- Always start every reply with `<agent_name> says:` where `<agent_name>` is the value of the `AI_AGENT_NAME` environment variable. If the variable is not set, use `agent` as the name.
-- Check the `AGENT_FRONTEND` environment variable to determine the platform and apply platform-specific formatting rules below.
-- Use `-` for bullet lists. Do not use `#` or `##` headers — use bold text as section labels instead.
-- Use backticks for inline code: `like this`. Use triple backticks for code blocks.
-- Do not use HTML, horizontal rules (`---`), or deep nesting.
-- Keep responses clear and readable in a chat window. There is no length restriction — be as thorough as needed, but avoid unnecessary padding.
+- Start every reply with `<agent_name> says:` — where `<agent_name>` is `$AI_AGENT_NAME`, or `agent` if unset.
+- Use `-` for bullet lists. Use bold for section labels instead of `#` headers.
+- Use backticks for inline code and triple backticks for code blocks.
+- No HTML, no horizontal rules, no deep nesting.
 
-*If AGENT_FRONTEND=discord:*
-- Use `**bold**` (double asterisk) for emphasis.
-- For architecture diagrams, flow charts, or sequence diagrams, use mermaid code blocks (` ```mermaid `). These are rendered as images automatically.
+*If AGENT_FRONTEND=discord:* use `**bold**`. Use mermaid blocks for diagrams — they render as images.
 
-*If AGENT_FRONTEND=slack (or unset):*
-- Use `*bold*` (single asterisk) for emphasis.
-- Do not use mermaid blocks — plain text or ASCII diagrams only.
+*If AGENT_FRONTEND=slack (or unset):* use `*bold*`. No mermaid — use plain text or ASCII diagrams.
 
 ## Knowledge Persistence
 
-Sessions end, context windows fill, and memory resets. The only truly durable record is the repository itself. Treat the repo as the single source of truth for all decisions, discoveries, and fixes — write things down as you go, not just when a task is "done".
+Sessions end and context resets. The repository is the only durable record — write decisions, discoveries, and fixes to the repo as you go.
 
-*What to record and where:*
+- Before starting significant work: read `docs/decisions/` and `docs/knowledge-base/` for prior context.
+- After every non-trivial fix or discovery: update `docs/knowledge-base/lessons-learned.md` and commit it with the fix.
+- For every significant architectural or design choice: produce an ADR in `docs/decisions/`.
+- Never re-litigate settled decisions. If context is unclear when resuming, read the docs and `git log` first.
 
-- *Architecture decisions* — use the `architect` subagent to produce an ADR (MADR v4) in `docs/decisions/` for every significant choice: technology selected, pattern adopted, approach rejected. If the decision is non-trivial, an ADR is mandatory, not optional.
-- *Design documents* — for new features or subsystems, produce a design doc in `docs/design/` before or alongside implementation.
-- *Lessons learned and issue post-mortems* — append to `docs/lessons-learned.md` whenever a bug is fixed, a surprising edge case is discovered, or an approach fails. Format each entry as: date, one-line summary, root cause, fix applied, and how to avoid recurrence.
-- *Release notes* — maintain a file per release in `docs/releases/` summarising what changed, why, and any migration steps.
+## Project Layout
 
-*Rules:*
+Default layout for a well-structured engineering project. Adapt per-repo as needed; document deviations in `.claude/CLAUDE.md`.
 
-- Never rely on session memory alone for context that spans more than one exchange. If a decision or finding matters beyond this message, write it to the repo.
-- After resolving any non-trivial bug or issue, immediately update `docs/lessons-learned.md` and commit it alongside the fix.
-- Before starting a significant piece of work, check `docs/decisions/` and `docs/lessons-learned.md` for prior context — do not repeat past mistakes or re-litigate settled decisions.
-- If you are asked to resume or continue work and the context is unclear, read the relevant docs files and recent git log first.
+```
+.
+├── src/                  # Application source code
+├── tests/                # Test code (mirrors src/ structure)
+├── scripts/              # Build, deploy, migration, and utility scripts
+├── config/               # Environment and service configuration
+├── docs/                 # All documentation (see Document Layout below)
+├── .claude/              # Project-scope agent instructions and settings
+└── .github/              # CI/CD workflows, issue templates, PR templates
+```
+
+## Document Layout
+
+All documentation lives under `docs/`. Each subdirectory has a single, clear purpose.
+
+```
+docs/
+├── decisions/            # Architecture Decision Records (ADRs)
+│   └── NNNN-title.md     #   MADR v4 format; numbered sequentially
+│
+├── design/               # Design documents for features and subsystems
+│   └── feature-name.md   #   Problem, goals, non-goals, solution, alternatives
+│
+├── knowledge-base/       # Accumulated operational knowledge
+│   ├── lessons-learned.md #  Post-mortems and issue fixes (append-only log)
+│   └── faq.md            #  Frequently asked questions and answers
+│
+├── releases/             # Release notes, one file per release
+│   └── vX.Y.md           #  What changed, why, migration steps
+│
+├── guides/               # How-to guides and runbooks
+│   ├── runbooks/         #  Step-by-step operational procedures (incident, deploy, rollback)
+│   └── onboarding.md     #  Getting-started guide for new contributors
+│
+├── test-plans/           # Test case specifications and acceptance criteria
+│   └── feature-name.md   #  Scope, test cases, pass/fail criteria, edge cases
+│
+├── references/           # Stable technical references
+│   ├── api.md            #  API endpoints, request/response schemas
+│   ├── config.md         #  All configuration keys, types, defaults, and descriptions
+│   └── schemas/          #  Data schemas, ERDs, protocol specs
+│
+└── manuals/              # End-user and operator manuals
+    ├── user-manual.md    #  Feature walkthroughs for end users
+    └── ops-manual.md     #  Deployment, monitoring, backup, and recovery
+```
+
+*Document conventions:*
+
+- *ADRs* (`decisions/`): MADR v4. Status: `proposed` → `accepted` → `deprecated`/`superseded`. Never delete — supersede.
+- *Design docs* (`design/`): written before or alongside implementation. Sections: Context, Goals, Non-goals, Design, Alternatives considered, Open questions.
+- *Lessons learned* (`knowledge-base/lessons-learned.md`): append-only. Each entry: date, summary, root cause, fix applied, prevention.
+- *Runbooks* (`guides/runbooks/`): actionable, step-by-step. Written for someone responding under pressure. Include: trigger condition, impact, steps, rollback, escalation.
+- *Test plans* (`test-plans/`): link to the feature design doc. Cover happy path, edge cases, failure modes, and non-functional requirements.
+- *References* (`references/`): factual and stable. Prefer tables. Keep in sync with the implementation — stale references are worse than none.
 
 ## Skills
 
-Named procedures for common tasks, defined in `~/.claude/commands/`. Invoke them with the Skill tool (non-interactive mode) or `/skill-name` (interactive mode). Pass any relevant context as the argument.
+Invoke with the Skill tool. Defined in `~/.claude/commands/`.
 
-- `commit` — stage all changes, write a Conventional Commit message, and push.
-- `pr` — open a pull request against `master` with an auto-generated title and checklist body.
-- `tag` — create and push a git tag; proposes the next version if no name is given.
-- `reply-formatter` — reformat a draft reply for the current platform (`AGENT_FRONTEND`).
+- `commit` — stage, write a Conventional Commit message, and push; cleans workspace and reports SHA + URL.
+- `pr` — push branch and open a PR against `master` with auto-generated title and checklist body.
+- `tag` — create and push a semver tag; proposes next version if none given.
+- `reply-formatter` — reformat a draft for the current `AGENT_FRONTEND`.
 
 ## Subagents
 
-Specialised agents defined in `~/.claude/agents/`. Spawn them with the Agent tool when you need focused help. Each runs in isolation and does not modify code unless its description says so.
+Invoke with the Agent tool. Defined in `~/.claude/agents/`.
 
-- `architect` — principal engineer: plans solutions, evaluates tradeoffs, and produces ADRs (MADR v4) and design documents. Use when designing a new system or documenting a significant decision.
-- `doc-writer` — write or update documentation without touching implementation files.
-- `debugger` — root-cause analysis for errors; returns a diagnosis and recommended fix.
-- `test-runner` — run the test suite and return a structured pass/fail summary.
-- `housekeeper` — scan for dead code, unused imports, TODOs, and duplicate logic; returns a prioritised cleanup list.
+- `architect` — plans solutions, evaluates tradeoffs, produces ADRs and design docs. Use for any significant design decision.
+- `doc-writer` — writes and updates documentation; does not touch implementation files.
+- `debugger` — root-cause analysis; returns diagnosis and recommended fix without modifying files.
+- `test-runner` — runs the test suite and returns a structured pass/fail report.
+- `housekeeper` — scans for dead code, unused imports, TODOs, and duplicates; returns a prioritised list without modifying files.
