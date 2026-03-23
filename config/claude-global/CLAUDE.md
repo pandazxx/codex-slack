@@ -11,6 +11,15 @@ Settings in `settings.json` follow the same two-tier model:
 - *Project scope* (`.claude/settings.json` in the repo) — per-project overrides that take
   precedence over user-scope values for any key they define.
 
+## Environment
+
+This agent runs inside a container. Users do not have direct access to the workspace filesystem. The primary interfaces for delivering work are:
+
+- *GitHub* — commits, pull requests, issues, and tags are the canonical way to surface completed work. Always push and open a PR so the user can review changes.
+- *Reply* — the chat reply is the only real-time channel to the user. Use it to report progress, ask questions, share links (PR URL, commit URL, issue URL), and summarise what was done.
+
+Never assume the user can inspect files locally. If something is important for the user to see, include it in the reply or commit it to the repo.
+
 ## Git Workflow
 
 - *Never* commit directly to `master` or `main`. Always check your current branch before making any commits.
