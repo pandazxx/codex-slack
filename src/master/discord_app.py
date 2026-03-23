@@ -402,16 +402,17 @@ def run_discord_frontend(
                     auto_archive_duration=1440,
                 )
                 thread_ts = str(thread.id)
-                response = await asyncio.to_thread(
-                    router.route_mention_message,
-                    platform="discord",
-                    channel_id=channel_id,
-                    text=text,
-                    thread_ts=thread_ts,
-                    event_ts=event_ts,
-                    user_id=user_id,
-                    image_urls=image_urls,
-                )
+                async with thread.typing():
+                    response = await asyncio.to_thread(
+                        router.route_mention_message,
+                        platform="discord",
+                        channel_id=channel_id,
+                        text=text,
+                        thread_ts=thread_ts,
+                        event_ts=event_ts,
+                        user_id=user_id,
+                        image_urls=image_urls,
+                    )
                 await _reply_in_thread(thread, response)
                 return
 
@@ -419,16 +420,17 @@ def run_discord_frontend(
                 # Mention inside an existing thread — re-track and respond in thread.
                 say_text = format_forward_ack(text=text, image_count=len(image_urls))
                 await message.reply(say_text, mention_author=False)
-                response = await asyncio.to_thread(
-                    router.route_mention_message,
-                    platform="discord",
-                    channel_id=channel_id,
-                    text=text,
-                    thread_ts=thread_ts,
-                    event_ts=event_ts,
-                    user_id=user_id,
-                    image_urls=image_urls,
-                )
+                async with message.channel.typing():
+                    response = await asyncio.to_thread(
+                        router.route_mention_message,
+                        platform="discord",
+                        channel_id=channel_id,
+                        text=text,
+                        thread_ts=thread_ts,
+                        event_ts=event_ts,
+                        user_id=user_id,
+                        image_urls=image_urls,
+                    )
                 await _reply_message_chunks(message, response)
                 return
 
@@ -448,15 +450,16 @@ def run_discord_frontend(
             if not accepted:
                 return
             await _reply_message_chunks(message, format_forward_ack(text=text, image_count=len(image_urls)))
-            routed = await asyncio.to_thread(
-                router.route_prompt,
-                platform="discord",
-                channel_id=channel_id,
-                text=text,
-                thread_ts=thread_ts,
-                user_id=user_id,
-                image_urls=image_urls,
-            )
+            async with message.channel.typing():
+                routed = await asyncio.to_thread(
+                    router.route_prompt,
+                    platform="discord",
+                    channel_id=channel_id,
+                    text=text,
+                    thread_ts=thread_ts,
+                    user_id=user_id,
+                    image_urls=image_urls,
+                )
             await _reply_message_chunks(message, routed)
         except RouteSkip as exc:
             LOGGER.info("discord route skipped for channel=%s reason=%s", channel_id, exc)
@@ -507,5 +510,9 @@ def run_discord_frontend(
     @tree.command(name="master-agent-refresh-auth", description="Refresh agent auth in workspace")
     async def cmd_refresh_auth(interaction, name: str) -> None:  # type: ignore[no-untyped-def]
         await _execute_and_send(interaction, command_name="/master-agent-refresh-auth", text=name)
+
+    @tree.command(name="master-agent-refresh-config", description="Push updated global Claude config to agent workspace")
+    async def cmd_refresh_config(interaction, name: str) -> None:  # type: ignore[no-untyped-def]
+        await _execute_and_send(interaction, command_name="/master-agent-refresh-config", text=name)
 
     client.run(bot_token)

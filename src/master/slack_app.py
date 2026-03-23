@@ -47,10 +47,6 @@ class CommandRateLimiter:
             return True
 
 
-def is_admin_channel(channel_id: str, admin_channels: set[str]) -> bool:
-    return channel_id in admin_channels
-
-
 def is_supported_thread_subtype(subtype: str | None) -> bool:
     if not subtype:
         return True
@@ -106,7 +102,7 @@ def create_master_app(
 
     if router is not None:
         @app.event("app_mention")
-        def on_mention(event: dict, say) -> None:  # type: ignore[no-untyped-def]
+        def on_mention(event: dict, say, client) -> None:  # type: ignore[no-untyped-def]
             channel_id = event.get("channel", "")
             thread_ts = event.get("thread_ts") or event.get("ts")
             event_ts = event.get("ts")
@@ -116,16 +112,20 @@ def create_master_app(
 
             try:
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
-                response = router.route_mention_message(
-                    platform="slack",
-                    channel_id=channel_id,
-                    text=text,
-                    thread_ts=thread_ts,
-                    event_ts=event_ts,
-                    user_id=user_id,
-                    image_urls=image_urls,
-                )
-                say(text=response, thread_ts=thread_ts)
+                client.reactions_add(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
+                try:
+                    response = router.route_mention_message(
+                        platform="slack",
+                        channel_id=channel_id,
+                        text=text,
+                        thread_ts=thread_ts,
+                        event_ts=event_ts,
+                        user_id=user_id,
+                        image_urls=image_urls,
+                    )
+                    say(text=response, thread_ts=thread_ts)
+                finally:
+                    client.reactions_remove(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
             except RouteSkip as exc:
                 LOGGER.info("route skipped for channel=%s reason=%s", channel_id, exc)
             except RouteError as exc:
@@ -136,7 +136,7 @@ def create_master_app(
                 say(text=f"Error: {exc}", thread_ts=thread_ts)
 
         @app.event("message")
-        def on_thread_message(event: dict, say) -> None:  # type: ignore[no-untyped-def]
+        def on_thread_message(event: dict, say, client) -> None:  # type: ignore[no-untyped-def]
             subtype = event.get("subtype")
             if not is_supported_thread_subtype(subtype):
                 LOGGER.info(
@@ -153,7 +153,6 @@ def create_master_app(
             text = event.get("text", "")
             user_id = event.get("user", "")
             image_urls = extract_image_urls(event.get("files", []), event_ts)
-            image_urls = select_thread_image_urls(image_urls, subtype)
             if image_urls:
                 LOGGER.info(
                     "thread image payload channel=%s thread_ts=%s subtype=%s image_count=%d first_image=%s",
@@ -203,22 +202,26 @@ def create_master_app(
                     )
                     return
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
-                response = router.route_prompt(
-                    platform="slack",
-                    channel_id=channel_id,
-                    text=text,
-                    thread_ts=thread_ts,
-                    user_id=user_id,
-                    image_urls=image_urls,
-                )
-                say(text=response, thread_ts=thread_ts)
-                LOGGER.info(
-                    "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d",
-                    channel_id,
-                    thread_ts,
-                    user_id,
-                    len(response),
-                )
+                client.reactions_add(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
+                try:
+                    response = router.route_prompt(
+                        platform="slack",
+                        channel_id=channel_id,
+                        text=text,
+                        thread_ts=thread_ts,
+                        user_id=user_id,
+                        image_urls=image_urls,
+                    )
+                    say(text=response, thread_ts=thread_ts)
+                    LOGGER.info(
+                        "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d",
+                        channel_id,
+                        thread_ts,
+                        user_id,
+                        len(response),
+                    )
+                finally:
+                    client.reactions_remove(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
             except RouteSkip as exc:
                 LOGGER.info("thread route skipped for channel=%s reason=%s", channel_id, exc)
             except RouteError as exc:
@@ -237,6 +240,7 @@ def create_master_app(
         "/master-agent-usage",
         "/master-agent-remove",
         "/master-agent-refresh-auth",
+        "/master-agent-refresh-config",
         "/master-agent-set-model",
     ):
         _register_command(
@@ -290,14 +294,6 @@ def extract_image_urls(files: object, event_ts: str | None = None) -> list[str]:
         if url:
             urls.append(url)
     return urls
-
-
-def select_thread_image_urls(image_urls: list[str], subtype: str | None) -> list[str]:
-    # Keep all image URLs from the current message payload.
-    # Historical thread files are filtered earlier by event timestamp matching.
-    if subtype == "file_share" and image_urls:
-        return image_urls
-    return image_urls
 
 
 def format_forward_ack(*, text: str, image_count: int) -> str:

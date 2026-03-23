@@ -101,4 +101,8 @@ def dispatch_command(service: MasterService, request: MasterCommandRequest) -> C
         name = parse_single_name_text(request.text, request.command_name)
         return service.refresh_agent_auth(name=name)
 
+    if request.command_name == "/master-agent-refresh-config":
+        name = parse_single_name_text(request.text, request.command_name)
+        return service.refresh_agent_config(name=name)
+
     return CommandResult(ok=False, code="ERR_INVALID_ARGS", message=f"unsupported command: {request.command_name}", data={})

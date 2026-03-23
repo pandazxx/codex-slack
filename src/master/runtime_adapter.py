@@ -39,6 +39,9 @@ class RuntimeAdapter(Protocol):
     def refresh_agent_auth(self, *, volume_name: str, host_auth_path: str) -> None:
         ...
 
+    def refresh_agent_config(self, *, volume_name: str, host_config_dir: str) -> None:
+        ...
+
     def inspect_agent(self, name: str) -> dict[str, Any] | None:
         ...
 
@@ -150,6 +153,27 @@ class PodmanRuntimeAdapter:
                     "mkdir -p /workspace/.codex && "
                     "cp /run/secrets/codex_auth.json /workspace/.codex/auth.json && "
                     "chmod 600 /workspace/.codex/auth.json"
+                ),
+            ]
+        )
+
+    def refresh_agent_config(self, *, volume_name: str, host_config_dir: str) -> None:
+        self._run(
+            [
+                "podman",
+                "run",
+                "--rm",
+                "-v",
+                f"{volume_name}:/workspace",
+                "-v",
+                f"{host_config_dir}:/run/secrets/master_claude_config:ro",
+                "alpine:3.20",
+                "sh",
+                "-lc",
+                (
+                    "mkdir -p /workspace/home/.claude && "
+                    "cp -r /run/secrets/master_claude_config/. /workspace/home/.claude/ && "
+                    "chmod -R go-rwx /workspace/home/.claude/"
                 ),
             ]
         )

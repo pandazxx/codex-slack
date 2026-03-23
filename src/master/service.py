@@ -56,7 +56,18 @@ class MasterService:
         self._default_agent_adapter = default_agent_adapter if default_agent_adapter in SUPPORTED_AGENT_ADAPTERS else DEFAULT_AGENT_ADAPTER
 
     def list_agents(self) -> CommandResult:
-        agents = [agent.to_dict() for agent in self._registry.list_agents()]
+        agents = []
+        for record in self._registry.list_agents():
+            d = record.to_dict()
+            inspect = self._runtime.inspect_agent(record.container_name)
+            if inspect:
+                state = inspect.get("State", {})
+                d["container_state"] = state.get("Status", "unknown")
+                d["container_running"] = bool(state.get("Running", False))
+            else:
+                d["container_state"] = "absent"
+                d["container_running"] = False
+            agents.append(d)
         result = CommandResult(ok=True, code="OK", message="agents listed", data={"agents": agents})
         self._audit(command="list", agent="-", result=result)
         return result
@@ -325,6 +336,51 @@ class MasterService:
             },
         )
         self._audit(command="refresh-auth", agent=name, result=result)
+        return result
+
+    def refresh_agent_config(self, *, name: str) -> CommandResult:
+        record = self._registry.get(name)
+        if not record:
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="refresh-config", agent=name, result=result)
+            return result
+
+        if not self._agent_claude_config_dir_path:
+            result = CommandResult(
+                ok=False,
+                code="ERR_RUNTIME_FAILED",
+                message="agent claude config source is not configured",
+                data={},
+            )
+            self._audit(command="refresh-config", agent=name, result=result)
+            return result
+
+        try:
+            self._runtime.refresh_agent_config(
+                volume_name=f"agent-workspace-{record.name}",
+                host_config_dir=self._agent_claude_config_dir_path,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = CommandResult(
+                ok=False,
+                code="ERR_RUNTIME_FAILED",
+                message=f"failed to refresh config for {name}: {exc}",
+                data={},
+            )
+            self._audit(command="refresh-config", agent=name, result=result)
+            return result
+
+        result = CommandResult(
+            ok=True,
+            code="OK",
+            message=f"refreshed config for {name}",
+            data={
+                "refreshed": True,
+                "volume_name": f"agent-workspace-{record.name}",
+                "config_source": self._agent_claude_config_dir_path,
+            },
+        )
+        self._audit(command="refresh-config", agent=name, result=result)
         return result
 
     def set_agent_model(self, *, name: str, model: str | None) -> CommandResult:
