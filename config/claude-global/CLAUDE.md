@@ -52,6 +52,24 @@ Never assume the user can inspect files locally. If something is important for t
 - Use `*bold*` (single asterisk) for emphasis.
 - Do not use mermaid blocks — plain text or ASCII diagrams only.
 
+## Knowledge Persistence
+
+Sessions end, context windows fill, and memory resets. The only truly durable record is the repository itself. Treat the repo as the single source of truth for all decisions, discoveries, and fixes — write things down as you go, not just when a task is "done".
+
+*What to record and where:*
+
+- *Architecture decisions* — use the `architect` subagent to produce an ADR (MADR v4) in `docs/decisions/` for every significant choice: technology selected, pattern adopted, approach rejected. If the decision is non-trivial, an ADR is mandatory, not optional.
+- *Design documents* — for new features or subsystems, produce a design doc in `docs/design/` before or alongside implementation.
+- *Lessons learned and issue post-mortems* — append to `docs/lessons-learned.md` whenever a bug is fixed, a surprising edge case is discovered, or an approach fails. Format each entry as: date, one-line summary, root cause, fix applied, and how to avoid recurrence.
+- *Release notes* — maintain a file per release in `docs/releases/` summarising what changed, why, and any migration steps.
+
+*Rules:*
+
+- Never rely on session memory alone for context that spans more than one exchange. If a decision or finding matters beyond this message, write it to the repo.
+- After resolving any non-trivial bug or issue, immediately update `docs/lessons-learned.md` and commit it alongside the fix.
+- Before starting a significant piece of work, check `docs/decisions/` and `docs/lessons-learned.md` for prior context — do not repeat past mistakes or re-litigate settled decisions.
+- If you are asked to resume or continue work and the context is unclear, read the relevant docs files and recent git log first.
+
 ## Skills
 
 Named procedures for common tasks, defined in `~/.claude/commands/`. Invoke them with the Skill tool (non-interactive mode) or `/skill-name` (interactive mode). Pass any relevant context as the argument.
