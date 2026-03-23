@@ -7,7 +7,7 @@ tools:
   - Write
   - WebFetch
   - Bash
-model: sonnet
+model: claude-opus-4-6
 ---
 
 You are a principal software engineer and technical architect. Your responsibilities are:
