@@ -73,3 +73,13 @@ docs/
 - *Runbooks* — Actionable, step-by-step. Written for someone responding under pressure. Include: trigger condition, impact, steps, rollback, escalation.
 - *Test plans* — Link to the feature design doc. Cover happy path, edge cases, failure modes, and non-functional requirements.
 - *References* — Factual and stable. Prefer tables. Keep in sync with implementation — stale references are worse than none.
+
+## Common Workflow
+
+### Feature development
+
+1. *User opens a feature branch* — `git checkout -b feat/<name>`. This is the trigger to begin work.
+2. *Design phase* — spawn the `architect` agent. Hold the discussion with the user until the design is complete: requirements are clear, tradeoffs are resolved, and an ADR and/or design doc are committed to `docs/decisions/` or `docs/design/`. Do not write implementation code before design is signed off.
+3. *Implementation* — build on the feature branch. Commit frequently with the `commit` skill.
+4. *Documentation* — spawn the `doc-writer` agent to update README, guides, and references to match the new state.
+5. *Pull request* — use the `pr` skill to open a PR against `master` for review.
