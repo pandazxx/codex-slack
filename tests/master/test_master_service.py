@@ -70,6 +70,83 @@ def test_load_agent_detects_dockerfile_plan(tmp_path) -> None:
     result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
     assert result.ok is True
     assert result.data["image_plan"]["type"] == "dockerfile"
+    assert result.data["agent_adapter"] == "codex"
+
+
+def test_load_agent_supports_explicit_claude_adapter(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(
+        name="payments-api",
+        repo_path=str(repo),
+        channel_id="C123",
+        agent_adapter="claude-code",
+    )
+    assert result.ok is True
+    assert result.data["agent_adapter"] == "claude-code"
+
+    record = registry.get("payments-api")
+    assert record is not None
+    assert record.agent_adapter == "claude-code"
+
+
+def test_load_agent_rejects_unsupported_adapter(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(
+        name="payments-api",
+        repo_path=str(repo),
+        channel_id="C123",
+        agent_adapter="unknown",
+    )
+    assert result.ok is False
+    assert result.code == "ERR_INVALID_ARGS"
+
+
+def test_load_agent_supports_discord_platform_channel_id(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(
+        name="payments-api",
+        repo_path=str(repo),
+        channel_id="123456789012345678",
+        platform="discord",
+    )
+    assert result.ok is True
+    assert result.data["platform"] == "discord"
+
+
+def test_load_agent_rejects_invalid_discord_channel_id(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    result = service.load_agent(
+        name="payments-api",
+        repo_path=str(repo),
+        channel_id="C123",
+        platform="discord",
+    )
+    assert result.ok is False
+    assert result.code == "ERR_INVALID_ARGS"
 
 
 def test_load_agent_channel_conflict(tmp_path) -> None:
@@ -136,6 +213,8 @@ def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> No
 
     monkeypatch.setenv("GH_TOKEN", "gh-token-value")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
 
     registry = AgentRegistry(tmp_path / "agents.json")
     runtime = FakeRuntime()
@@ -148,9 +227,13 @@ def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> No
     assert start_result.ok is True
     assert runtime.calls[0][0] == "create_or_update_agent"
     env = runtime.calls[0][1]["env"]
+    assert env["HOME"] == "/workspace/home"
+    assert env["XDG_CONFIG_HOME"] == "/workspace/home/.config"
     assert env["CODEX_HOME"] == "/workspace/.codex"
     assert env["GH_TOKEN"] == "gh-token-value"
     assert env["OPENAI_API_KEY"] == "openai-key"
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+    assert "ANTHROPIC_API_KEY" not in env
 
 
 def test_start_agent_passes_git_identity_to_agent(tmp_path) -> None:
@@ -196,6 +279,34 @@ def test_start_agent_mounts_codex_auth_json_only(tmp_path) -> None:
     assert runtime.calls[0][0] == "create_or_update_agent"
     mounts = runtime.calls[0][1]["mounts"]
     assert mounts == ["/host/secrets/codex-auth.json:/run/secrets/codex_auth.json:ro"]
+
+
+def test_start_agent_mounts_global_codex_and_claude_config_dirs(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_codex_config_dir_path="/host/config/codex",
+        agent_claude_config_dir_path="/host/config/claude",
+    )
+
+    load_result = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert load_result.ok is True
+
+    start_result = service.start_agent(name="payments-api")
+    assert start_result.ok is True
+    env = runtime.calls[0][1]["env"]
+    mounts = runtime.calls[0][1]["mounts"]
+    assert env["AGENT_GLOBAL_CODEX_CONFIG_DIR"] == "/run/secrets/master_codex_config"
+    assert env["AGENT_GLOBAL_CLAUDE_CONFIG_DIR"] == "/run/secrets/master_claude_config"
+    assert mounts == [
+        "/host/config/codex:/run/secrets/master_codex_config:ro",
+        "/host/config/claude:/run/secrets/master_claude_config:ro",
+    ]
 
 
 def test_start_agent_mounts_ssh_forwarding_and_sets_env(tmp_path) -> None:

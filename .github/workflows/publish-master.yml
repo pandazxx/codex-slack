@@ -1,0 +1,73 @@
+name: Publish Master Image
+
+# Builds and pushes the master orchestrator image to GHCR.
+#
+# Tag strategy
+# ------------
+# - Push to `master`  → image tagged `latest`  (staging environment tracks this)
+# - Push of `v*` tag  → image tagged with the semver (production environment tracks this)
+# - Every push        → image additionally tagged `sha-<short-commit>` for pinned rollbacks
+#
+# The CD daemon on each environment watches the relevant tag and auto-deploys
+# when the digest changes.
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+    paths:
+      - "Dockerfile"
+      - "docker/entrypoint.sh"
+      - "src/**"
+      - "config/**"
+      - "requirements.txt"
+      - ".github/workflows/publish-master.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/codex-slack-master
+          tags: |
+            # "latest" on every push to master — staging tracks this
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
+            # Short commit SHA for pinned rollback references
+            type=sha,prefix=sha-
+            # Semver tag on releases — production tracks this
+            type=ref,event=tag
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

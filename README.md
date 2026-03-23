@@ -73,28 +73,52 @@ Master control plane Socket Mode entrypoint:
 
 Required env:
 
-- `SLACK_BOT_TOKEN`
-- `SLACK_APP_TOKEN`
-- `MASTER_ADMIN_CHANNELS` (comma-separated channel IDs)
+- `MASTER_FRONTENDS` (comma-separated: `slack`, `discord`; default `slack`)
+- Slack frontend requires:
+  - `SLACK_BOT_TOKEN`
+  - `SLACK_APP_TOKEN`
+  - `MASTER_ADMIN_CHANNELS` (comma-separated Slack channel IDs)
+- Discord frontend requires:
+  - `DISCORD_BOT_TOKEN`
+  - `DISCORD_ADMIN_CHANNELS` (comma-separated Discord channel IDs)
 - `podman` CLI available inside the master runtime image/container when using real lifecycle operations
 - For rootless Podman socket access in a containerized master, use `--userns=keep-id --security-opt label=disable` and mount `/run/user/<uid>/podman/podman.sock`
 - Optional: `MASTER_AGENT_BASE_IMAGE` (default `codex-slack-bot:latest`; set this to the rebuilt image tag you want agent containers to run, e.g. `codex-slack-v1-uat`)
 - Optional: `MASTER_CODEX_AUTH_JSON_PATH` (host path to the shared Codex `auth.json`; mounted into agents as `/run/secrets/codex_auth.json:ro`)
+- Optional: `MASTER_CODEX_CONFIG_DIR_PATH` (host path to a global Codex config directory; seeded into each agent before repo-local `.codex` overrides are applied)
+- Optional: `MASTER_CLAUDE_CONFIG_DIR_PATH` (host path to a global Claude config directory; seeded into each agent home before repo-level `.claude` config is considered)
 - Optional: `MASTER_SSH_AUTH_SOCK_PATH` (host path to the SSH agent socket; mounted into agents as `/run/secrets/ssh-auth.sock`)
 - Optional: `MASTER_SSH_KNOWN_HOSTS_PATH` (host path to `known_hosts`; mounted into agents as `/run/secrets/ssh_known_hosts:ro`. If omitted, SSH defaults to `StrictHostKeyChecking=no` with `/dev/null` known hosts.)
 - Optional: `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` (passed into agents and written to repo-local `git config user.name` / `user.email` during worker startup)
 - Optional: `MASTER_REGISTRY_PATH` (default `data/master/agents.json`)
 - Optional: `MASTER_DRY_RUN=true` for non-destructive runtime testing
-- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (default `codex exec --dangerously-bypass-approvals-and-sandbox resume --last -`)
+- Optional: `MASTER_AGENT_COMMAND_TEMPLATE` (legacy/default fallback for Codex template)
+- Optional: `MASTER_CODEX_COMMAND_TEMPLATE` (default `codex exec --dangerously-bypass-approvals-and-sandbox resume --last -`)
+- Optional: `MASTER_CLAUDE_COMMAND_TEMPLATE` (default `claude -p --dangerously-skip-permissions`; if an override points to `claude ...` without the flag, the dispatcher auto-injects `--dangerously-skip-permissions`)
+- Optional: `MASTER_DEFAULT_AGENT_ADAPTER` (`codex` default, supported: `codex`, `claude-code`)
 - Optional: `MASTER_AGENT_TIMEOUT_SECONDS`
 - Optional: `MASTER_COMMAND_RATE_LIMIT_COUNT` (default `20`)
 - Optional: `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
+- Optional auth pass-through env from master to agents:
+  - `GH_TOKEN` / `GITHUB_TOKEN`
+  - `OPENAI_API_KEY` (Codex/OpenAI tooling)
+  - `CLAUDE_CODE_OAUTH_TOKEN` (preferred for headless Claude Code subscription auth)
+  - `ANTHROPIC_API_KEY` (Claude Console/API billing path; used only when OAuth token is absent)
+- If you use `claude-code` agents, rebuild the base image from this branch so the container includes the `claude` CLI. Older images only include `codex` and will fail with `sh: 1: claude: not found`.
 - For a Compose-based master runtime, use `docker-compose.master-agent.example.yml` (Podman Compose-oriented example for the v1 master container)
   Set `MASTER_RUNTIME_IMAGE` to override the master container image tag used by that compose example.
 
-Admin slash commands:
+v3 compose changes to apply:
+- Add `MASTER_FRONTENDS` (`slack`, `discord`, or `slack,discord`).
+- For Discord frontend add `DISCORD_BOT_TOKEN` and `DISCORD_ADMIN_CHANNELS`.
+- Add `MASTER_DEFAULT_AGENT_ADAPTER` (`codex` default) and optional adapter templates:
+  - `MASTER_CODEX_COMMAND_TEMPLATE`
+  - `MASTER_CLAUDE_COMMAND_TEMPLATE`
+- Keep Slack vars (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS`) only if Slack frontend is enabled.
+
+Admin slash commands (Slack + Discord parity):
 - `/master-agent-list`
-- `/master-agent-load <name> <repo_path> <channel_id> [branch]`
+- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
 - `/master-agent-start <name>`
 - `/master-agent-stop <name>`
 - `/master-agent-status <name>`
@@ -107,6 +131,7 @@ Operator notes:
 - `/master-agent-status <name> --full` returns chunked full JSON output across multiple Slack messages.
 - Image attachments in mapped channel conversations are forwarded to agents as `url_private` references appended to the prompt.
 - For Slack private image fetch, ensure bot scope includes `files:read`.
+- Agent records persist `platform` and `agent_adapter` fields (defaults: `slack`, `codex`).
 - For lean worker deployments, this repo includes `Dockerfile.agent-minimal`.
 - CI/CD workflow `.github/workflows/publish-agent-minimal.yml` publishes the minimal agent image to `ghcr.io/<owner>/codex-slack-agent-minimal` on `master` and version tags.
 
@@ -132,6 +157,7 @@ Required env for worker init:
 - Canonical documentation map: `docs/DOCUMENTATION_INDEX.md`
 - Tutorials and release checklist: `docs/TUTORIALS.md`
 - Detailed Slack app configuration: `docs/SLACK_SETUP.md`
+- Detailed Discord app configuration: `docs/DISCORD_SETUP.md`
 - Logging configuration: `docs/LOGGING.md`
 - Container runtime: `docs/CONTAINER.md`
 - Multi-agent setup (same Slack workspace): `docs/MULTI_AGENT_SETUP.md`

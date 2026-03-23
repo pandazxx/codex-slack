@@ -1,24 +1,29 @@
-# Master-Agent Runbook (v1)
+# Master-Agent Runbook (v3.0)
 
 ## Scope
-Operational guide for the master->agent v1 stack:
-- master in container (Slack + orchestration)
+Operational guide for the master->agent v3.0 stack:
+- master in container (Slack + Discord + orchestration)
 - agent worker containers (no direct Slack connection)
 - Podman host socket control path
 
 See `docs/MASTER_AGENT_UAT.md` for step-by-step user acceptance test cases.
-Containerized UAT is required for v1 sign-off; functional Slack-only checks are not sufficient.
+Containerized UAT is required for v3.0 sign-off.
 
 ## Prerequisites
 - Host Podman service socket mounted into master container.
 - For rootless Podman, mount `/run/user/<uid>/podman/podman.sock` and run the master container with `--userns=keep-id --security-opt label=disable`.
 - `podman` CLI installed inside the master image/container.
 - Provide `GH_TOKEN` on the master container so it can be forwarded into agent workers for repo access.
+- For `claude-code` adapter agents, prefer `CLAUDE_CODE_OAUTH_TOKEN` on the master container for headless subscription auth.
+- Use `ANTHROPIC_API_KEY` only for Claude Console/API billing flows, and only when `CLAUDE_CODE_OAUTH_TOKEN` is absent.
 - Provide `MASTER_CODEX_AUTH_JSON_PATH` as a host path to the shared Codex `auth.json`; v1 forwards only this auth file to agents, not Codex session directories.
 - Provide `MASTER_SSH_AUTH_SOCK_PATH` as a host path to the SSH agent socket for private repo checkout and push over SSH.
 - Optional: provide `MASTER_SSH_KNOWN_HOSTS_PATH` as a host path to `known_hosts` for explicit SSH host verification. If omitted, master and agents default to `StrictHostKeyChecking=no` with `/dev/null` known hosts.
-- Slack app configured with command/event scopes.
-- `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS` set.
+- Optional: provide `MASTER_CLAUDE_CONFIG_DIR_PATH` as a host path to a directory containing `settings.json` (typically `~/.claude`). Mounted into each agent as `/run/secrets/master_claude_config:ro` with `CLAUDE_CONFIG_DIR` set so claude picks up the model and other settings from there. Editing the host file takes effect on the next prompt dispatch without any restart.
+- Slack and/or Discord frontend configured.
+- `MASTER_FRONTENDS` set (`slack`, `discord`, or `slack,discord`).
+- For Slack frontend: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MASTER_ADMIN_CHANNELS`.
+- For Discord frontend: `DISCORD_BOT_TOKEN`, `DISCORD_ADMIN_CHANNELS`.
 - Shared auth refs available to agents (`SSH_AUTH_SOCK` and/or `GH_TOKEN_FILE`).
 
 ## Master Startup
@@ -30,16 +35,22 @@ podman run --rm \
   -e SLACK_BOT_TOKEN \
   -e SLACK_APP_TOKEN \
   -e GH_TOKEN \
+  -e CLAUDE_CODE_OAUTH_TOKEN \
   -e SSH_AUTH_SOCK=/ssh-agent \
   -e MASTER_GIT_USER_NAME='Your Name' \
   -e MASTER_GIT_USER_EMAIL='you@example.com' \
+  -e MASTER_FRONTENDS=slack,discord \
   -e MASTER_CODEX_AUTH_JSON_PATH=/absolute/host/path/auth.json \
   -e MASTER_SSH_AUTH_SOCK_PATH=/absolute/host/path/ssh-agent.sock \
   -e MASTER_SSH_KNOWN_HOSTS_PATH=/absolute/host/path/known_hosts \
   -e MASTER_ADMIN_CHANNELS=<admin_channel_id> \
+  -e DISCORD_ADMIN_CHANNELS=<discord_admin_channel_id> \
+  -e DISCORD_BOT_TOKEN=... \
   -e MASTER_AGENT_BASE_IMAGE=codex-slack-v1-uat \
   -e MASTER_REGISTRY_PATH=/opt/codex-slack/data/master/agents.json \
-  -e MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -' \
+  -e MASTER_DEFAULT_AGENT_ADAPTER=codex \
+  -e MASTER_CODEX_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -' \
+  -e MASTER_CLAUDE_COMMAND_TEMPLATE='claude -p --dangerously-skip-permissions' \
   -e MASTER_AGENT_TIMEOUT_SECONDS=120 \
   -e MASTER_COMMAND_RATE_LIMIT_COUNT=20 \
   -e MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60 \
@@ -59,32 +70,58 @@ export PODMAN_SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
 export MASTER_DATA_DIR="$(pwd)/data/master"
 export MASTER_RUNTIME_IMAGE="codex-slack-v1-uat"
 export MASTER_CODEX_AUTH_JSON_PATH="${HOME}/.codex/auth.json"
+export MASTER_CLAUDE_CONFIG_DIR_PATH="${HOME}/.claude"   # optional: share claude settings with agents
 export MASTER_SSH_AUTH_SOCK_PATH="${SSH_AUTH_SOCK}"
 export MASTER_ADMIN_CHANNELS="<admin_channel_id>"
 export MASTER_AGENT_BASE_IMAGE="codex-slack-v1-uat"
 export MASTER_GIT_USER_NAME="Your Name"
 export MASTER_GIT_USER_EMAIL="you@example.com"
-export MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'
+export CLAUDE_CODE_OAUTH_TOKEN="..."
+export MASTER_FRONTENDS="slack,discord"
+export DISCORD_BOT_TOKEN="..."
+export DISCORD_ADMIN_CHANNELS="<discord_admin_channel_id>"
+export MASTER_DEFAULT_AGENT_ADAPTER="codex"
+export MASTER_CODEX_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'
+export MASTER_CLAUDE_COMMAND_TEMPLATE='claude -p --dangerously-skip-permissions'
 mkdir -p "${MASTER_DATA_DIR}"
 podman compose -f docker-compose.master-agent.example.yml up --build -d
 podman compose -f docker-compose.master-agent.example.yml logs -f
 ```
-The compose example is intended for Podman Compose and already includes `userns_mode: keep-id`, `security_opt: [label=disable]`, and `x-podman.in_pod: false`.
+The compose example is intended for Podman Compose and already includes:
+- `userns_mode: keep-id`
+- `security_opt: [label=disable]`
+- `x-podman.in_pod: false`
+
 It also reads the master container image from `MASTER_RUNTIME_IMAGE` (default `codex-slack-v1-uat`) so you can swap tags without editing the compose file.
+
 For non-container local debugging, you can also run:
 ```bash
 python -m src.master.main
 ```
-Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent containers. If this is left unset, default-image agents still start from `codex-slack-bot:latest`.
-`MASTER_CODEX_AUTH_JSON_PATH` must be a host filesystem path visible to host Podman because the master uses the host Podman socket. It is mounted into each agent as `/run/secrets/codex_auth.json:ro`.
-`MASTER_SSH_AUTH_SOCK_PATH` must be a host filesystem path visible to host Podman. It is mounted into each agent as `/run/secrets/ssh-auth.sock`.
-The master container itself also needs the same socket mounted separately (for example `-v /absolute/host/path/ssh-agent.sock:/ssh-agent`) with `SSH_AUTH_SOCK=/ssh-agent` so `/master-agent-load` can clone private repos over SSH.
-If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it must also be a host filesystem path visible to host Podman and is mounted into each agent as `/run/secrets/ssh_known_hosts:ro`.
-If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`.
-If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup so commits do not require manual setup.
-Default is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'`.
-Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
-The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
+
+Important env notes:
+- Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent containers. If unset, default-image agents still start from `codex-slack-bot:latest`.
+- `MASTER_CODEX_AUTH_JSON_PATH` must be a host filesystem path visible to host Podman. It is mounted into each agent as `/run/secrets/codex_auth.json:ro`.
+- `MASTER_SSH_AUTH_SOCK_PATH` must be a host filesystem path visible to host Podman. It is mounted into each agent as `/run/secrets/ssh-auth.sock`.
+- The master container itself also needs the same SSH socket mounted separately, for example `-v /absolute/host/path/ssh-agent.sock:/ssh-agent`, with `SSH_AUTH_SOCK=/ssh-agent` so `/master-agent-load` can clone private repos over SSH.
+- If `MASTER_SSH_KNOWN_HOSTS_PATH` is set, it must also be host-visible and is mounted into each agent as `/run/secrets/ssh_known_hosts:ro`.
+- If `MASTER_SSH_KNOWN_HOSTS_PATH` is unset, master-side and agent-side SSH use `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`.
+- If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup.
+- Default command template is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'`.
+- Default adapter is `MASTER_DEFAULT_AGENT_ADAPTER=codex`.
+- If you use the `claude-code` adapter, rebuild the base image from this branch so the agent container includes the `claude` CLI binary.
+
+Claude subscription auth in headless containers:
+- Generate `CLAUDE_CODE_OAUTH_TOKEN` on the host with:
+```bash
+claude setup-token
+```
+- Export that token into the master container environment.
+- If `CLAUDE_CODE_OAUTH_TOKEN` is present, the master prefers it over `ANTHROPIC_API_KEY` when building agent env.
+
+Persistence notes:
+- Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
+- The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
 2. Verify startup logs include:
 - loaded admin channels
 - registry path
@@ -95,7 +132,7 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 ## Agent Lifecycle (Admin Channel)
 1. Load mapping and image plan:
 ```text
-/master-agent-load <name> <repo_path> <channel_id>
+/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]
 ```
 2. Start agent:
 ```text
@@ -113,6 +150,14 @@ The repo includes `docker-compose.master-agent.example.yml` as the baseline Comp
 5. Refresh the agent's persisted Codex auth after renewing the host auth file:
 ```text
 /master-agent-refresh-auth <name>
+```
+6. Override the claude model for a specific agent (persisted in registry, no restart needed):
+```text
+/master-agent-set-model <name> claude-opus-4-5
+```
+Omit the model argument to clear the override:
+```text
+/master-agent-set-model <name>
 ```
 
 ## Routing Validation

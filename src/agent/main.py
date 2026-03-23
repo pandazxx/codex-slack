@@ -4,6 +4,7 @@ import argparse
 import logging
 
 from .worker import load_worker_settings, run_worker
+from ..logging_utils import LocalTimeFormatter
 
 
 def parse_args() -> argparse.Namespace:
@@ -14,7 +15,9 @@ def parse_args() -> argparse.Namespace:
 
 def configure_logging(log_level: str) -> None:
     level = getattr(logging, log_level.upper(), logging.INFO)
-    logging.basicConfig(level=level, handlers=[logging.StreamHandler()], format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    handler = logging.StreamHandler()
+    handler.setFormatter(LocalTimeFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.basicConfig(level=level, handlers=[handler])
 
 
 def main() -> int:

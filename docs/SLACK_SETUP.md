@@ -58,6 +58,7 @@ Create these commands in **Slash Commands**:
 - `/master-agent-usage`
 - `/master-agent-remove`
 - `/master-agent-refresh-auth`
+- `/master-agent-set-model`
 
 For each command:
 1. Click **Create New Command**.
@@ -65,6 +66,10 @@ For each command:
 3. Use a placeholder Request URL, for example `https://example.com/slack/command`.
 4. Add a short description.
 5. Save.
+
+Load command syntax:
+- `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
+- Platform is inferred as `slack` because the command runs in Slack.
 
 ## 6. Install App to Workspace
 1. Open **Install App**.
@@ -100,14 +105,18 @@ curl -sS -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
 ```dotenv
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
+MASTER_FRONTENDS=slack
 MASTER_ADMIN_CHANNELS=C01234567
 MASTER_REGISTRY_PATH=data/master/agents.json
 MASTER_DRY_RUN=false
 MASTER_AGENT_COMMAND_TEMPLATE=codex exec --dangerously-bypass-approvals-and-sandbox resume --last -
+MASTER_DEFAULT_AGENT_ADAPTER=codex
 # The router injects a stable per-thread `resume <session_id>` automatically for standard `... -` templates.
 MASTER_AGENT_TIMEOUT_SECONDS=120
 MASTER_COMMAND_RATE_LIMIT_COUNT=20
 MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS=60
+# Optional: mount host ~/.claude directory into agents so claude reads settings.json from there
+# MASTER_CLAUDE_CONFIG_DIR_PATH=/home/user/.claude
 ```
 
 ## 10. Verify Master Slack Integration
@@ -122,7 +131,7 @@ python -m src.master.main
 3. Confirm a JSON response is posted.
 4. Run (branch optional; defaults to `main`, then falls back to `master`):
 ```text
-/master-agent-load <name> <repo_path> <agent_channel_id> [branch]
+/master-agent-load <name> <repo_path> <agent_channel_id> [branch] [--adapter codex|claude-code]
 ```
 5. Run:
 ```text
@@ -132,9 +141,14 @@ python -m src.master.main
 ```text
 /master-agent-refresh-auth <name>
 ```
-7. In the mapped agent channel, mention the bot with a prompt.
-8. Reply in the same thread without mentioning the bot again.
-9. Confirm master routes both messages to the mapped agent.
+7. To override the claude model for a specific agent (takes effect immediately, no restart needed):
+```text
+/master-agent-set-model <name> claude-opus-4-5
+```
+Omit the model to clear the override and revert to the default.
+8. In the mapped agent channel, mention the bot with a prompt.
+9. Reply in the same thread without mentioning the bot again.
+10. Confirm master routes both messages to the mapped agent.
 
 ## 11. Channel Usage Rules
 - Admin channels are for master slash commands only.

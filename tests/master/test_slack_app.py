@@ -1,19 +1,23 @@
 from __future__ import annotations
 import logging
 
+from src.master.command_dispatch import (
+    MasterCommandRequest as SlackCommandRequest,
+    dispatch_command as dispatch_slash_command,
+    parse_load_text,
+    parse_status_text,
+)
+from src.master.command_format import (
+    format_command_result,
+    format_status_full_chunks,
+)
 from src.master.service import CommandResult
 from src.master.slack_app import (
     CommandRateLimiter,
-    SlackCommandRequest,
-    dispatch_slash_command,
     extract_image_urls,
     format_forward_ack,
-    format_status_full_chunks,
-    format_command_result,
     is_admin_channel,
     is_supported_thread_subtype,
-    parse_load_text,
-    parse_status_text,
     select_thread_image_urls,
 )
 
@@ -22,12 +26,28 @@ class FakeMasterService:
     def list_agents(self) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="listed", data={"agents": []})
 
-    def load_agent(self, *, name: str, repo_path: str, channel_id: str, repo_ref: str = "main") -> CommandResult:
+    def load_agent(
+        self,
+        *,
+        name: str,
+        repo_path: str,
+        channel_id: str,
+        repo_ref: str = "main",
+        platform: str = "slack",
+        agent_adapter: str | None = None,
+    ) -> CommandResult:
         return CommandResult(
             ok=True,
             code="OK",
             message="loaded",
-            data={"name": name, "repo_path": repo_path, "channel_id": channel_id, "repo_ref": repo_ref},
+            data={
+                "name": name,
+                "repo_path": repo_path,
+                "channel_id": channel_id,
+                "repo_ref": repo_ref,
+                "platform": platform,
+                "agent_adapter": agent_adapter,
+            },
         )
 
     def start_agent(self, *, name: str) -> CommandResult:
@@ -59,13 +79,30 @@ def test_is_supported_thread_subtype_allows_file_share() -> None:
 
 
 def test_parse_load_text_requires_three_args() -> None:
-    name, repo_path, channel_id, repo_ref = parse_load_text("payments /tmp/repo C123")
-    assert (name, repo_path, channel_id, repo_ref) == ("payments", "/tmp/repo", "C123", "main")
+    name, repo_path, channel_id, repo_ref, adapter = parse_load_text("payments /tmp/repo C123")
+    assert (name, repo_path, channel_id, repo_ref, adapter) == ("payments", "/tmp/repo", "C123", "main", None)
 
 
 def test_parse_load_text_accepts_optional_branch() -> None:
-    name, repo_path, channel_id, repo_ref = parse_load_text("payments /tmp/repo C123 master")
-    assert (name, repo_path, channel_id, repo_ref) == ("payments", "/tmp/repo", "C123", "master")
+    name, repo_path, channel_id, repo_ref, adapter = parse_load_text("payments /tmp/repo C123 master")
+    assert (name, repo_path, channel_id, repo_ref, adapter) == (
+        "payments",
+        "/tmp/repo",
+        "C123",
+        "master",
+        None,
+    )
+
+
+def test_parse_load_text_accepts_adapter_flag() -> None:
+    parsed = parse_load_text("payments /tmp/repo C123 release/1 --adapter claude-code")
+    assert parsed == (
+        "payments",
+        "/tmp/repo",
+        "C123",
+        "release/1",
+        "claude-code",
+    )
 
 
 def test_parse_status_text_accepts_full_flag() -> None:
@@ -86,6 +123,22 @@ def test_dispatch_load_command() -> None:
     result = dispatch_slash_command(service, request)
     assert result.ok is True
     assert result.data["name"] == "payments"
+
+
+def test_dispatch_load_command_with_platform_and_adapter_flags() -> None:
+    service = FakeMasterService()
+    request = SlackCommandRequest(
+        command_name="/master-agent-load",
+        text="payments /tmp/repo C123 main --adapter claude-code",
+        channel_id="CADMIN",
+        user_id="U1",
+        platform="slack",
+    )
+
+    result = dispatch_slash_command(service, request)
+    assert result.ok is True
+    assert result.data["platform"] == "slack"
+    assert result.data["agent_adapter"] == "claude-code"
 
 
 def test_dispatch_list_command() -> None:

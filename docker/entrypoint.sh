@@ -29,6 +29,19 @@ if [[ -d "/run/secrets/codex_sessions" ]] && (
   cp -a /run/secrets/codex_sessions/. "${CODEX_HOME_PATH}/sessions/"
 fi
 
+# Copy global claude config into ~/.claude/ so claude has a writable config dir.
+# Prefer the host-mounted path (injected by master when MASTER_PROJECT_DIR is set),
+# fall back to the baked-in image path (always present when using the standard image).
+# Pointing CLAUDE_CONFIG_DIR at a read-only mount causes claude to hang on first write.
+CLAUDE_HOME="${HOME:-/workspace/home}/.claude"
+if [[ -d "/run/secrets/master_claude_config" ]]; then
+  mkdir -p "${CLAUDE_HOME}"
+  cp -a /run/secrets/master_claude_config/. "${CLAUDE_HOME}/"
+elif [[ -d "/opt/codex-slack/config/claude-global" ]]; then
+  mkdir -p "${CLAUDE_HOME}"
+  cp -a /opt/codex-slack/config/claude-global/. "${CLAUDE_HOME}/"
+fi
+
 if [[ -n "${GIT_USER_NAME:-}" ]]; then
   git config --global user.name "${GIT_USER_NAME}"
 fi
