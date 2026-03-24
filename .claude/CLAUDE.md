@@ -16,7 +16,7 @@ Sessions end and context resets. The repository is the only durable record — w
 - For every significant architectural or design choice: produce an ADR in `docs/decisions/` using the `architect` subagent.
 - Never re-litigate settled decisions. If context is unclear when resuming, read the docs and `git log` first.
 
-## Project Layout
+## Project Layout (target structure — create incrementally)
 
 ```
 .

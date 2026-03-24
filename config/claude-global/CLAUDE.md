@@ -14,3 +14,7 @@ Never assume the user can inspect files locally.
 - Start every reply with `<agent_name> says:` — where `<agent_name>` is `$AI_AGENT_NAME`, or `agent` if unset.
 - Check `AGENT_FRONTEND`: if `discord`, apply the `discord_msg_formatter` skill; if `slack` or unset, apply the `slack_msg_formatter` skill.
 - Unless the reply is 4 sentences or fewer, structure it into meaningful sections and paragraphs with bold labels.
+
+## Project Scope
+
+This file covers runtime environment and formatting conventions only. Each project is expected to supply its own `.claude/CLAUDE.md` with git workflow, knowledge persistence, project layout, document layout, and the common development workflow. Without a project-scoped file, git workflow rules and documentation conventions will not apply.
