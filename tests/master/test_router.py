@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from src.master.registry import AgentRecord, AgentRegistry
+from src.master.dispatch_result import DispatchResult
 from src.master.router import (
     ChannelRouter,
     ClaudeCodeDispatcher,
@@ -31,6 +32,7 @@ class FakeDispatcher:
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        claude_model: str | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -45,7 +47,7 @@ class FakeDispatcher:
                 "image_urls": image_urls or [],
             }
         )
-        return f"{agent_name}:{prompt}"
+        return DispatchResult(text=f"{agent_name}:{prompt}")
 
 
 def _seed_registry(registry: AgentRegistry) -> None:
@@ -171,6 +173,7 @@ class FailingDispatcher(FakeDispatcher):
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        claude_model: str | None = None,
     ) -> str:
         raise RouteError("codex exec failed")
 
