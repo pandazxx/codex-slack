@@ -1,23 +1,23 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This repository is currently in bootstrap state (no committed source files yet). Keep the layout simple and predictable as code is added:
-- `src/` application code, organized by feature or domain.
+- `src/` application source code, organized by subdomain: `bot/`, `master/`, `agent/`, `cd/`.
 - `tests/` automated tests mirroring `src/` paths.
-- `docs/` design notes, architecture decisions, and runbooks.
-- `assets/` static files (images, sample data).
+- `docs/` all documentation — operational runbooks, setup guides, and knowledge-base entries.
+- `.claude/` Claude Code agent framework: project CLAUDE.md, subagent definitions, and slash-command skills.
 
-Example: `src/auth/session.ts` should map to `tests/auth/session.test.ts`.
+Example: `src/master/dispatcher.py` should map to `tests/master/test_dispatcher.py`.
 
 ## Build, Test, and Development Commands
-No build system is committed yet. When adding one, expose standard entry points through a single toolchain (`Makefile` or package scripts) and document them here.
-Recommended baseline commands:
-- `make setup` install dependencies.
-- `make test` run the full test suite.
-- `make lint` run static analysis and formatting checks.
-- `make dev` start the local development environment.
+The project uses Python with pip for dependency management and pytest for testing.
 
-If you use Node, also provide `npm run test`, `npm run lint`, and `npm run dev` equivalents.
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+pytest -q                  # run full test suite
+```
+
+For containerised development, see `BUILD.md` and `docs/CONTAINER.md`.
 
 ## Coding Style & Naming Conventions
 Until language-specific configs are added:
@@ -37,12 +37,15 @@ Add and enforce formatter/linter configs early (for example, `prettier` + `eslin
 Run all tests locally before opening a PR.
 
 ## Commit & Pull Request Guidelines
-There is no existing commit history yet; start with Conventional Commits:
+Use Conventional Commits:
 - `feat: add session token validation`
 - `fix: handle missing config file`
+- `docs: update onboarding guide`
 
 PRs should include:
 - Clear summary of what changed and why.
 - Linked issue/ticket when available.
 - Test evidence (command + result).
 - Screenshots/logs for UI or behavior changes.
+
+Use the `.claude/commands/commit.md` skill and `.claude/commands/pr.md` skill when working inside the Claude Code agent framework.
