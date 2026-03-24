@@ -37,3 +37,9 @@ The container image does not include the `claude` CLI. Rebuild the base image fr
 **Q: Where do I find the agent registry?**
 
 Default path: `data/master/agents.json`. Override with `MASTER_REGISTRY_PATH`.
+
+---
+
+**Q: Does the agent support complex Word documents (tracked changes, macros, embedded OLE objects, rich formatting)?**
+
+Not fully in v3.5. The inbound conversion is best-effort — plain text and inline images are extracted, but tracked changes, macros, and embedded OLE objects are not preserved. For best results in v3.5, use `.md` or `.txt` + separate image attachments. Full complex docx fidelity is in the backlog for a future version.
