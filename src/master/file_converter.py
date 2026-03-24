@@ -6,6 +6,21 @@ import os
 import subprocess
 import tempfile
 
+try:
+    import pdfplumber  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+    pdfplumber = None  # type: ignore[assignment]
+
+try:
+    import docx  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+    docx = None  # type: ignore[assignment]
+
+try:
+    import openpyxl  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+    openpyxl = None  # type: ignore[assignment]
+
 LOGGER = logging.getLogger(__name__)
 
 ATTACHMENT_INLINE_TOKEN_BUDGET: int = int(os.environ.get("ATTACHMENT_INLINE_TOKEN_BUDGET", "4000"))
@@ -23,42 +38,44 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _convert_docx(data: bytes) -> str:
-    try:
-        from docx import Document  # type: ignore[import-untyped]
-    except ImportError:
+    if docx is None:
         return "[attachment: python-docx is not installed; docx conversion unavailable]"
-    doc = Document(io.BytesIO(data))
-    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    text = "\n\n".join(paragraphs)
-    if len(text.strip()) < _COMPLEX_DOCX_TEXT_THRESHOLD:
-        hint = (
-            "For best results with text + images, send a .md or .txt file"
-            " and attach images separately."
-        )
-        text = f"{text}\n\n{hint}".strip()
-    return text
+    try:
+        doc = docx.Document(io.BytesIO(data))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        text = "\n\n".join(paragraphs)
+        if len(text.strip()) < _COMPLEX_DOCX_TEXT_THRESHOLD:
+            hint = (
+                "For best results with text + images, send a .md or .txt file"
+                " and attach images separately."
+            )
+            text = f"{text}\n\n{hint}".strip()
+        return text
+    except Exception as exc:  # noqa: BLE001
+        return f"[attachment: docx conversion failed — {exc}]"
 
 
 def _convert_xlsx(data: bytes) -> str:
-    try:
-        import openpyxl  # type: ignore[import-untyped]
-    except ImportError:
+    if openpyxl is None:
         return "[attachment: openpyxl is not installed; xlsx conversion unavailable]"
     wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     sheet_parts: list[str] = []
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
+        raw_rows = list(ws.iter_rows())
+        if not raw_rows:
             continue
-        str_rows = [[str(cell) if cell is not None else "" for cell in row] for row in rows]
-        col_widths = [max(len(r[c]) for r in str_rows) for c in range(len(str_rows[0]))]
+        rows = [
+            [str(getattr(cell, "value", cell) if getattr(cell, "value", cell) is not None else "") for cell in row]
+            for row in raw_rows
+        ]
+        col_widths = [max(len(r[c]) for r in rows) for c in range(len(rows[0]))]
         lines: list[str] = []
-        for ridx, row in enumerate(str_rows):
+        for ridx, row in enumerate(rows):
             padded = " | ".join(cell.ljust(col_widths[c]) for c, cell in enumerate(row))
             lines.append(f"| {padded} |")
             if ridx == 0:
-                sep = " | ".join("-" * col_widths[c] for c in range(len(str_rows[0])))
+                sep = " | ".join("-" * col_widths[c] for c in range(len(rows[0])))
                 lines.append(f"| {sep} |")
         sheet_parts.append(f"**Sheet: {sheet_name}**\n\n" + "\n".join(lines))
     return "\n\n".join(sheet_parts)
@@ -70,17 +87,18 @@ def _convert_csv(data: bytes) -> str:
 
 
 def _convert_pdf(data: bytes) -> str:
-    try:
-        import pdfplumber  # type: ignore[import-untyped]
-    except ImportError:
+    if pdfplumber is None:
         return "[attachment: pdfplumber is not installed; pdf conversion unavailable]"
-    pages: list[str] = []
-    with pdfplumber.open(io.BytesIO(data)) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text() or ""
-            if page_text.strip():
-                pages.append(page_text)
-    return "\n\n".join(pages)
+    try:
+        pages: list[str] = []
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text() or ""
+                if page_text.strip():
+                    pages.append(page_text)
+        return "\n\n".join(pages)
+    except Exception as exc:  # noqa: BLE001
+        return f"[attachment: pdf conversion failed — {exc}]"
 
 
 def convert_attachment(filename: str, mime_type: str, data: bytes) -> str:
