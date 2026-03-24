@@ -351,8 +351,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
 
     @staticmethod
     def _make_session_id(channel_id: str) -> str:
-        normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", channel_id).strip("-") or "session"
-        return f"claude-{normalized}"
+        import uuid
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, channel_id))
 
     def _get_or_create_session_id(self, channel_id: str) -> tuple[str, bool]:
         """Return (session_id, is_new).  *is_new* is True on first use for this channel."""
