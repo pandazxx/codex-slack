@@ -506,6 +506,75 @@ def test_claude_dispatcher_uses_continue_flag(monkeypatch) -> None:  # type: ign
     # Both calls use --continue; each container has exactly one channel.
     assert all(" --continue" in cmd[-1] for cmd in seen)
     assert " --dangerously-skip-permissions" in seen[0][-1]
+    # The removed --session-id / --resume approach must not appear.
+    assert all("--session-id" not in cmd[-1] for cmd in seen)
+    assert all("--resume" not in cmd[-1] for cmd in seen)
+
+
+def test_claude_dispatcher_retries_without_continue_on_stale_session(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """When --continue fails with a stale-session error, the dispatcher
+    must retry using a fresh 'create' action (no --continue flag)."""
+    dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
+    seen: list[list[str]] = []
+
+    call_count = 0
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal call_count
+        call_count += 1
+        seen.append(cmd)
+        if call_count == 1:
+            # Simulate stale-session error on the first (--continue) attempt.
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=1,
+                stdout="",
+                stderr="Error: no session found",
+            )
+        # Second attempt (fresh create) succeeds.
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="retry-ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    result = dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        platform="slack",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert call_count == 2, "Expected exactly one retry after stale-session failure"
+    # First attempt must have used --continue.
+    assert "--continue" in seen[0][-1]
+    # Retry must NOT use --continue (fresh create).
+    assert "--continue" not in seen[1][-1]
+    # Neither attempt should use --session-id or --resume.
+    assert all("--session-id" not in cmd[-1] for cmd in seen)
+    assert all("--resume" not in cmd[-1] for cmd in seen)
+    assert result.text == "retry-ok"
+
+
+def test_should_retry_with_create_recognises_stale_session_phrases() -> None:
+    """_should_retry_with_create must match all documented stale-session error phrases."""
+    phrases = [
+        "no session found",
+        "session not found",
+        "no conversation exists",
+        "session does not exist",
+        "unknown session abc123",
+    ]
+    for phrase in phrases:
+        assert ClaudeCodeDispatcher._should_retry_with_create(phrase), (
+            f"Expected _should_retry_with_create to return True for: {phrase!r}"
+        )
+
+    # A generic non-zero exit (e.g. permission error) must not trigger a retry.
+    assert not ClaudeCodeDispatcher._should_retry_with_create("permission denied"), (
+        "Expected _should_retry_with_create to return False for unrelated error"
+    )
 
 
 def test_podman_exec_dispatcher_injects_claude_permission_bypass(monkeypatch) -> None:  # type: ignore[no-untyped-def]
