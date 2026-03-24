@@ -11,6 +11,9 @@ Use this page as the source-of-truth map for v3.x.
 - Build/setup for local bot mode: `BUILD.md`
 - Day-to-day usage and troubleshooting: `USAGE.md`
 - Hands-on tutorials and checklists: `docs/TUTORIALS.md`
+- New contributor onboarding: `docs/guides/onboarding.md`
+- Lessons learned and post-mortems: `docs/knowledge-base/lessons-learned.md`
+- FAQ: `docs/knowledge-base/faq.md`
 
 ## Canonical Master Command Set (Implemented)
 - `/master-agent-list`

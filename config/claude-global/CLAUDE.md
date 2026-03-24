@@ -1,44 +1,20 @@
 # Global Agent Instructions
 
-This file is installed at *user scope* (`~/.claude/CLAUDE.md`) and applies to every project
-this agent works on. Individual repositories can extend or override these defaults by placing
-a `.claude/CLAUDE.md` file in the repository root (project scope). Claude Code concatenates
-all in-scope CLAUDE.md files, so project-scope instructions are appended after these and
-take effect alongside them.
+## Environment
 
-Settings in `settings.json` follow the same two-tier model:
-- *User scope* (`~/.claude/settings.json`) — this file, managed by the master deployment.
-- *Project scope* (`.claude/settings.json` in the repo) — per-project overrides that take
-  precedence over user-scope values for any key they define.
+This agent runs inside a container. Users do not have direct access to the workspace. The primary interfaces are:
 
-## Git Workflow
+- *GitHub* — commits, pull requests, issues, and tags are the canonical output. Always push and open a PR for the user to review.
+- *Reply* — the only real-time channel. Report progress, ask questions, and share links (PR, commit, issue URLs) here.
 
-- *Never* commit directly to `master` or `main`. Always check your current branch before making any commits.
-- If you are on `master` or `main`, create a new feature branch first: `git checkout -b <descriptive-branch-name>`.
-- Name branches clearly after the work being done, e.g. `feat/add-login`, `fix/null-pointer`, `refactor/cleanup-auth`.
-- After completing your changes on a feature branch, push the branch and open a pull request targeting `master` or `main`.
-- Use `gh pr create --base master --fill` (or `--base main`) to submit the PR.
-
-## Committing and Pushing Changes
-
-- After every meaningful set of changes, stage, commit, and push.
-- Do not leave work uncommitted. Every code change must be committed and pushed before you consider the task done.
-- Write concise, descriptive commit messages that explain *what* changed and *why*.
-- Example: `git add -p && git commit -m "fix: handle null session in auth middleware" && git push`.
+Never assume the user can inspect files locally.
 
 ## Reply Formatting
 
-- Always start every reply with `<agent_name> says:` where `<agent_name>` is the value of the `AI_AGENT_NAME` environment variable. If the variable is not set, use `agent` as the name.
-- Check the `AGENT_FRONTEND` environment variable to determine the platform and apply platform-specific formatting rules below.
-- Use `-` for bullet lists. Do not use `#` or `##` headers — use bold text as section labels instead.
-- Use backticks for inline code: `like this`. Use triple backticks for code blocks.
-- Do not use HTML, horizontal rules (`---`), or deep nesting.
-- Keep responses clear and readable in a chat window. There is no length restriction — be as thorough as needed, but avoid unnecessary padding.
+- Start every reply with `<agent_name> says:` — where `<agent_name>` is `$AI_AGENT_NAME`, or `agent` if unset.
+- Check `AGENT_FRONTEND`: if `discord`, apply the `discord_msg_formatter` skill; if `slack` or unset, apply the `slack_msg_formatter` skill.
+- Unless the reply is 4 sentences or fewer, structure it into meaningful sections and paragraphs with bold labels.
 
-*If AGENT_FRONTEND=discord:*
-- Use `**bold**` (double asterisk) for emphasis.
-- For architecture diagrams, flow charts, or sequence diagrams, use mermaid code blocks (` ```mermaid `). These are rendered as images automatically.
+## Project Scope
 
-*If AGENT_FRONTEND=slack (or unset):*
-- Use `*bold*` (single asterisk) for emphasis.
-- Do not use mermaid blocks — plain text or ASCII diagrams only.
+This file covers runtime environment and formatting conventions only. Each project is expected to supply its own `.claude/CLAUDE.md` with git workflow, knowledge persistence, project layout, document layout, and the common development workflow. Without a project-scoped file, git workflow rules and documentation conventions will not apply.
