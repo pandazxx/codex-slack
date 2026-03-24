@@ -323,109 +323,20 @@ class MultiAgentDispatcher:
 
 @dataclass
 class ClaudeCodeDispatcher(PodmanExecDispatcher):
-    """Dispatcher that uses the Claude CLI with stable per-channel session IDs.
+    """Dispatcher that uses the Claude CLI with --continue session resumption.
 
-    Session lifecycle:
-    - First prompt for a channel: ``--session-id <id>`` is appended.
-    - Subsequent prompts for the same channel: ``--resume <id>`` is used.
-    - If the first attempt fails with "is already in use" in stderr, the
-      dispatcher retries immediately with ``--resume <id>``.
-
-    Session IDs are derived from the channel_id and are persisted across
-    restarts when *session_state_path* is provided.
+    Each agent runs in its own container with one channel per container, so
+    --continue always targets the correct session. Falls back to a fresh
+    create if the session is stale or missing.
     """
 
     command_template: str = "claude -p --output-format json"
-    session_state_path: str | None = None
 
-    # Mutable session state — not part of the dataclass equality / repr.
-    _session_ids: dict[str, str] = field(default_factory=dict, init=False, repr=False)
-    _session_lock: Lock = field(default_factory=Lock, init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        self._session_ids = self._load_session_state()
-
-    # ------------------------------------------------------------------
-    # Session ID management
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _make_session_id(channel_id: str) -> str:
-        import uuid
-        return str(uuid.uuid5(uuid.NAMESPACE_DNS, channel_id))
-
-    def _get_or_create_session_id(self, channel_id: str) -> tuple[str, bool]:
-        """Return (session_id, is_new).  *is_new* is True on first use for this channel."""
-        with self._session_lock:
-            existing = self._session_ids.get(channel_id)
-            if existing:
-                return existing, False
-            new_id = self._make_session_id(channel_id)
-            self._session_ids[channel_id] = new_id
-            self._persist_session_state_unlocked()
-            return new_id, True
-
-    def _mark_session_known(self, channel_id: str, session_id: str) -> None:
-        with self._session_lock:
-            self._session_ids[channel_id] = session_id
-            self._persist_session_state_unlocked()
-
-    def _load_session_state(self) -> dict[str, str]:
-        path = (self.session_state_path or "").strip()
-        if not path:
-            return {}
-        state_path = Path(path)
-        if not state_path.exists():
-            return {}
-        try:
-            raw = json.loads(state_path.read_text(encoding="utf-8"))
-            data = raw.get("sessions")
-            if not isinstance(data, dict):
-                return {}
-            return {str(k): str(v) for k, v in data.items()}
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("router.claude_session_load_failed path=%s error=%s", path, exc)
-            return {}
-
-    def _persist_session_state_unlocked(self) -> None:
-        path = (self.session_state_path or "").strip()
-        if not path:
-            return
-        state_path = Path(path)
-        payload = {"sessions": dict(self._session_ids)}
-        try:
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("router.claude_session_persist_failed path=%s error=%s", path, exc)
-
-    # ------------------------------------------------------------------
-    # Command rendering
-    # ------------------------------------------------------------------
-
-    def _render_first_command(self, *, session_id: str) -> str:
-        """Build the command for the first call (use --session-id <id>)."""
-        base = self.command_template.rstrip()
-        if "{session_id}" in base:
-            rendered = base.format(session_id=session_id)
-        elif "--session-id" in base:
-            rendered = base
-        else:
-            rendered = f"{base} --session-id {session_id}"
+    def _render_command(self, *, action: str) -> str:
+        rendered = self.command_template.rstrip()
+        if action == "continue":
+            rendered = f"{rendered} --continue"
         return self._ensure_claude_permission_bypass(rendered)
-
-    def _render_resume_command(self, *, session_id: str) -> str:
-        """Build the command for subsequent calls (use --resume <id>)."""
-        base = self.command_template.rstrip()
-        # Strip any existing session-id placeholder or flag so we can add --resume.
-        base = re.sub(r"--session-id\s+\S+", "", base).rstrip()
-        base = re.sub(r"\{session_id\}", session_id, base)
-        rendered = f"{base} --resume {session_id}"
-        return self._ensure_claude_permission_bypass(rendered)
-
-    @staticmethod
-    def _should_retry_with_resume(stderr_text: str) -> bool:
-        return "is already in use" in stderr_text
 
     @staticmethod
     def _should_retry_with_create(stderr_text: str) -> bool:
@@ -628,14 +539,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
             effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
 
-        session_id, is_new_session = self._get_or_create_session_id(channel_id)
-        if is_new_session:
-            initial_command = self._render_first_command(session_id=session_id)
-            initial_action = "session-id"
-        else:
-            initial_command = self._render_resume_command(session_id=session_id)
-            initial_action = "resume"
-
+        initial_action = "continue"
+        initial_command = self._render_command(action=initial_action)
         if claude_model:
             initial_command = _inject_claude_model(initial_command, claude_model)
 
@@ -679,15 +584,10 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             stderr_text = self._clip(completed.stderr)
             retry_command: str | None = None
 
-            if self._should_retry_with_resume(stderr_text):
-                # Session is already in use — switch to --resume
-                retry_action = "resume"
-                retry_command = self._render_resume_command(session_id=session_id)
-                self._mark_session_known(channel_id, session_id)
-            elif self._should_retry_with_create(stderr_text):
-                # Session not found — retry fresh with a new session-id command
-                retry_action = "session-id-retry"
-                retry_command = self._render_first_command(session_id=session_id)
+            if self._should_retry_with_create(stderr_text):
+                # Session stale or missing — retry with a fresh create (no --continue)
+                retry_action = "create"
+                retry_command = self._render_command(action=retry_action)
 
             if retry_command is not None:
                 if claude_model:
@@ -743,9 +643,6 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             if stdout_text:
                 details.append(f"stdout={stdout_text}")
             raise RouteError(f"dispatch failed ({', '.join(details)})")
-
-        # Mark channel as having an active session for future --resume calls.
-        self._mark_session_known(channel_id, session_id)
 
         raw_stdout = completed.stdout.strip()
         response = self._parse_response(raw_stdout)
