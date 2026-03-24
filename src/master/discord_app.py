@@ -330,6 +330,14 @@ def parse_admin_message_command(text: str) -> tuple[str, str] | None:
     return command_name, args_text
 
 
+def label_discord_chunks(chunks: list[str]) -> list[str]:
+    """Prefix each chunk with a [N/total] header when there are multiple chunks."""
+    total = len(chunks)
+    if total <= 1:
+        return list(chunks)
+    return [f"[{i}/{total}]\n{chunk}" for i, chunk in enumerate(chunks, start=1)]
+
+
 def split_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     if len(text) <= limit:
         return [text]

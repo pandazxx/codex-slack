@@ -53,6 +53,16 @@ class CommandRateLimiter:
             return True
 
 
+def is_admin_channel(channel_id: str, admin_channels: set[str]) -> bool:
+    """Return True if channel_id is in the set of admin channels."""
+    return channel_id in admin_channels
+
+
+def select_thread_image_urls(image_urls: list[str], subtype: str | None) -> list[str]:
+    """Select which image URLs to forward.  For file_share events keep all."""
+    return list(image_urls)
+
+
 def is_supported_thread_subtype(subtype: str | None) -> bool:
     if not subtype:
         return True
