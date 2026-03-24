@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 import logging
 from threading import Lock
 import time
+from pathlib import Path
+
+import requests as _requests
 
 from slack_bolt import App
 
@@ -20,6 +23,8 @@ from .command_format import (
 )
 from .command_runtime import execute_master_command
 from .dispatch_guard import in_flight_dispatch, is_shutting_down
+from .dispatch_result import DispatchResult
+from .file_converter import attachment_to_prompt_fragment
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import CommandResult, MasterService
 
@@ -112,14 +117,22 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
-            image_urls = extract_image_urls(event.get("files", []), event_ts)
+            files = event.get("files", [])
+            image_urls = extract_image_urls(files, event_ts)
+            attachment_text = extract_non_image_attachments(
+                files,
+                event_ts,
+                slack_bot_token=bot_token,
+            )
+            if attachment_text:
+                text = f"{text}\n\n{attachment_text}".strip()
 
             try:
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
                 client.reactions_add(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
                 try:
                     with in_flight_dispatch():
-                        response = router.route_mention_message(
+                        result = router.route_mention_message(
                             platform="slack",
                             channel_id=channel_id,
                             text=text,
@@ -128,7 +141,8 @@ def create_master_app(
                             user_id=user_id,
                             image_urls=image_urls,
                         )
-                    say(text=response, thread_ts=thread_ts)
+                    say(text=result.text, thread_ts=thread_ts)
+                    _upload_result_files(client, channel_id=channel_id, thread_ts=thread_ts, file_paths=result.file_paths)
                 finally:
                     client.reactions_remove(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
             except RouteSkip as exc:
@@ -160,7 +174,15 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
-            image_urls = extract_image_urls(event.get("files", []), event_ts)
+            files = event.get("files", [])
+            image_urls = extract_image_urls(files, event_ts)
+            attachment_text = extract_non_image_attachments(
+                files,
+                event_ts,
+                slack_bot_token=bot_token,
+            )
+            if attachment_text:
+                text = f"{text}\n\n{attachment_text}".strip()
             if image_urls:
                 LOGGER.info(
                     "thread image payload channel=%s thread_ts=%s subtype=%s image_count=%d first_image=%s",
@@ -213,7 +235,7 @@ def create_master_app(
                 client.reactions_add(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
                 try:
                     with in_flight_dispatch():
-                        response = router.route_prompt(
+                        result = router.route_prompt(
                             platform="slack",
                             channel_id=channel_id,
                             text=text,
@@ -221,13 +243,15 @@ def create_master_app(
                             user_id=user_id,
                             image_urls=image_urls,
                         )
-                    say(text=response, thread_ts=thread_ts)
+                    say(text=result.text, thread_ts=thread_ts)
+                    _upload_result_files(client, channel_id=channel_id, thread_ts=thread_ts, file_paths=result.file_paths)
                     LOGGER.info(
-                        "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d",
+                        "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d output_files=%d",
                         channel_id,
                         thread_ts,
                         user_id,
-                        len(response),
+                        len(result.text),
+                        len(result.file_paths),
                     )
                 finally:
                     client.reactions_remove(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
@@ -285,6 +309,77 @@ def _file_matches_event_ts(file_item: dict, event_ts: str | None) -> bool:
                 if str(entry.get("ts", "")) == event_ts:
                     return True
     return False
+
+
+def extract_non_image_attachments(
+    files: object,
+    event_ts: str | None,
+    *,
+    slack_bot_token: str,
+    container_name: str | None = None,
+) -> str:
+    """Download non-image Slack file attachments and convert them to prompt text."""
+    if not isinstance(files, list):
+        return ""
+    parts: list[str] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        if not _file_matches_event_ts(item, event_ts):
+            continue
+        mimetype = str(item.get("mimetype", ""))
+        if mimetype.startswith("image/"):
+            continue
+        filename = str(item.get("name") or item.get("title") or "attachment")
+        url = str(item.get("url_private_download") or item.get("url_private") or "").strip()
+        if not url:
+            continue
+        try:
+            response = _requests.get(
+                url,
+                headers={"Authorization": f"Bearer {slack_bot_token}"},
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.content
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "slack_app.attachment_download_failed filename=%s url=%s error=%s",
+                filename,
+                url,
+                exc,
+            )
+            parts.append(f"[attachment: {filename} — download failed: {exc}]")
+            continue
+        fragment = attachment_to_prompt_fragment(
+            filename=filename,
+            mime_type=mimetype,
+            data=data,
+            container_name=container_name,
+        )
+        parts.append(fragment)
+    return "\n\n".join(parts)
+
+
+def _upload_result_files(client: object, *, channel_id: str, thread_ts: str | None, file_paths: list[Path]) -> None:
+    """Upload output files from a DispatchResult back to Slack."""
+    for path in file_paths:
+        try:
+            with open(path, "rb") as fh:
+                client.files_upload_v2(  # type: ignore[union-attr]
+                    channels=channel_id,
+                    file=fh,
+                    filename=path.name,
+                    thread_ts=thread_ts,
+                )
+            LOGGER.info("slack_app.file_uploaded filename=%s channel=%s", path.name, channel_id)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("slack_app.file_upload_failed filename=%s error=%s", path.name, exc)
+        finally:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def extract_image_urls(files: object, event_ts: str | None = None) -> list[str]:
