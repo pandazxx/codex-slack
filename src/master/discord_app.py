@@ -4,12 +4,19 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
 from .command_runtime import execute_master_command
 from .dispatch_guard import in_flight_dispatch, is_shutting_down
+from .dispatch_result import DispatchResult
+from .file_converter import attachment_to_prompt_fragment
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import MasterService
 from .slack_app import format_forward_ack
@@ -23,10 +30,10 @@ _MERMAID_FENCE = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 _MD_TABLE_ROW = re.compile(r"^\|.+\|$")
 _MD_TABLE_SEP = re.compile(r"^\|[\s\-:|]+\|$")
 
+_TEXT_ATTACHMENT_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB
 
-_TEXT_MIME_PREFIXES = ("text/",)
-_TEXT_EXTENSIONS = {".txt", ".log", ".md", ".json", ".yaml", ".yml", ".toml", ".sh", ".py", ".js", ".ts", ".csv"}
-_TEXT_ATTACHMENT_SIZE_LIMIT = 512 * 1024  # 512 KB
+DISCORD_FILE_MAX_BYTES: int = int(os.environ.get("DISCORD_FILE_MAX_BYTES", "25000000"))
+DISCORD_COMPRESSION_QUALITY: int = int(os.environ.get("DISCORD_COMPRESSION_QUALITY", "65"))
 
 
 def preprocess_for_discord(text: str) -> str:
@@ -132,32 +139,173 @@ async def _render_mermaid_blocks(text: str) -> tuple[str, list[io.BytesIO]]:
     return result.strip(), buffers
 
 
-def _is_text_attachment(attachment: Any) -> bool:
-    content_type = str(getattr(attachment, "content_type", "") or "").split(";")[0].strip()
-    if any(content_type.startswith(p) for p in _TEXT_MIME_PREFIXES):
-        return True
-    filename = str(getattr(attachment, "filename", "") or "")
-    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    return ext in _TEXT_EXTENSIONS
-
-
-async def _read_text_attachments(attachments: list[Any]) -> str:
-    """Download text/file attachments and return their contents joined as a string."""
+async def _read_all_attachments(attachments: list[Any]) -> str:
+    """Download all non-image attachments, convert them, and return prompt text."""
     parts: list[str] = []
     for attachment in attachments:
-        if not _is_text_attachment(attachment):
+        content_type = str(getattr(attachment, "content_type", "") or "").split(";")[0].strip()
+        if content_type.startswith("image/"):
             continue
+        filename = str(getattr(attachment, "filename", "") or "attachment")
         size = getattr(attachment, "size", 0) or 0
         if size > _TEXT_ATTACHMENT_SIZE_LIMIT:
-            parts.append(f"[attachment {attachment.filename}: too large to include ({size:,} bytes)]")
+            parts.append(
+                f"[attachment {filename}: too large to include ({size:,} bytes)]"
+            )
             continue
         try:
             raw = await attachment.read()
-            text = raw.decode("utf-8", errors="replace")
-            parts.append(f"[attachment: {attachment.filename}]\n{text}")
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("discord.text_attachment_read_failed filename=%s error=%s", getattr(attachment, "filename", "?"), exc)
+            LOGGER.warning(
+                "discord.attachment_read_failed filename=%s error=%s", filename, exc
+            )
+            parts.append(f"[attachment: {filename} — read failed: {exc}]")
+            continue
+        fragment = attachment_to_prompt_fragment(
+            filename=filename,
+            mime_type=content_type,
+            data=raw,
+        )
+        parts.append(fragment)
     return "\n\n".join(parts)
+
+
+def _compress_for_discord(path: Path) -> Path | None:
+    """Apply the tiered compression pipeline for Discord.
+
+    Returns a path to the (possibly recompressed) file, or None if the file
+    already fits within DISCORD_FILE_MAX_BYTES without any compression.
+    Returns the original path unchanged if it already fits.
+    Raises no exceptions — on hard failure the caller falls back to a notice.
+    """
+    size = path.stat().st_size
+    if size <= DISCORD_FILE_MAX_BYTES:
+        return path
+
+    # Step 3: ZIP recompression + JPEG downsampling for embedded images
+    try:
+        import zipfile
+        with zipfile.ZipFile(path, "r") as zin:
+            names = zin.namelist()
+        # Only try ZIP recompression if it actually is a ZIP
+        with tempfile.NamedTemporaryFile(delete=False, suffix=path.suffix) as tmp:
+            tmp_path = Path(tmp.name)
+        with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
+            for name in names:
+                data = zin.read(name)
+                lower = name.lower()
+                if lower.endswith((".jpg", ".jpeg", ".png")) and len(data) > 10_000:
+                    try:
+                        from PIL import Image  # type: ignore[import-untyped]
+                        img = Image.open(io.BytesIO(data))
+                        buf = io.BytesIO()
+                        img.convert("RGB").save(buf, format="JPEG", quality=DISCORD_COMPRESSION_QUALITY, optimize=True)
+                        data = buf.getvalue()
+                        name = re.sub(r"\.(png)$", ".jpg", name, flags=re.IGNORECASE)
+                    except Exception:  # noqa: BLE001
+                        pass
+                zout.writestr(name, data)
+        if tmp_path.stat().st_size <= DISCORD_FILE_MAX_BYTES:
+            return tmp_path
+        tmp_path.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Step 4: format conversion via LibreOffice + Ghostscript
+    if shutil.which("libreoffice") is not None:
+        try:
+            with tempfile.TemporaryDirectory() as conv_dir:
+                subprocess.run(
+                    ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", conv_dir, str(path)],
+                    check=True,
+                    capture_output=True,
+                    timeout=120,
+                )
+                pdf_files = list(Path(conv_dir).glob("*.pdf"))
+                if pdf_files:
+                    pdf_path = pdf_files[0]
+                    if shutil.which("gs") is not None:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+                            compressed_pdf = Path(tmp_pdf.name)
+                        subprocess.run(
+                            [
+                                "gs", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite",
+                                "-dPDFSETTINGS=/ebook",
+                                f"-sOutputFile={compressed_pdf}", str(pdf_path),
+                            ],
+                            check=True,
+                            capture_output=True,
+                            timeout=120,
+                        )
+                        if compressed_pdf.stat().st_size <= DISCORD_FILE_MAX_BYTES:
+                            return compressed_pdf
+                        compressed_pdf.unlink(missing_ok=True)
+                    elif pdf_path.stat().st_size <= DISCORD_FILE_MAX_BYTES:
+                        stable = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+                        stable.close()
+                        shutil.copy2(str(pdf_path), stable.name)
+                        return Path(stable.name)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return None
+
+
+async def _send_result_files_discord(message_or_thread: Any, result: DispatchResult) -> None:
+    """Upload output files to Discord with the tiered compression pipeline."""
+    try:
+        import discord
+    except ImportError:
+        return
+
+    guild = getattr(getattr(message_or_thread, "guild", None) or getattr(getattr(message_or_thread, "parent", None), "guild", None), "premium_tier", None)
+    premium_tier = guild if isinstance(guild, int) else 0
+
+    for path in result.file_paths:
+        size = path.stat().st_size
+
+        # Nitro fast-path: guild has boost tier 2+ (500 MB cap)
+        if premium_tier >= 2 or size <= DISCORD_FILE_MAX_BYTES:
+            try:
+                with open(path, "rb") as fh:
+                    await message_or_thread.send(file=discord.File(fh, filename=path.name))
+                LOGGER.info("discord.file_uploaded filename=%s size=%d", path.name, size)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("discord.file_upload_failed filename=%s error=%s", path.name, exc)
+            finally:
+                path.unlink(missing_ok=True)
+            continue
+
+        # Try compression pipeline
+        compressed = await asyncio.to_thread(_compress_for_discord, path)
+        if compressed is not None and compressed.stat().st_size <= DISCORD_FILE_MAX_BYTES:
+            try:
+                with open(compressed, "rb") as fh:
+                    await message_or_thread.send(file=discord.File(fh, filename=compressed.name))
+                LOGGER.info(
+                    "discord.file_uploaded_compressed original=%s original_size=%d compressed_size=%d",
+                    path.name,
+                    size,
+                    compressed.stat().st_size,
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("discord.file_upload_failed filename=%s error=%s", path.name, exc)
+            finally:
+                if compressed != path:
+                    compressed.unlink(missing_ok=True)
+                path.unlink(missing_ok=True)
+            continue
+
+        # Hard failure
+        size_mb = size / 1_000_000
+        await message_or_thread.send(
+            f"File is too large for Discord even after compression ({size_mb:.1f} MB)."
+            f" It has been saved to the agent workspace at `{path}`."
+            " Use Slack to retrieve it, or ask the agent to split it."
+        )
+        if compressed and compressed != path:
+            compressed.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
 
 
 def _extract_image_urls(attachments: list[Any]) -> list[str]:
@@ -360,9 +508,9 @@ def run_discord_frontend(
         text = str(message.content or "")
         user_id = str(message.author.id)
         image_urls = _extract_image_urls(list(message.attachments))
-        text_attachment_content = await _read_text_attachments(list(message.attachments))
-        if text_attachment_content:
-            text = f"{text}\n\n{text_attachment_content}".strip()
+        attachment_content = await _read_all_attachments(list(message.attachments))
+        if attachment_content:
+            text = f"{text}\n\n{attachment_content}".strip()
         is_mention = client.user is not None and client.user.mentioned_in(message)
 
         # Discord threads have a stable channel.id and a parent_id pointing to
@@ -408,7 +556,7 @@ def run_discord_frontend(
                 thread_ts = str(thread.id)
                 async with thread.typing():
                     with in_flight_dispatch():
-                        response = await asyncio.to_thread(
+                        result = await asyncio.to_thread(
                             router.route_mention_message,
                             platform="discord",
                             channel_id=channel_id,
@@ -418,7 +566,8 @@ def run_discord_frontend(
                             user_id=user_id,
                             image_urls=image_urls,
                         )
-                await _reply_in_thread(thread, response)
+                await _reply_in_thread(thread, result.text)
+                await _send_result_files_discord(thread, result)
                 return
 
             if is_mention and is_thread:
@@ -427,7 +576,7 @@ def run_discord_frontend(
                 await message.reply(say_text, mention_author=False)
                 async with message.channel.typing():
                     with in_flight_dispatch():
-                        response = await asyncio.to_thread(
+                        result = await asyncio.to_thread(
                             router.route_mention_message,
                             platform="discord",
                             channel_id=channel_id,
@@ -437,7 +586,8 @@ def run_discord_frontend(
                             user_id=user_id,
                             image_urls=image_urls,
                         )
-                await _reply_message_chunks(message, response)
+                await _reply_message_chunks(message, result.text)
+                await _send_result_files_discord(message.channel, result)
                 return
 
             # Followup in a thread without @mention.
@@ -458,7 +608,7 @@ def run_discord_frontend(
             await _reply_message_chunks(message, format_forward_ack(text=text, image_count=len(image_urls)))
             async with message.channel.typing():
                 with in_flight_dispatch():
-                    routed = await asyncio.to_thread(
+                    result = await asyncio.to_thread(
                         router.route_prompt,
                         platform="discord",
                         channel_id=channel_id,
@@ -467,7 +617,8 @@ def run_discord_frontend(
                         user_id=user_id,
                         image_urls=image_urls,
                     )
-            await _reply_message_chunks(message, routed)
+            await _reply_message_chunks(message, result.text)
+            await _send_result_files_discord(message.channel, result)
         except RouteSkip as exc:
             LOGGER.info("discord route skipped for channel=%s reason=%s", channel_id, exc)
         except RouteError as exc:
