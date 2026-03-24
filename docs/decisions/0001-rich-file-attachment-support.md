@@ -1,6 +1,6 @@
 ---
 title: "ADR-0001: Rich file attachment support (inbound and outbound)"
-status: proposed
+status: accepted
 date: 2026-03-24
 decision-makers: [user, architect agent]
 consulted: []
@@ -41,23 +41,26 @@ The system today handles a narrow set of file types in each direction. Slack inb
 
 ## Decision Outcome
 
-**Chosen options (proposed):**
+**Chosen options (accepted):**
 
-- *Inbound:* Option 1 — server-side conversion in the master runtime, two-tier delivery (inline for small files, `podman cp` + Read-tool pointer for large files). Threshold is a configurable constant.
-- *Outbound:* Option 1 — JSON envelope in stdout. `ClaudeCodeDispatcher` already parses JSON from `claude --output-format json`; extending the envelope is low-friction. Return type changes from `str` to `DispatchResult(text, file_paths)`.
+- *Inbound:* Option 1 — server-side conversion in the master runtime, two-tier delivery (inline for small files, `podman cp` + Read-tool pointer for large files). No restriction on inbound file type — accept anything the platform delivers and pass it to the agent; the agent determines what to do with it. Unsupported types fall back gracefully with a notice.
+- *Outbound:* Option 1 — JSON envelope in stdout, `claude-code` adapter only in v3.5. The `codex` adapter receives a clear "not supported" user-facing message rather than silently failing.
+- *Conversion fidelity:* Best-effort for all types. For simple text + images, suggest that users send plain `.md` or `.txt` + separate image attachments for the clearest agent experience. Complex formatting (tracked changes, macros, embedded OLE objects) is extracted on a best-effort basis with no guarantee of structure preservation.
 - *Discord size:* Option 1 — tiered fallback pipeline. Platform-aware logic lives exclusively in `discord_app.py`; Slack path is unaffected.
+- *Scope:* Master-mode only (`src/master/`). `src/bot/` is not updated in this version.
 
 ### Consequences
 
 - *Good:* Fully transparent to users — no pre-processing required. Reuses existing `podman cp` infrastructure. Context window overflow is eliminated by the staged-pointer approach.
 - *Good:* Platform-specific compression logic is isolated to `discord_app.py`, consistent with the existing module split.
+- *Good:* No inbound type restriction means zero friction regardless of what the user attaches.
 - *Bad:* `send_prompt()` / `route_prompt()` return type changes from `str` to a dataclass — multiple call sites need updating.
-- *Bad:* Format conversion (step 4 of Discord fallback) requires LibreOffice in the container image; presence needs verification.
-- *Bad:* Agents must be instructed (via CLAUDE.md and system prompts) to declare output files in the JSON envelope — requires prompt discipline.
+- *Bad:* Codex users get a "not supported" message for outbound files; parity deferred to a future version.
+- *Bad:* Format conversion (step 4 of Discord fallback) requires LibreOffice in the container image — presence must be verified at implementation time; if absent, this step is skipped and the pipeline falls through to the hard-failure notice.
 
 ### Confirmation
 
-Design is confirmed when: all open questions below are resolved, a design doc is produced in `docs/design/`, and the engineer agent implements to spec with passing tests.
+Design is confirmed. Implementation proceeds per the common workflow: engineer builds, tester validates interface stability, reviewer signs off.
 
 ## Constraint Reference
 
@@ -65,24 +68,18 @@ Design is confirmed when: all open questions below are resolved, a design doc is
 |---|---|---|---|---|
 | Max file size | 1 GB — *Platform* | 25 MB (Nitro: 500 MB) — *Platform* | 1 GB via files API — *Platform* | 25 MB (Nitro: 500 MB) — *Platform* |
 | File types today | Images only — *Bot/Master* | Images + text/code extensions — *Bot/Master* | Text only | Text; >8 000 chars → `.md` file — *Bot/Master* |
-| docx / xlsx / pdf | Silently discarded — *Solvable* | Silently discarded — *Solvable* | Not implemented — *Solvable* | Not implemented — *Solvable* |
-| Text attachment cap | No extraction today — *Solvable* | Hard 512 KB — *Bot/Master* | N/A | N/A |
-| Context window overflow | No guard; Claude errors at runtime — *Agent* (mitigable via staged-pointer) | Same | N/A | N/A |
-| Discord CDN URL expiry | N/A | URLs expire ~1 hr — *Platform* (mitigable: download-and-stage immediately) | N/A | Bot reply links also expire — *Platform* |
-| Outbound compression needed | No size pressure | No size pressure | No size pressure | >25 MB fails — *Solvable* via tiered pipeline |
+| Inbound type restriction | None — accept all, agent decides | None — accept all, agent decides | N/A | N/A |
+| Text attachment cap | No extraction today — *Solvable* | Hard 512 KB — *Bot/Master* (raise for this feature) | N/A | N/A |
+| Context window overflow | Mitigated via staged-pointer for large files | Same | N/A | N/A |
+| Discord CDN URL expiry | N/A | URLs expire ~1 hr — download-and-stage immediately | N/A | Bot reply links also expire — *Platform* |
+| Outbound file return | claude-code adapter only | claude-code adapter only | Codex: "not supported" notice | Codex: "not supported" notice |
+| Outbound compression | No size pressure | No size pressure | No size pressure | Tiered pipeline: recompress → convert → hard-fail notice |
 
 *Legend:* Platform = enforced by Discord/Slack before the bot sees it. Bot/Master = our code. Agent = Claude Code model limit. Solvable = addressable in implementation.
 
-## Open Questions
+## Implementation Notes
 
-These must be resolved before the design doc is finalised and implementation begins.
-
-1. **Adapter scope** — should outbound file return work for the `claude-code` adapter only, or also for the `codex` (PodmanExecDispatcher) adapter? The JSON envelope approach is simpler for `claude-code` since it already outputs structured JSON.
-
-2. **Conversion fidelity** — for `.docx` files with complex formatting (tracked changes, embedded images, macros), server-side text extraction will lose structure. Is best-effort extraction acceptable, or does the agent need a closer representation (e.g. raw XML)?
-
-3. **File types for phase 1** — implement all of `xlsx`, `csv`, `pdf`, `docx` at once, or prioritise a subset? Suggested priority: `xlsx`/`csv` (tabular, highest demand), then `pdf` (read-only), then `docx` (editable).
-
-4. **Bot mode** — the `src/bot/` path is the older single-session Slack bot and has no file attachment handling. Should this feature target master-mode only, or must `src/bot/` also be updated?
-
-5. **LibreOffice availability** — the Discord outbound compression fallback (step 4) requires LibreOffice in the agent container for docx→PDF conversion. Is LibreOffice present in the container image, or does it need to be added?
+- **LibreOffice check**: at engineer time, verify `libreoffice --version` in the container. If absent, skip compression step 4 and go directly to hard-failure notice. Document the finding.
+- **Suggested format hint**: when a user sends a complex docx, include in the agent prompt: *"For best results with text + images, send a `.md` or `.txt` file and attach images separately."*
+- **`DispatchResult` dataclass**: `text: str`, `file_paths: list[Path]`. Empty list is the default — no behaviour change for turns without file output.
+- **Codex "not supported" message**: injected by the master before routing, not inside the agent container. Message: *"File attachments in replies are not supported for this agent type. The agent can read your uploaded files but cannot return modified files as attachments."*
