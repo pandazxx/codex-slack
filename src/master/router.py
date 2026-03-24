@@ -14,6 +14,7 @@ from typing import Protocol
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from .dispatch_result import DispatchResult
 from .registry import AgentRegistry
 
 LOGGER = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class AgentDispatcher(Protocol):
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
-    ) -> str:
+    ) -> DispatchResult:
         ...
 
 
@@ -111,7 +112,7 @@ class PodmanExecDispatcher:
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
-    ) -> str:
+    ) -> DispatchResult:
         rendered_command, session_id = self._render_command(channel_id=channel_id, thread_ts=thread_ts)
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
@@ -130,6 +131,13 @@ class PodmanExecDispatcher:
                 lines.append(f"- remote url: {url}")
             prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
             effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
+
+        _CODEX_FILE_NOTICE = (
+            "File attachments in replies are not supported for this agent type."
+            " The agent can read your uploaded files but cannot return modified"
+            " files as attachments.\n\n"
+        )
+        has_file_attachments = "[attachment:" in prompt
 
         cmd = ["podman", "exec", "-i"]
         if self.codex_home:
@@ -200,6 +208,8 @@ class PodmanExecDispatcher:
                 details.append(f"stdout={stdout_text}")
             raise RouteError(f"dispatch failed ({', '.join(details)})")
         response = completed.stdout.strip()
+        if has_file_attachments:
+            response = _CODEX_FILE_NOTICE + response
         LOGGER.info(
             "router.dispatch_done agent=%s container=%s channel=%s thread_ts=%s user=%s response_chars=%d",
             agent_name,
@@ -209,7 +219,7 @@ class PodmanExecDispatcher:
             user_id or "-",
             len(response),
         )
-        return response
+        return DispatchResult(text=response)
 
     def _stage_images(
         self,
@@ -292,7 +302,7 @@ class MultiAgentDispatcher:
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
-    ) -> str:
+    ) -> DispatchResult:
         selected = (agent_adapter or self.default_adapter).strip().lower()
         dispatcher = self.dispatchers.get(selected) or self.dispatchers.get(self.default_adapter)
         if dispatcher is None:
@@ -429,6 +439,56 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             LOGGER.warning("router.parse_response_no_footer usage=%r cost=%r", usage, cost)
         return result
 
+    def _retrieve_output_files(
+        self,
+        *,
+        raw_stdout: str,
+        container_name: str,
+    ) -> list[Path]:
+        """Extract output_files from the JSON envelope and copy them out of the container."""
+        try:
+            data = json.loads(raw_stdout)
+        except (json.JSONDecodeError, ValueError):
+            return []
+        output_files = data.get("output_files")
+        if not isinstance(output_files, list) or not output_files:
+            return []
+
+        local_paths: list[Path] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for container_path in output_files:
+                if not isinstance(container_path, str):
+                    continue
+                filename = os.path.basename(container_path) or "output"
+                local_dest = os.path.join(tmpdir, filename)
+                try:
+                    self._run_quiet(
+                        ["podman", "cp", f"{container_name}:{container_path}", local_dest]
+                    )
+                    # Move to a stable temp location so it survives the TemporaryDirectory scope
+                    ext = os.path.splitext(filename)[1]
+                    stable = tempfile.NamedTemporaryFile(
+                        delete=False, suffix=ext, prefix=f"agent_output_{filename}_"
+                    )
+                    stable.close()
+                    import shutil as _shutil
+                    _shutil.move(local_dest, stable.name)
+                    local_paths.append(Path(stable.name))
+                    LOGGER.info(
+                        "router.output_file_retrieved container=%s container_path=%s local=%s",
+                        container_name,
+                        container_path,
+                        stable.name,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.warning(
+                        "router.output_file_retrieve_failed container=%s container_path=%s error=%s",
+                        container_name,
+                        container_path,
+                        exc,
+                    )
+        return local_paths
+
     def send_prompt(
         self,
         *,
@@ -442,7 +502,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
-    ) -> str:
+    ) -> DispatchResult:
         LOGGER.info("router.claude_command_template template=%r", self.command_template)
         image_urls = image_urls or []
         staged_paths, passthrough_urls = self._stage_images(
@@ -559,9 +619,14 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                 details.append(f"stdout={stdout_text}")
             raise RouteError(f"dispatch failed ({', '.join(details)})")
 
-        response = self._parse_response(completed.stdout.strip())
+        raw_stdout = completed.stdout.strip()
+        response = self._parse_response(raw_stdout)
+        file_paths = self._retrieve_output_files(
+            raw_stdout=raw_stdout,
+            container_name=container_name,
+        )
         LOGGER.info(
-            "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s response_chars=%d",
+            "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s response_chars=%d output_files=%d",
             agent_name,
             container_name,
             platform,
@@ -570,8 +635,9 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             user_id or "-",
             retry_action or initial_action,
             len(response),
+            len(file_paths),
         )
-        return response
+        return DispatchResult(text=response, file_paths=file_paths)
 
 
 @dataclass
@@ -650,7 +716,7 @@ class ChannelRouter:
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
-    ) -> str:
+    ) -> DispatchResult:
         if channel_id in self.admin_channels:
             raise RouteSkip("admin channel is reserved for master commands")
 
@@ -664,7 +730,7 @@ class ChannelRouter:
             raise RouteSkip("prompt is empty after removing mention")
 
         started_at = time.perf_counter()
-        response = self.dispatcher.send_prompt(
+        result = self.dispatcher.send_prompt(
             agent_adapter=record.agent_adapter,
             agent_name=record.name,
             container_name=record.container_name,
@@ -680,11 +746,11 @@ class ChannelRouter:
         self._record_usage(
             agent_name=record.name,
             prompt_chars=len(prompt),
-            response_chars=len(response),
+            response_chars=len(result.text),
             image_count=len(image_urls),
             elapsed_ms=elapsed_ms,
         )
-        return response
+        return result
 
     def route_mention_message(
         self,
@@ -696,7 +762,7 @@ class ChannelRouter:
         event_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
-    ) -> str:
+    ) -> DispatchResult:
         self.track_thread(channel_id=channel_id, thread_ts=thread_ts, platform=platform)
         self.mark_mention_event(channel_id=channel_id, ts=event_ts, platform=platform)
         return self.route_prompt(
@@ -718,7 +784,7 @@ class ChannelRouter:
         event_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
-    ) -> str | None:
+    ) -> DispatchResult | None:
         if not self.accept_followup_message(
             platform=platform,
             channel_id=channel_id,
