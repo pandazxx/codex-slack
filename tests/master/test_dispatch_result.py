@@ -155,7 +155,13 @@ class TestClaudeCodeDispatcherReturnsDispatchResult:
         def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=response_json, stderr="")
 
+        fake_paths = [Path("/workspace/out/report.docx")]
+
+        def fake_retrieve(self, *, raw_stdout: str, container_name: str) -> list[Path]:  # type: ignore[no-untyped-def]
+            return fake_paths
+
         monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+        monkeypatch.setattr(ClaudeCodeDispatcher, "_retrieve_output_files", fake_retrieve)
 
         result = dispatcher.send_prompt(
             agent_name="payments-agent",
