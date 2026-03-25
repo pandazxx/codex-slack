@@ -20,7 +20,8 @@ The user proposes extending the agent's workspace concept: alongside the git rep
 
 - Eliminate the JSON-in-text fragility of the current outbound mechanism
 - Remove platform file size limits as a hard constraint
-- Provide persistent, browsable cloud storage for agent outputs
+- Provide persistent, browsable cloud storage for agent outputs — with a **user-friendly web UI** for managing and viewing documents (not just raw object storage)
+- **Access control** — users should be able to share specific files or folders with other people, set view/edit permissions, and revoke access; this should not require operator intervention
 - Optionally improve inbound document quality when users share Google Workspace URLs
 - Keep the solution operationally simple (no new infrastructure beyond Google credentials)
 
@@ -58,8 +59,17 @@ A research spike was conducted to assess available MCP servers for Google Drive.
 ### Cross-cutting issue: shareable URL generation
 No MCP server today exposes an atomic "upload file → return shareable URL" tool. The operation always requires two API calls: (1) upload → get file ID; (2) set `anyone` permission → construct URL. rclone's `rclone link` handles both steps in one CLI call and is the most battle-tested path for this workflow.
 
+### `@googleworkspace/cli` (March 2026, official org, unofficial support)
+- Published under the official `googleworkspace` GitHub org in March 2026 but explicitly disclaimed as "not a supported Google product".
+- Covers Drive, Docs, Sheets, Gmail, Calendar, Slides, Chat, Forms — full CRUD.
+- Auth: OAuth 2.0 primary; service account path listed but not confirmed for Workspace products.
+- Does not resolve the headless service account problem for Drive upload.
+
+### Service account restrictions (April 2025 change)
+Service accounts created after April 15, 2025 **cannot access personal My Drive**. They can only access **Shared Drives**, which require a **Google Workspace (paid) subscription** to create. A personal Gmail account can create a GCP service account for free, but has no Shared Drive to point it at. Google Drive via service account therefore requires Google Workspace.
+
 ### Research conclusion
-**No production-ready MCP server exists today for headless Google Drive upload + shareable URL.** The most reliable mechanism is rclone CLI called directly — either by the master process or by the agent via bash, without an MCP wrapper.
+**No production-ready MCP server exists today for headless Google Drive upload + shareable URL.** The most reliable mechanism is rclone CLI called directly — either by the master process or by the agent via bash, without an MCP wrapper. Google Drive also requires a Google Workspace subscription for service account access.
 
 ## Considered Options
 
@@ -83,16 +93,39 @@ No MCP server today exposes an atomic "upload file → return shareable URL" too
 2. **Per-agent subfolder** — within the shared Drive, each agent gets its own subfolder keyed by `agent_name`. Keeps outputs organised and prevents collisions.
 3. **Per-session subfolder** — within the agent subfolder, each conversation gets a timestamped subfolder. Provides full auditability but may produce many small folders.
 
+## Storage Backend Comparison
+
+The decision drivers include **user-facing UI** and **access control** as first-class requirements, not just headless upload capability. This reshapes the comparison significantly — pure object stores (S3, R2, B2) excel at headless auth and URL generation but provide no user-facing interface or fine-grained sharing controls.
+
+| Criterion | Google Drive | Nextcloud | Dropbox | OneDrive | AWS S3 / R2 | Backblaze B2 |
+|---|---|---|---|---|---|---|
+| **User-friendly web UI** | Excellent | Good (self-hosted) | Good | Excellent | None (console only) | None |
+| **Per-file access control** | Excellent (view/edit/comment per user) | Good (shares + groups) | Good (view/edit per user) | Excellent (Microsoft 365 integration) | None (bucket policies only) | None |
+| **Headless auth (no browser)** | SA only on Shared Drive (Workspace req'd) | Basic Auth / app token | OAuth refresh token (one-time browser) | Device code / client creds (Azure AD) | API key (IAM) — no browser ever | API key — no browser ever |
+| **Shareable URL generation** | Drive API / rclone link | OCS share API (atomic) | Sharing API | Graph API | Pre-signed URL (up to 7d) or public | Pre-signed / public |
+| **MCP server** | None production-ready | Multiple active (nextcloud-mcp, cbcoutinho) | Sparse | In flux (official deprecated Mar 2026) | Multiple active (2026) | Exists (BraveRam/backblaze-mcp) |
+| **Subscription required** | Google Workspace (for SA + Shared Drive) | Self-hosted instance | Free tier available | Microsoft 365 / Azure AD | AWS account (pay-as-you-go) | Free up to 10 GB |
+| **Inbound doc parsing improvement** | Yes (Docs/Sheets API → clean text) | No | No | Yes (Graph API → clean text) | No | No |
+| **Familiar to end users** | Very high | Medium | High | High (enterprise) | Low | Low |
+
+### Analysis
+
+- **Google Drive** scores highest on UI quality, access control, and inbound parsing — but the service account + Workspace subscription requirement is a hard constraint. Not viable for personal account operators.
+- **Nextcloud** matches Google Drive on UI and access control, supports fully headless Basic Auth, has the healthiest MCP ecosystem of the workspace-style options, and costs nothing if self-hosted. Downside: requires a running Nextcloud instance (self-hosted or a provider).
+- **Dropbox** has a good UI and per-user access control, and the one-time OAuth setup is manageable. No MCP server is a gap for agent-initiated upload.
+- **OneDrive** is strong for Microsoft-ecosystem teams but MCP tooling is in flux and Azure AD setup adds complexity.
+- **S3 / R2 / B2** are optimal for headless upload but cannot satisfy the UI and access control requirements. Suitable only if the operator accepts that file management happens through a separate tool (e.g. the AWS console or Cyberduck).
+
 ## Open Questions
 
-1. ~~**MCP server maturity**~~ — **Resolved:** no production-ready MCP server exists for this use case. rclone CLI is the right mechanism.
-2. ~~**Auth model**~~ — **Resolved:** service account JSON file, configured via rclone `service_account_file`. Fully headless, no browser. Requires a GCP project with Drive API enabled and a service account with Drive access. Do we have one?
-3. ~~**MCP sidecar lifecycle**~~ — **Moot** if rclone CLI is used directly; no persistent MCP process needed.
-4. **Which layer owns Drive — agent or master?** — Option 1 (agent runs rclone) keeps master simple but requires rclone in every agent container image. Option 2 (master runs rclone) centralises Drive logic but requires the manifest mechanism. Option 3 (thin MCP) is the cleanest interface but adds a custom server to maintain. Option 4 (Drive API in master) adds no container dependency but more Python code.
-5. **Inbound URL detection** — should master detect and pre-fetch Google Workspace URLs automatically, or should the user explicitly signal intent?
-6. **Fallback for non-Drive users** — users without Google accounts cannot view restricted Drive URLs. Policy decision: default to "anyone with the link" (public) or "restricted" (Google account required)?
-7. **Does this supersede ADR-0001 outbound?** — Drive delivery and platform attachment delivery are not mutually exclusive. Drive could be the preferred path when configured; platform attachment a fallback for small files or when Drive credentials are absent.
-8. **rclone link and domain policy** — `rclone link` fails with 403 if Google Workspace admin has disabled external link sharing. How do we detect and report this clearly to the operator?
+1. ~~**MCP server maturity**~~ — **Resolved:** no production-ready MCP server exists for Google Drive. rclone CLI is the right mechanism if Drive is chosen.
+2. ~~**Auth model**~~ — **Resolved:** service account JSON via rclone `service_account_file`. Requires Google Workspace for Shared Drive access. Personal Gmail accounts cannot use this path.
+3. ~~**MCP sidecar lifecycle**~~ — **Moot** if rclone CLI is used directly.
+4. **Storage backend choice** — given the UI and access control requirements, the realistic options are Google Drive (Workspace req'd), Nextcloud (self-hosted req'd), or Dropbox (OAuth one-time setup). Which fits the operator's existing infrastructure?
+5. **Which layer owns upload — agent or master?** — agent-initiated (rclone/bash in container) vs master-initiated (manifest + master calls storage API). Applies regardless of backend chosen.
+6. **Inbound URL detection** — should master detect and pre-fetch Google Workspace / OneDrive URLs automatically, or require explicit user signalling?
+7. **Does this supersede ADR-0001 outbound?** — cloud storage delivery and platform attachment delivery are not mutually exclusive. Cloud storage could be the preferred path when configured; platform attachment a fallback for small files.
+8. **rclone link and domain policy** — `rclone link` fails with 403 if Google Workspace admin has disabled external link sharing. How do we detect and surface this clearly to the operator?
 
 ## Decision
 
