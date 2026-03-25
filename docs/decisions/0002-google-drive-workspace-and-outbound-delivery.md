@@ -108,15 +108,17 @@ The decision drivers include **user-facing UI** and **access control** as first-
 | **Inbound doc parsing improvement** | Yes (Docs/Sheets API → clean text) | No | No | No | Yes (Graph API → clean text) | No | No |
 | **Familiar to end users** | Very high | Medium | Medium–High (consumer NAS users) | High | High (enterprise) | Low | Low |
 | **External access without port-forwarding** | Yes (cloud) | Requires reverse proxy or VPN | Yes (QuickConnect, free) | Yes (cloud) | Yes (cloud) | Yes (cloud) | Yes (cloud) |
+| **In-browser document read** | Excellent (native Docs/Sheets viewer) | Good (requires Collabora/ONLYOFFICE plugin) | Basic (Synology Office viewer; limited formats) | Limited (preview only; no native office renderer) | Excellent (native Word/Excel Online viewer) | None | None |
+| **In-browser document edit** | Excellent (Google Docs/Sheets/Slides — full fidelity) | Good (Collabora/ONLYOFFICE plugin — full LibreOffice in browser) | Basic (Synology Office — native formats; .docx/.xlsx import/export with fidelity loss) | None (redirects to external editor; Dropbox Paper is its own format) | Excellent (Word Online / Excel Online — native fidelity) | None | None |
 
 ### Analysis
 
-- **Google Drive** scores highest on UI quality, access control, and inbound parsing — but the service account + Workspace subscription requirement is a hard constraint. Not viable for personal account operators.
-- **Nextcloud** matches Google Drive on UI and access control, supports fully headless Basic Auth, has the healthiest MCP ecosystem of the workspace-style options. Downside: requires a running Linux server; external access needs a reverse proxy or VPN unless a hosting provider is used.
-- **Synology Drive** is the strongest self-hosted option for operators who already own a Synology NAS. UI and access control are excellent. Headless auth via WebDAV Basic Auth or Synology API tokens — fully compatible with rclone. QuickConnect provides free external access without port-forwarding configuration. No dedicated MCP server, but rclone's `synology` and `webdav` backends cover the upload + share URL workflow. Key constraint: requires Synology hardware.
-- **Dropbox** has a good UI and per-user access control, and the one-time OAuth setup is manageable. No MCP server is a gap for agent-initiated upload.
-- **OneDrive** is strong for Microsoft-ecosystem teams but MCP tooling is in flux and Azure AD setup adds complexity.
-- **S3 / R2 / B2** are optimal for headless upload but cannot satisfy the UI and access control requirements. Suitable only if the operator accepts that file management happens through a separate tool (e.g. the AWS console or Cyberduck).
+- **Google Drive** scores highest on UI quality, access control, inbound parsing, and in-browser editing. Google Docs/Sheets provide full-fidelity editing of documents in the browser — no plugins required. Hard constraint remains: requires Google Workspace subscription for service account access.
+- **OneDrive** matches Google Drive on in-browser editing (Word Online / Excel Online are native and full-fidelity) and excels in Microsoft-ecosystem teams. MCP tooling is in flux and Azure AD setup adds complexity.
+- **Nextcloud** can match both on document editing if Collabora Online or ONLYOFFICE is installed as a plugin — these provide full LibreOffice or ONLYOFFICE in the browser. Without the plugin, Nextcloud only offers download. Downside: the plugin adds operational complexity (a second service to run and maintain); external access requires a reverse proxy or VPN.
+- **Synology Drive** includes Synology Office for basic document editing in the browser. It handles its own `.osheet`/`.odoc` formats well; importing/exporting `.docx`/`.xlsx` works but with some fidelity loss for complex documents. Not a substitute for Google Docs or Word Online for document-heavy workflows.
+- **Dropbox** provides preview only — no native in-browser editor. Editing opens an external tool (Microsoft Office Online or Google Docs) depending on configuration. Not a self-contained editing experience.
+- **S3 / R2 / B2** are optimal for headless upload but cannot satisfy the UI, access control, or editing requirements. Suitable only if the operator accepts that file management and editing happen through separate tools.
 
 ## Open Questions
 
