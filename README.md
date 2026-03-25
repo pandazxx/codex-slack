@@ -44,6 +44,7 @@ podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build -d
 ```
 
 Full setup (Slack app creation, OAuth scopes, slash commands): `BUILD.md`.
+For Codex contributors, repository workflow instructions live in `AGENTS.md` and repo-local skills live under `.agents/skills/`.
 
 ## Project structure
 
@@ -58,6 +59,8 @@ Full setup (Slack app creation, OAuth scopes, slash commands): `BUILD.md`.
 ├── scripts/                      # Build, bootstrap, and utility scripts
 ├── config/                       # Environment and service configuration
 ├── docs/                         # All documentation
+├── .agents/                      # Codex repo-local workflow skills
+│   └── skills/                   #   Workflow, role, and git helper skills
 ├── .claude/                      # Claude Code agent framework
 │   ├── CLAUDE.md                 #   Project-scope agent instructions
 │   ├── agents/                   #   Subagent definitions (architect, engineer, tester, reviewer, doc-writer)
