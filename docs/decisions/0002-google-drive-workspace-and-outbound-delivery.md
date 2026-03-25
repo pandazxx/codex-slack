@@ -97,21 +97,23 @@ Service accounts created after April 15, 2025 **cannot access personal My Drive*
 
 The decision drivers include **user-facing UI** and **access control** as first-class requirements, not just headless upload capability. This reshapes the comparison significantly — pure object stores (S3, R2, B2) excel at headless auth and URL generation but provide no user-facing interface or fine-grained sharing controls.
 
-| Criterion | Google Drive | Nextcloud | Dropbox | OneDrive | AWS S3 / R2 | Backblaze B2 |
-|---|---|---|---|---|---|---|
-| **User-friendly web UI** | Excellent | Good (self-hosted) | Good | Excellent | None (console only) | None |
-| **Per-file access control** | Excellent (view/edit/comment per user) | Good (shares + groups) | Good (view/edit per user) | Excellent (Microsoft 365 integration) | None (bucket policies only) | None |
-| **Headless auth (no browser)** | SA only on Shared Drive (Workspace req'd) | Basic Auth / app token | OAuth refresh token (one-time browser) | Device code / client creds (Azure AD) | API key (IAM) — no browser ever | API key — no browser ever |
-| **Shareable URL generation** | Drive API / rclone link | OCS share API (atomic) | Sharing API | Graph API | Pre-signed URL (up to 7d) or public | Pre-signed / public |
-| **MCP server** | None production-ready | Multiple active (nextcloud-mcp, cbcoutinho) | Sparse | In flux (official deprecated Mar 2026) | Multiple active (2026) | Exists (BraveRam/backblaze-mcp) |
-| **Subscription required** | Google Workspace (for SA + Shared Drive) | Self-hosted instance | Free tier available | Microsoft 365 / Azure AD | AWS account (pay-as-you-go) | Free up to 10 GB |
-| **Inbound doc parsing improvement** | Yes (Docs/Sheets API → clean text) | No | No | Yes (Graph API → clean text) | No | No |
-| **Familiar to end users** | Very high | Medium | High | High (enterprise) | Low | Low |
+| Criterion | Google Drive | Nextcloud | Synology Drive | Dropbox | OneDrive | AWS S3 / R2 | Backblaze B2 |
+|---|---|---|---|---|---|---|---|
+| **User-friendly web UI** | Excellent | Good | Excellent (DSM + mobile apps) | Good | Excellent | None (console only) | None |
+| **Per-file access control** | Excellent (view/edit/comment per user) | Good (shares + groups) | Good (DSM ACLs + share links with password/expiry) | Good (view/edit per user) | Excellent (Microsoft 365) | None (bucket policies only) | None |
+| **Headless auth (no browser)** | SA only on Shared Drive (Workspace req'd) | Basic Auth / app token | Basic Auth (WebDAV) or Synology Drive API token | OAuth refresh token (one-time browser) | Device code / client creds (Azure AD) | API key (IAM) — no browser ever | API key — no browser ever |
+| **Shareable URL generation** | Drive API / rclone link | OCS share API (atomic) | Synology Drive share API / rclone link | Sharing API | Graph API | Pre-signed URL (up to 7d) or public | Pre-signed / public |
+| **MCP server** | None production-ready | Multiple active (nextcloud-mcp, cbcoutinho) | None (rclone-based path applies) | Sparse | In flux (official deprecated Mar 2026) | Multiple active (2026) | Exists (BraveRam/backblaze-mcp) |
+| **Infrastructure required** | Google Workspace subscription | Any Linux server | Synology NAS hardware | None (SaaS) | Microsoft 365 / Azure AD | AWS account | None (SaaS) |
+| **Inbound doc parsing improvement** | Yes (Docs/Sheets API → clean text) | No | No | No | Yes (Graph API → clean text) | No | No |
+| **Familiar to end users** | Very high | Medium | Medium–High (consumer NAS users) | High | High (enterprise) | Low | Low |
+| **External access without port-forwarding** | Yes (cloud) | Requires reverse proxy or VPN | Yes (QuickConnect, free) | Yes (cloud) | Yes (cloud) | Yes (cloud) | Yes (cloud) |
 
 ### Analysis
 
 - **Google Drive** scores highest on UI quality, access control, and inbound parsing — but the service account + Workspace subscription requirement is a hard constraint. Not viable for personal account operators.
-- **Nextcloud** matches Google Drive on UI and access control, supports fully headless Basic Auth, has the healthiest MCP ecosystem of the workspace-style options, and costs nothing if self-hosted. Downside: requires a running Nextcloud instance (self-hosted or a provider).
+- **Nextcloud** matches Google Drive on UI and access control, supports fully headless Basic Auth, has the healthiest MCP ecosystem of the workspace-style options. Downside: requires a running Linux server; external access needs a reverse proxy or VPN unless a hosting provider is used.
+- **Synology Drive** is the strongest self-hosted option for operators who already own a Synology NAS. UI and access control are excellent. Headless auth via WebDAV Basic Auth or Synology API tokens — fully compatible with rclone. QuickConnect provides free external access without port-forwarding configuration. No dedicated MCP server, but rclone's `synology` and `webdav` backends cover the upload + share URL workflow. Key constraint: requires Synology hardware.
 - **Dropbox** has a good UI and per-user access control, and the one-time OAuth setup is manageable. No MCP server is a gap for agent-initiated upload.
 - **OneDrive** is strong for Microsoft-ecosystem teams but MCP tooling is in flux and Azure AD setup adds complexity.
 - **S3 / R2 / B2** are optimal for headless upload but cannot satisfy the UI and access control requirements. Suitable only if the operator accepts that file management happens through a separate tool (e.g. the AWS console or Cyberduck).
@@ -121,7 +123,7 @@ The decision drivers include **user-facing UI** and **access control** as first-
 1. ~~**MCP server maturity**~~ — **Resolved:** no production-ready MCP server exists for Google Drive. rclone CLI is the right mechanism if Drive is chosen.
 2. ~~**Auth model**~~ — **Resolved:** service account JSON via rclone `service_account_file`. Requires Google Workspace for Shared Drive access. Personal Gmail accounts cannot use this path.
 3. ~~**MCP sidecar lifecycle**~~ — **Moot** if rclone CLI is used directly.
-4. **Storage backend choice** — given the UI and access control requirements, the realistic options are Google Drive (Workspace req'd), Nextcloud (self-hosted req'd), or Dropbox (OAuth one-time setup). Which fits the operator's existing infrastructure?
+4. **Storage backend choice** — given the UI and access control requirements, the realistic options are Google Drive (Workspace req'd), Nextcloud (any Linux server), Synology Drive (Synology NAS req'd), or Dropbox (OAuth one-time setup). Which fits the operator's existing infrastructure?
 5. **Which layer owns upload — agent or master?** — agent-initiated (rclone/bash in container) vs master-initiated (manifest + master calls storage API). Applies regardless of backend chosen.
 6. **Inbound URL detection** — should master detect and pre-fetch Google Workspace / OneDrive URLs automatically, or require explicit user signalling?
 7. **Does this supersede ADR-0001 outbound?** — cloud storage delivery and platform attachment delivery are not mutually exclusive. Cloud storage could be the preferred path when configured; platform attachment a fallback for small files.
