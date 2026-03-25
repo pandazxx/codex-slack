@@ -427,3 +427,87 @@ class TestOutputFilesInnerJsonEnvelope:
         assert "Here is your report." in response
         assert "output_files" not in response
         assert "/workspace" not in response
+
+    def test_parse_response_plain_text_result_unaffected(self) -> None:
+        """IC-03c: plain-text result (no inner JSON) is returned as-is — regression guard."""
+        import json
+        from src.master.router import ClaudeCodeDispatcher
+
+        outer = json.dumps({
+            "result": "This is a plain text reply.",
+            "usage": {"input_tokens": 5, "output_tokens": 3},
+            "total_cost_usd": 0.0005,
+        })
+
+        response = ClaudeCodeDispatcher._parse_response(outer)
+        assert "This is a plain text reply." in response
+
+    def test_send_prompt_returns_clean_text_not_raw_json(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IC-03d: end-to-end send_prompt returns human-readable text, not raw inner JSON."""
+        import json
+        from src.master.router import ClaudeCodeDispatcher
+
+        dispatcher = ClaudeCodeDispatcher(command_template="claude -p --output-format json")
+
+        inner = json.dumps({
+            "result": "Summary written successfully.",
+            "output_files": ["/workspace/out/summary.txt"],
+        })
+        outer = self._make_outer_envelope(inner)
+
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=outer, stderr="")
+
+        monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+        result = dispatcher.send_prompt(
+            agent_name="test-agent",
+            container_name="agent-test",
+            prompt="write a summary",
+            platform="discord",
+            channel_id="C002",
+            thread_ts=None,
+            user_id="U2",
+        )
+
+        assert "Summary written successfully." in result.text
+        assert "output_files" not in result.text
+        assert "/workspace" not in result.text
+
+    def test_retrieve_output_files_inner_json_missing_result_key_does_not_crash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IC-03e: inner JSON without a 'result' key is handled gracefully — no crash."""
+        import json
+        from src.master.router import ClaudeCodeDispatcher
+
+        dispatcher = ClaudeCodeDispatcher(command_template="claude -p --output-format json")
+
+        # Agent emits only output_files with no result key (malformed but should not crash)
+        inner = json.dumps({"output_files": ["/workspace/out/file.txt"]})
+        outer = self._make_outer_envelope(inner)
+
+        seen_cmds: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            seen_cmds.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=outer, stderr="")
+
+        monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+        result = dispatcher.send_prompt(
+            agent_name="test-agent",
+            container_name="agent-test",
+            prompt="generate file",
+            platform="slack",
+            channel_id="C003",
+            thread_ts=None,
+            user_id="U3",
+        )
+
+        assert isinstance(result, DispatchResult)
+        cp_calls = [cmd for cmd in seen_cmds if len(cmd) >= 2 and cmd[0] == "podman" and cmd[1] == "cp"]
+        assert len(cp_calls) == 1
+        assert "file.txt" in cp_calls[0][-1]
