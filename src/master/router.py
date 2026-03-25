@@ -417,7 +417,14 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             LOGGER.warning("router.parse_response_not_json first_100=%r", raw[:100])
             return raw  # plain text mode or unparseable — return as-is
 
-        result = str(data.get("result") or "").strip()
+        raw_result = str(data.get("result") or "").strip()
+        # If the agent embedded a JSON envelope in its reply (for output_files),
+        # extract the human-readable "result" text from it.
+        try:
+            inner = json.loads(raw_result)
+            result = str(inner.get("result") or raw_result).strip()
+        except (json.JSONDecodeError, ValueError):
+            result = raw_result
         usage = data.get("usage") or {}
         cost = data.get("total_cost_usd")
 
@@ -460,12 +467,34 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         raw_stdout: str,
         container_name: str,
     ) -> list[Path]:
-        """Extract output_files from the JSON envelope and copy them out of the container."""
+        """Extract output_files from the JSON envelope and copy them out of the container.
+
+        claude --output-format json wraps the agent reply in an outer envelope:
+            {"result": "<agent text>", "usage": {...}, ...}
+
+        The agent embeds output_files in its reply text as a JSON object:
+            {"result": "Done.", "output_files": ["/path/to/file"]}
+
+        So we must parse the outer envelope first, then parse the result string
+        as inner JSON to find output_files.
+        """
         try:
-            data = json.loads(raw_stdout)
+            outer = json.loads(raw_stdout)
         except (json.JSONDecodeError, ValueError):
             return []
-        output_files = data.get("output_files")
+
+        # Try inner JSON first (agent result text), then fall back to outer envelope
+        output_files = None
+        result_text = outer.get("result", "")
+        if isinstance(result_text, str):
+            try:
+                inner = json.loads(result_text)
+                output_files = inner.get("output_files")
+            except (json.JSONDecodeError, ValueError):
+                pass
+        if output_files is None:
+            output_files = outer.get("output_files")
+
         if not isinstance(output_files, list) or not output_files:
             return []
 

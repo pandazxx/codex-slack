@@ -347,3 +347,83 @@ class TestPodmanCpForOutputFiles:
         cp_targets = [cmd[-1] for cmd in cp_calls]  # last arg is <container>:<path>
         assert any("a.docx" in t for t in cp_targets)
         assert any("b.xlsx" in t for t in cp_targets)
+
+
+# ---------------------------------------------------------------------------
+# IC-03  output_files extracted from inner JSON (correct agent format)
+# ---------------------------------------------------------------------------
+
+class TestOutputFilesInnerJsonEnvelope:
+    """The agent embeds output_files inside its result text as JSON.
+
+    claude --output-format json produces:
+        {"result": "{\"result\": \"Done.\", \"output_files\": [...]}", ...}
+
+    _retrieve_output_files must parse the inner JSON to find the paths.
+    _parse_response must return only the human-readable "result" text, not raw JSON.
+    """
+
+    def _make_outer_envelope(self, inner_result: str) -> str:
+        import json
+        return json.dumps({
+            "result": inner_result,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "total_cost_usd": 0.001,
+        })
+
+    def test_retrieve_output_files_reads_inner_json(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """IC-03a: output_files embedded as inner JSON inside result are extracted."""
+        import json
+        from src.master.router import ClaudeCodeDispatcher
+
+        dispatcher = ClaudeCodeDispatcher(command_template="claude -p --output-format json")
+
+        inner = json.dumps({
+            "result": "Here is your report.",
+            "output_files": ["/workspace/out/report.txt"],
+        })
+        outer = self._make_outer_envelope(inner)
+
+        seen_cmds: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            seen_cmds.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=outer, stderr="")
+
+        monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+        result = dispatcher.send_prompt(
+            agent_name="test-agent",
+            container_name="agent-test",
+            prompt="generate a report",
+            platform="slack",
+            channel_id="C001",
+            thread_ts=None,
+            user_id="U1",
+        )
+
+        cp_calls = [cmd for cmd in seen_cmds if len(cmd) >= 2 and cmd[0] == "podman" and cmd[1] == "cp"]
+        assert len(cp_calls) == 1
+        assert "report.txt" in cp_calls[0][-1]
+
+    def test_parse_response_strips_inner_json_returns_text(self) -> None:
+        """IC-03b: _parse_response returns human-readable text, not raw JSON, when result is inner JSON."""
+        import json
+        from src.master.router import ClaudeCodeDispatcher
+
+        inner = json.dumps({
+            "result": "Here is your report.",
+            "output_files": ["/workspace/out/report.txt"],
+        })
+        outer = json.dumps({
+            "result": inner,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "total_cost_usd": 0.001,
+        })
+
+        response = ClaudeCodeDispatcher._parse_response(outer)
+        assert "Here is your report." in response
+        assert "output_files" not in response
+        assert "/workspace" not in response
