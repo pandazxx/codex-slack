@@ -6,7 +6,7 @@ Built for teams that want AI coding assistance directly inside their chat worksp
 
 ## Vision
 
-The project is evolving from a single-session Slack bridge into a full multi-agent orchestration platform. The master runtime will manage any number of agent containers — each targeting a different repository and channel — from a single control plane reachable via Slack or Discord admin commands. A structured Claude Code agent framework (`.claude/`) governs how features are designed, built, tested, reviewed, and documented within this repository itself.
+The project is evolving from a single-session Slack bridge into a full multi-agent orchestration platform. The master runtime will manage any number of agent containers — each targeting a different repository and channel — from a single control plane reachable via Slack or Discord admin commands. Structured Claude Code (`.claude/`) and Codex (`AGENTS.md`, `.agents/skills/`) workflows govern how features are designed, built, tested, reviewed, and documented within this repository itself.
 
 ## What this project is not
 
@@ -43,7 +43,7 @@ export UID="$(id -u)" GID="$(id -g)"
 podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build -d
 ```
 
-Full setup (Slack app creation, OAuth scopes, slash commands): `BUILD.md`.
+Full setup and runtime guides live under `docs/`; use `docs/manuals/ops-manual.md` as the primary entry point.
 For Codex contributors, repository workflow instructions live in `AGENTS.md` and repo-local skills live under `.agents/skills/`.
 
 ## Project structure
@@ -59,6 +59,14 @@ For Codex contributors, repository workflow instructions live in `AGENTS.md` and
 ├── scripts/                      # Build, bootstrap, and utility scripts
 ├── config/                       # Environment and service configuration
 ├── docs/                         # All documentation
+│   ├── manuals/                  #   User and operator entry points
+│   ├── guides/                   #   Setup guides, tutorials, and runbooks
+│   ├── references/               #   Commands, config, logging, schemas
+│   ├── design/                   #   Design and planning artifacts
+│   ├── decisions/                #   Architecture Decision Records
+│   ├── test-plans/               #   Acceptance plans and UAT checklists
+│   ├── releases/                 #   Release notes
+│   └── knowledge-base/           #   FAQ and lessons learned
 ├── .agents/                      # Codex repo-local workflow skills
 │   └── skills/                   #   Workflow, role, and git helper skills
 ├── .claude/                      # Claude Code agent framework
@@ -72,20 +80,20 @@ For Codex contributors, repository workflow instructions live in `AGENTS.md` and
 ├── docker-compose.master-agent.example.yml  # Master runtime Compose example
 ├── docker-compose.multi-agent.example.yml   # Multi-agent Compose example
 ├── docker-compose.podman.yml     # Podman rootless override
-├── BUILD.md                      # Local setup and Slack app configuration
-└── USAGE.md                      # Day-to-day operation and troubleshooting
+├── BUILD.md                      # Compatibility pointer to setup and ops docs
+└── USAGE.md                      # Compatibility pointer to usage docs
 ```
 
 ## Further reading
 
-- `BUILD.md` — local environment setup, Slack app OAuth, slash command registration
-- `USAGE.md` — day-to-day operation, prompt workflow, master-mode quick path
-- `docs/SLACK_SETUP.md` — detailed Slack app configuration
-- `docs/DISCORD_SETUP.md` — Discord app setup for master mode
-- `docs/CONTAINER.md` — containerised runtime, Podman socket, volume mounts
-- `docs/LOGGING.md` — log destination and level configuration
-- `docs/MASTER_AGENT_RUNBOOK.md` — master-agent operational runbook (v3.0)
-- `docs/MULTI_AGENT_SETUP.md` — running multiple agents in the same workspace
-- `docs/CD_DAEMON.md` — CD daemon design and operator guide
-- `docs/TUTORIALS.md` — step-by-step tutorials and release checklists
-- `docs/DOCUMENTATION_INDEX.md` — canonical doc map and implemented command reference
+- `docs/README.md` — documentation map and category index
+- `docs/manuals/ops-manual.md` — setup, deployment, and operations entry point
+- `docs/manuals/user-manual.md` — day-to-day usage entry point
+- `docs/guides/slack-setup.md` — detailed Slack app configuration
+- `docs/guides/discord-setup.md` — Discord app setup for master mode
+- `docs/guides/container-runtime.md` — container runtime, Podman socket, and mounts
+- `docs/guides/runbooks/master-agent.md` — master-agent operational runbook
+- `docs/guides/runbooks/cd-daemon.md` — CD daemon operational runbook
+- `docs/guides/tutorials.md` — step-by-step tutorials and checklists
+- `docs/references/api.md` — implemented command surface
+- `docs/references/config.md` — configuration keys and defaults
