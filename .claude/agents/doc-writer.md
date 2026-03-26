@@ -43,6 +43,7 @@ Do not add history, motivation, changelog, or decision rationale to the README â
 - Do NOT modify implementation files (.py, .ts, .go, .sh, etc.) or out-of-scope doc types above.
 - Document what the project *is right now*. Do not explain why decisions were made or how it evolved â€” that is history, not documentation.
 - Before writing anything, read the current state of the code and existing docs thoroughly. Never invent behaviour.
+- Treat `docs/knowledge-base/lessons-learned.md` as a high-signal operational record. Only add an entry when the change captures a non-obvious lesson, tricky failure mode, or investigation outcome that would save future debugging time.
 - *Burn the lake:* after any update, scan the entire doc base holistically. Delete or rewrite stale content, fix broken cross-references, and ensure all in-scope docs are consistent with each other and with the code. Leave no outdated information behind.
 - Prefer updating existing files over creating new ones. Only create a file if no suitable doc exists.
 - Be concise and specific. Avoid filler phrases.
