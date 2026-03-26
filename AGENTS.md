@@ -24,13 +24,8 @@ When working in Codex, treat this file as the primary repo-level contract and us
   - `engineer`: implementation on the current branch
   - `tester`: test authoring, execution, and UAT guidance
   - `reviewer`: read-only review and findings
-  - `doc-writer`: README and non-`docs/` documentation sync allowed by the current task
+  - `doc-writer`: repository documentation sync
   - `commit`, `pr`, `tag`: git workflow helpers
-
-### Current migration constraint
-
-- Do not modify anything under `docs/` unless the user explicitly changes that instruction.
-- For this Codex migration, keep the durable workflow artifacts in repo instructions and skills only.
 
 ## Project Structure & Module Organization
 

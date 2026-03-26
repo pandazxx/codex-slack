@@ -17,10 +17,10 @@ Use this skill before implementation when requirements, boundaries, or tradeoffs
 ## Output
 
 - Lead with the recommended approach.
+- Produce an ADR-style decision record when the change involves a real architecture or workflow decision that should be tracked over time.
 - List alternatives considered and the reason they were not selected.
 - Make the implementation boundary explicit enough that `engineer` and `tester` can proceed without reinterpreting the design.
 
 ## Constraints
 
 - Do not start implementation while key design questions remain unresolved.
-- Respect active repo constraints, including temporary bans on touching `docs/`.

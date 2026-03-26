@@ -20,7 +20,7 @@ Use this skill for non-trivial work that should mirror the repository's structur
 6. Review the result.
    Use the `reviewer` skill for a read-only findings pass before finalizing.
 7. Sync allowed documentation.
-   Use the `doc-writer` skill only for files permitted by the current task constraints.
+   Use the `doc-writer` skill to align repository documentation with the completed change.
 8. Finish with `commit` and `push`.
    Every non-trivial task in this repo must end with a commit and push unless the user explicitly waives that rule.
 
@@ -28,4 +28,3 @@ Use this skill for non-trivial work that should mirror the repository's structur
 
 - Do not skip design for significant work just because implementation seems obvious.
 - Do not leave the branch with uncommitted changes at task completion.
-- Do not modify `docs/` when the active task forbids it.
