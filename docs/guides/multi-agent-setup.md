@@ -1,6 +1,6 @@
 # Multi-Agent Setup (Same Slack Workspace)
 
-> **Historical reference.** This document describes the manual multi-agent setup approach predating the master-agent system. For current multi-agent deployments use the master-agent commands (`/master-agent-load`, `/master-agent-start`, etc.) documented in `docs/MASTER_AGENT_RUNBOOK.md`.
+> **Historical reference.** This document describes the manual multi-agent setup approach predating the master-agent system. For current multi-agent deployments use the master-agent commands (`/master-agent-load`, `/master-agent-start`, etc.) documented in `docs/guides/runbooks/master-agent.md`.
 
 This guide runs multiple Codex agents in separate containers, each mapped to a different repository, while sharing one Slack workspace.
 

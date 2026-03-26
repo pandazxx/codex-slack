@@ -6,7 +6,7 @@ Operational guide for the master->agent v3.0 stack:
 - agent worker containers (no direct Slack connection)
 - Podman host socket control path
 
-See `docs/MASTER_AGENT_UAT.md` for step-by-step user acceptance test cases.
+See `docs/test-plans/master-agent-uat.md` for step-by-step user acceptance test cases.
 Containerized UAT is required for v3.0 sign-off.
 
 ## Prerequisites
