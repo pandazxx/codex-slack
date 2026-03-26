@@ -18,7 +18,7 @@ Create a pull request from the current branch targeting `master` (or `main` if `
    ## Test plan
    <markdown checklist of how to verify the change works>
 
-   🤖 Generated with [Claude Code](https://claude.com/claude-code)
+   🤖 Generated with repository automation
    ```
 7. Run: `gh pr create --base master --title "<title>" --body "<body>"`
 8. Report the PR URL.

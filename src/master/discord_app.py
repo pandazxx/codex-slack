@@ -202,6 +202,13 @@ def split_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list
     return [chunk for chunk in chunks if chunk]
 
 
+def label_discord_chunks(chunks: list[str]) -> list[str]:
+    total = len(chunks)
+    if total <= 1:
+        return list(chunks)
+    return [f"[{idx}/{total}]\n{chunk}" for idx, chunk in enumerate(chunks, start=1)]
+
+
 def _make_file(text: str, filename: str = "response.md"):  # type: ignore[no-untyped-def]
     return io.BytesIO(text.encode("utf-8")), filename
 
@@ -521,5 +528,10 @@ def run_discord_frontend(
     @tree.command(name="master-agent-refresh-config", description="Push updated global Claude config to agent workspace")
     async def cmd_refresh_config(interaction, name: str) -> None:  # type: ignore[no-untyped-def]
         await _execute_and_send(interaction, command_name="/master-agent-refresh-config", text=name)
+
+    @tree.command(name="master-agent-set-model", description="Set or clear an agent Claude model override")
+    async def cmd_set_model(interaction, name: str, model: str | None = None) -> None:  # type: ignore[no-untyped-def]
+        text = name if not model else f"{name} {model}"
+        await _execute_and_send(interaction, command_name="/master-agent-set-model", text=text)
 
     client.run(bot_token)

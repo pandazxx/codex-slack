@@ -5,6 +5,7 @@ from src.master.command_dispatch import (
     MasterCommandRequest as SlackCommandRequest,
     dispatch_command as dispatch_slash_command,
     parse_load_text,
+    parse_set_model_text,
     parse_status_text,
 )
 from src.master.command_format import (
@@ -65,6 +66,9 @@ class FakeMasterService:
     def refresh_agent_auth(self, *, name: str) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="refreshed", data={"name": name})
 
+    def set_agent_model(self, *, name: str, model: str | None) -> CommandResult:
+        return CommandResult(ok=True, code="OK", message="model updated", data={"name": name, "claude_model": model})
+
 
 def test_is_admin_channel() -> None:
     assert is_admin_channel("C1", {"C1", "C2"}) is True
@@ -109,6 +113,16 @@ def test_parse_status_text_accepts_full_flag() -> None:
     name, is_full = parse_status_text("payments --full")
     assert name == "payments"
     assert is_full is True
+
+
+def test_parse_set_model_text_accepts_optional_model() -> None:
+    name, model = parse_set_model_text("payments claude-opus-4-5")
+    assert (name, model) == ("payments", "claude-opus-4-5")
+
+
+def test_parse_set_model_text_allows_model_clear() -> None:
+    name, model = parse_set_model_text("payments")
+    assert (name, model) == ("payments", None)
 
 
 def test_dispatch_load_command() -> None:
@@ -181,6 +195,34 @@ def test_dispatch_status_command_accepts_full_flag() -> None:
     result = dispatch_slash_command(service, request)
     assert result.ok is True
     assert result.message == "status"
+
+
+def test_dispatch_set_model_command_accepts_optional_model() -> None:
+    service = FakeMasterService()
+    request = SlackCommandRequest(
+        command_name="/master-agent-set-model",
+        text="payments claude-opus-4-5",
+        channel_id="CADMIN",
+        user_id="U1",
+    )
+
+    result = dispatch_slash_command(service, request)
+    assert result.ok is True
+    assert result.data["claude_model"] == "claude-opus-4-5"
+
+
+def test_dispatch_set_model_command_can_clear_model() -> None:
+    service = FakeMasterService()
+    request = SlackCommandRequest(
+        command_name="/master-agent-set-model",
+        text="payments",
+        channel_id="CADMIN",
+        user_id="U1",
+    )
+
+    result = dispatch_slash_command(service, request)
+    assert result.ok is True
+    assert result.data["claude_model"] is None
 
 
 def test_format_command_result_json_payload() -> None:

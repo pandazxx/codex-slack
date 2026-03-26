@@ -19,6 +19,7 @@ from .command_format import (
     wants_full_status,
 )
 from .command_runtime import execute_master_command
+from .command_runtime import is_admin_channel
 from .dispatch_guard import in_flight_dispatch, is_shutting_down
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import CommandResult, MasterService
@@ -303,6 +304,12 @@ def extract_image_urls(files: object, event_ts: str | None = None) -> list[str]:
         if url:
             urls.append(url)
     return urls
+
+
+def select_thread_image_urls(image_urls: list[str], subtype: str | None) -> list[str]:
+    if subtype == "file_share":
+        return list(image_urls)
+    return list(image_urls[:1])
 
 
 def format_forward_ack(*, text: str, image_count: int) -> str:
