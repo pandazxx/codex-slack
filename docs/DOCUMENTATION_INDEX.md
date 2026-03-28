@@ -43,6 +43,7 @@ The following are design artifacts and may include non-implemented options:
 - `docs/design/master-agent-plan.md`
 - `docs/design/v3-multi-adapter-frontend-plan.md`
 - `docs/design/cloud-workspace-auth-analysis.md`
+- `docs/design/cloud-workspace-detailed-design.md`
 - `docs/design/cloud-workspace-office-file-analysis.md`
 - `docs/design/cloud-workspace-file-handling.md`
 

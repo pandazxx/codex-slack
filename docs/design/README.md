@@ -3,6 +3,7 @@
 This directory stores design notes, architecture drafts, and planning documents that are not ADRs.
 
 Current design artifacts:
+- `cloud-workspace-detailed-design.md`
 - `cloud-workspace-auth-analysis.md`
 - `cloud-workspace-file-handling.md`
 - `cloud-workspace-office-file-analysis.md`
