@@ -153,6 +153,20 @@ Rationale:
 - Should the original uploaded binary file also be committed for traceability, or remain an input-only artifact?
 - Should request-specific storage live inside `/workspace/repo/` or outside it, such as `/workspace/message/...`?
 
+### Discussion Note: Request-Specific Storage Location
+
+This has not been decided yet, but the current direction under discussion is:
+
+- request-scoped input artifacts may live outside the Git worktree, for example `/workspace/message/<request-id>/...`
+- commit-worthy derived Markdown artifacts may later be written into `/workspace/repo/...`
+
+This is technically viable because the agent can read absolute paths under `/workspace/`, not only files under `/workspace/repo/`.
+
+The decision is still open because there is a tradeoff between:
+
+- cleaner separation of transient input artifacts from Git-tracked output
+- versus simpler path handling when everything stays under the repo worktree
+
 ## References
 
 - Slack file object: https://docs.slack.dev/reference/objects/file-object/
