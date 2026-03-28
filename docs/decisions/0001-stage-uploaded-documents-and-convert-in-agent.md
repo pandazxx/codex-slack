@@ -157,9 +157,19 @@ Rationale:
 - supporting `.doc` well would likely force a heavier normalization dependency
 - `docx` and `pdf` cover the cleaner first implementation path
 
+### 6. Conversion toolchain for v1
+
+Decision: use `Mammoth` for `docx` and `PyMuPDF4LLM` for `pdf`.
+
+Rationale:
+
+- this keeps the toolchain headless-container friendly
+- it matches the requirement focus on headers, text, tables, and basic image extraction
+- it avoids dragging in a heavier office-suite dependency for the first implementation
+- each tool is a good fit for its native format instead of forcing one generic converter across both
+
 ## Remaining Discussion Items
 
-- Which conversion toolchain should be used for `docx` and `pdf` in v1?
 - Should the original uploaded binary file also be committed for traceability, or remain an input-only artifact?
 - Should request-specific storage live inside `/workspace/repo/` or outside it, such as `/workspace/message/...`?
 
@@ -178,6 +188,8 @@ The decision is still open because there is a tradeoff between:
 - versus simpler path handling when everything stays under the repo worktree
 
 ### Discussion Note: Conversion Toolchain Comparison
+
+Chosen option for v1: `Mammoth + PyMuPDF4LLM`
 
 | Option | `docx` tool | `pdf` tool | Type | Language | Operational overhead | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
