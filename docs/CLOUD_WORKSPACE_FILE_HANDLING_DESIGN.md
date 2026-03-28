@@ -3,7 +3,7 @@
 **Status:** draft
 **Author:** Codex architect
 **Date:** 2026-03-28
-**Related ADRs:** ADR-0001
+**Related ADRs:** ADR-0001, ADR-0002
 
 ## Problem Statement
 
