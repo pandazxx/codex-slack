@@ -32,6 +32,7 @@ This directory is the canonical home for repository documentation.
 
 ## Design
 
+- `docs/design/chat-document-upload-implementation-plan.md` — concrete module-level implementation design and rollout plan for uploaded `docx/pdf` handling
 - `docs/design/chat-document-upload-detailed-design.md` — toolchain and artifact-level discussion for uploaded `doc/docx/pdf` handling
 - `docs/design/master-agent-architecture.md` — architecture background and constraints
 - `docs/design/master-agent-implementation-plan.md` — phased implementation plan
