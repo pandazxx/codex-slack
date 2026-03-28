@@ -82,6 +82,13 @@ This layer does **not** parse office file internals.
 
 The agent image should include document-processing libraries and a small internal document API.
 
+This layer should also include an adapter registry that maps a resolved local file to the correct document adapter by:
+
+- URI scheme
+- file extension
+- MIME type when available
+- lightweight file-signature checks when needed
+
 The internal API should expose capability-oriented operations, for example:
 
 - `inspect_document(path)`
@@ -105,6 +112,152 @@ The agent decides when to:
 - sync results back
 
 This is where a skill can help, but the skill remains an orchestration aid rather than the document engine itself.
+
+## Example Request Flow
+
+Example user request:
+
+`Read the images of nextcloud:/my document/example.docx and add a description at the bottom of each image`
+
+The expected execution flow is:
+
+### 1. Resolve and fetch the file
+
+The agent should not open `nextcloud:/...` directly through a document parser.
+
+Instead:
+
+1. The cloud workspace layer resolves `nextcloud:/my document/example.docx` to a remote workspace path.
+2. The sync layer ensures the latest remote version is present in the local mirror, for example:
+   `/workspace/cloud/my document/example.docx`
+3. The workflow records the local path, remote path, and file revision metadata before editing.
+
+This keeps provider concerns at the sync layer and gives the document layer a normal local file path.
+
+### 2. Select the correct document adapter
+
+The document toolkit should inspect the local file and choose the adapter from a registry.
+
+For this example:
+
+- remote path resolves to local `.docx`
+- adapter registry selects `docx_adapter`
+- the adapter reports supported operations such as:
+  - text extraction
+  - table extraction
+  - image extraction
+  - paragraph insertion
+  - image-adjacent content insertion
+
+The agent should never choose tools by prompt text alone. Tool selection should be deterministic from the resolved file type and advertised adapter capabilities.
+
+### 3. Read document structure, text, and images
+
+The `docx_adapter` should expose a structured read model, for example:
+
+- document text blocks
+- tables
+- image objects
+- image anchors or nearest surrounding paragraphs
+- element ordering in the document body
+
+For this specific request, the agent needs:
+
+- the ordered list of images
+- a stable anchor for each image in the document flow
+- enough nearby context to insert a description under each image instead of in an arbitrary location
+
+The image bytes or extracted image files can then be passed to an image-description step if the agent needs to generate descriptions from image content rather than surrounding text.
+
+### 4. Generate the descriptions
+
+For each image, the agent should generate a candidate description using one or both of:
+
+- direct image analysis
+- document context near the image
+
+This is where multimodal inference may be used, but it is separate from the office-file parser.
+
+The output of this step should be structured, for example:
+
+- `image_id`
+- `anchor_location`
+- `generated_description`
+
+### 5. Apply the document update
+
+The `docx_adapter` should then:
+
+- reopen or continue holding the local document model
+- insert a paragraph immediately after each image anchor, or in the nearest valid position below the image in document flow
+- write the generated description into that inserted paragraph
+
+For v1, the implementation should use conservative insertion behavior:
+
+- operate only on inline-image flows that have reliable anchors
+- skip or warn on unsupported floating-layout cases
+- avoid rewriting unrelated document structure
+
+### 6. Validate the rewritten file
+
+Before any writeback to Nextcloud, the agent should:
+
+- save the modified document to the local mirror
+- reopen it through the same adapter
+- verify that the document is still readable
+- verify that the inserted descriptions appear in the expected count and positions
+
+If validation fails, the sync layer should not upload the modified file.
+
+### 7. Write back to the remote path
+
+Once validation succeeds:
+
+1. The cloud sync layer marks the local file as changed.
+2. The sync layer uploads the updated file back to:
+   `nextcloud:/my document/example.docx`
+3. The sync layer checks for revision conflicts before overwrite, according to the workspace conflict policy.
+4. The agent reports:
+   - what file was modified
+   - how many images were described
+   - whether any images were skipped due to unsupported layout
+
+## Required Internal Interfaces
+
+To make the above flow reliable, the implementation should define explicit interfaces between layers.
+
+### Cloud workspace interface
+
+- `resolve_uri(uri) -> remote_ref`
+- `sync_down(remote_ref) -> local_path, revision`
+- `sync_up(local_path, remote_ref, expected_revision) -> new_revision`
+
+### Document adapter registry
+
+- `open_document(local_path) -> adapter_instance`
+- `get_capabilities(local_path) -> capability_set`
+
+### Document adapter interface
+
+- `extract_text()`
+- `extract_tables()`
+- `extract_images()`
+- `describe_edit_points()`
+- `insert_paragraph_after_anchor(anchor, text)`
+- `save()`
+- `validate()`
+
+### Agent workflow contract
+
+- resolve remote path
+- sync down
+- open with adapter
+- perform modality-specific analysis
+- apply structured edits
+- validate
+- sync up
+
+This contract is the reason ADR-0002 favors a local document toolkit over a skill or cascaded MCP. The workflow needs stable execution semantics, not just prompt guidance.
 
 ## Format-by-Format Capability Target
 
