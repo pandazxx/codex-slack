@@ -9,7 +9,7 @@ informed: [master and agent operators]
 
 ## Context and Problem Statement
 
-Users need to send `doc`, `docx`, and `pdf` files to agents through Slack and Discord. Those documents may contain headings, tables, images, and layout structure that are difficult for `codex` and `claude-code` to consume directly from binary files. The system needs a stable ingestion model that works across both agent adapters and supports two user intents:
+Users need to send office-style documents to agents through Slack and Discord. For v1, the active scope is `docx` and `pdf`. Those documents may contain headings, tables, images, and layout structure that are difficult for `codex` and `claude-code` to consume directly from binary files. The system needs a stable ingestion model that works across both agent adapters and supports two user intents:
 
 - read and analyze the document
 - modify the document and persist the result in GitHub
@@ -22,7 +22,7 @@ The key architecture question is where document conversion should happen and wha
 - Keeps the master runtime focused on chat-platform integration, not document semantics
 - Produces an agent-friendly working artifact
 - Supports eventual commit/push of the modified output to GitHub
-- Handles `doc`, `docx`, and `pdf` with a single workflow shape
+- Handles `docx` and `pdf` with a single workflow shape in v1
 - Minimizes duplicated conversion logic across adapters
 
 ## Considered Options
@@ -50,7 +50,7 @@ The key architecture question is where document conversion should happen and wha
 We will consider this decision validated when:
 
 - Slack and Discord uploads of supported document types are staged into the agent workspace
-- the agent can convert staged `doc`, `docx`, and `pdf` files into a Markdown artifact plus extracted assets
+- the agent can convert staged `docx` and `pdf` files into a Markdown artifact plus extracted assets
 - both `codex` and `claude-code` can read the converted artifact through the same project workflow
 - modification requests end with a committed Markdown result and a returned GitHub URL
 
@@ -147,9 +147,19 @@ Rationale:
 - keeps cleanup simple
 - avoids a shared mutable `current-request` location
 
+### 5. File-format scope for v1
+
+Decision: drop legacy `.doc` from v1. Focus the first implementation on `docx` and `pdf`.
+
+Rationale:
+
+- `.doc` conflicts with the goal of keeping the toolchain simple and headless-container friendly
+- supporting `.doc` well would likely force a heavier normalization dependency
+- `docx` and `pdf` cover the cleaner first implementation path
+
 ## Remaining Discussion Items
 
-- Which conversion toolchain should be used for `.doc`, `docx`, and `pdf` in v1?
+- Which conversion toolchain should be used for `docx` and `pdf` in v1?
 - Should the original uploaded binary file also be committed for traceability, or remain an input-only artifact?
 - Should request-specific storage live inside `/workspace/repo/` or outside it, such as `/workspace/message/...`?
 
@@ -166,6 +176,22 @@ The decision is still open because there is a tradeoff between:
 
 - cleaner separation of transient input artifacts from Git-tracked output
 - versus simpler path handling when everything stays under the repo worktree
+
+### Discussion Note: Conversion Toolchain Comparison
+
+| Option | `docx` tool | `pdf` tool | Type | Language | Operational overhead | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Specialized split stack | Mammoth | PyMuPDF4LLM / PyMuPDF | library + library | JavaScript for Mammoth; Python for PyMuPDF | medium | Best fit for simple headless extraction; two toolchains instead of one |
+| Unified converter | MarkItDown | MarkItDown | library and CLI-style entrypoint | Python | low to medium | Single interface is attractive, but less format-specific control |
+| General-purpose + PDF-specific | Pandoc | PyMuPDF4LLM / PyMuPDF | CLI + library | Pandoc executable; Python for PyMuPDF | medium | Mature, but more generic than necessary for `docx` |
+| Custom extraction stack | custom `docx` parser flow | custom PDF extraction flow | library code | Python | high | Highest control, highest maintenance burden |
+
+Additional notes:
+
+- Mammoth is purpose-built for `docx` conversion and is structurally a better fit than a generic converter when the goal is headings, text, tables, and basic images.
+- PyMuPDF4LLM / PyMuPDF is a strong PDF-side fit for headless extraction and LLM-oriented Markdown output.
+- MarkItDown is attractive if a single conversion surface is more important than format-specific tuning.
+- Pandoc is mature, but for this use case it looks more like a fallback or secondary tool than the most natural primary path.
 
 ## References
 
