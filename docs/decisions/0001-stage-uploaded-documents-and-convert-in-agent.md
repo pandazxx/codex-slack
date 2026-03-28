@@ -178,9 +178,20 @@ Rationale:
 - other projects may want to avoid binary files in the repo entirely
 - this is better decided at the agent/project work level than hard-coded in the transport layer
 
+### 8. Request-specific storage location
+
+Decision: request-specific attachment storage should live outside `/workspace/repo/`, for example under `/workspace/message/<request-id>/...`.
+
+Rationale:
+
+- keeps transient request inputs separate from Git-tracked repo content
+- reduces the chance of accidentally committing staged source files
+- gives the platform a cleaner lifecycle boundary for request-scoped cleanup
+- the agent can still read absolute paths under `/workspace/`, so this does not block processing
+
 ## Remaining Discussion Items
 
-- Should request-specific storage live inside `/workspace/repo/` or outside it, such as `/workspace/message/...`?
+- none at the ADR level
 
 ### Discussion Note: Request-Specific Storage Location
 
