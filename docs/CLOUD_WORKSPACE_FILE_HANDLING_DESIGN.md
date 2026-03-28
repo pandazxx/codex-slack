@@ -385,6 +385,123 @@ To make the above flow reliable, the implementation should define explicit inter
 
 This contract is the reason ADR-0002 favors a local document toolkit over a skill or cascaded MCP. The workflow needs stable execution semantics, not just prompt guidance.
 
+## How Adapters Are Found
+
+Yes. The adapters should be registered in code.
+
+The agent should not "discover" adapters through prompting, and it should not rely on the model remembering which parser handles which format. The runtime should own a `DocumentAdapterRegistry`.
+
+## Recommended Registry Design
+
+For v1, use a static built-in registry loaded at agent startup.
+
+Example shape:
+
+- `docx_adapter`
+- `xlsx_adapter`
+- `pptx_adapter`
+- `pdf_adapter`
+
+Each adapter registration should declare:
+
+- adapter name
+- supported file extensions
+- supported MIME types
+- optional file-signature or package checks
+- read capabilities
+- write capabilities
+- validation function
+- priority or specificity
+
+## Selection Algorithm
+
+When the agent has a resolved local path, the runtime should:
+
+1. normalize the path and extension
+2. determine MIME type if available
+3. run lightweight file-signature checks if needed
+4. ask the registry for matching adapters
+5. select the most specific compatible adapter
+6. return the adapter and its capabilities to the workflow
+
+That means the selection call is something like:
+
+- `registry.select(local_path, mime_type)`
+
+And the result is something like:
+
+- `adapter=docx_adapter`
+- `capabilities={extract_text, extract_tables, extract_images, insert_paragraph_after_anchor, validate}`
+
+## Why Registration Is Better Than Free-Form Discovery
+
+Explicit registration gives us:
+
+- deterministic routing
+- testable behavior
+- clear unsupported-format errors
+- a stable place to add new formats later
+- no dependency on model-specific prompt behavior
+
+It also lets the runtime reject bad matches, for example:
+
+- `.docx` extension but invalid zip package
+- renamed `.pdf` that is actually an image
+- `.xlsx` that is macro-heavy or corrupted and fails validation
+
+## Static Registry vs Plugin Registry
+
+For v1, use a static registry in the agent codebase.
+
+That is the simplest and most reliable path because:
+
+- the supported formats are known
+- the agent image already controls the installed libraries
+- startup behavior is predictable
+- testing is straightforward
+
+Later, if the project needs third-party or provider-specific adapters, the registry can evolve into a plugin model. But that should be a later extension, not the first implementation.
+
+## Example Registration Shape
+
+The design should look roughly like this:
+
+```python
+DocumentAdapterRegistry.register(
+    name="docx_adapter",
+    extensions=[".docx"],
+    mime_types=[
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ],
+    probe=probe_docx,
+    capabilities={
+        "extract_text",
+        "extract_tables",
+        "extract_images",
+        "insert_paragraph_after_anchor",
+        "validate",
+    },
+    factory=DocxAdapter,
+)
+```
+
+The important part is not the exact API shape. The important part is:
+
+- adapters are registered explicitly
+- selection is owned by code
+- the model consumes capabilities after selection
+
+## Operational Rule
+
+The LLM-facing workflow should only ever see:
+
+- file path or URI
+- selected adapter name
+- capability set
+- validation result
+
+It should not see raw library-routing concerns such as "choose python-docx or unzip OOXML manually." Those are implementation details below the agent workflow layer.
+
 ## Format-by-Format Capability Target
 
 ### `docx`
