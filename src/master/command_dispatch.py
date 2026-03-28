@@ -66,6 +66,15 @@ def parse_status_text(text: str, command_name: str = "/master-agent-status") -> 
     raise ValueError(f"usage: {command_name} <name> [--full]")
 
 
+def parse_set_model_text(text: str, command_name: str = "/master-agent-set-model") -> tuple[str, str | None]:
+    parts = [part.strip() for part in text.split(maxsplit=1) if part.strip()]
+    if not parts:
+        raise ValueError(f"usage: {command_name} <name> [model]")
+    if len(parts) == 1:
+        return parts[0], None
+    return parts[0], parts[1] or None
+
+
 def dispatch_command(service: MasterService, request: MasterCommandRequest) -> CommandResult:
     if request.command_name == "/master-agent-list":
         return service.list_agents()
@@ -104,5 +113,9 @@ def dispatch_command(service: MasterService, request: MasterCommandRequest) -> C
     if request.command_name == "/master-agent-refresh-config":
         name = parse_single_name_text(request.text, request.command_name)
         return service.refresh_agent_config(name=name)
+
+    if request.command_name == "/master-agent-set-model":
+        name, model = parse_set_model_text(request.text, request.command_name)
+        return service.set_agent_model(name=name, model=model)
 
     return CommandResult(ok=False, code="ERR_INVALID_ARGS", message=f"unsupported command: {request.command_name}", data={})
