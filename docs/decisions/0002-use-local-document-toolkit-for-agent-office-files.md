@@ -1,9 +1,9 @@
 ---
 title: "ADR-0002: Use a local document toolkit for agent office file handling"
-status: proposed
+status: accepted
 date: 2026-03-28
 decision-makers: [project maintainers]
-consulted: [architecture review pending]
+consulted: [architecture review completed]
 informed: [master and agent operators]
 ---
 
@@ -102,12 +102,74 @@ This ADR records the current recommendation for v1 only:
 - Use skills only as workflow wrappers around the document toolkit.
 - Reserve MCP for optional later augmentations such as OCR, preview rendering, or advanced PDF extraction.
 
-## Follow-Up Questions
+## Resolved Follow-Up Decisions
 
-- Should the local toolkit expose a shared normalized intermediate representation for text, tables, and images?
-- Should the toolkit be a pure Python module, internal CLI, or both?
-- What confidence checks should gate automatic writeback to synced cloud documents?
-- Which advanced features are explicitly unsupported in v1 for each file format?
+### 1. Shared normalized representation
+
+Decision: use a minimal normalized read model, but keep writes adapter-specific.
+
+The normalized model should cover:
+
+- text blocks
+- tables
+- images
+- anchors or edit points
+- validation warnings
+
+Writes should still flow through adapter-specific operations instead of a universal full-document rewrite format.
+
+Rationale:
+
+- A shared read model helps workflow portability across formats.
+- Adapter-specific writes preserve format-aware safety and fidelity boundaries.
+
+### 2. Toolkit interface shape
+
+Decision: provide both a Python module and a thin internal CLI.
+
+The Python module is the source of truth.
+The CLI is a wrapper for:
+
+- agent invocation
+- debugging
+- testing
+- scripting
+
+Rationale:
+
+- The module keeps the implementation clean.
+- The CLI gives `claude-code` and `codex` a stable project-owned interface.
+
+### 3. Confidence checks before writeback
+
+Decision: automatic writeback is allowed only when all of the following are true:
+
+- adapter validation passes after save
+- the requested operation is explicitly supported by the adapter capability set
+- no revision conflict is detected by the cloud sync layer
+- no critical unsupported element was encountered during the edit
+- the agent can produce a structured change summary
+
+If any of these fail, writeback must stop and the agent must report the reason.
+
+Rationale:
+
+- This creates a deterministic safety gate for document edits.
+- It prevents silent corruption or blind overwrite behavior.
+
+### 4. Explicitly unsupported v1 features
+
+Decision: the following are out of scope for v1:
+
+- `docx`: tracked changes, comments, floating-layout objects, complex template-preserving rewrites
+- `xlsx`: macros, pivot tables, external data connections, high-fidelity chart manipulation
+- `pptx`: SmartArt, animations, embedded media, high-fidelity theme/master preservation
+- `pdf`: OCR-only documents, guaranteed semantic table extraction, in-place layout-faithful rewriting
+
+Rationale:
+
+- These features have weak reliability characteristics in a lightweight headless toolchain.
+- They should not be implied by a v1 claim of "office-file support."
 
 ## References
 

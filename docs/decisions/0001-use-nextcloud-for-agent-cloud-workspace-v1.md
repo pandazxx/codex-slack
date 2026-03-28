@@ -120,12 +120,70 @@ This ADR records the current recommendation for v1 only:
 - Mount the synchronized workspace into the agent as a dedicated path such as `/workspace/cloud`.
 - Treat office-file parsing and editing as an agent-local capability, not a cloud-provider capability, with provider-native document APIs added only as optional later adapters.
 
-## Follow-Up Questions
+## Resolved Follow-Up Decisions
 
-- Should the first release support only self-hosted Nextcloud, or also managed deployments?
-- Should sync happen only on startup and task completion, or also on explicit command?
-- What conflict policy should apply if both the user and the agent modify the same file?
-- Which office-file libraries and conversion tools should be included in the agent image for v1?
+### 1. Deployment scope for v1
+
+Decision: support self-hosted or admin-controlled Nextcloud deployments only in v1.
+
+Rationale:
+
+- The product needs predictable WebDAV, authentication, and operational behavior.
+- Self-hosted or admin-controlled deployments give the project a reliable baseline.
+- Managed-hosting compatibility can be revisited later, but it is not the committed support target for the first release.
+
+### 2. Sync timing for v1
+
+Decision: use explicit sync stages, not background live sync.
+
+The workflow should be:
+
+- sync down when the workspace is attached or when a remote file is first accessed
+- allow explicit manual sync-down or sync-up commands
+- sync up only after successful validation of local edits
+
+Rationale:
+
+- This preserves deterministic file state during agent work.
+- It avoids background race conditions and hidden writes.
+- It aligns with the local-mirror architecture chosen for v1.
+
+### 3. Conflict policy for v1
+
+Decision: use revision-checked writeback and fail closed on conflict.
+
+The workflow should be:
+
+- record remote revision metadata on sync-down
+- require the same revision on sync-up
+- if the remote file changed, abort upload and report a conflict
+- do not auto-merge office documents in v1
+
+Rationale:
+
+- Binary office formats are poor candidates for automatic merge.
+- Failing closed is safer than silently overwriting user changes.
+
+### 4. Office tooling baseline for v1
+
+Decision: ship a minimal local document toolchain in the agent image:
+
+- `python-docx` for `docx`
+- `openpyxl` for `xlsx`
+- `python-pptx` for `pptx`
+- `pypdf` for `pdf`
+- `Pillow` as a supporting image utility
+
+Deferred from v1 baseline:
+
+- LibreOffice headless
+- OCR toolchains
+- advanced document-conversion pipelines
+
+Rationale:
+
+- The minimal Python-first stack is sufficient for structured v1 operations.
+- Heavier rendering and conversion tools should be added only when required by real workflows.
 
 ## References
 
