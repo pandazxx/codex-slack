@@ -1,9 +1,9 @@
 ---
 title: "ADR-0001: Stage uploaded documents in master and convert them in the agent"
-status: proposed
+status: accepted
 date: 2026-03-28
 decision-makers: [project maintainers]
-consulted: [architecture review pending]
+consulted: [architecture review completed]
 informed: [master and agent operators]
 ---
 
@@ -96,11 +96,62 @@ This ADR records the intended v1 shape:
 - agent reads and edits Markdown, not the original binary file
 - modification requests return a GitHub URL to the committed Markdown artifact instead of returning a rewritten binary file over chat
 
-## Follow-Up Questions
+## Resolved Follow-Up Decisions
+
+### 1. Conversion location
+
+Decision: document conversion happens in the agent, not in master.
+
+Rationale:
+
+- master should remain a transport and staging layer
+- the derived Markdown artifact belongs in the agent working context
+- both `codex` and `claude-code` can follow the same workflow once the staged file is present
+
+### 2. How the agent is told what to do
+
+Decision: do not inject document-handling instructions into the routed prompt.
+
+Instead:
+
+- repo-level `AGENTS.md` and `.claude/CLAUDE.md` carry the workflow rule
+- master provides request-specific state through a manifest file
+
+Rationale:
+
+- the prompt should stay close to the user’s actual message
+- attachment-handling policy should live in versioned repo instructions, not per-message prompt prose
+
+### 3. Request-state transport
+
+Decision: use a per-request manifest file plus one exec-time environment variable:
+
+- `AGENT_REQUEST_MANIFEST=<absolute path>`
+
+No additional attachment-specific env vars are required in v1.
+
+Rationale:
+
+- the manifest contains all request attachment state in one place
+- the env var gives the agent a stable discovery point
+- this avoids prompt augmentation and avoids proliferating many small env vars
+
+### 4. Request scoping
+
+Decision: create a unique request-specific attachment directory for every routed message.
+
+Rationale:
+
+- prevents cross-message state leakage
+- works for concurrent requests
+- keeps cleanup simple
+- avoids a shared mutable `current-request` location
+
+## Remaining Discussion Items
 
 - Which conversion toolchain should be used for `.doc`, `docx`, and `pdf` in v1?
-- What exact prompt and tool contract should master use when passing staged file paths to the agent?
 - Should the original uploaded binary file also be committed for traceability, or remain an input-only artifact?
+- Should request-specific storage live inside `/workspace/repo/` or outside it, such as `/workspace/message/...`?
 
 ## References
 
