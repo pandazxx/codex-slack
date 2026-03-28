@@ -1,9 +1,9 @@
 ---
 title: "ADR-0001: Use Nextcloud for agent cloud workspace v1"
-status: proposed
+status: accepted
 date: 2026-03-28
 decision-makers: [project maintainers]
-consulted: [architecture review pending]
+consulted: [architecture review completed]
 informed: [master and agent operators]
 ---
 
@@ -50,7 +50,7 @@ We will consider this decision validated when:
 - agent startup can pull a remote cloud workspace into a local working directory
 - agent can modify and upload files back to the remote workspace
 - at least one end-to-end test path covers document sync for representative office-compatible files
-- architecture review accepts or amends this ADR
+- architecture review accepts this ADR
 
 ## Pros and Cons of the Options
 
@@ -144,3 +144,4 @@ This ADR records the current recommendation for v1 only:
 - Dropbox collaborative Microsoft Office editing: https://help.dropbox.com/view-edit/collaborate-on-microsoft-office
 - Dropbox Office integration FAQ: https://help.dropbox.com/integrations/microsoft-office-faq
 - Office file handling analysis: `docs/CLOUD_WORKSPACE_OFFICE_FILE_ANALYSIS.md`
+- File handling design discussion: `docs/CLOUD_WORKSPACE_FILE_HANDLING_DESIGN.md`

@@ -43,5 +43,6 @@ The following are design artifacts and may include non-implemented options:
 - `docs/V3_0_MULTI_ADAPTER_FRONTEND_PLAN.md`
 - `docs/CLOUD_WORKSPACE_AUTH_ANALYSIS.md`
 - `docs/CLOUD_WORKSPACE_OFFICE_FILE_ANALYSIS.md`
+- `docs/CLOUD_WORKSPACE_FILE_HANDLING_DESIGN.md`
 
 Treat them as context/history, not operational source-of-truth.
