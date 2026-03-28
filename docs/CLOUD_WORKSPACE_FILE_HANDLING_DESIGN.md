@@ -47,8 +47,7 @@ Using a cascaded MCP-style service as the main file-processing path looks attrac
 
 - It adds another runtime dependency for every agent task.
 - It forces large or complex document payloads through a tool boundary.
-- It makes local sync less useful, even though local sync is already part of the storage design.
-- It creates a second failure domain on top of Nextcloud sync.
+- It adds another failure domain on top of Nextcloud CRUD operations.
 - It makes provider-independent document handling harder, not easier.
 
 ### Where MCP Could Help Later
@@ -65,16 +64,16 @@ That is an augmentation story, not the primary editing path.
 
 ## Proposed Architecture
 
-### Layer 1: Cloud Sync
+### Layer 1: Cloud CRUD
 
-Master and agent coordinate to mirror a Nextcloud workspace into a local directory such as `/workspace/cloud`.
+Master and agent coordinate on-demand fetch and writeback against Nextcloud, using temporary local working files only while an operation is active.
 
 This layer owns:
 
 - authentication
 - download and upload
-- sync policy
-- conflict detection
+- URI resolution
+- request-scoped file lifecycle
 
 This layer does **not** parse office file internals.
 
@@ -109,7 +108,7 @@ The agent decides when to:
 - summarize structure for the user
 - ask for confirmation before destructive edits
 - apply updates
-- sync results back
+- write results back
 
 This is where a skill can help, but the skill remains an orchestration aid rather than the document engine itself.
 
@@ -128,11 +127,11 @@ The agent should not open `nextcloud:/...` directly through a document parser.
 Instead:
 
 1. The cloud workspace layer resolves `nextcloud:/my document/example.docx` to a remote workspace path.
-2. The sync layer ensures the latest remote version is present in the local mirror, for example:
-   `/workspace/cloud/my document/example.docx`
-3. The workflow records the local path, remote path, and file revision metadata before editing.
+2. The CRUD layer fetches the current remote file into a temporary local path, for example:
+   `/workspace/cloud-tmp/example.docx`
+3. The workflow records the local working path and remote path before editing.
 
-This keeps provider concerns at the sync layer and gives the document layer a normal local file path.
+This keeps provider concerns at the CRUD layer and gives the document layer a normal local file path.
 
 ### 2. Select the correct document adapter
 
@@ -165,7 +164,7 @@ Instead, expose a small number of high-level operations such as:
 - `document.inspect(path)`
 - `document.extract_content(path)`
 - `document.apply_structured_edit(path, edit_spec)`
-- `workspace.sync_back(path, remote_ref)`
+- `workspace.write_back(path, remote_ref)`
 
 At this stage, the model only needs to infer:
 
@@ -211,14 +210,14 @@ To make tool selection reliable across both agents, the document capability shou
 ### Good interface shape
 
 - `workspace.resolve_cloud_uri(uri)`
-- `workspace.sync_down(remote_ref)`
+- `workspace.fetch(remote_ref)`
 - `document.open(local_path)`
 - `document.get_capabilities(local_path)`
 - `document.describe_structure(local_path)`
 - `document.extract_images(local_path)`
 - `document.apply_edit(local_path, edit_spec)`
 - `document.validate(local_path)`
-- `workspace.sync_up(local_path, remote_ref, revision)`
+- `workspace.write_back(local_path, remote_ref)`
 
 ### Bad interface shape
 
@@ -240,11 +239,10 @@ The actual selection sequence should be:
 
 1. Model calls `workspace.resolve_cloud_uri("nextcloud:/my document/example.docx")`
 2. Runtime returns a `remote_ref`
-3. Model calls `workspace.sync_down(remote_ref)`
+3. Model calls `workspace.fetch(remote_ref)`
 4. Runtime returns:
-   - `local_path=/workspace/cloud/my document/example.docx`
+   - `local_path=/workspace/cloud-tmp/example.docx`
    - `mime_type=application/vnd.openxmlformats-officedocument.wordprocessingml.document`
-   - `revision=<remote revision>`
 5. Model calls `document.get_capabilities(local_path)`
 6. Runtime selects `docx_adapter` and returns capabilities such as:
    - `can_extract_text=true`
@@ -268,7 +266,7 @@ Both agents are much more reliable when:
 If the tool surface is designed this way, the model does not need special file-format expertise to route requests correctly. It only needs to follow a stable workflow:
 
 - resolve
-- sync
+- fetch
 - inspect capabilities
 - extract
 - edit
@@ -328,22 +326,21 @@ For v1, the implementation should use conservative insertion behavior:
 
 Before any writeback to Nextcloud, the agent should:
 
-- save the modified document to the local mirror
+- save the modified document to the temporary local working path
 - reopen it through the same adapter
 - verify that the document is still readable
 - verify that the inserted descriptions appear in the expected count and positions
 
-If validation fails, the sync layer should not upload the modified file.
+If validation fails, the CRUD layer should not upload the modified file.
 
 ### 7. Write back to the remote path
 
 Once validation succeeds:
 
-1. The cloud sync layer marks the local file as changed.
-2. The sync layer uploads the updated file back to:
+1. The CRUD layer uploads the updated file back to:
    `nextcloud:/my document/example.docx`
-3. The sync layer checks for revision conflicts before overwrite, according to the workspace conflict policy.
-4. The agent reports:
+2. The temporary working file is then discarded.
+3. The agent reports:
    - what file was modified
    - how many images were described
    - whether any images were skipped due to unsupported layout
@@ -355,8 +352,8 @@ To make the above flow reliable, the implementation should define explicit inter
 ### Cloud workspace interface
 
 - `resolve_uri(uri) -> remote_ref`
-- `sync_down(remote_ref) -> local_path, revision`
-- `sync_up(local_path, remote_ref, expected_revision) -> new_revision`
+- `fetch(remote_ref) -> local_path`
+- `write_back(local_path, remote_ref) -> remote_result`
 
 ### Document adapter registry
 
@@ -376,12 +373,12 @@ To make the above flow reliable, the implementation should define explicit inter
 ### Agent workflow contract
 
 - resolve remote path
-- sync down
+- fetch
 - open with adapter
 - perform modality-specific analysis
 - apply structured edits
 - validate
-- sync up
+- write back
 
 This contract is the reason ADR-0002 favors a local document toolkit over a skill or cascaded MCP. The workflow needs stable execution semantics, not just prompt guidance.
 
@@ -489,10 +486,10 @@ Examples:
 
 For both Codex and Claude, add repo guidance such as:
 
-- for office files in cloud workspaces, always resolve and sync first
+- for office files in cloud workspaces, always resolve and fetch first
 - always call the document toolkit before attempting edits
 - never use generic text editing on binary office files
-- always validate before sync-up
+- always validate before writeback
 
 ### 3. Optionally add a skill as a workflow reminder
 
@@ -508,7 +505,7 @@ But the skill still does not register adapters. It only nudges the model toward 
 
 For this project, the cleanest v1 path is:
 
-1. Implement the registry in Python inside `src/agent/`
+1. Implement the registry and adapters inside `src/agent/`
 2. Expose a project CLI such as `agent-doc`
 3. Update Claude/Codex instructions to use `agent-doc` for office-file operations
 4. Keep parser routing fully inside the CLI/runtime layer
@@ -708,7 +705,7 @@ Microsoft Graph is especially relevant for Excel workbooks and may be worth a de
 
 ### Nextcloud
 
-Nextcloud should remain a storage and sync layer from the agent’s perspective. Browser-based office editing is useful for users, but it should not define the agent’s core file-processing strategy.
+Nextcloud should remain a storage and CRUD layer from the agent’s perspective. Browser-based office editing is useful for users, but it should not define the agent’s core file-processing strategy.
 
 ## Proposed v1 Shape
 
@@ -756,7 +753,7 @@ Do not require MCP for ordinary `docx`, `xlsx`, `pptx`, or simple `pdf` processi
 
 For file handling, the project should choose:
 
-- `Nextcloud` for storage and sync
+- `Nextcloud` for storage and CRUD
 - local agent libraries for document parsing and editing
 - skills for workflow guidance only
 - optional MCP later for specialized augmentations, not the default path

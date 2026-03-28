@@ -9,7 +9,7 @@ informed: [master and agent operators]
 
 ## Context and Problem Statement
 
-ADR-0001 establishes `Nextcloud` as the v1 cloud workspace backend. The remaining architectural question is how agents should read and write office files in that synced workspace, including text, tables, and embedded images where feasible.
+ADR-0001 establishes `Nextcloud` as the v1 cloud workspace backend. The remaining architectural question is how agents should read and write office files fetched on demand from that workspace, including text, tables, and embedded images where feasible.
 
 The main options are:
 
@@ -17,15 +17,15 @@ The main options are:
 - route office handling through a cascaded MCP-style service
 - treat office handling as a skill-driven prompt workflow
 
-The project runs in a headless container-managed environment, so the chosen approach must remain reliable when agents operate on synchronized local files without interactive desktop tooling.
+The project runs in a headless container-managed environment, so the chosen approach must remain reliable when agents operate on temporary local working copies without interactive desktop tooling.
 
 ## Decision Drivers
 
 - Reliable handling of `docx`, `xlsx`, `pptx`, and `pdf` in a headless runtime
 - Ability to read and update text, tables, and embedded images where realistically possible
-- Provider independence once files have been synced locally
+- Provider independence once files have been fetched locally
 - Low runtime complexity for v1
-- Clear separation between storage/sync concerns and document-processing concerns
+- Clear separation between storage/CRUD concerns and document-processing concerns
 - Extensibility for future OCR, preview, and document-intelligence services
 
 ## Considered Options
@@ -36,11 +36,11 @@ The project runs in a headless container-managed environment, so the chosen appr
 
 ## Decision Outcome
 
-*Chosen option:* Option 1 — local document toolkit inside the agent runtime — because office-file parsing and writing are core execution capabilities, not orchestration concerns, and they are more reliable when performed directly against the synced local workspace.
+*Chosen option:* Option 1 — local document toolkit inside the agent runtime — because office-file parsing and writing are core execution capabilities, not orchestration concerns, and they are more reliable when performed directly against local temporary working files.
 
 ### Consequences
 
-- *Good:* Document handling stays provider-agnostic after sync.
+- *Good:* Document handling stays provider-agnostic after fetch.
 - *Good:* Agents can operate on local files without depending on another remote tool service.
 - *Good:* The design maps cleanly to `docx`, `xlsx`, `pptx`, and limited `pdf` support.
 - *Good:* Skills can still improve workflow consistency without owning binary file parsing.
@@ -56,16 +56,16 @@ We will consider this decision validated when:
 - the toolkit can extract text and tables from representative `docx`, `xlsx`, and `pptx` files
 - the toolkit can extract images where supported by the underlying format libraries
 - the toolkit can apply safe write/update operations for basic document edits
-- the cloud workspace flow can sync documents down, let the agent modify them locally, and sync them back
+- the cloud workspace flow can fetch documents on demand, let the agent modify temporary local copies, and write them back immediately
 
 ## Pros and Cons of the Options
 
 ### Option 1: Local document toolkit inside the agent runtime
 
-Use local libraries and internal adapters to inspect and update files in the synced workspace.
+Use local libraries and internal adapters to inspect and update files in temporary local working copies.
 
 - Pro: Best fit for headless container execution.
-- Pro: Works directly on local files after Nextcloud sync.
+- Pro: Works directly on local files after Nextcloud fetch.
 - Pro: Keeps storage and document processing cleanly separated.
 - Pro: Avoids passing large binary payloads through a remote tool boundary.
 - Con: Requires packaging and maintaining file-format libraries in the agent image.
@@ -78,7 +78,7 @@ Use a remote tool server to parse and modify office files on behalf of the agent
 - Pro: Centralizes some specialized processing logic.
 - Pro: Could help later for OCR, rendering, or enterprise policy integration.
 - Con: Adds another runtime dependency and failure domain.
-- Con: Weakens the value of having a synced local workspace.
+- Con: Adds another runtime dependency and failure domain.
 - Con: Makes ordinary document handling more operationally complex than necessary.
 - Con: Pushes provider-independent file operations through a remote boundary for little gain.
 
@@ -125,10 +125,9 @@ Rationale:
 
 ### 2. Toolkit interface shape
 
-Decision: provide both a Python module and a thin internal CLI.
+Decision: expose a thin internal CLI as the project-owned interface. Internal modules are implementation details, not a separate architectural surface.
 
-The Python module is the source of truth.
-The CLI is a wrapper for:
+The CLI exists for:
 
 - agent invocation
 - debugging
@@ -137,8 +136,8 @@ The CLI is a wrapper for:
 
 Rationale:
 
-- The module keeps the implementation clean.
-- The CLI gives `claude-code` and `codex` a stable project-owned interface.
+- The model-facing surface should stay narrow.
+- The implementation can still use internal modules without committing to a dual public interface.
 
 ### 3. Confidence checks before writeback
 
@@ -146,7 +145,7 @@ Decision: automatic writeback is allowed only when all of the following are true
 
 - adapter validation passes after save
 - the requested operation is explicitly supported by the adapter capability set
-- no revision conflict is detected by the cloud sync layer
+- the remote file can be written back immediately through the CRUD layer
 - no critical unsupported element was encountered during the edit
 - the agent can produce a structured change summary
 

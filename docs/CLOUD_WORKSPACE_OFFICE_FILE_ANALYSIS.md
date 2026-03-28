@@ -218,7 +218,7 @@ Office.js is not a good primary path for this project because it assumes an Offi
 
 ### Nextcloud, Synology Drive, and Dropbox
 
-These platforms are primarily storage and sync layers in this context.
+These platforms are primarily storage and file-access layers in this context.
 
 #### What the APIs support
 
@@ -229,7 +229,7 @@ These platforms are primarily storage and sync layers in this context.
 
 #### Architectural implication
 
-The agent should not depend on provider-native document object models here. For these backends, office-file intelligence should come from the local agent toolchain after sync.
+The agent should not depend on provider-native document object models here. For these backends, office-file intelligence should come from the local agent toolchain after on-demand fetch.
 
 ## Proposed Capability Model
 
@@ -271,7 +271,7 @@ But that should be treated as a second-phase enhancement, not the base requireme
 
 The project should separate storage choice from document-processing choice:
 
-- Cloud providers decide how files are stored, synchronized, and authenticated.
+- Cloud providers decide how files are stored, fetched/written, and authenticated.
 - The agent’s local office toolchain decides how files are parsed and updated.
 - Provider-native office APIs are optional accelerators, not the foundation.
 

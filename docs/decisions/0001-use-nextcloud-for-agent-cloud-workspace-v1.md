@@ -31,7 +31,7 @@ The master/agent runtime currently gives each agent a local workspace, but it do
 
 ## Decision Outcome
 
-*Chosen option:* Option 1 — Nextcloud + Nextcloud Office + WebDAV — because it best satisfies the decision drivers with predictable file semantics for agents, a strong browser GUI for users, and a straightforward auth and sync model that the master can control.
+*Chosen option:* Option 1 — Nextcloud + Nextcloud Office + WebDAV — because it best satisfies the decision drivers with predictable file semantics for agents, a strong browser GUI for users, and a straightforward auth and CRUD model that the master can control.
 
 ### Consequences
 
@@ -40,7 +40,7 @@ The master/agent runtime currently gives each agent a local workspace, but it do
 - *Good:* WebDAV gives a stable first integration point and keeps the backend abstraction simple.
 - *Good:* The design can stay backend-agnostic so later support for OneDrive or Google Drive is still possible.
 - *Bad:* The project must operate or depend on a Nextcloud deployment.
-- *Bad:* v1 should use local mirror plus sync, not a live remote mount, so file conflicts and sync timing must be handled explicitly.
+- *Bad:* v1 should use on-demand remote CRUD with local temporary working copies, so request latency and file-lifecycle cleanup must be handled explicitly.
 - *Bad:* Office editing parity depends on the Nextcloud Office deployment and configured app support.
 
 ### Confirmation
@@ -49,7 +49,7 @@ We will consider this decision validated when:
 - master can provision an agent with cloud workspace settings and scoped credentials
 - agent startup can pull a remote cloud workspace into a local working directory
 - agent can modify and upload files back to the remote workspace
-- at least one end-to-end test path covers document sync for representative office-compatible files
+- at least one end-to-end test path covers document fetch, edit, and writeback for representative office-compatible files
 - architecture review accepts this ADR
 
 ## Pros and Cons of the Options
@@ -61,7 +61,7 @@ Self-hosted cloud file platform with browser UI, office integrations, and filesy
 - Pro: Strong match for file/folder semantics that agents already expect.
 - Pro: Friendly browser GUI for users to manage workspace files.
 - Pro: Good fit for master-managed auth cascaded to agents through scoped credentials.
-- Pro: WebDAV supports a simple local-mirror sync architecture for v1.
+- Pro: WebDAV supports a straightforward on-demand fetch and writeback architecture for v1.
 - Con: Requires operating or adopting a Nextcloud service.
 - Con: Some advanced office behavior depends on Nextcloud Office deployment quality.
 
@@ -115,54 +115,53 @@ Managed cloud storage with a strong user-facing file UI, API support, and Office
 This ADR records the current recommendation for v1 only:
 
 - Keep the feature backend-agnostic in code, but implement Nextcloud first.
-- Prefer a `local mirror + explicit sync` model over a live FUSE-style mount in v1.
+- Prefer on-demand CRUD with temporary local working files over a persistent mirror or live FUSE-style mount in v1.
 - Let master own primary authentication and pass scoped access details to the agent.
-- Mount the synchronized workspace into the agent as a dedicated path such as `/workspace/cloud`.
+- Use a dedicated temporary working area in the agent such as `/workspace/cloud-tmp` while a document operation is in flight.
 - Treat office-file parsing and editing as an agent-local capability, not a cloud-provider capability, with provider-native document APIs added only as optional later adapters.
 
 ## Resolved Follow-Up Decisions
 
 ### 1. Deployment scope for v1
 
-Decision: support self-hosted or admin-controlled Nextcloud deployments only in v1.
+Decision: keep this open for further elaboration.
 
 Rationale:
 
-- The product needs predictable WebDAV, authentication, and operational behavior.
-- Self-hosted or admin-controlled deployments give the project a reliable baseline.
-- Managed-hosting compatibility can be revisited later, but it is not the committed support target for the first release.
+- The support boundary between self-hosted, admin-controlled hosted, and third-party managed Nextcloud still needs a more precise support matrix.
+- The current decision is sufficient to proceed with architecture and implementation work, but not yet precise enough for the release promise.
 
 ### 2. Sync timing for v1
 
-Decision: use explicit sync stages, not background live sync.
+Decision: do not maintain a mirrored workspace. Use CRUD on demand.
 
 The workflow should be:
 
-- sync down when the workspace is attached or when a remote file is first accessed
-- allow explicit manual sync-down or sync-up commands
-- sync up only after successful validation of local edits
+- fetch the remote file only when an operation requires it
+- operate on a temporary local working file
+- write the updated file back immediately after successful validation
+- clean up temporary local state after completion
 
 Rationale:
 
-- This preserves deterministic file state during agent work.
-- It avoids background race conditions and hidden writes.
-- It aligns with the local-mirror architecture chosen for v1.
+- This removes the need for background synchronization logic.
+- It keeps the runtime simpler and more request-driven.
+- It avoids drift between long-lived local state and the remote source.
 
 ### 3. Conflict policy for v1
 
-Decision: use revision-checked writeback and fail closed on conflict.
+Decision: there should be no persistent sync-conflict workflow in v1 because the system will not maintain a mirrored workspace.
 
 The workflow should be:
 
-- record remote revision metadata on sync-down
-- require the same revision on sync-up
-- if the remote file changed, abort upload and report a conflict
-- do not auto-merge office documents in v1
+- fetch the current remote file when the operation begins
+- validate and write back immediately after the edit
+- avoid long-lived local copies and background divergence
 
 Rationale:
 
-- Binary office formats are poor candidates for automatic merge.
-- Failing closed is safer than silently overwriting user changes.
+- The chosen CRUD-on-demand model removes the main source of sync conflicts.
+- The product does not need a user-facing sync-conflict resolution flow in v1.
 
 ### 4. Office tooling baseline for v1
 
