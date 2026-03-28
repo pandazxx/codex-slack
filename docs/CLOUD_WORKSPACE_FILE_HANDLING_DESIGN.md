@@ -391,6 +391,20 @@ Yes. The adapters should be registered in code.
 
 The agent should not "discover" adapters through prompting, and it should not rely on the model remembering which parser handles which format. The runtime should own a `DocumentAdapterRegistry`.
 
+## What "Built-In Registry" Means
+
+`Static built-in registry` does **not** mean built into `codex` or `claude-code`.
+
+It means built into **this project's own runtime code**.
+
+The ownership split should be:
+
+- project runtime owns adapter registration and parser dispatch
+- `codex` or `claude-code` only see a small high-level tool surface
+- repo instructions or skills tell the model when to call those high-level tools
+
+So the adapters are not something we "register with Codex" or "register with Claude Code" directly. We register them in our code, and then we expose our document capability to the agent in a form the model can call.
+
 ## Recommended Registry Design
 
 For v1, use a static built-in registry loaded at agent startup.
@@ -412,6 +426,109 @@ Each adapter registration should declare:
 - write capabilities
 - validation function
 - priority or specificity
+
+## How To Register Them in This Project
+
+The expected implementation is:
+
+1. Add a runtime module such as:
+   - `src/agent/document_registry.py`
+   - `src/agent/document_adapters/docx_adapter.py`
+   - `src/agent/document_adapters/xlsx_adapter.py`
+   - `src/agent/document_adapters/pptx_adapter.py`
+   - `src/agent/document_adapters/pdf_adapter.py`
+2. At agent startup, or on first document-tool use, initialize the registry.
+3. Register each adapter in code.
+4. Expose a narrow project-owned command surface on top of the registry.
+
+That command surface could be:
+
+- an internal Python API
+- an internal CLI
+- or a project-owned MCP server
+
+For v1, an internal CLI or Python API is simpler than MCP.
+
+## How Codex and Claude Actually Use It
+
+Both `codex` and `claude-code` work best when they call a small number of stable project tools.
+
+So instead of teaching them:
+
+- "use python-docx for docx"
+- "use openpyxl for xlsx"
+- "use pypdf for pdf"
+
+we should teach them:
+
+- "use `agent-doc inspect <path>` for office-file inspection"
+- "use `agent-doc edit <path> --spec <file>` for structured edits"
+- "use `agent-doc capabilities <path>` before attempting a write"
+
+The important point is:
+
+- Codex and Claude choose the **project tool**
+- the project tool chooses the **registered adapter**
+
+## How To Tell Codex and Claude To Use Them
+
+You do not configure adapter-level knowledge in the model. You configure usage at the workflow layer.
+
+That means:
+
+### 1. Expose one project-owned document tool surface
+
+Examples:
+
+- `agent-doc inspect <local-path>`
+- `agent-doc extract-images <local-path>`
+- `agent-doc apply-edit <local-path> <edit-spec>`
+- `agent-doc validate <local-path>`
+
+### 2. Document it in repo instructions
+
+For both Codex and Claude, add repo guidance such as:
+
+- for office files in cloud workspaces, always resolve and sync first
+- always call the document toolkit before attempting edits
+- never use generic text editing on binary office files
+- always validate before sync-up
+
+### 3. Optionally add a skill as a workflow reminder
+
+A skill can say:
+
+- when the request targets `docx`, `xlsx`, `pptx`, or `pdf`, use the project document toolkit
+- check capabilities before editing
+- summarize unsupported features before making changes
+
+But the skill still does not register adapters. It only nudges the model toward the project tool surface.
+
+## Recommended v1 Integration
+
+For this project, the cleanest v1 path is:
+
+1. Implement the registry in Python inside `src/agent/`
+2. Expose a project CLI such as `agent-doc`
+3. Update Claude/Codex instructions to use `agent-doc` for office-file operations
+4. Keep parser routing fully inside the CLI/runtime layer
+
+This gives us:
+
+- deterministic parser selection
+- one consistent model-facing interface
+- no direct dependency on Codex-specific or Claude-specific parser registration mechanisms
+
+## If We Later Add MCP
+
+If the project later adds MCP, the pattern should still be the same:
+
+- registry remains in project code
+- MCP server wraps the registry
+- Codex/Claude call MCP tools like `document.inspect`
+- MCP implementation dispatches to registered adapters
+
+Even then, the adapters are still not "built into" Codex or Claude. They remain part of our system.
 
 ## Selection Algorithm
 
