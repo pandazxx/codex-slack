@@ -26,6 +26,8 @@ The master/agent runtime currently gives each agent a local workspace, but it do
 1. Nextcloud + Nextcloud Office + WebDAV
 2. Microsoft OneDrive / SharePoint + Microsoft 365 + Graph API
 3. Google Drive + Google Workspace editors + Drive API
+4. Synology Drive + Synology Office + Synology Drive API
+5. Dropbox + Microsoft Office web/mobile integrations + Dropbox API
 
 ## Decision Outcome
 
@@ -85,6 +87,29 @@ Widely used cloud storage with browser editing and support for Office file impor
 - Con: Upload, export, and conversion behavior is less predictable for automated editing workflows.
 - Con: File semantics are weaker for a workspace that should behave like a normal directory tree.
 
+### Option 4: Synology Drive + Synology Office + Synology Drive API
+
+Private-cloud file platform on Synology NAS with browser access, file sync, and built-in office collaboration.
+
+- Pro: Strong self-hosted story for teams that want full data ownership on their own NAS.
+- Pro: Synology Drive provides a web portal, desktop sync clients, and mobile access.
+- Pro: Synology Office supports browser-based documents, spreadsheets, and slides with import/export support.
+- Pro: A Synology Drive API exists, so integration is possible without screen automation.
+- Con: It is better framed as a NAS-centric platform than a generic cloud backend, which narrows the deployment audience.
+- Con: The agent integration would likely need to target Synology-specific APIs and operational assumptions rather than a broadly portable protocol-first model.
+- Con: It is a stronger fit for organizations that already run Synology infrastructure than for a default first backend.
+
+### Option 5: Dropbox + Microsoft Office web/mobile integrations + Dropbox API
+
+Managed cloud storage with a strong user-facing file UI, API support, and Office editing through Dropbox and Microsoft integrations.
+
+- Pro: Very familiar managed-cloud user experience with low setup friction.
+- Pro: Dropbox has a mature developer platform for file operations and auth.
+- Pro: Users can edit Microsoft Office files from Dropbox using browser and mobile integrations.
+- Con: Office editing relies on Microsoft integrations rather than a single native document model owned by the storage platform.
+- Con: Some document workflows create links or provider-specific shortcuts instead of clean filesystem-like files.
+- Con: The resulting workspace semantics are less predictable for agent automation than a WebDAV-style remote tree or a fully self-hosted file platform.
+
 ## Implementation Notes
 
 This ADR records the current recommendation for v1 only:
@@ -100,3 +125,20 @@ This ADR records the current recommendation for v1 only:
 - Should sync happen only on startup and task completion, or also on explicit command?
 - What conflict policy should apply if both the user and the agent modify the same file?
 - Which office-file libraries and conversion tools should be included in the agent image for v1?
+
+## References
+
+- Nextcloud Office: https://nextcloud.com/office/
+- Nextcloud WebDAV user docs: https://docs.nextcloud.com/server/latest/user_manual/mn/files/access_webdav.html
+- Nextcloud WebDAV API basics: https://docs.nextcloud.com/server/latest/developer_manual/client_apis/WebDAV/basic.html
+- Microsoft Graph OneDrive overview: https://learn.microsoft.com/en-us/graph/onedrive-concept-overview
+- Microsoft web editing overview: https://support.microsoft.com/en-us/office/using-office-for-the-web-in-onedrive-dc62cfd4-120f-4dc8-b3a6-7aec6c26b55d
+- Google Drive file model overview: https://developers.google.com/workspace/drive/api/guides/about-files
+- Google Drive upload guide: https://developers.google.com/workspace/drive/api/guides/manage-uploads
+- Google Workspace Office-file support: https://support.google.com/docs/answer/9406611?hl=en
+- Synology Drive overview: https://www.synology.com/en-us/dsm/feature/drive
+- Synology Office overview: https://www.synology.com/en-global/dsm/feature/office
+- Synology Drive Server help: https://kb.synology.com/api/v1/findHelpFile/dsm/SynologyDrive/2.0/enu/6.2-24922/synology_apollolake_218%2B/100/drive_desc.html
+- Dropbox developer platform: https://www.dropbox.com/developers/documentation
+- Dropbox collaborative Microsoft Office editing: https://help.dropbox.com/view-edit/collaborate-on-microsoft-office
+- Dropbox Office integration FAQ: https://help.dropbox.com/integrations/microsoft-office-faq
