@@ -41,5 +41,6 @@ The following are design artifacts and may include non-implemented options:
 - `docs/MASTER_AGENT_ARCHITECTURE.md`
 - `docs/MASTER_AGENT_PLAN.md`
 - `docs/V3_0_MULTI_ADAPTER_FRONTEND_PLAN.md`
+- `docs/CLOUD_WORKSPACE_AUTH_ANALYSIS.md`
 
 Treat them as context/history, not operational source-of-truth.
