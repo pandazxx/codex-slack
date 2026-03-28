@@ -151,6 +151,132 @@ For this example:
 
 The agent should never choose tools by prompt text alone. Tool selection should be deterministic from the resolved file type and advertised adapter capabilities.
 
+## How the Agent Actually Chooses the Correct Tool
+
+This is a two-stage decision, and it should be designed so both `claude-code` and `codex` can succeed reliably.
+
+### Stage A: The model chooses a high-level document operation
+
+The model should not be asked to choose among many low-level file parsers.
+
+Instead, expose a small number of high-level operations such as:
+
+- `workspace.resolve_cloud_uri(uri)`
+- `document.inspect(path)`
+- `document.extract_content(path)`
+- `document.apply_structured_edit(path, edit_spec)`
+- `workspace.sync_back(path, remote_ref)`
+
+At this stage, the model only needs to infer:
+
+- this request is about a cloud-backed document
+- it needs inspection before editing
+- it needs writeback after successful validation
+
+That is a strength of both `claude-code` and `codex`: they are good at choosing workflow steps when the tool surface is compact and semantically clear.
+
+### Stage B: The runtime chooses the actual parser or writer
+
+Once the model invokes the high-level document operation, normal code should choose the actual adapter.
+
+That choice should be deterministic and based on:
+
+1. URI scheme or storage provider
+2. resolved local file path
+3. file extension
+4. MIME type if known
+5. lightweight file-signature checks if extension and MIME disagree
+6. advertised adapter capabilities
+
+In other words:
+
+- the model chooses `document.extract_content(...)`
+- the runtime chooses `docx_adapter`, `xlsx_adapter`, `pptx_adapter`, or `pdf_adapter`
+
+This separation is important. It avoids making the LLM responsible for technical parser routing.
+
+### What the agent should not do
+
+The agent should not:
+
+- parse the filename in free-form prompt space and guess a library
+- pick between ten file-format tools with overlapping descriptions
+- directly manipulate binary office files through generic text-edit tools
+- decide writeback rules without capability checks and validation
+
+## Recommended Tool Surface for Claude-Code and Codex
+
+To make tool selection reliable across both agents, the document capability should be exposed as a narrow, provider-independent interface.
+
+### Good interface shape
+
+- `workspace.resolve_cloud_uri(uri)`
+- `workspace.sync_down(remote_ref)`
+- `document.open(local_path)`
+- `document.get_capabilities(local_path)`
+- `document.describe_structure(local_path)`
+- `document.extract_images(local_path)`
+- `document.apply_edit(local_path, edit_spec)`
+- `document.validate(local_path)`
+- `workspace.sync_up(local_path, remote_ref, revision)`
+
+### Bad interface shape
+
+- `use_python_docx`
+- `use_openpyxl`
+- `use_python_pptx`
+- `use_pypdf`
+- `use_nextcloud_webdav`
+
+The bad shape forces the model to do internal implementation routing. The good shape lets the model express intent while the runtime owns dispatch.
+
+## Concrete Decision Logic
+
+Using the example:
+
+`Read the images of nextcloud:/my document/example.docx and add a description at the bottom of each image`
+
+The actual selection sequence should be:
+
+1. Model calls `workspace.resolve_cloud_uri("nextcloud:/my document/example.docx")`
+2. Runtime returns a `remote_ref`
+3. Model calls `workspace.sync_down(remote_ref)`
+4. Runtime returns:
+   - `local_path=/workspace/cloud/my document/example.docx`
+   - `mime_type=application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+   - `revision=<remote revision>`
+5. Model calls `document.get_capabilities(local_path)`
+6. Runtime selects `docx_adapter` and returns capabilities such as:
+   - `can_extract_text=true`
+   - `can_extract_tables=true`
+   - `can_extract_images=true`
+   - `can_insert_paragraph_after_anchor=true`
+   - `layout_limitations=["floating_images_may_be_unsupported"]`
+7. Based on those capabilities, the model proceeds with extraction and edit calls
+
+The important point is that the model is using tool outputs, not making hidden guesses.
+
+## Why This Works for Both Claude-Code and Codex
+
+Both agents are much more reliable when:
+
+- the number of tool choices is small
+- the tool names describe user intent, not implementation details
+- the runtime returns explicit capability metadata
+- unsupported operations fail early and clearly
+
+If the tool surface is designed this way, the model does not need special file-format expertise to route requests correctly. It only needs to follow a stable workflow:
+
+- resolve
+- sync
+- inspect capabilities
+- extract
+- edit
+- validate
+- write back
+
+That is portable across `claude-code` and `codex`.
+
 ### 3. Read document structure, text, and images
 
 The `docx_adapter` should expose a structured read model, for example:
