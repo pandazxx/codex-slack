@@ -168,9 +168,18 @@ Rationale:
 - it avoids dragging in a heavier office-suite dependency for the first implementation
 - each tool is a good fit for its native format instead of forcing one generic converter across both
 
+### 7. Original uploaded binary retention
+
+Decision: whether the original uploaded binary is committed should be left to the project/agent workflow, not enforced as a global platform rule.
+
+Rationale:
+
+- some projects may want the original upload preserved for traceability
+- other projects may want to avoid binary files in the repo entirely
+- this is better decided at the agent/project work level than hard-coded in the transport layer
+
 ## Remaining Discussion Items
 
-- Should the original uploaded binary file also be committed for traceability, or remain an input-only artifact?
 - Should request-specific storage live inside `/workspace/repo/` or outside it, such as `/workspace/message/...`?
 
 ### Discussion Note: Request-Specific Storage Location
