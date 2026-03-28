@@ -118,6 +118,7 @@ This ADR records the current recommendation for v1 only:
 - Prefer a `local mirror + explicit sync` model over a live FUSE-style mount in v1.
 - Let master own primary authentication and pass scoped access details to the agent.
 - Mount the synchronized workspace into the agent as a dedicated path such as `/workspace/cloud`.
+- Treat office-file parsing and editing as an agent-local capability, not a cloud-provider capability, with provider-native document APIs added only as optional later adapters.
 
 ## Follow-Up Questions
 
@@ -142,3 +143,4 @@ This ADR records the current recommendation for v1 only:
 - Dropbox developer platform: https://www.dropbox.com/developers/documentation
 - Dropbox collaborative Microsoft Office editing: https://help.dropbox.com/view-edit/collaborate-on-microsoft-office
 - Dropbox Office integration FAQ: https://help.dropbox.com/integrations/microsoft-office-faq
+- Office file handling analysis: `docs/CLOUD_WORKSPACE_OFFICE_FILE_ANALYSIS.md`
