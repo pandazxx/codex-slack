@@ -7,6 +7,7 @@ Use this page as the source-of-truth map for v3.x.
 - Operator runbook (master/agent runtime): `docs/MASTER_AGENT_RUNBOOK.md`
 - CD daemon design and operator guide: `docs/CD_DAEMON.md`
 - Architecture decision records: `docs/decisions/README.md`
+- Design documents and architecture drafts: `docs/design/README.md`
 - Slack app setup for master mode: `docs/SLACK_SETUP.md`
 - Discord app setup for master mode: `docs/DISCORD_SETUP.md`
 - Build/setup for local bot mode: `BUILD.md`
@@ -38,11 +39,11 @@ Use this page as the source-of-truth map for v3.x.
 
 ## Historical/Draft Docs
 The following are design artifacts and may include non-implemented options:
-- `docs/MASTER_AGENT_ARCHITECTURE.md`
-- `docs/MASTER_AGENT_PLAN.md`
-- `docs/V3_0_MULTI_ADAPTER_FRONTEND_PLAN.md`
-- `docs/CLOUD_WORKSPACE_AUTH_ANALYSIS.md`
-- `docs/CLOUD_WORKSPACE_OFFICE_FILE_ANALYSIS.md`
-- `docs/CLOUD_WORKSPACE_FILE_HANDLING_DESIGN.md`
+- `docs/design/master-agent-architecture.md`
+- `docs/design/master-agent-plan.md`
+- `docs/design/v3-multi-adapter-frontend-plan.md`
+- `docs/design/cloud-workspace-auth-analysis.md`
+- `docs/design/cloud-workspace-office-file-analysis.md`
+- `docs/design/cloud-workspace-file-handling.md`
 
 Treat them as context/history, not operational source-of-truth.

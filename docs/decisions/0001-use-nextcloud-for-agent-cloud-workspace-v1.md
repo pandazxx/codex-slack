@@ -200,5 +200,5 @@ Rationale:
 - Dropbox developer platform: https://www.dropbox.com/developers/documentation
 - Dropbox collaborative Microsoft Office editing: https://help.dropbox.com/view-edit/collaborate-on-microsoft-office
 - Dropbox Office integration FAQ: https://help.dropbox.com/integrations/microsoft-office-faq
-- Office file handling analysis: `docs/CLOUD_WORKSPACE_OFFICE_FILE_ANALYSIS.md`
-- File handling design discussion: `docs/CLOUD_WORKSPACE_FILE_HANDLING_DESIGN.md`
+- Office file handling analysis: `docs/design/cloud-workspace-office-file-analysis.md`
+- File handling design discussion: `docs/design/cloud-workspace-file-handling.md`

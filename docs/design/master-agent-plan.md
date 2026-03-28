@@ -30,8 +30,8 @@ For current operator-facing behavior and command surface, use `docs/DOCUMENTATIO
 - Finalize agent initialization stages and status reporting contract (no in-agent control service).
 
 Deliverables:
-- `docs/MASTER_AGENT_ARCHITECTURE.md`
-- `docs/MASTER_AGENT_PLAN.md`
+- `docs/design/master-agent-architecture.md`
+- `docs/design/master-agent-plan.md`
 - sample registry JSON
 - sample project manifest (`.prj_assistant/agent.toml`)
 - master command contract + idempotency rules

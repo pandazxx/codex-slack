@@ -172,6 +172,6 @@ Rationale:
 
 ## References
 
-- File handling design discussion: `docs/CLOUD_WORKSPACE_FILE_HANDLING_DESIGN.md`
-- Office file handling analysis: `docs/CLOUD_WORKSPACE_OFFICE_FILE_ANALYSIS.md`
+- File handling design discussion: `docs/design/cloud-workspace-file-handling.md`
+- Office file handling analysis: `docs/design/cloud-workspace-office-file-analysis.md`
 - ADR-0001: `docs/decisions/0001-use-nextcloud-for-agent-cloud-workspace-v1.md`
