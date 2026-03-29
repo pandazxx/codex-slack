@@ -33,7 +33,6 @@ This directory is the canonical home for repository documentation.
 ## Design
 
 - `docs/design/chat-document-upload-implementation-plan.md` — concrete module-level implementation design and rollout plan for uploaded `docx/pdf` handling
-- `docs/design/chat-document-upload-detailed-design.md` — toolchain and artifact-level discussion for uploaded `doc/docx/pdf` handling
 - `docs/design/master-agent-architecture.md` — architecture background and constraints
 - `docs/design/master-agent-implementation-plan.md` — phased implementation plan
 - `docs/design/v3-0-multi-adapter-frontend-plan.md` — v3.0 adapter/frontend design plan
@@ -41,7 +40,7 @@ This directory is the canonical home for repository documentation.
 ## Decisions
 
 - `docs/decisions/README.md` — ADR directory conventions
-- `docs/decisions/0001-stage-uploaded-documents-and-convert-in-agent.md` — proposed document-upload architecture decision
+- `docs/decisions/0001-stage-and-convert-uploaded-documents-in-master.md` — accepted document-upload architecture decision
 
 ## Test Plans
 

@@ -3,7 +3,7 @@
 This directory stores Architecture Decision Records.
 
 Current ADRs:
-- `0001-stage-uploaded-documents-and-convert-in-agent.md`
+- `0001-stage-and-convert-uploaded-documents-in-master.md`
 
 File naming convention:
 - `NNNN-short-title.md`

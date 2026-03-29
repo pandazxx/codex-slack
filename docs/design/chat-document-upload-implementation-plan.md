@@ -2,19 +2,19 @@
 
 **Status:** draft  
 **Author:** Codex architect  
-**Date:** 2026-03-28  
-**Related ADRs:** `docs/decisions/0001-stage-uploaded-documents-and-convert-in-agent.md`
+**Date:** 2026-03-29  
+**Related ADRs:** `docs/decisions/0001-stage-and-convert-uploaded-documents-in-master.md`
 
 ## Goal
 
 Implement support for `docx` and `pdf` uploads in Slack and Discord so that:
 
-- master stages uploaded documents into request-scoped storage outside the repo
-- master stages uploaded images through the same request-scoped storage path
-- agent discovers staged attachments through `AGENT_REQUEST_MANIFEST`
-- agent converts documents with `Mammoth` and `PyMuPDF4LLM`
-- agent reads and edits the derived Markdown artifact
-- when modifications are requested, the agent can commit the derived artifact and return a GitHub URL
+- master stages uploaded documents and images into request-scoped storage outside the repo
+- master converts supported documents to Markdown before dispatch
+- master extracts images from the original document into request-scoped derived storage
+- generated Markdown refers to extracted images with correct relative paths
+- agent discovers all staged and derived artifacts through `AGENT_REQUEST_MANIFEST`
+- when modifications are requested, the agent can copy selected derived output into `/workspace/repo/...`, commit it, and return a GitHub URL
 
 ## Current Integration Points
 
@@ -23,36 +23,40 @@ The current code already provides the right hooks:
 - [src/master/slack_app.py](/workspace/repo/src/master/slack_app.py)
   Handles Slack events and currently extracts image attachments.
 - [src/master/discord_app.py](/workspace/repo/src/master/discord_app.py)
-  Handles Discord messages and currently reads text attachments inline plus image extraction.
+  Handles Discord messages and currently reads some attachment types inline.
 - [src/master/router.py](/workspace/repo/src/master/router.py)
-  Owns prompt dispatch and already stages Slack private images into the container.
-- [src/agent/worker.py](/workspace/repo/src/agent/worker.py)
-  Owns agent startup stages and can prepare request storage roots and runtime prerequisites.
+  Owns prompt dispatch and already stages some Slack image inputs.
+- [src/master/service.py](/workspace/repo/src/master/service.py)
+  Owns agent startup and is the right place to mount request storage.
+- [src/master/runtime_adapter.py](/workspace/repo/src/master/runtime_adapter.py)
+  Centralizes container mount wiring.
 
 ## High-Level Design
 
 ### Master responsibilities
 
 - detect supported document and image attachments from Slack and Discord
-- manage request-scoped source storage through a mounted request area attached to the agent container
-- download and stage them into request-scoped storage
-- write a request manifest JSON file
+- manage request-scoped storage through a mounted request area attached to the agent container
+- download and stage uploaded source files
+- convert supported `docx` and `pdf` files to Markdown before dispatch
+- extract images from uploaded documents and store them in request-scoped derived storage
+- ensure generated Markdown refers to extracted assets with correct relative paths
+- write a request manifest JSON file that describes both source and derived artifacts
 - inject `AGENT_REQUEST_MANIFEST` into the dispatch environment
-- clean up the request directory after the reply is complete
+- clean up the request directory after a successful reply
 - keep the routed prompt close to the user’s original text
 
 ### Agent responsibilities
 
 - read `AGENT_REQUEST_MANIFEST`
-- ingest each staged `docx` / `pdf`
+- read derived Markdown for document attachments
 - read staged image attachments from the same manifest when present
-- convert to Markdown and extracted assets in a separate writable location
-- work from derived artifacts
-- commit derived artifacts if the task requires durable output
+- decide whether to produce durable repo output from the derived artifact
+- write durable output into `/workspace/repo/...` when a commit-ready result is needed
 
 ## Request Storage Layout
 
-Request-specific source storage lives outside the repo, under `/workspace/message/`, and is exposed to the agent through a master-managed mount created when the agent container starts.
+Request-specific storage lives outside the repo, under `/workspace/message/`, and is exposed to the agent through a master-managed mount created when the agent container starts.
 
 ### Mount implementation choice
 
@@ -61,16 +65,10 @@ For the first implementation, use a shared host bind path per agent.
 Suggested shape:
 
 - host path: `/var/lib/codex-slack/messages/<agent-name>/`
-- master mount path: writable host path or writable master-container mount
+- master path: writable direct filesystem access or equivalent writable mount inside the master runtime
 - agent mount path: `/workspace/message` as read-only
 
-Why this choice:
-
-- simplest for master to write and clean up directly
-- easiest to inspect during development and operations
-- avoids helper-container write flows for the first implementation
-
-Recommended layout:
+### Layout
 
 ```text
 /workspace/message/
@@ -79,21 +77,27 @@ Recommended layout:
     source/
       file-001.docx
       file-002.pdf
+      image-001.png
+    derived/
+      att-1/
+        document.md
+        assets/
+          image-001.png
+          image-002.jpeg
+        derived.json
+      att-2/
+        document.md
+        assets/
+        derived.json
 ```
 
 ### Why this layout
 
-- transient request inputs stay outside the Git worktree
-- multiple attachments can share one request directory
-- the agent can still read the paths directly
-- the mount lifetime is per agent, while the request directory lifetime is per message
-- the agent does not need write access to request-scoped source data
-
-### Derived artifact location
-
-Derived Markdown and extracted assets should not be written back into the read-only request source mount.
-
-That writable derived-output location is a separate concern and remains the next implementation decision to settle.
+- transient request data stays outside the Git worktree
+- source and derived artifacts are grouped under one request id
+- master can fully own artifact creation and cleanup
+- agent can consume request data read-only
+- document-local derived files can use stable relative references like `assets/image-001.png`
 
 ## Request ID Scheme
 
@@ -101,15 +105,11 @@ Use a deterministic request id per routed message.
 
 ### Slack
 
-Suggested format:
-
 ```text
 slack-<channel-id>-<thread-ts-or-event-ts>-<event-ts>
 ```
 
 ### Discord
-
-Suggested format:
 
 ```text
 discord-<channel-id>-<message-id>
@@ -141,14 +141,21 @@ Suggested schema:
       "filename": "example.docx",
       "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "staged_path": "/workspace/message/slack-C123-171234-171235/source/example.docx",
-      "format_hint": "docx"
+      "format_hint": "docx",
+      "derived": {
+        "markdown_path": "/workspace/message/slack-C123-171234-171235/derived/att-1/document.md",
+        "assets_dir": "/workspace/message/slack-C123-171234-171235/derived/att-1/assets",
+        "manifest_path": "/workspace/message/slack-C123-171234-171235/derived/att-1/derived.json",
+        "converter": "mammoth",
+        "warnings": []
+      }
     },
     {
       "id": "att-2",
       "kind": "image",
       "filename": "diagram.png",
-      "staged_path": "/workspace/message/slack-C123-171234-171235/source/diagram.png",
-      "content_type": "image/png"
+      "content_type": "image/png",
+      "staged_path": "/workspace/message/slack-C123-171234-171235/source/diagram.png"
     }
   ]
 }
@@ -159,6 +166,7 @@ Suggested schema:
 - use one flat `attachments` array rather than separate top-level buckets
 - `kind` is the discriminator
 - `staged_path` is always an absolute path inside the container
+- `derived` is present only for converted document attachments
 
 ## Master-Side Changes
 
@@ -196,7 +204,7 @@ Add helpers:
 
 File: [src/master/router.py](/workspace/repo/src/master/router.py)
 
-Add a new normalized dataclass:
+Add a normalized dataclass:
 
 ```python
 @dataclass(frozen=True)
@@ -209,11 +217,12 @@ class RoutedAttachment:
     format_hint: str | None = None
 ```
 
-Add staging functions:
+Add staging and conversion functions:
 
 - `_stage_request_attachments(...)`
 - `_stage_slack_attachment(...)`
 - `_stage_discord_attachment(...)`
+- `_convert_staged_document(...)`
 - `_write_request_manifest(...)`
 - `_cleanup_request_attachments(...)`
 
@@ -229,24 +238,23 @@ File: [src/master/router.py](/workspace/repo/src/master/router.py)
 Extend `PodmanExecDispatcher.send_prompt()` to inject:
 
 - `AGENT_REQUEST_MANIFEST=/workspace/message/<request-id>/manifest.json`
-- `AGENT_REQUEST_ID=<request-id>`
 
 This should happen on the `podman exec` call, just like current per-dispatch env vars.
 
-### 4a. Runtime mount wiring
+### 5. Runtime mount wiring
 
 Files:
 
 - [src/master/service.py](/workspace/repo/src/master/service.py)
 - [src/master/runtime_adapter.py](/workspace/repo/src/master/runtime_adapter.py)
 
-At agent start time, mount a dedicated request-source path into the container, for example:
+At agent start time, mount the request-storage path into the container as:
 
 - host bind path -> `/workspace/message:ro`
 
 Master owns this storage area and writes request-scoped subdirectories into it during dispatch.
 
-### 5. Prompt handling
+### 6. Prompt handling
 
 Do not append document or image attachment listings to the prompt body.
 
@@ -259,44 +267,43 @@ The agent is expected to discover staged attachments via:
 
 This replaces the current special-case image URL prompt augmentation model.
 
-## Agent-Side Changes
+### 7. Document conversion service
 
-### Packaging choice
+New files:
 
-Use a Python-first `agent-doc` CLI as the project interface.
-
-Implementation shape:
-
-- Python owns:
-  - request-manifest handling
-  - path and artifact management
-  - JSON output contract
-  - `pdf` ingestion through PyMuPDF4LLM
-- `docx` ingestion uses a small Node helper or subprocess path for Mammoth
-
-Why this choice:
-
-- one stable CLI for both `codex` and `claude-code`
-- best fit with the existing Python-heavy codebase
-- avoids turning the whole feature into a Node-first subsystem
-
-### 1. Worker preparation
-
-File: [src/agent/worker.py](/workspace/repo/src/agent/worker.py)
-
-Add a new startup stage:
-
-- `message_storage_prepare`
+- `src/master/document_convert.py`
+- `src/master/document_convert_docx.js`
+- optional helper module(s) for shared path and manifest writing
 
 Responsibilities:
 
-- ensure `/workspace/message` exists
-- ensure it is writable
-- emit status events about message storage readiness
+- convert staged `docx` with Mammoth
+- convert staged `pdf` with PyMuPDF4LLM
+- write converted Markdown into `derived/<attachment-id>/document.md`
+- extract document images into `derived/<attachment-id>/assets/`
+- ensure Markdown uses relative image references rooted at the per-attachment `assets/` directory
+- emit per-attachment `derived.json`
 
-This stage should not create per-request directories. Those are master-owned at dispatch time inside the mounted request-storage area.
+Example per-attachment derived manifest:
 
-### 2. Request manifest reader
+```json
+{
+  "attachment_id": "att-1",
+  "source_path": "/workspace/message/req-123/source/example.docx",
+  "format": "docx",
+  "converter": "mammoth",
+  "derived_markdown_path": "/workspace/message/req-123/derived/att-1/document.md",
+  "assets_dir": "/workspace/message/req-123/derived/att-1/assets",
+  "assets": [
+    "assets/image-001.png"
+  ],
+  "warnings": []
+}
+```
+
+## Agent-Side Changes
+
+### 1. Request manifest reader
 
 New file:
 
@@ -306,7 +313,7 @@ Responsibilities:
 
 - load `AGENT_REQUEST_MANIFEST`
 - validate schema
-- expose typed accessors for attachments
+- expose typed accessors for staged source files, derived Markdown, and staged images
 
 Suggested interface:
 
@@ -314,113 +321,65 @@ Suggested interface:
 def load_request_manifest() -> RequestManifest: ...
 ```
 
-### 3. Document ingestion CLI
-
-New file:
-
-- `src/agent/document_cli.py`
-
-Command:
-
-```bash
-agent-doc ingest <staged-path> [--output-dir <dir>]
-```
-
-Required JSON output:
-
-```json
-{
-  "ok": true,
-  "format": "docx",
-  "source_path": "/workspace/message/req-123/source/example.docx",
-  "derived_markdown_path": "<separate writable location>/req-123/att-1/document.md",
-  "assets_dir": "<separate writable location>/req-123/att-1/assets",
-  "warnings": []
-}
-```
-
-### 4. `docx` ingestion
-
-New file:
-
-- `src/agent/doc_ingest_docx.py`
-
-Responsibilities:
-
-- call Mammoth on the staged `docx`
-- emit Markdown
-- extract images into `assets/`
-- emit an attachment-local derived manifest
-
-### 5. `pdf` ingestion
-
-New file:
-
-- `src/agent/doc_ingest_pdf.py`
-
-Responsibilities:
-
-- call PyMuPDF4LLM / PyMuPDF on the staged `pdf`
-- emit Markdown
-- extract images into `assets/`
-- emit an attachment-local derived manifest
-
-### 6. Attachment-local derived manifest
-
-For each document attachment, emit:
-
-```json
-{
-  "attachment_id": "att-1",
-  "source_path": "/workspace/message/req-123/source/example.docx",
-  "format": "docx",
-  "converter": "mammoth",
-  "derived_markdown_path": "<separate writable location>/req-123/att-1/document.md",
-  "assets": [
-    "assets/image-001.png"
-  ],
-  "warnings": []
-}
-```
-
-## Agent Workflow Contract
+### 2. Workflow contract
 
 Repo instructions should direct both `codex` and `claude-code` to:
 
 1. check `AGENT_REQUEST_MANIFEST`
-2. ingest any document attachments before attempting analysis
-3. read and edit the derived Markdown, not the original binary file
-4. decide project-level source retention behavior independently
+2. use `derived.markdown_path` for document attachments when present
+3. use staged image paths directly for image attachments
+4. avoid mutating request storage
+5. copy or rewrite any durable output into `/workspace/repo/...` before commit
+
+### 3. Optional helper CLI
+
+If the agent needs a helper for manifest inspection, keep it thin and read-only, for example:
+
+```bash
+agent-request show
+```
+
+This helper is optional. The core contract is the manifest itself, not a mandatory CLI.
+
+## Unified Image Flow
+
+Image attachments use the same request flow as documents:
+
+- master stages them into `source/`
+- manifest records them as `kind=image`
+- agent reads staged image paths from the manifest
+- no image URLs or image file paths are appended into the prompt
+
+This retires the current special-case image prompt augmentation model.
 
 ## Expected Runtime Flow
 
 ### Read-only request
 
 1. user uploads `docx`, `pdf`, and/or images
-2. master stages file into `/workspace/message/<request-id>/source/`
-3. master writes manifest
-4. master dispatches prompt with `AGENT_REQUEST_MANIFEST`
-5. agent ingests document attachments into a separate writable derived-output area and reads image attachments from the same manifest
-6. agent replies in chat
-7. master cleans up `/workspace/message/<request-id>/`
+2. master stages files into `/workspace/message/<request-id>/source/`
+3. master converts supported documents into `/workspace/message/<request-id>/derived/<attachment-id>/`
+4. master writes manifest
+5. master dispatches prompt with `AGENT_REQUEST_MANIFEST`
+6. agent reads derived Markdown for documents and staged image paths for images
+7. agent replies in chat
+8. master cleans up `/workspace/message/<request-id>/`
 
 ### Modify-and-commit request
 
 1. user uploads `docx` or `pdf`
-2. same staging and ingestion flow
-3. agent edits derived Markdown
-4. agent copies or writes the final durable Markdown artifact into `/workspace/repo/...`
-5. agent commits and pushes
-6. agent replies with URL
-7. master cleans up `/workspace/message/<request-id>/`
+2. same staging and conversion flow
+3. agent edits the derived Markdown content conceptually, but writes the durable final artifact into `/workspace/repo/...`
+4. agent commits and pushes
+5. agent replies with the resulting URL
+6. master cleans up `/workspace/message/<request-id>/`
 
-## Important Boundary
+## Important Boundaries
 
-Derived request artifacts may not be written into `/workspace/message/...` because that mount is read-only to the agent.
-
-Final durable output placement inside `/workspace/repo/...` is owned by the project/agent workflow, not by a platform-fixed path convention.
-
-That writable derived-output location, and any later copy/move into `/workspace/repo/...`, are part of the agent task workflow, not part of master routing.
+- request storage is read-only to the agent
+- request storage is transport-scoped and cleaned by master
+- durable output belongs in `/workspace/repo/...`, not in request storage
+- final durable output placement inside `/workspace/repo/...` is owned by the project/agent workflow, not by a platform-fixed path convention
 
 ## Logging and Observability
 
@@ -428,11 +387,12 @@ Add structured logs for:
 
 - attachment detection
 - attachment download success/failure
+- conversion start/finish per attachment
+- image extraction count and output directory
 - request manifest write
 - env injection path
 - request cleanup start/finish
-- agent ingest success/failure
-- derived artifact locations
+- cleanup retention on failure
 
 ## Cleanup Policy
 
@@ -452,25 +412,18 @@ Use the following validation policy:
 - one global size cap for supported attachments
 - hard rejection for unsupported or oversized document attachments
 
-Why this choice:
-
-- MIME metadata from chat platforms is useful but not always reliable
-- extension fallback improves practical usability
-- one global cap keeps the first implementation simpler
-- hard rejection avoids silent partial behavior for document ingestion
-
 Master should reject:
 
 - unsupported document types
 - attachments above a configurable size threshold
 - missing download URLs
 
-Agent ingest should fail clearly on:
+Master conversion should fail clearly on:
 
-- unreadable manifest
 - missing staged file
 - unsupported format
 - converter failure
+- missing derived Markdown output
 
 ## Tests
 
@@ -481,25 +434,28 @@ Agent ingest should fail clearly on:
 - Discord document attachment extraction
 - Discord image attachment extraction into normalized attachment records
 - request id generation
-- manifest JSON generation
+- mixed document and image staging
+- manifest JSON generation including derived metadata
 - per-dispatch env injection
+- document conversion output path generation
+- Markdown image-reference correctness
 
 ### Router tests
 
-- mixed image + document attachment staging
 - no prompt augmentation for images or documents
 - correct `AGENT_REQUEST_MANIFEST` propagation
+- cleanup on success and retention on failure
 
 ### Agent unit tests
 
 - request manifest loading
-- `docx` ingest command output shape
-- `pdf` ingest command output shape
+- document attachment selection prefers `derived.markdown_path`
+- image attachment selection reads staged image paths
 
 ### Integration tests
 
-- staged `docx` flows from master to agent and produces derived Markdown
-- staged `pdf` flows from master to agent and produces derived Markdown
+- staged `docx` flows from master to agent with converted Markdown and extracted images
+- staged `pdf` flows from master to agent with converted Markdown and extracted images
 - modification flow can place durable output into repo and commit it
 
 ## Delivery Plan
@@ -513,23 +469,23 @@ Agent ingest should fail clearly on:
 - add request-storage mount wiring on agent start
 - inject `AGENT_REQUEST_MANIFEST`
 
-### Phase 2: Agent ingestion foundation
+### Phase 2: Master conversion foundation
 
-- add request manifest loader
-- add `agent-doc ingest`
-- implement `docx` ingestion with Mammoth
-- implement `pdf` ingestion with PyMuPDF4LLM
+- implement `docx` conversion with Mammoth
+- implement `pdf` conversion with PyMuPDF4LLM
+- write per-attachment derived manifests
+- validate Markdown-relative image references
 
 ### Phase 3: Agent workflow integration
 
-- update repo instructions for attachment discovery
+- update repo instructions for manifest-driven attachment discovery
+- ensure agent workflows consume derived Markdown and staged images
 - add durable output workflow for commit-ready Markdown
-- add tests for both `codex` and `claude-code` execution paths where feasible
 
 ### Phase 4: Hardening
 
 - file size limits
-- cleanup policy for `/workspace/message/<request-id>/`
+- failure retention policy hardening
 - converter warning surfacing
 - unsupported feature reporting for tables/images/layout issues
 
@@ -539,7 +495,3 @@ Agent ingest should fail clearly on:
 - regenerating `docx` or `pdf`
 - OCR-heavy scanned PDF support
 - perfect binary round-trip fidelity
-
-## Remaining Implementation Decision
-
-- choose the writable derived-output location for agent-generated Markdown and assets
