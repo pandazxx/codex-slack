@@ -1,6 +1,6 @@
 # Chat Document Upload Implementation Design
 
-**Status:** draft  
+**Status:** implemented baseline  
 **Author:** Codex architect  
 **Date:** 2026-03-29  
 **Related ADRs:** `docs/decisions/0001-stage-and-convert-uploaded-documents-in-master.md`
@@ -269,20 +269,24 @@ This replaces the current special-case image URL prompt augmentation model.
 
 ### 7. Document conversion service
 
-New files:
+Implemented file:
 
 - `src/master/document_convert.py`
-- `src/master/document_convert_docx.js`
-- optional helper module(s) for shared path and manifest writing
 
 Responsibilities:
 
-- convert staged `docx` with Mammoth
-- convert staged `pdf` with PyMuPDF4LLM
+- convert staged `docx` into Markdown and extracted assets
+- convert staged `pdf` into Markdown and best-effort extracted content
 - write converted Markdown into `derived/<attachment-id>/document.md`
 - extract document images into `derived/<attachment-id>/assets/`
 - ensure Markdown uses relative image references rooted at the per-attachment `assets/` directory
 - emit per-attachment `derived.json`
+
+Current implementation notes:
+
+- `docx` conversion currently uses an internal XML-based fallback converter in Python
+- `pdf` conversion currently uses optional `pypdf` text extraction with a clear warning when the dependency is unavailable
+- the ADR target remains `Mammoth + PyMuPDF4LLM`, but the code now ships a working baseline path instead of waiting on the final toolchain
 
 Example per-attachment derived manifest:
 
@@ -291,7 +295,7 @@ Example per-attachment derived manifest:
   "attachment_id": "att-1",
   "source_path": "/workspace/message/req-123/source/example.docx",
   "format": "docx",
-  "converter": "mammoth",
+  "converter": "docx-xml-fallback",
   "derived_markdown_path": "/workspace/message/req-123/derived/att-1/document.md",
   "assets_dir": "/workspace/message/req-123/derived/att-1/assets",
   "assets": [
@@ -347,6 +351,10 @@ agent-request show
 ```
 
 This helper is optional. The core contract is the manifest itself, not a mandatory CLI.
+
+Implemented file:
+
+- `src/agent/request_manifest.py`
 
 ## Unified Image Flow
 

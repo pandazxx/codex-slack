@@ -30,3 +30,5 @@ Implemented command set:
 - Slack routed prompts start with an app mention and continue in thread replies.
 - Discord routed prompts start with a mention and continue inside the created Thread channel.
 - Master admin commands are valid only in configured admin channels for the corresponding frontend.
+- Routed Slack and Discord attachment requests are exposed to the agent through `AGENT_REQUEST_MANIFEST`, not prompt-appended file lists.
+- Request manifests can contain staged image attachments plus document-derived Markdown and asset paths under `/workspace/message/<request-id>/...`.

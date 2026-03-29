@@ -154,6 +154,12 @@ Rationale:
 - it matches the requirement focus on headers, text, tables, and basic image extraction
 - it avoids dragging in a heavier office-suite dependency for the first implementation
 
+Current implementation note:
+
+- the accepted target toolchain remains `Mammoth + PyMuPDF4LLM`
+- the repository currently ships a working baseline converter in `src/master/document_convert.py`
+- that baseline uses an internal DOCX XML fallback and optional `pypdf` extraction for PDFs until the final toolchain is wired in
+
 ### 7. Original uploaded binary retention
 
 Decision: whether the original uploaded binary is committed is left to the project/agent workflow, not enforced as a global platform rule.
