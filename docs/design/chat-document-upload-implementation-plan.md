@@ -54,6 +54,21 @@ The current code already provides the right hooks:
 
 Request-specific storage lives outside the repo, under `/workspace/message/`, and is exposed to the agent through a master-managed mount created when the agent container starts.
 
+### Mount implementation choice
+
+For the first implementation, use a shared host bind path per agent.
+
+Suggested shape:
+
+- host path: `/var/lib/codex-slack/messages/<agent-name>/`
+- container path: `/workspace/message`
+
+Why this choice:
+
+- simplest for master to write and clean up directly
+- easiest to inspect during development and operations
+- avoids helper-container write flows for the first implementation
+
 Recommended layout:
 
 ```text
