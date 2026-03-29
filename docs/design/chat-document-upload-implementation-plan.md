@@ -417,6 +417,8 @@ Repo instructions should direct both `codex` and `claude-code` to:
 
 Derived request artifacts may initially live under `/workspace/message/...`, but anything that must be committed must end up inside `/workspace/repo/...`.
 
+Final durable output placement inside `/workspace/repo/...` is owned by the project/agent workflow, not by a platform-fixed path convention.
+
 That copy/move step is part of the agent task workflow, not part of master routing.
 
 ## Logging and Observability
