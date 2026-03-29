@@ -34,7 +34,7 @@ The current code already provides the right hooks:
 ### Master responsibilities
 
 - detect supported document and image attachments from Slack and Discord
-- manage request-scoped storage through a mounted request area attached to the agent container
+- manage request-scoped source storage through a mounted request area attached to the agent container
 - download and stage them into request-scoped storage
 - write a request manifest JSON file
 - inject `AGENT_REQUEST_MANIFEST` into the dispatch environment
@@ -46,13 +46,13 @@ The current code already provides the right hooks:
 - read `AGENT_REQUEST_MANIFEST`
 - ingest each staged `docx` / `pdf`
 - read staged image attachments from the same manifest when present
-- convert to Markdown and extracted assets
+- convert to Markdown and extracted assets in a separate writable location
 - work from derived artifacts
 - commit derived artifacts if the task requires durable output
 
 ## Request Storage Layout
 
-Request-specific storage lives outside the repo, under `/workspace/message/`, and is exposed to the agent through a master-managed mount created when the agent container starts.
+Request-specific source storage lives outside the repo, under `/workspace/message/`, and is exposed to the agent through a master-managed mount created when the agent container starts.
 
 ### Mount implementation choice
 
@@ -61,7 +61,8 @@ For the first implementation, use a shared host bind path per agent.
 Suggested shape:
 
 - host path: `/var/lib/codex-slack/messages/<agent-name>/`
-- container path: `/workspace/message`
+- master mount path: writable host path or writable master-container mount
+- agent mount path: `/workspace/message` as read-only
 
 Why this choice:
 
@@ -78,21 +79,21 @@ Recommended layout:
     source/
       file-001.docx
       file-002.pdf
-    derived/
-      <attachment-id>/
-        document.md
-        manifest.json
-        assets/
-          image-001.png
 ```
 
 ### Why this layout
 
 - transient request inputs stay outside the Git worktree
 - multiple attachments can share one request directory
-- derived artifacts are easy to inspect and clean up
 - the agent can still read the paths directly
 - the mount lifetime is per agent, while the request directory lifetime is per message
+- the agent does not need write access to request-scoped source data
+
+### Derived artifact location
+
+Derived Markdown and extracted assets should not be written back into the read-only request source mount.
+
+That writable derived-output location is a separate concern and remains the next implementation decision to settle.
 
 ## Request ID Scheme
 
@@ -239,9 +240,9 @@ Files:
 - [src/master/service.py](/workspace/repo/src/master/service.py)
 - [src/master/runtime_adapter.py](/workspace/repo/src/master/runtime_adapter.py)
 
-At agent start time, mount a dedicated request-storage path into the container, for example:
+At agent start time, mount a dedicated request-source path into the container, for example:
 
-- host/volume -> `/workspace/message`
+- host bind path -> `/workspace/message:ro`
 
 Master owns this storage area and writes request-scoped subdirectories into it during dispatch.
 
@@ -332,8 +333,8 @@ Required JSON output:
   "ok": true,
   "format": "docx",
   "source_path": "/workspace/message/req-123/source/example.docx",
-  "derived_markdown_path": "/workspace/message/req-123/derived/att-1/document.md",
-  "assets_dir": "/workspace/message/req-123/derived/att-1/assets",
+  "derived_markdown_path": "<separate writable location>/req-123/att-1/document.md",
+  "assets_dir": "<separate writable location>/req-123/att-1/assets",
   "warnings": []
 }
 ```
@@ -374,7 +375,7 @@ For each document attachment, emit:
   "source_path": "/workspace/message/req-123/source/example.docx",
   "format": "docx",
   "converter": "mammoth",
-  "derived_markdown_path": "/workspace/message/req-123/derived/att-1/document.md",
+  "derived_markdown_path": "<separate writable location>/req-123/att-1/document.md",
   "assets": [
     "assets/image-001.png"
   ],
@@ -399,7 +400,7 @@ Repo instructions should direct both `codex` and `claude-code` to:
 2. master stages file into `/workspace/message/<request-id>/source/`
 3. master writes manifest
 4. master dispatches prompt with `AGENT_REQUEST_MANIFEST`
-5. agent ingests document attachments to Markdown and reads image attachments from the same manifest
+5. agent ingests document attachments into a separate writable derived-output area and reads image attachments from the same manifest
 6. agent replies in chat
 7. master cleans up `/workspace/message/<request-id>/`
 
@@ -415,11 +416,11 @@ Repo instructions should direct both `codex` and `claude-code` to:
 
 ## Important Boundary
 
-Derived request artifacts may initially live under `/workspace/message/...`, but anything that must be committed must end up inside `/workspace/repo/...`.
+Derived request artifacts may not be written into `/workspace/message/...` because that mount is read-only to the agent.
 
 Final durable output placement inside `/workspace/repo/...` is owned by the project/agent workflow, not by a platform-fixed path convention.
 
-That copy/move step is part of the agent task workflow, not part of master routing.
+That writable derived-output location, and any later copy/move into `/workspace/repo/...`, are part of the agent task workflow, not part of master routing.
 
 ## Logging and Observability
 
@@ -538,3 +539,7 @@ Agent ingest should fail clearly on:
 - regenerating `docx` or `pdf`
 - OCR-heavy scanned PDF support
 - perfect binary round-trip fidelity
+
+## Remaining Implementation Decision
+
+- choose the writable derived-output location for agent-generated Markdown and assets
