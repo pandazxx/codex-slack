@@ -132,6 +132,51 @@ def test_create_or_update_agent_creates_request_message_bind_source(monkeypatch)
     ]
 
 
+def test_create_or_update_agent_falls_back_to_local_mkdir_for_remote_podman(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    adapter = PodmanRuntimeAdapter()
+    seen: list[list[str]] = []
+    request_root = tmp_path / "messages" / "payments-api"
+
+    monkeypatch.setattr(adapter, "_container_exists", lambda _: False)
+
+    def fake_run(cmd: list[str], cwd: str | None = None, check: bool = True):  # type: ignore[no-untyped-def]
+        seen.append(cmd)
+        if cmd[:3] == ["podman", "unshare", "mkdir"]:
+            raise RuntimeErrorAdapter(
+                'Command failed (podman unshare mkdir -p /tmp/messages): '
+                'Error: cannot use command "podman unshare" with the remote podman client'
+            )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(adapter, "_run", fake_run)
+
+    adapter.create_or_update_agent(
+        container_name="agent-payments-api",
+        image="codex-slack-bot:latest",
+        repo_volume="agent-workspace-payments-api",
+        mounts=[f"{request_root}:/workspace/message:ro"],
+    )
+
+    assert request_root.is_dir()
+    assert seen[0] == [
+        "podman",
+        "unshare",
+        "mkdir",
+        "-p",
+        str(request_root),
+    ]
+    assert seen[1][0:8] == [
+        "podman",
+        "create",
+        "--userns=keep-id",
+        "--security-opt",
+        "label=disable",
+        "--name",
+        "agent-payments-api",
+        "-v",
+    ]
+
+
 def test_refresh_agent_auth_replaces_auth_file_without_deleting_codex_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = PodmanRuntimeAdapter()
     seen: list[list[str]] = []
