@@ -433,6 +433,21 @@ Add structured logs for:
 
 ## Validation Rules
 
+### Attachment acceptance policy
+
+Use the following validation policy:
+
+- best-effort acceptance if either MIME type or filename extension looks correct
+- one global size cap for supported attachments
+- hard rejection for unsupported or oversized document attachments
+
+Why this choice:
+
+- MIME metadata from chat platforms is useful but not always reliable
+- extension fallback improves practical usability
+- one global cap keeps the first implementation simpler
+- hard rejection avoids silent partial behavior for document ingestion
+
 Master should reject:
 
 - unsupported document types
