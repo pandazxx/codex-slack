@@ -33,9 +33,11 @@ The current code already provides the right hooks:
 ### Master responsibilities
 
 - detect supported document attachments from Slack and Discord
+- manage request-scoped storage through a mounted request area attached to the agent container
 - download and stage them into request-scoped storage
 - write a request manifest JSON file
 - inject `AGENT_REQUEST_MANIFEST` into the dispatch environment
+- clean up the request directory after the reply is complete
 - keep the routed prompt close to the user’s original text
 
 ### Agent responsibilities
@@ -48,7 +50,7 @@ The current code already provides the right hooks:
 
 ## Request Storage Layout
 
-Request-specific storage lives outside the repo, under `/workspace/message/`.
+Request-specific storage lives outside the repo, under `/workspace/message/`, and is exposed to the agent through a master-managed mount created when the agent container starts.
 
 Recommended layout:
 
@@ -73,6 +75,7 @@ Recommended layout:
 - multiple attachments can share one request directory
 - derived artifacts are easy to inspect and clean up
 - the agent can still read the paths directly
+- the mount lifetime is per agent, while the request directory lifetime is per message
 
 ## Request ID Scheme
 
@@ -194,6 +197,7 @@ Add staging functions:
 - `_stage_slack_attachment(...)`
 - `_stage_discord_attachment(...)`
 - `_write_request_manifest(...)`
+- `_cleanup_request_attachments(...)`
 
 ### 4. Dispatcher env injection
 
@@ -205,6 +209,19 @@ Extend `PodmanExecDispatcher.send_prompt()` to inject:
 - `AGENT_REQUEST_ID=<request-id>`
 
 This should happen on the `podman exec` call, just like current per-dispatch env vars.
+
+### 4a. Runtime mount wiring
+
+Files:
+
+- [src/master/service.py](/workspace/repo/src/master/service.py)
+- [src/master/runtime_adapter.py](/workspace/repo/src/master/runtime_adapter.py)
+
+At agent start time, mount a dedicated request-storage path into the container, for example:
+
+- host/volume -> `/workspace/message`
+
+Master owns this storage area and writes request-scoped subdirectories into it during dispatch.
 
 ### 5. Prompt handling
 
@@ -233,7 +250,7 @@ Responsibilities:
 - ensure it is writable
 - emit status events about message storage readiness
 
-This stage should not create per-request directories. Those are master-owned at dispatch time.
+This stage should not create per-request directories. Those are master-owned at dispatch time inside the mounted request-storage area.
 
 ### 2. Request manifest reader
 
@@ -341,6 +358,7 @@ Repo instructions should direct both `codex` and `claude-code` to:
 4. master dispatches prompt with `AGENT_REQUEST_MANIFEST`
 5. agent ingests the file to Markdown
 6. agent reads Markdown and replies in chat
+7. master cleans up `/workspace/message/<request-id>/`
 
 ### Modify-and-commit request
 
@@ -350,6 +368,7 @@ Repo instructions should direct both `codex` and `claude-code` to:
 4. agent copies or writes the final durable Markdown artifact into `/workspace/repo/...`
 5. agent commits and pushes
 6. agent replies with URL
+7. master cleans up `/workspace/message/<request-id>/`
 
 ## Important Boundary
 
@@ -365,6 +384,7 @@ Add structured logs for:
 - attachment download success/failure
 - request manifest write
 - env injection path
+- request cleanup start/finish
 - agent ingest success/failure
 - derived artifact locations
 
@@ -418,6 +438,7 @@ Agent ingest should fail clearly on:
 - add document-attachment extraction to Slack and Discord frontends
 - add request id generation
 - add request-scoped staging and manifest writing
+- add request-storage mount wiring on agent start
 - inject `AGENT_REQUEST_MANIFEST`
 
 ### Phase 2: Agent ingestion foundation

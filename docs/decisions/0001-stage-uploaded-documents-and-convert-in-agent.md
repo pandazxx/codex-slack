@@ -180,7 +180,7 @@ Rationale:
 
 ### 8. Request-specific storage location
 
-Decision: request-specific attachment storage should live outside `/workspace/repo/`, for example under `/workspace/message/<request-id>/...`.
+Decision: request-specific attachment storage should live outside `/workspace/repo/`, for example under `/workspace/message/<request-id>/...`, via a master-managed request-storage mount attached to the agent container.
 
 Rationale:
 
@@ -189,23 +189,19 @@ Rationale:
 - gives the platform a cleaner lifecycle boundary for request-scoped cleanup
 - the agent can still read absolute paths under `/workspace/`, so this does not block processing
 
+### 9. Request-storage lifecycle
+
+Decision: master manages request storage and cleans up the request directory after the message has been replied.
+
+Rationale:
+
+- request manifests and staged sources are transport-scoped artifacts owned by master
+- cleanup should not depend on agent behavior after the reply is complete
+- request data should not accumulate indefinitely in the mounted storage area
+
 ## Remaining Discussion Items
 
 - none at the ADR level
-
-### Discussion Note: Request-Specific Storage Location
-
-This has not been decided yet, but the current direction under discussion is:
-
-- request-scoped input artifacts may live outside the Git worktree, for example `/workspace/message/<request-id>/...`
-- commit-worthy derived Markdown artifacts may later be written into `/workspace/repo/...`
-
-This is technically viable because the agent can read absolute paths under `/workspace/`, not only files under `/workspace/repo/`.
-
-The decision is still open because there is a tradeoff between:
-
-- cleaner separation of transient input artifacts from Git-tracked output
-- versus simpler path handling when everything stays under the repo worktree
 
 ### Discussion Note: Conversion Toolchain Comparison
 
