@@ -14,6 +14,7 @@ from .runtime_adapter import RuntimeAdapter
 DEFAULT_IMAGE = "codex-slack-bot:latest"
 DEFAULT_RUNTIME = "podman"
 DEFAULT_AGENT_ADAPTER = "codex"
+DEFAULT_MESSAGE_ROOT = "/var/lib/codex-slack/messages"
 SUPPORTED_AGENT_ADAPTERS = {"codex", "claude-code"}
 GLOBAL_CODEX_CONFIG_MOUNT = "/run/secrets/master_codex_config"
 GLOBAL_CLAUDE_CONFIG_MOUNT = "/run/secrets/master_claude_config"
@@ -42,6 +43,7 @@ class MasterService:
         git_user_name: str | None = None,
         git_user_email: str | None = None,
         default_agent_adapter: str = DEFAULT_AGENT_ADAPTER,
+        message_root: str = DEFAULT_MESSAGE_ROOT,
     ) -> None:
         self._registry = registry
         self._runtime = runtime
@@ -54,6 +56,7 @@ class MasterService:
         self._git_user_name = git_user_name
         self._git_user_email = git_user_email
         self._default_agent_adapter = default_agent_adapter if default_agent_adapter in SUPPORTED_AGENT_ADAPTERS else DEFAULT_AGENT_ADAPTER
+        self._message_root = message_root
 
     def list_agents(self) -> CommandResult:
         agents = []
@@ -192,7 +195,7 @@ class MasterService:
                 image=image,
                 repo_volume=f"agent-workspace-{record.name}",
                 env=self._build_agent_env(record),
-                mounts=self._build_agent_mounts(),
+                mounts=self._build_agent_mounts(record),
             )
             self._runtime.start_agent(record.container_name)
         except Exception as exc:  # noqa: BLE001
@@ -488,7 +491,7 @@ class MasterService:
 
         return env
 
-    def _build_agent_mounts(self) -> list[str]:
+    def _build_agent_mounts(self, record: AgentRecord) -> list[str]:
         mounts: list[str] = []
         if self._agent_codex_auth_json_path:
             mounts.append(f"{self._agent_codex_auth_json_path}:/run/secrets/codex_auth.json:ro")
@@ -500,6 +503,7 @@ class MasterService:
             mounts.append(f"{self._agent_ssh_auth_sock_path}:/run/secrets/ssh-auth.sock")
         if self._agent_ssh_known_hosts_path:
             mounts.append(f"{self._agent_ssh_known_hosts_path}:/run/secrets/ssh_known_hosts:ro")
+        mounts.append(f"{self._message_root}/{record.name}:/workspace/message:ro")
         return mounts
 
     def _agent_git_ssh_command(self) -> str:

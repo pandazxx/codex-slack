@@ -6,15 +6,18 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 from threading import Lock
 import time
-from typing import Protocol
+from typing import Any, Protocol
+import uuid
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .registry import AgentRegistry
+from .document_convert import convert_document_to_markdown
 
 LOGGER = logging.getLogger(__name__)
 MENTION_PATTERN = re.compile(r"<@[^>]+>")
@@ -46,9 +49,60 @@ class AgentDispatcher(Protocol):
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        attachments: list["RoutedAttachment"] | None = None,
         claude_model: str | None = None,
     ) -> str:
         ...
+
+
+@dataclass(frozen=True)
+class RoutedAttachment:
+    id: str
+    kind: str
+    filename: str
+    content_type: str
+    source_url: str
+    format_hint: str | None = None
+
+
+def make_image_attachments(image_urls: list[str]) -> list[RoutedAttachment]:
+    attachments: list[RoutedAttachment] = []
+    for idx, url in enumerate(image_urls, start=1):
+        parsed = urlparse(url)
+        filename = os.path.basename(parsed.path) or f"image-{idx}"
+        content_type = _guess_content_type(filename=filename, default="image/*")
+        attachments.append(
+            RoutedAttachment(
+                id=f"img-{idx}",
+                kind="image",
+                filename=filename,
+                content_type=content_type,
+                source_url=url,
+            )
+        )
+    return attachments
+
+
+def _sanitize_filename(filename: str, *, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", filename).strip(".-")
+    return cleaned or fallback
+
+
+def _guess_content_type(*, filename: str, default: str) -> str:
+    lowered = filename.lower()
+    if lowered.endswith(".png"):
+        return "image/png"
+    if lowered.endswith(".jpg") or lowered.endswith(".jpeg"):
+        return "image/jpeg"
+    if lowered.endswith(".gif"):
+        return "image/gif"
+    if lowered.endswith(".webp"):
+        return "image/webp"
+    if lowered.endswith(".docx"):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if lowered.endswith(".pdf"):
+        return "application/pdf"
+    return default
 
 
 @dataclass(frozen=True)
@@ -58,6 +112,8 @@ class PodmanExecDispatcher:
     workdir: str = "/workspace/repo"
     codex_home: str = "/workspace/.codex"
     slack_bot_token: str | None = None
+    message_root: str = "/var/lib/codex-slack/messages"
+    message_mount_path: str = "/workspace/message"
 
     @staticmethod
     def _clip(value: str, limit: int = 240) -> str:
@@ -73,6 +129,12 @@ class PodmanExecDispatcher:
         if not normalized:
             normalized = "session"
         return f"slack-{channel_id}-{normalized}"
+
+    @staticmethod
+    def _request_id(*, platform: str, channel_id: str, thread_ts: str | None) -> str:
+        source = thread_ts or channel_id
+        normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", source).strip("-") or "request"
+        return f"{platform}-{channel_id}-{normalized}-{time.time_ns()}"
 
     def _render_command(self, *, channel_id: str, thread_ts: str | None) -> tuple[str, str]:
         session_id = self._session_id(channel_id=channel_id, thread_ts=thread_ts)
@@ -110,26 +172,24 @@ class PodmanExecDispatcher:
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        attachments: list[RoutedAttachment] | None = None,
         claude_model: str | None = None,
     ) -> str:
         rendered_command, session_id = self._render_command(channel_id=channel_id, thread_ts=thread_ts)
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
-        image_urls = image_urls or []
-        staged_paths, passthrough_urls = self._stage_images(
-            container_name=container_name,
-            session_id=session_id,
-            image_urls=image_urls,
-        )
-        effective_prompt = prompt
-        if staged_paths or passthrough_urls:
-            lines: list[str] = []
-            for path in staged_paths:
-                lines.append(f"- local file: {path}")
-            for url in passthrough_urls:
-                lines.append(f"- remote url: {url}")
-            prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
-            effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
+        attachments = list(attachments or [])
+        if image_urls:
+            attachments.extend(make_image_attachments(image_urls))
+        manifest_path: str | None = None
+        request_host_dir: Path | None = None
+        if attachments:
+            request_id = self._request_id(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
+            request_host_dir, manifest_path = self._stage_request_attachments(
+                agent_name=agent_name,
+                request_id=request_id,
+                attachments=attachments,
+            )
 
         cmd = ["podman", "exec", "-i"]
         if self.codex_home:
@@ -139,6 +199,8 @@ class PodmanExecDispatcher:
         cmd.extend(["-e", f"AGENT_FRONTEND={platform}"])
         cmd.extend(["-e", f"AGENT_CHANNEL_ID={channel_id}"])
         cmd.extend(["-e", f"AGENT_ADAPTER={agent_adapter}"])
+        if manifest_path:
+            cmd.extend(["-e", f"AGENT_REQUEST_MANIFEST={manifest_path}"])
         cmd.extend([container_name, "sh", "-lc", rendered_command])
         LOGGER.info(
             "router.dispatch_start agent=%s container=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s codex_home=%s session_id=%s agent_command=%r",
@@ -153,10 +215,11 @@ class PodmanExecDispatcher:
             session_id,
             rendered_command,
         )
+        completed: subprocess.CompletedProcess[str] | None = None
         try:
             completed = subprocess.run(
                 cmd,
-                input=effective_prompt,
+                input=prompt,
                 text=True,
                 capture_output=True,
                 timeout=self.timeout_seconds,
@@ -180,6 +243,9 @@ class PodmanExecDispatcher:
                 exc,
             )
             raise RouteError("podman CLI is not available in the master runtime") from exc
+        finally:
+            if request_host_dir is not None and completed is not None and completed.returncode == 0:
+                self._cleanup_request_attachments(request_host_dir)
 
         if completed.returncode != 0:
             stderr_text = self._clip(completed.stderr)
@@ -211,48 +277,72 @@ class PodmanExecDispatcher:
         )
         return response
 
-    def _stage_images(
+    def _stage_request_attachments(
         self,
         *,
-        container_name: str,
-        session_id: str,
-        image_urls: list[str],
-    ) -> tuple[list[str], list[str]]:
-        staged_paths: list[str] = []
-        passthrough_urls: list[str] = []
+        agent_name: str,
+        request_id: str,
+        attachments: list[RoutedAttachment],
+    ) -> tuple[Path, str]:
+        request_host_dir = Path(self.message_root) / agent_name / request_id
+        source_dir = request_host_dir / "source"
+        derived_root = request_host_dir / "derived"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        derived_root.mkdir(parents=True, exist_ok=True)
+
+        manifest_attachments: list[dict[str, Any]] = []
+        for idx, attachment in enumerate(attachments, start=1):
+            fallback = f"{attachment.kind}-{idx}"
+            safe_name = _sanitize_filename(attachment.filename, fallback=fallback)
+            source_path = source_dir / safe_name
+            self._download_attachment(attachment=attachment, destination=source_path)
+            item: dict[str, Any] = {
+                "id": attachment.id or f"att-{idx}",
+                "kind": attachment.kind,
+                "filename": attachment.filename,
+                "content_type": attachment.content_type,
+                "staged_path": f"{self.message_mount_path}/{request_id}/source/{safe_name}",
+            }
+            if attachment.format_hint:
+                item["format_hint"] = attachment.format_hint
+            if attachment.kind == "document":
+                derived_dir = derived_root / item["id"]
+                derived = convert_document_to_markdown(source_path=source_path, output_dir=derived_dir)
+                item["derived"] = {
+                    "markdown_path": f"{self.message_mount_path}/{request_id}/derived/{item['id']}/document.md",
+                    "assets_dir": f"{self.message_mount_path}/{request_id}/derived/{item['id']}/assets",
+                    "manifest_path": f"{self.message_mount_path}/{request_id}/derived/{item['id']}/derived.json",
+                    "converter": derived.converter,
+                    "warnings": derived.warnings,
+                }
+            manifest_attachments.append(item)
+
+        manifest_path = request_host_dir / "manifest.json"
+        payload = {
+            "request_id": request_id,
+            "attachments": manifest_attachments,
+        }
+        manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return request_host_dir, f"{self.message_mount_path}/{request_id}/manifest.json"
+
+    def _download_attachment(self, *, attachment: RoutedAttachment, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        url = attachment.source_url
         token = (self.slack_bot_token or "").strip()
-        if not image_urls:
-            return staged_paths, passthrough_urls
+        parsed = urlparse(url)
+        if parsed.scheme in {"", "file"}:
+            src = Path(parsed.path if parsed.scheme else url)
+            destination.write_bytes(src.read_bytes())
+            return
+        headers: dict[str, str] = {}
+        if "files.slack.com" in url and token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = Request(url, headers=headers)
+        with urlopen(req, timeout=self.timeout_seconds or 30) as response:  # noqa: S310
+            destination.write_bytes(response.read())
 
-        for idx, url in enumerate(image_urls, start=1):
-            tmp_path: str | None = None
-            if "files.slack.com" not in url or not token:
-                passthrough_urls.append(url)
-                continue
-
-            parsed = urlparse(url)
-            ext = os.path.splitext(parsed.path)[1] or ".bin"
-            rel_dir = f".slack_images/{session_id}"
-            rel_path = f"{rel_dir}/{time.time_ns()}-{idx}{ext}"
-            target = f"{self.workdir.rstrip('/')}/{rel_path}" if self.workdir else rel_path
-            try:
-                self._run_quiet(["podman", "exec", container_name, "sh", "-lc", f"mkdir -p '{self.workdir.rstrip('/')}/{rel_dir}'"])
-                tmp_path = self._download_slack_file(url=url, token=token, suffix=ext)
-                self._run_quiet(["podman", "cp", tmp_path, f"{container_name}:{target}"])
-                staged_paths.append(target)
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning(
-                    "router.image_stage_failed container=%s url=%s error=%s",
-                    container_name,
-                    self._clip(url, 120),
-                    exc,
-                )
-                passthrough_urls.append(url)
-            finally:
-                if tmp_path and os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-
-        return staged_paths, passthrough_urls
+    def _cleanup_request_attachments(self, request_host_dir: Path) -> None:
+        shutil.rmtree(request_host_dir, ignore_errors=True)
 
     def _download_slack_file(self, *, url: str, token: str, suffix: str) -> str:
         req = Request(url, headers={"Authorization": f"Bearer {token}"})
@@ -291,6 +381,7 @@ class MultiAgentDispatcher:
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        attachments: list[RoutedAttachment] | None = None,
         claude_model: str | None = None,
     ) -> str:
         selected = (agent_adapter or self.default_adapter).strip().lower()
@@ -307,6 +398,7 @@ class MultiAgentDispatcher:
             thread_ts=thread_ts,
             user_id=user_id,
             image_urls=image_urls,
+            attachments=attachments,
             claude_model=claude_model,
         )
 
@@ -314,22 +406,68 @@ class MultiAgentDispatcher:
 @dataclass(frozen=True)
 class ClaudeCodeDispatcher(PodmanExecDispatcher):
     command_template: str = "claude -p --output-format json"
+    session_state_path: str | None = None
+    _channel_sessions: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
-    def _render_command(self, *, action: str) -> str:
-        rendered = self.command_template.rstrip()
-        if action == "continue":
-            rendered = f"{rendered} --continue"
-        return self._ensure_claude_permission_bypass(rendered)
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_channel_sessions", self._load_session_state())
+
+    def _render_command(self, *, action: str, session_id: str) -> str:
+        rendered = self._ensure_claude_permission_bypass(self.command_template.rstrip())
+        if "{session_id}" in rendered:
+            rendered = rendered.format(session_id=session_id)
+        elif action == "create":
+            rendered = f"{rendered} --session-id {session_id}"
+        if action == "resume":
+            rendered = f"{rendered} --resume {session_id}"
+        return rendered
 
     @staticmethod
-    def _should_retry_with_create(stderr_text: str) -> bool:
+    def _should_retry_with_resume(stderr_text: str) -> bool:
         lowered = stderr_text.lower()
-        return (
-            "no session" in lowered
-            or "not found" in lowered
-            or "no conversation" in lowered
-            or "does not exist" in lowered
-            or "unknown session" in lowered
+        return "already in use" in lowered
+
+    @staticmethod
+    def _channel_key(*, platform: str, channel_id: str) -> str:
+        return f"{platform}:{channel_id}"
+
+    def _session_id_for_channel(self, *, platform: str, channel_id: str) -> str:
+        key = self._channel_key(platform=platform, channel_id=channel_id)
+        known = self._channel_sessions.get(key)
+        if known:
+            return known
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+
+    def _mark_session_known(self, *, platform: str, channel_id: str, session_id: str) -> None:
+        key = self._channel_key(platform=platform, channel_id=channel_id)
+        self._channel_sessions[key] = session_id
+        self._persist_session_state()
+
+    def _load_session_state(self) -> dict[str, str]:
+        path = (self.session_state_path or "").strip()
+        if not path:
+            return {}
+        state_path = Path(path)
+        if not state_path.exists():
+            return {}
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {}
+        sessions = payload.get("channel_sessions")
+        if not isinstance(sessions, dict):
+            return {}
+        return {str(k): str(v) for k, v in sessions.items()}
+
+    def _persist_session_state(self) -> None:
+        path = (self.session_state_path or "").strip()
+        if not path:
+            return
+        state_path = Path(path)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps({"channel_sessions": self._channel_sessions}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
         )
 
     def _execute_prompt(
@@ -346,6 +484,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         thread_ts: str | None,
         user_id: str | None,
         effective_prompt: str,
+        manifest_path: str | None,
     ) -> subprocess.CompletedProcess[str]:
         cmd = ["podman", "exec", "-i"]
         if self.codex_home:
@@ -355,6 +494,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         cmd.extend(["-e", f"AGENT_FRONTEND={platform}"])
         cmd.extend(["-e", f"AGENT_CHANNEL_ID={channel_id}"])
         cmd.extend(["-e", f"AGENT_ADAPTER={agent_adapter}"])
+        if manifest_path:
+            cmd.extend(["-e", f"AGENT_REQUEST_MANIFEST={manifest_path}"])
         cmd.extend([container_name, "sh", "-lc", rendered_command])
         LOGGER.info(
             "router.dispatch_start agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s claude_action=%s agent_command=%r",
@@ -441,28 +582,28 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        attachments: list[RoutedAttachment] | None = None,
         claude_model: str | None = None,
     ) -> str:
         LOGGER.info("router.claude_command_template template=%r", self.command_template)
-        image_urls = image_urls or []
-        staged_paths, passthrough_urls = self._stage_images(
-            container_name=container_name,
-            session_id=channel_id,
-            image_urls=image_urls,
-        )
-        effective_prompt = prompt
-        if staged_paths or passthrough_urls:
-            lines: list[str] = []
-            for path in staged_paths:
-                lines.append(f"- local file: {path}")
-            for url in passthrough_urls:
-                lines.append(f"- remote url: {url}")
-            prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
-            effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
+        attachments = list(attachments or [])
+        if image_urls:
+            attachments.extend(make_image_attachments(image_urls))
+        manifest_path: str | None = None
+        request_host_dir: Path | None = None
+        if attachments:
+            request_id = self._request_id(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
+            request_host_dir, manifest_path = self._stage_request_attachments(
+                agent_name=agent_name,
+                request_id=request_id,
+                attachments=attachments,
+            )
 
-        initial_action = "continue"
+        session_id = self._session_id_for_channel(platform=platform, channel_id=channel_id)
+        known_session = self._channel_key(platform=platform, channel_id=channel_id) in self._channel_sessions
+        initial_action = "resume" if known_session else "create"
         retry_action: str | None = None
-        rendered_command = self._render_command(action=initial_action)
+        rendered_command = self._render_command(action=initial_action, session_id=session_id)
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
         try:
@@ -477,7 +618,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                 channel_id=channel_id,
                 thread_ts=thread_ts,
                 user_id=user_id,
-                effective_prompt=effective_prompt,
+                effective_prompt=prompt,
+                manifest_path=manifest_path,
             )
         except subprocess.TimeoutExpired as exc:
             LOGGER.warning(
@@ -502,8 +644,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
 
         if completed.returncode != 0:
             stderr_text = self._clip(completed.stderr)
-            if self._should_retry_with_create(stderr_text):
-                retry_action = "create"
+            if self._should_retry_with_resume(stderr_text):
+                retry_action = "resume"
                 LOGGER.info(
                     "router.dispatch_retry agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s claude_retry_action=%s retry_reason=%r",
                     agent_name,
@@ -516,7 +658,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                     retry_action,
                     stderr_text,
                 )
-                rendered_command = self._render_command(action=retry_action)
+                rendered_command = self._render_command(action=retry_action, session_id=session_id)
                 if claude_model:
                     rendered_command = _inject_claude_model(rendered_command, claude_model)
                 try:
@@ -531,7 +673,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                         channel_id=channel_id,
                         thread_ts=thread_ts,
                         user_id=user_id,
-                        effective_prompt=effective_prompt,
+                        effective_prompt=prompt,
+                        manifest_path=manifest_path,
                     )
                 except subprocess.TimeoutExpired as exc:
                     raise RouteError(f"dispatch timed out after {self.timeout_seconds}s") from exc
@@ -559,7 +702,10 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                 details.append(f"stdout={stdout_text}")
             raise RouteError(f"dispatch failed ({', '.join(details)})")
 
+        self._mark_session_known(platform=platform, channel_id=channel_id, session_id=session_id)
         response = self._parse_response(completed.stdout.strip())
+        if request_host_dir is not None:
+            self._cleanup_request_attachments(request_host_dir)
         LOGGER.info(
             "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s response_chars=%d",
             agent_name,
@@ -650,6 +796,7 @@ class ChannelRouter:
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        attachments: list[RoutedAttachment] | None = None,
     ) -> str:
         if channel_id in self.admin_channels:
             raise RouteSkip("admin channel is reserved for master commands")
@@ -660,7 +807,8 @@ class ChannelRouter:
 
         prompt = self.extract_prompt(text)
         image_urls = image_urls or []
-        if not prompt and not image_urls:
+        attachments = list(attachments or [])
+        if not prompt and not image_urls and not attachments:
             raise RouteSkip("prompt is empty after removing mention")
 
         started_at = time.perf_counter()
@@ -674,6 +822,7 @@ class ChannelRouter:
             thread_ts=thread_ts,
             user_id=user_id,
             image_urls=image_urls,
+            attachments=attachments,
             claude_model=record.claude_model,
         )
         elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -681,7 +830,7 @@ class ChannelRouter:
             agent_name=record.name,
             prompt_chars=len(prompt),
             response_chars=len(response),
-            image_count=len(image_urls),
+            image_count=len([a for a in attachments if a.kind == "image"]) or len(image_urls),
             elapsed_ms=elapsed_ms,
         )
         return response
@@ -696,6 +845,7 @@ class ChannelRouter:
         event_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        attachments: list[RoutedAttachment] | None = None,
     ) -> str:
         self.track_thread(channel_id=channel_id, thread_ts=thread_ts, platform=platform)
         self.mark_mention_event(channel_id=channel_id, ts=event_ts, platform=platform)
@@ -706,6 +856,7 @@ class ChannelRouter:
             thread_ts=thread_ts,
             user_id=user_id,
             image_urls=image_urls,
+            attachments=attachments,
         )
 
     def route_followup_message(
@@ -718,6 +869,7 @@ class ChannelRouter:
         event_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        attachments: list[RoutedAttachment] | None = None,
     ) -> str | None:
         if not self.accept_followup_message(
             platform=platform,
@@ -727,6 +879,7 @@ class ChannelRouter:
             event_ts=event_ts,
             user_id=user_id,
             image_urls=image_urls,
+            attachments=attachments,
         ):
             return None
         return self.route_prompt(
@@ -736,6 +889,7 @@ class ChannelRouter:
             thread_ts=thread_ts,
             user_id=user_id,
             image_urls=image_urls,
+            attachments=attachments,
         )
 
     def accept_followup_message(
@@ -748,9 +902,11 @@ class ChannelRouter:
         event_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
+        attachments: list[RoutedAttachment] | None = None,
     ) -> bool:
         image_urls = image_urls or []
-        if not thread_ts or not user_id or (not text and not image_urls):
+        attachments = attachments or []
+        if not thread_ts or not user_id or (not text and not image_urls and not attachments):
             return False
         if self.consume_marked_mention_event(channel_id=channel_id, ts=event_ts, platform=platform):
             return False

@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 from .command_runtime import execute_master_command
 from .dispatch_guard import in_flight_dispatch, is_shutting_down
-from .router import ChannelRouter, RouteError, RouteSkip
+from .router import ChannelRouter, RouteError, RouteSkip, RoutedAttachment
 from .service import MasterService
 from .slack_app import format_forward_ack
 
@@ -27,6 +27,11 @@ _MD_TABLE_SEP = re.compile(r"^\|[\s\-:|]+\|$")
 _TEXT_MIME_PREFIXES = ("text/",)
 _TEXT_EXTENSIONS = {".txt", ".log", ".md", ".json", ".yaml", ".yml", ".toml", ".sh", ".py", ".js", ".ts", ".csv"}
 _TEXT_ATTACHMENT_SIZE_LIMIT = 512 * 1024  # 512 KB
+_DOCUMENT_EXTENSIONS = {".docx": "docx", ".pdf": "pdf"}
+_DOCUMENT_MIME_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/pdf": "pdf",
+}
 
 
 def preprocess_for_discord(text: str) -> str:
@@ -170,6 +175,55 @@ def _extract_image_urls(attachments: list[Any]) -> list[str]:
         if url:
             urls.append(url)
     return urls
+
+
+def _is_document_attachment(attachment: Any) -> bool:
+    content_type = str(getattr(attachment, "content_type", "") or "").split(";")[0].strip()
+    if content_type in _DOCUMENT_MIME_TYPES:
+        return True
+    filename = str(getattr(attachment, "filename", "") or "")
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return ext in _DOCUMENT_EXTENSIONS
+
+
+def _extract_document_attachments(attachments: list[Any]) -> list[RoutedAttachment]:
+    results: list[RoutedAttachment] = []
+    for idx, item in enumerate(attachments, start=1):
+        if not _is_document_attachment(item):
+            continue
+        filename = str(getattr(item, "filename", "") or f"document-{idx}")
+        content_type = str(getattr(item, "content_type", "") or "").split(";")[0].strip()
+        ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        format_hint = _DOCUMENT_MIME_TYPES.get(content_type) or _DOCUMENT_EXTENSIONS.get(ext)
+        url = str(getattr(item, "url", "") or "").strip()
+        if not format_hint or not url:
+            continue
+        results.append(
+            RoutedAttachment(
+                id=str(getattr(item, "id", f"doc-{idx}")),
+                kind="document",
+                filename=filename,
+                content_type=content_type or "application/octet-stream",
+                source_url=url,
+                format_hint=format_hint,
+            )
+        )
+    return results
+
+
+def _extract_routed_attachments(attachments: list[Any]) -> list[RoutedAttachment]:
+    image_attachments: list[RoutedAttachment] = []
+    for idx, url in enumerate(_extract_image_urls(attachments), start=1):
+        image_attachments.append(
+            RoutedAttachment(
+                id=f"img-{idx}",
+                kind="image",
+                filename=f"image-{idx}",
+                content_type="image/*",
+                source_url=url,
+            )
+        )
+    return _extract_document_attachments(attachments) + image_attachments
 
 
 def parse_admin_message_command(text: str) -> tuple[str, str] | None:
@@ -367,6 +421,7 @@ def run_discord_frontend(
         text = str(message.content or "")
         user_id = str(message.author.id)
         image_urls = _extract_image_urls(list(message.attachments))
+        routed_attachments = _extract_routed_attachments(list(message.attachments))
         text_attachment_content = await _read_text_attachments(list(message.attachments))
         if text_attachment_content:
             text = f"{text}\n\n{text_attachment_content}".strip()
@@ -424,6 +479,7 @@ def run_discord_frontend(
                             event_ts=event_ts,
                             user_id=user_id,
                             image_urls=image_urls,
+                            attachments=routed_attachments,
                         )
                 await _reply_in_thread(thread, response)
                 return
@@ -443,6 +499,7 @@ def run_discord_frontend(
                             event_ts=event_ts,
                             user_id=user_id,
                             image_urls=image_urls,
+                            attachments=routed_attachments,
                         )
                 await _reply_message_chunks(message, response)
                 return
@@ -459,6 +516,7 @@ def run_discord_frontend(
                 event_ts=event_ts,
                 user_id=user_id,
                 image_urls=image_urls,
+                attachments=routed_attachments,
             )
             if not accepted:
                 return
@@ -473,6 +531,7 @@ def run_discord_frontend(
                         thread_ts=thread_ts,
                         user_id=user_id,
                         image_urls=image_urls,
+                        attachments=routed_attachments,
                     )
             await _reply_message_chunks(message, routed)
         except RouteSkip as exc:

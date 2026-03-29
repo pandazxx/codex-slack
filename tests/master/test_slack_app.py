@@ -15,7 +15,9 @@ from src.master.command_format import (
 from src.master.service import CommandResult
 from src.master.slack_app import (
     CommandRateLimiter,
+    extract_document_attachments,
     extract_image_urls,
+    extract_routed_attachments,
     format_forward_ack,
     is_admin_channel,
     is_supported_thread_subtype,
@@ -80,6 +82,55 @@ def test_is_supported_thread_subtype_allows_file_share() -> None:
     assert is_supported_thread_subtype("") is True
     assert is_supported_thread_subtype("file_share") is True
     assert is_supported_thread_subtype("bot_message") is False
+
+
+def test_extract_document_attachments_picks_docx_and_pdf() -> None:
+    files = [
+        {
+            "id": "F1",
+            "mimetype": "application/pdf",
+            "name": "report.pdf",
+            "url_private_download": "https://files.slack.com/report.pdf",
+        },
+        {
+            "id": "F2",
+            "mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "name": "plan.docx",
+            "url_private_download": "https://files.slack.com/plan.docx",
+        },
+        {
+            "id": "F3",
+            "mimetype": "text/plain",
+            "name": "notes.txt",
+            "url_private_download": "https://files.slack.com/notes.txt",
+        },
+    ]
+
+    attachments = extract_document_attachments(files)
+
+    assert [item.format_hint for item in attachments] == ["pdf", "docx"]
+    assert [item.kind for item in attachments] == ["document", "document"]
+
+
+def test_extract_routed_attachments_includes_images_and_documents() -> None:
+    files = [
+        {
+            "id": "F1",
+            "mimetype": "image/png",
+            "name": "diagram.png",
+            "url_private_download": "https://files.slack.com/diagram.png",
+        },
+        {
+            "id": "F2",
+            "mimetype": "application/pdf",
+            "name": "report.pdf",
+            "url_private_download": "https://files.slack.com/report.pdf",
+        },
+    ]
+
+    attachments = extract_routed_attachments(files)
+
+    assert [item.kind for item in attachments] == ["document", "image"]
 
 
 def test_parse_load_text_requires_three_args() -> None:

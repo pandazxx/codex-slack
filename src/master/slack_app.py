@@ -21,10 +21,18 @@ from .command_format import (
 from .command_runtime import execute_master_command
 from .command_runtime import is_admin_channel
 from .dispatch_guard import in_flight_dispatch, is_shutting_down
-from .router import ChannelRouter, RouteError, RouteSkip
+from .router import ChannelRouter, RouteError, RouteSkip, RoutedAttachment, make_image_attachments
 from .service import CommandResult, MasterService
 
 LOGGER = logging.getLogger(__name__)
+_DOCUMENT_MIME_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/pdf": "pdf",
+}
+_FORMAT_CONTENT_TYPES = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+}
 
 
 @dataclass
@@ -114,6 +122,7 @@ def create_master_app(
             text = event.get("text", "")
             user_id = event.get("user", "")
             image_urls = extract_image_urls(event.get("files", []), event_ts)
+            attachments = extract_routed_attachments(event.get("files", []), event_ts)
 
             try:
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
@@ -128,6 +137,7 @@ def create_master_app(
                             event_ts=event_ts,
                             user_id=user_id,
                             image_urls=image_urls,
+                            attachments=attachments,
                         )
                     say(text=response, thread_ts=thread_ts)
                 finally:
@@ -162,6 +172,7 @@ def create_master_app(
             text = event.get("text", "")
             user_id = event.get("user", "")
             image_urls = extract_image_urls(event.get("files", []), event_ts)
+            attachments = extract_routed_attachments(event.get("files", []), event_ts)
             if image_urls:
                 LOGGER.info(
                     "thread image payload channel=%s thread_ts=%s subtype=%s image_count=%d first_image=%s",
@@ -201,6 +212,7 @@ def create_master_app(
                     event_ts=event_ts,
                     user_id=user_id,
                     image_urls=image_urls,
+                    attachments=attachments,
                 )
                 if not should_route:
                     LOGGER.info(
@@ -221,6 +233,7 @@ def create_master_app(
                             thread_ts=thread_ts,
                             user_id=user_id,
                             image_urls=image_urls,
+                            attachments=attachments,
                         )
                     say(text=response, thread_ts=thread_ts)
                     LOGGER.info(
@@ -310,6 +323,46 @@ def select_thread_image_urls(image_urls: list[str], subtype: str | None) -> list
     if subtype == "file_share":
         return list(image_urls)
     return list(image_urls[:1])
+
+
+def extract_document_attachments(files: object, event_ts: str | None = None) -> list[RoutedAttachment]:
+    if not isinstance(files, list):
+        return []
+    attachments: list[RoutedAttachment] = []
+    for idx, item in enumerate(files, start=1):
+        if not isinstance(item, dict):
+            continue
+        if not _file_matches_event_ts(item, event_ts):
+            continue
+        mimetype = str(item.get("mimetype", "")).strip()
+        filename = str(item.get("name", "") or f"document-{idx}").strip()
+        format_hint = _DOCUMENT_MIME_TYPES.get(mimetype)
+        if not format_hint:
+            lowered = filename.lower()
+            if lowered.endswith(".docx"):
+                format_hint = "docx"
+            elif lowered.endswith(".pdf"):
+                format_hint = "pdf"
+        if not format_hint:
+            continue
+        url = str(item.get("url_private_download") or item.get("url_private") or "").strip()
+        if not url:
+            continue
+        attachments.append(
+            RoutedAttachment(
+                id=str(item.get("id") or f"doc-{idx}"),
+                kind="document",
+                filename=filename,
+                content_type=mimetype or _FORMAT_CONTENT_TYPES.get(format_hint, "application/octet-stream"),
+                source_url=url,
+                format_hint=format_hint,
+            )
+        )
+    return attachments
+
+
+def extract_routed_attachments(files: object, event_ts: str | None = None) -> list[RoutedAttachment]:
+    return extract_document_attachments(files, event_ts) + make_image_attachments(extract_image_urls(files, event_ts))
 
 
 def format_forward_ack(*, text: str, image_count: int) -> str:

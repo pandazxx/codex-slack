@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
+from src.master.discord_app import _extract_document_attachments
 from src.master.discord_app import label_discord_chunks
 from src.master.discord_app import parse_admin_message_command
 from src.master.discord_app import split_discord_message
@@ -38,6 +40,34 @@ def test_split_discord_message_chunks_long_payload() -> None:
 def test_label_discord_chunks_adds_part_headers() -> None:
     chunks = label_discord_chunks(["alpha", "beta"])
     assert chunks == ["[1/2]\nalpha", "[2/2]\nbeta"]
+
+
+def test_extract_document_attachments_accepts_pdf_and_docx() -> None:
+    attachments = [
+        SimpleNamespace(
+            id=1,
+            filename="report.pdf",
+            content_type="application/pdf",
+            url="https://cdn.discordapp.com/report.pdf",
+        ),
+        SimpleNamespace(
+            id=2,
+            filename="plan.docx",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            url="https://cdn.discordapp.com/plan.docx",
+        ),
+        SimpleNamespace(
+            id=3,
+            filename="notes.txt",
+            content_type="text/plain",
+            url="https://cdn.discordapp.com/notes.txt",
+        ),
+    ]
+
+    routed = _extract_document_attachments(attachments)
+
+    assert [item.kind for item in routed] == ["document", "document"]
+    assert [item.format_hint for item in routed] == ["pdf", "docx"]
 
 
 def test_sync_registered_commands_copies_global_commands_to_admin_guild() -> None:
