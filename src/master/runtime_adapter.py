@@ -79,18 +79,6 @@ class PodmanRuntimeAdapter:
         completed = self._run(["podman", "container", "exists", container_name], check=False)
         return completed.returncode == 0
 
-    def _ensure_bind_mount_sources(self, mounts: list[str]) -> None:
-        for mount in mounts:
-            parts = mount.split(":")
-            if len(parts) < 2:
-                continue
-            source, target = parts[0], parts[1]
-            if not source.startswith("/"):
-                continue
-            if target != "/workspace/message":
-                continue
-            self._run(["podman", "unshare", "mkdir", "-p", source])
-
     def build_image(self, *, name: str, repo_path: str, context_rel: str, dockerfile_rel: str) -> str:
         image_tag = f"codex-agent-{name}:latest"
         context_dir = Path(repo_path) / context_rel
@@ -119,8 +107,6 @@ class PodmanRuntimeAdapter:
     ) -> None:
         if self._container_exists(container_name):
             self._run(["podman", "rm", "-f", container_name], check=False)
-
-        self._ensure_bind_mount_sources(mounts or [])
 
         cmd = [
             "podman",

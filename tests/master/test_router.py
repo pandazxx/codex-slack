@@ -10,7 +10,6 @@ from src.master.router import (
     ClaudeCodeDispatcher,
     MultiAgentDispatcher,
     PodmanExecDispatcher,
-    RoutedAttachment,
     RouteError,
     RouteSkip,
 )
@@ -32,8 +31,6 @@ class FakeDispatcher:
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
-        attachments: list[RoutedAttachment] | None = None,
-        claude_model: str | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -46,8 +43,6 @@ class FakeDispatcher:
                 "thread_ts": thread_ts,
                 "user_id": user_id,
                 "image_urls": image_urls or [],
-                "attachments": attachments or [],
-                "claude_model": claude_model,
             }
         )
         return f"{agent_name}:{prompt}"
@@ -176,8 +171,6 @@ class FailingDispatcher(FakeDispatcher):
         thread_ts: str | None,
         user_id: str | None,
         image_urls: list[str] | None = None,
-        attachments: list[RoutedAttachment] | None = None,
-        claude_model: str | None = None,
     ) -> str:
         raise RouteError("codex exec failed")
 
@@ -337,51 +330,17 @@ def test_podman_exec_dispatcher_includes_exit_and_output_details(monkeypatch) ->
             stderr="fatal stderr",
         )
 
-
-def test_podman_exec_dispatcher_injects_request_manifest_without_prompt_augmentation(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
-    dispatcher = PodmanExecDispatcher(message_root=str(tmp_path))
-    seen: dict[str, object] = {}
-
-    def fake_stage_request_attachments(*, agent_name: str, request_id: str, attachments: list[RoutedAttachment]):  # type: ignore[no-untyped-def]
-        host_dir = tmp_path / agent_name / request_id
-        host_dir.mkdir(parents=True)
-        return host_dir, f"/workspace/message/{request_id}/manifest.json"
-
-    def fake_cleanup(_path):  # type: ignore[no-untyped-def]
-        seen["cleaned"] = True
-
-    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        seen["cmd"] = cmd
-        seen["input"] = kwargs.get("input")
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
-
-    monkeypatch.setattr(PodmanExecDispatcher, "_stage_request_attachments", lambda self, **kwargs: fake_stage_request_attachments(**kwargs))
-    monkeypatch.setattr(PodmanExecDispatcher, "_cleanup_request_attachments", lambda self, path: fake_cleanup(path))
     monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
 
-    response = dispatcher.send_prompt(
-        agent_name="payments-agent",
-        container_name="agent-payments",
-        prompt="summarize this",
-        channel_id="CAGENT",
-        thread_ts="1730000000.1234",
-        user_id="U123",
-        attachments=[
-            RoutedAttachment(
-                id="att-1",
-                kind="document",
-                filename="example.docx",
-                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                source_url="https://files.slack.com/example.docx",
-                format_hint="docx",
-            )
-        ],
-    )
-
-    assert response == "ok"
-    assert "AGENT_REQUEST_MANIFEST=/workspace/message/" in " ".join(seen["cmd"])  # type: ignore[arg-type]
-    assert seen["input"] == "summarize this"
-    assert seen["cleaned"] is True
+    with pytest.raises(RouteError, match=r"exit=17"):
+        dispatcher.send_prompt(
+            agent_name="payments-agent",
+            container_name="agent-payments",
+            prompt="hello",
+            channel_id="CAGENT",
+            thread_ts="1730000000.1234",
+            user_id="U123",
+        )
 
 
 def test_podman_exec_dispatcher_reports_timeout(monkeypatch) -> None:  # type: ignore[no-untyped-def]

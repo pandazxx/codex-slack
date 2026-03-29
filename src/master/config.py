@@ -119,7 +119,7 @@ def load_master_settings() -> MasterSettings:
     _log_env("MASTER_CODEX_COMMAND_TEMPLATE", os.getenv("MASTER_CODEX_COMMAND_TEMPLATE"))
     claude_command_template = os.getenv(
         "MASTER_CLAUDE_COMMAND_TEMPLATE",
-        "claude -p --dangerously-skip-permissions",
+        "claude -p --output-format json --dangerously-skip-permissions",
     ).strip()
     _log_env("MASTER_CLAUDE_COMMAND_TEMPLATE", os.getenv("MASTER_CLAUDE_COMMAND_TEMPLATE"))
     default_agent_adapter = os.getenv("MASTER_DEFAULT_AGENT_ADAPTER", "codex").strip().lower() or "codex"

@@ -94,44 +94,6 @@ def test_create_or_update_agent_adds_extra_mounts(monkeypatch) -> None:  # type:
     ]
 
 
-def test_create_or_update_agent_creates_request_message_bind_source(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    adapter = PodmanRuntimeAdapter()
-    seen: list[list[str]] = []
-
-    monkeypatch.setattr(adapter, "_container_exists", lambda _: False)
-
-    def fake_run(cmd: list[str], cwd: str | None = None, check: bool = True):  # type: ignore[no-untyped-def]
-        seen.append(cmd)
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(adapter, "_run", fake_run)
-
-    adapter.create_or_update_agent(
-        container_name="agent-payments-api",
-        image="codex-slack-bot:latest",
-        repo_volume="agent-workspace-payments-api",
-        mounts=["/var/lib/codex-slack/messages/payments-api:/workspace/message:ro"],
-    )
-
-    assert seen[0] == [
-        "podman",
-        "unshare",
-        "mkdir",
-        "-p",
-        "/var/lib/codex-slack/messages/payments-api",
-    ]
-    assert seen[1][0:8] == [
-        "podman",
-        "create",
-        "--userns=keep-id",
-        "--security-opt",
-        "label=disable",
-        "--name",
-        "agent-payments-api",
-        "-v",
-    ]
-
-
 def test_refresh_agent_auth_replaces_auth_file_without_deleting_codex_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = PodmanRuntimeAdapter()
     seen: list[list[str]] = []
