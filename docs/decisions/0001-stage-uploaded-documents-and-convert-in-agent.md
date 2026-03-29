@@ -217,6 +217,7 @@ Chosen option for v1: `Mammoth + PyMuPDF4LLM`
 Additional notes:
 
 - Mammoth is purpose-built for `docx` conversion and is structurally a better fit than a generic converter when the goal is headings, text, tables, and basic images.
+- `docx2python` remains a future alternative if later work prioritizes Python-native extraction depth or optional comment extraction over direct Markdown simplicity.
 - PyMuPDF4LLM / PyMuPDF is a strong PDF-side fit for headless extraction and LLM-oriented Markdown output.
 - MarkItDown is attractive if a single conversion surface is more important than format-specific tuning.
 - Pandoc is mature, but for this use case it looks more like a fallback or secondary tool than the most natural primary path.
