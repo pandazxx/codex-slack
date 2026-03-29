@@ -10,6 +10,7 @@
 Implement support for `docx` and `pdf` uploads in Slack and Discord so that:
 
 - master stages uploaded documents into request-scoped storage outside the repo
+- master stages uploaded images through the same request-scoped storage path
 - agent discovers staged attachments through `AGENT_REQUEST_MANIFEST`
 - agent converts documents with `Mammoth` and `PyMuPDF4LLM`
 - agent reads and edits the derived Markdown artifact
@@ -32,7 +33,7 @@ The current code already provides the right hooks:
 
 ### Master responsibilities
 
-- detect supported document attachments from Slack and Discord
+- detect supported document and image attachments from Slack and Discord
 - manage request-scoped storage through a mounted request area attached to the agent container
 - download and stage them into request-scoped storage
 - write a request manifest JSON file
@@ -44,6 +45,7 @@ The current code already provides the right hooks:
 
 - read `AGENT_REQUEST_MANIFEST`
 - ingest each staged `docx` / `pdf`
+- read staged image attachments from the same manifest when present
 - convert to Markdown and extracted assets
 - work from derived artifacts
 - commit derived artifacts if the task requires durable output
@@ -156,8 +158,8 @@ Add extraction for supported document attachments:
 
 Behavior:
 
-- image extraction remains
-- document attachments are collected separately and forwarded to the router
+- image extraction is normalized into the same attachment payload model as documents
+- document and image attachments are forwarded together to the router
 
 ### 2. Discord attachment extraction
 
@@ -167,7 +169,7 @@ Change current behavior:
 
 - keep inline expansion only for plain text attachments
 - treat `docx` and `pdf` as staged document attachments
-- keep image attachment extraction
+- treat images as staged image attachments in the same request manifest flow
 
 Add helpers:
 
@@ -199,6 +201,11 @@ Add staging functions:
 - `_write_request_manifest(...)`
 - `_cleanup_request_attachments(...)`
 
+Design rule:
+
+- images and documents use the same request manifest and storage flow
+- the current image-specific prompt augmentation path should be retired
+
 ### 4. Dispatcher env injection
 
 File: [src/master/router.py](/workspace/repo/src/master/router.py)
@@ -225,7 +232,7 @@ Master owns this storage area and writes request-scoped subdirectories into it d
 
 ### 5. Prompt handling
 
-Do not append document instructions to the prompt body.
+Do not append document or image attachment listings to the prompt body.
 
 The prompt should remain the user text.
 
@@ -233,6 +240,8 @@ The agent is expected to discover staged attachments via:
 
 - `AGENT_REQUEST_MANIFEST`
 - repo-level instructions in `AGENTS.md` / `.claude/CLAUDE.md`
+
+This replaces the current special-case image URL prompt augmentation model.
 
 ## Agent-Side Changes
 
@@ -352,12 +361,12 @@ Repo instructions should direct both `codex` and `claude-code` to:
 
 ### Read-only request
 
-1. user uploads `docx` or `pdf`
+1. user uploads `docx`, `pdf`, and/or images
 2. master stages file into `/workspace/message/<request-id>/source/`
 3. master writes manifest
 4. master dispatches prompt with `AGENT_REQUEST_MANIFEST`
-5. agent ingests the file to Markdown
-6. agent reads Markdown and replies in chat
+5. agent ingests document attachments to Markdown and reads image attachments from the same manifest
+6. agent replies in chat
 7. master cleans up `/workspace/message/<request-id>/`
 
 ### Modify-and-commit request
@@ -408,7 +417,9 @@ Agent ingest should fail clearly on:
 ### Master unit tests
 
 - Slack document attachment extraction
+- Slack image attachment extraction into normalized attachment records
 - Discord document attachment extraction
+- Discord image attachment extraction into normalized attachment records
 - request id generation
 - manifest JSON generation
 - per-dispatch env injection
@@ -416,7 +427,7 @@ Agent ingest should fail clearly on:
 ### Router tests
 
 - mixed image + document attachment staging
-- no prompt augmentation for documents
+- no prompt augmentation for images or documents
 - correct `AGENT_REQUEST_MANIFEST` propagation
 
 ### Agent unit tests
@@ -436,6 +447,7 @@ Agent ingest should fail clearly on:
 ### Phase 1: Master attachment plumbing
 
 - add document-attachment extraction to Slack and Discord frontends
+- fold image attachment handling into the same normalized attachment/staging path
 - add request id generation
 - add request-scoped staging and manifest writing
 - add request-storage mount wiring on agent start
