@@ -327,7 +327,6 @@ def test_start_agent_mounts_request_storage_root(tmp_path) -> None:
 
     assert service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123").ok is True
     assert service.start_agent(name="payments-api").ok is True
-
     mounts = runtime.calls[0][1]["mounts"]
     assert "/srv/messages/payments-api:/workspace/message:ro" in mounts
 
