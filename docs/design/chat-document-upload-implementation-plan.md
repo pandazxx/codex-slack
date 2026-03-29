@@ -433,6 +433,14 @@ Add structured logs for:
 - agent ingest success/failure
 - derived artifact locations
 
+## Cleanup Policy
+
+Use this request-storage cleanup policy:
+
+- clean request data immediately after a successful reply
+- retain request data when the request fails
+- failed request retention is for debugging and should later be paired with a bounded TTL or manual cleanup workflow
+
 ## Validation Rules
 
 ### Attachment acceptance policy
