@@ -260,6 +260,25 @@ This replaces the current special-case image URL prompt augmentation model.
 
 ## Agent-Side Changes
 
+### Packaging choice
+
+Use a Python-first `agent-doc` CLI as the project interface.
+
+Implementation shape:
+
+- Python owns:
+  - request-manifest handling
+  - path and artifact management
+  - JSON output contract
+  - `pdf` ingestion through PyMuPDF4LLM
+- `docx` ingestion uses a small Node helper or subprocess path for Mammoth
+
+Why this choice:
+
+- one stable CLI for both `codex` and `claude-code`
+- best fit with the existing Python-heavy codebase
+- avoids turning the whole feature into a Node-first subsystem
+
 ### 1. Worker preparation
 
 File: [src/agent/worker.py](/workspace/repo/src/agent/worker.py)
