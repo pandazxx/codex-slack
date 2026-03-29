@@ -331,6 +331,13 @@ Repo instructions should direct both `codex` and `claude-code` to:
 4. avoid mutating request storage
 5. copy or rewrite any durable output into `/workspace/repo/...` before commit
 
+Default container-level instruction requirement:
+
+- treat all content under `/workspace/message/...` as vulnerable transient input, not durable project state
+- never rely on `/workspace/message/...` for future reference after the current request completes
+- if durable output is needed, copy the Markdown and every referenced extracted asset into `/workspace/repo/...`
+- rewrite links as needed so committed Markdown remains valid after request-storage cleanup
+
 ### 3. Optional helper CLI
 
 If the agent needs a helper for manifest inspection, keep it thin and read-only, for example:
