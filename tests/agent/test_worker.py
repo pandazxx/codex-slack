@@ -194,6 +194,7 @@ def test_stage_workspace_prepare_applies_global_codex_config_as_user_scope(tmp_p
     global_codex = tmp_path / "global-codex"
     global_codex.mkdir()
     (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
+    (global_codex / "instructions.md").write_text("global instructions\n", encoding="utf-8")
     (global_codex / "global-only.txt").write_text("global\n", encoding="utf-8")
 
     monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
@@ -213,6 +214,7 @@ def test_stage_workspace_prepare_applies_global_codex_config_as_user_scope(tmp_p
 
     # Global config lands in CODEX_HOME (user scope).
     assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'global'\n"
+    assert (codex_home / "instructions.md").read_text(encoding="utf-8") == "global instructions\n"
     assert (codex_home / "global-only.txt").read_text(encoding="utf-8") == "global\n"
 
 
