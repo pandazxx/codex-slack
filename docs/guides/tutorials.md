@@ -228,7 +228,7 @@ my-project/
 
 8. Validate the effective config inside the running agent if needed.
    - Codex runtime config:
-     - `podman exec -it agent-<name> sh -lc 'ls -la /workspace/.codex'`
+     - `podman exec -it agent-<name> sh -lc 'ls -la /workspace/home/.codex'`
    - Claude home config:
      - `podman exec -it agent-<name> sh -lc 'ls -la /workspace/home/.claude'`
    - Repo overrides:

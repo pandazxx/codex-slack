@@ -229,7 +229,7 @@ def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> No
     env = runtime.calls[0][1]["env"]
     assert env["HOME"] == "/workspace/home"
     assert env["XDG_CONFIG_HOME"] == "/workspace/home/.config"
-    assert env["CODEX_HOME"] == "/workspace/.codex"
+    assert env["CODEX_HOME"] == "/workspace/home/.codex"
     assert env["GH_TOKEN"] == "gh-token-value"
     assert env["OPENAI_API_KEY"] == "openai-key"
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"

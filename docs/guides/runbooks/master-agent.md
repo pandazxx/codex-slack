@@ -208,7 +208,7 @@ ls -l "$MASTER_SSH_AUTH_SOCK_PATH"
 ```text
 /master-agent-refresh-auth <name>
 ```
-- This updates `/workspace/.codex/auth.json` in the agent workspace and preserves existing `.codex` session state files.
+- This updates `/workspace/home/.codex/auth.json` in the agent home and preserves existing `.codex` session state files.
 - You do not need to remove the agent container for this recovery path.
 
 ### Rate-limited commands

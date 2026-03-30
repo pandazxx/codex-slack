@@ -448,7 +448,7 @@ class MasterService:
             "CODEX_CONTAINER_MODE": "agent-worker",
             "HOME": "/workspace/home",
             "XDG_CONFIG_HOME": "/workspace/home/.config",
-            "CODEX_HOME": "/workspace/.codex",
+            "CODEX_HOME": "/workspace/home/.codex",
             "AGENT_REPO_URL": record.repo_source or record.repo_path,
             "AGENT_REPO_REF": record.repo_ref,
             "AGENT_REPO_DIR": "repo",
