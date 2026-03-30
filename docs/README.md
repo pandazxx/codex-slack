@@ -34,6 +34,7 @@ This directory is the canonical home for repository documentation.
 
 - `docs/design/master-agent-architecture.md` — architecture background and constraints
 - `docs/design/master-agent-implementation-plan.md` — phased implementation plan
+- `docs/design/agent-container-runtime-design.md` — canonical runtime contract for agent containers
 - `docs/design/v3-0-multi-adapter-frontend-plan.md` — v3.0 adapter/frontend design plan
 
 ## Decisions
