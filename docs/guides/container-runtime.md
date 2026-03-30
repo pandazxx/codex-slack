@@ -6,7 +6,37 @@ This project includes a containerized runtime for the Slack bot.
 The image ships with:
 - Python 3.11 runtime
 - `codex` CLI (installed via npm package `@openai/codex`)
+- `claude` CLI
 - `git`, `gh`, `curl`, `jq`, `make`, `openssh-client`
+
+## Runtime Modes
+This image is used in two container roles:
+
+- bot/master runtime:
+  - receives Slack and Discord events
+  - manages agent lifecycle through Podman
+  - forwards shared auth/config inputs into agent containers
+- agent runtime:
+  - clones the target repo into the workspace volume
+  - runs either `codex` or `claude-code` inside the container
+  - keeps user-scope agent config under `/workspace/home`
+
+For detailed master-agent operational steps, see
+`docs/guides/runbooks/master-agent.md`.
+
+## Agent Home Layout
+Master-managed agent containers align both frameworks under the agent home:
+
+- Codex user scope: `/workspace/home/.codex`
+- Claude user scope: `/workspace/home/.claude`
+- XDG config: `/workspace/home/.config`
+- repo working tree: `/workspace/repo`
+- transient request input: `/workspace/message`
+
+Project-scope overrides stay in the repo:
+
+- Codex project scope: `/workspace/repo/.codex`
+- Claude project scope: `/workspace/repo/.claude`
 
 ## Required Mounts
 The provided `docker-compose.yml` mounts:
@@ -18,11 +48,27 @@ The provided `docker-compose.yml` mounts:
 Only the Codex auth + sessions paths are mounted read-only; the rest of your host auth/config files are not required.
 - Slack secrets are provided via environment variables.
 - Codex authentication is provided by copying mounted auth cache into writable `CODEX_HOME` at startup.
+- Claude authentication is provided either by `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`.
 - GitHub authentication is provided via `GH_TOKEN`.
 - `CODEX_HOME` selection on startup:
   1. Use explicit `CODEX_HOME` env var if set.
   2. Else use `/workspace/home/.codex` for the master-managed agent runtime.
   3. Else fallback to `/home/appuser/.codex`.
+
+## Global Config Cascade for Agents
+Master can inject shared global defaults for both adapters into every agent:
+
+- Codex:
+  - host source: `MASTER_CODEX_CONFIG_DIR_PATH`
+  - mounted into agent as `/run/secrets/master_codex_config:ro`
+  - copied into `/workspace/home/.codex/`
+- Claude:
+  - host source: `MASTER_CLAUDE_CONFIG_DIR_PATH`
+  - mounted into agent as `/run/secrets/master_claude_config:ro`
+  - copied into `/workspace/home/.claude/`
+
+Those are user-scope defaults. Repo-local `.codex/` and `.claude/` remain the
+project-scope override layer.
 
 ## Safe Forwarding of `auth.json`
 Configured in compose (default):
@@ -34,6 +80,29 @@ Configured in compose (default):
 - prevents direct writes back to host session files
 - token refresh updates still will not persist to host from container
 - refresh token manually on host (`codex login`) and restart container when needed
+
+## Claude Auth and Config Inputs
+For `claude-code` agents:
+
+- prefer `CLAUDE_CODE_OAUTH_TOKEN` on the master container for headless
+  subscription auth
+- use `ANTHROPIC_API_KEY` only when the OAuth token is absent and API billing is
+  intended
+- optional shared Claude defaults can be provided through
+  `MASTER_CLAUDE_CONFIG_DIR_PATH`
+- after the agent starts, those defaults live in `/workspace/home/.claude/`
+
+To refresh shared Claude defaults in a running agent without restart, use:
+
+```text
+/master-agent-refresh-config <name>
+```
+
+To refresh Codex auth in a running agent after renewing the host auth file, use:
+
+```text
+/master-agent-refresh-auth <name>
+```
 
 ## Session Management
 - Set `CODEX_SESSION_ID` (from host session) to resume a specific Codex session.
@@ -187,6 +256,34 @@ In your allowlisted Slack channel:
 1. Run `/codex-status`.
 2. Send `@codex hello`.
 3. Confirm the bot replies and logs are written to `./logs/bot.log`.
+
+## Master-Agent Container Operations
+When using the master-agent runtime, the normal agent container operations are:
+
+```text
+/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]
+/master-agent-start <name>
+/master-agent-status <name>
+/master-agent-stop <name>
+/master-agent-remove <name>
+/master-agent-refresh-auth <name>
+/master-agent-refresh-config <name>
+```
+
+Useful in-container checks after an agent starts:
+
+```bash
+podman exec -it agent-<name> sh -lc 'echo "$HOME" "$CODEX_HOME"'
+podman exec -it agent-<name> sh -lc 'ls -la /workspace/home/.codex /workspace/home/.claude'
+podman exec -it agent-<name> sh -lc 'ls -la /workspace/repo/.codex /workspace/repo/.claude 2>/dev/null || true'
+```
+
+For attachment-driven requests, master also injects request-scoped manifest data
+into the agent runtime:
+
+- `AGENT_REQUEST_MANIFEST` points at the current request manifest
+- request input is mounted under `/workspace/message/...`
+- that request storage is transient and should not be treated as durable state
 
 ## Codex Sandbox Bypass
 Container mode is configured to run Codex with:
