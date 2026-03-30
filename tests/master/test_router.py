@@ -339,16 +339,16 @@ def test_podman_exec_dispatcher_includes_exit_and_output_details(monkeypatch) ->
 
 
 def test_podman_exec_dispatcher_injects_request_manifest_without_prompt_augmentation(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
-    dispatcher = PodmanExecDispatcher(message_root=str(tmp_path))
+    dispatcher = PodmanExecDispatcher()
     seen: dict[str, object] = {}
 
     def fake_stage_request_attachments(*, agent_name: str, request_id: str, attachments: list[RoutedAttachment]):  # type: ignore[no-untyped-def]
-        host_dir = tmp_path / agent_name / request_id
-        host_dir.mkdir(parents=True)
-        return host_dir, f"/workspace/message/{request_id}/manifest.json"
+        return request_id, f"/workspace/message/{request_id}/manifest.json"
 
-    def fake_cleanup(_path):  # type: ignore[no-untyped-def]
+    def fake_cleanup(*, agent_name: str, request_id: str):  # type: ignore[no-untyped-def]
         seen["cleaned"] = True
+        seen["cleaned_agent"] = agent_name
+        seen["cleaned_request_id"] = request_id
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
         seen["cmd"] = cmd
@@ -356,7 +356,7 @@ def test_podman_exec_dispatcher_injects_request_manifest_without_prompt_augmenta
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr(PodmanExecDispatcher, "_stage_request_attachments", lambda self, **kwargs: fake_stage_request_attachments(**kwargs))
-    monkeypatch.setattr(PodmanExecDispatcher, "_cleanup_request_attachments", lambda self, path: fake_cleanup(path))
+    monkeypatch.setattr(PodmanExecDispatcher, "_cleanup_request_attachments", lambda self, **kwargs: fake_cleanup(**kwargs))
     monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
 
     response = dispatcher.send_prompt(
@@ -382,6 +382,7 @@ def test_podman_exec_dispatcher_injects_request_manifest_without_prompt_augmenta
     assert "AGENT_REQUEST_MANIFEST=/workspace/message/" in " ".join(seen["cmd"])  # type: ignore[arg-type]
     assert seen["input"] == "summarize this"
     assert seen["cleaned"] is True
+    assert seen["cleaned_agent"] == "payments-agent"
 
 
 def test_podman_exec_dispatcher_reports_timeout(monkeypatch) -> None:  # type: ignore[no-untyped-def]

@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -112,8 +113,9 @@ class PodmanExecDispatcher:
     workdir: str = "/workspace/repo"
     codex_home: str = "/workspace/.codex"
     slack_bot_token: str | None = None
-    message_root: str = "/var/lib/codex-slack/messages"
+    message_volume_prefix: str = "agent-messages"
     message_mount_path: str = "/workspace/message"
+    helper_image: str = "alpine:3.20"
 
     @staticmethod
     def _clip(value: str, limit: int = 240) -> str:
@@ -135,6 +137,9 @@ class PodmanExecDispatcher:
         source = thread_ts or channel_id
         normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", source).strip("-") or "request"
         return f"{platform}-{channel_id}-{normalized}-{time.time_ns()}"
+
+    def _request_volume_name(self, agent_name: str) -> str:
+        return f"{self.message_volume_prefix}-{agent_name}"
 
     def _render_command(self, *, channel_id: str, thread_ts: str | None) -> tuple[str, str]:
         session_id = self._session_id(channel_id=channel_id, thread_ts=thread_ts)
@@ -182,10 +187,10 @@ class PodmanExecDispatcher:
         if image_urls:
             attachments.extend(make_image_attachments(image_urls))
         manifest_path: str | None = None
-        request_host_dir: Path | None = None
+        request_id: str | None = None
         if attachments:
             request_id = self._request_id(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
-            request_host_dir, manifest_path = self._stage_request_attachments(
+            request_id, manifest_path = self._stage_request_attachments(
                 agent_name=agent_name,
                 request_id=request_id,
                 attachments=attachments,
@@ -244,8 +249,8 @@ class PodmanExecDispatcher:
             )
             raise RouteError("podman CLI is not available in the master runtime") from exc
         finally:
-            if request_host_dir is not None and completed is not None and completed.returncode == 0:
-                self._cleanup_request_attachments(request_host_dir)
+            if request_id is not None and completed is not None and completed.returncode == 0:
+                self._cleanup_request_attachments(agent_name=agent_name, request_id=request_id)
 
         if completed.returncode != 0:
             stderr_text = self._clip(completed.stderr)
@@ -283,47 +288,56 @@ class PodmanExecDispatcher:
         agent_name: str,
         request_id: str,
         attachments: list[RoutedAttachment],
-    ) -> tuple[Path, str]:
-        request_host_dir = Path(self.message_root) / agent_name / request_id
-        source_dir = request_host_dir / "source"
-        derived_root = request_host_dir / "derived"
+    ) -> tuple[str, str]:
+        staging_root = Path(tempfile.mkdtemp(prefix=f"{agent_name}-{request_id}-"))
+        request_local_dir = staging_root / request_id
+        source_dir = request_local_dir / "source"
+        derived_root = request_local_dir / "derived"
         source_dir.mkdir(parents=True, exist_ok=True)
         derived_root.mkdir(parents=True, exist_ok=True)
 
-        manifest_attachments: list[dict[str, Any]] = []
-        for idx, attachment in enumerate(attachments, start=1):
-            fallback = f"{attachment.kind}-{idx}"
-            safe_name = _sanitize_filename(attachment.filename, fallback=fallback)
-            source_path = source_dir / safe_name
-            self._download_attachment(attachment=attachment, destination=source_path)
-            item: dict[str, Any] = {
-                "id": attachment.id or f"att-{idx}",
-                "kind": attachment.kind,
-                "filename": attachment.filename,
-                "content_type": attachment.content_type,
-                "staged_path": f"{self.message_mount_path}/{request_id}/source/{safe_name}",
-            }
-            if attachment.format_hint:
-                item["format_hint"] = attachment.format_hint
-            if attachment.kind == "document":
-                derived_dir = derived_root / item["id"]
-                derived = convert_document_to_markdown(source_path=source_path, output_dir=derived_dir)
-                item["derived"] = {
-                    "markdown_path": f"{self.message_mount_path}/{request_id}/derived/{item['id']}/document.md",
-                    "assets_dir": f"{self.message_mount_path}/{request_id}/derived/{item['id']}/assets",
-                    "manifest_path": f"{self.message_mount_path}/{request_id}/derived/{item['id']}/derived.json",
-                    "converter": derived.converter,
-                    "warnings": derived.warnings,
+        try:
+            manifest_attachments: list[dict[str, Any]] = []
+            for idx, attachment in enumerate(attachments, start=1):
+                fallback = f"{attachment.kind}-{idx}"
+                safe_name = _sanitize_filename(attachment.filename, fallback=fallback)
+                source_path = source_dir / safe_name
+                self._download_attachment(attachment=attachment, destination=source_path)
+                item: dict[str, Any] = {
+                    "id": attachment.id or f"att-{idx}",
+                    "kind": attachment.kind,
+                    "filename": attachment.filename,
+                    "content_type": attachment.content_type,
+                    "staged_path": f"{self.message_mount_path}/{request_id}/source/{safe_name}",
                 }
-            manifest_attachments.append(item)
+                if attachment.format_hint:
+                    item["format_hint"] = attachment.format_hint
+                if attachment.kind == "document":
+                    derived_dir = derived_root / item["id"]
+                    derived = convert_document_to_markdown(source_path=source_path, output_dir=derived_dir)
+                    item["derived"] = {
+                        "markdown_path": f"{self.message_mount_path}/{request_id}/derived/{item['id']}/document.md",
+                        "assets_dir": f"{self.message_mount_path}/{request_id}/derived/{item['id']}/assets",
+                        "manifest_path": f"{self.message_mount_path}/{request_id}/derived/{item['id']}/derived.json",
+                        "converter": derived.converter,
+                        "warnings": derived.warnings,
+                    }
+                manifest_attachments.append(item)
 
-        manifest_path = request_host_dir / "manifest.json"
-        payload = {
-            "request_id": request_id,
-            "attachments": manifest_attachments,
-        }
-        manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return request_host_dir, f"{self.message_mount_path}/{request_id}/manifest.json"
+            manifest_path = request_local_dir / "manifest.json"
+            payload = {
+                "request_id": request_id,
+                "attachments": manifest_attachments,
+            }
+            manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            self._sync_request_attachments(
+                agent_name=agent_name,
+                request_id=request_id,
+                request_local_dir=request_local_dir,
+            )
+            return request_id, f"{self.message_mount_path}/{request_id}/manifest.json"
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
 
     def _download_attachment(self, *, attachment: RoutedAttachment, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -341,8 +355,61 @@ class PodmanExecDispatcher:
         with urlopen(req, timeout=self.timeout_seconds or 30) as response:  # noqa: S310
             destination.write_bytes(response.read())
 
-    def _cleanup_request_attachments(self, request_host_dir: Path) -> None:
-        shutil.rmtree(request_host_dir, ignore_errors=True)
+    def _sync_request_attachments(self, *, agent_name: str, request_id: str, request_local_dir: Path) -> None:
+        volume_name = self._request_volume_name(agent_name)
+        helper_name = f"request-stage-{agent_name}-{uuid.uuid4().hex}"
+        self._run_quiet(["podman", "volume", "create", volume_name])
+        try:
+            self._run_quiet(
+                [
+                    "podman",
+                    "create",
+                    "--name",
+                    helper_name,
+                    "-v",
+                    f"{volume_name}:/request-volume",
+                    self.helper_image,
+                    "sh",
+                    "-lc",
+                    "sleep 300",
+                ]
+            )
+            self._run_quiet(["podman", "start", helper_name])
+            self._run_quiet(
+                [
+                    "podman",
+                    "exec",
+                    helper_name,
+                    "sh",
+                    "-lc",
+                    f"mkdir -p /request-volume/{shlex.quote(request_id)}",
+                ]
+            )
+            self._run_quiet(
+                [
+                    "podman",
+                    "cp",
+                    f"{request_local_dir}/.",
+                    f"{helper_name}:/request-volume/{request_id}/",
+                ]
+            )
+        finally:
+            self._run_quiet(["podman", "rm", "-f", helper_name])
+
+    def _cleanup_request_attachments(self, *, agent_name: str, request_id: str) -> None:
+        self._run_quiet(
+            [
+                "podman",
+                "run",
+                "--rm",
+                "-v",
+                f"{self._request_volume_name(agent_name)}:/request-volume",
+                self.helper_image,
+                "sh",
+                "-lc",
+                f"rm -rf /request-volume/{shlex.quote(request_id)}",
+            ]
+        )
 
     def _download_slack_file(self, *, url: str, token: str, suffix: str) -> str:
         req = Request(url, headers={"Authorization": f"Bearer {token}"})
@@ -590,10 +657,10 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         if image_urls:
             attachments.extend(make_image_attachments(image_urls))
         manifest_path: str | None = None
-        request_host_dir: Path | None = None
+        request_id: str | None = None
         if attachments:
             request_id = self._request_id(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
-            request_host_dir, manifest_path = self._stage_request_attachments(
+            request_id, manifest_path = self._stage_request_attachments(
                 agent_name=agent_name,
                 request_id=request_id,
                 attachments=attachments,
@@ -704,8 +771,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
 
         self._mark_session_known(platform=platform, channel_id=channel_id, session_id=session_id)
         response = self._parse_response(completed.stdout.strip())
-        if request_host_dir is not None:
-            self._cleanup_request_attachments(request_host_dir)
+        if request_id is not None:
+            self._cleanup_request_attachments(agent_name=agent_name, request_id=request_id)
         LOGGER.info(
             "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s response_chars=%d",
             agent_name,

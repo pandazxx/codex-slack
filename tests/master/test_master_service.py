@@ -280,7 +280,7 @@ def test_start_agent_mounts_codex_auth_json_only(tmp_path) -> None:
     mounts = runtime.calls[0][1]["mounts"]
     assert mounts == [
         "/host/secrets/codex-auth.json:/run/secrets/codex_auth.json:ro",
-        "/var/lib/codex-slack/messages/payments-api:/workspace/message:ro",
+        "agent-messages-payments-api:/workspace/message:ro",
     ]
 
 
@@ -309,11 +309,11 @@ def test_start_agent_mounts_global_codex_and_claude_config_dirs(tmp_path) -> Non
     assert mounts == [
         "/host/config/codex:/run/secrets/master_codex_config:ro",
         "/host/config/claude:/run/secrets/master_claude_config:ro",
-        "/var/lib/codex-slack/messages/payments-api:/workspace/message:ro",
+        "agent-messages-payments-api:/workspace/message:ro",
     ]
 
 
-def test_start_agent_mounts_request_storage_root(tmp_path) -> None:
+def test_start_agent_mounts_request_storage_volume(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -322,13 +322,13 @@ def test_start_agent_mounts_request_storage_root(tmp_path) -> None:
     service = MasterService(
         registry=registry,
         runtime=runtime,
-        message_root="/srv/messages",
+        message_volume_prefix="requests",
     )
 
     assert service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123").ok is True
     assert service.start_agent(name="payments-api").ok is True
     mounts = runtime.calls[0][1]["mounts"]
-    assert "/srv/messages/payments-api:/workspace/message:ro" in mounts
+    assert "requests-payments-api:/workspace/message:ro" in mounts
 
 
 def test_start_agent_mounts_ssh_forwarding_and_sets_env(tmp_path) -> None:
@@ -357,7 +357,7 @@ def test_start_agent_mounts_ssh_forwarding_and_sets_env(tmp_path) -> None:
     assert mounts == [
         "/run/user/1000/keyring/ssh:/run/secrets/ssh-auth.sock",
         "/home/tester/.ssh/known_hosts:/run/secrets/ssh_known_hosts:ro",
-        "/var/lib/codex-slack/messages/payments-api:/workspace/message:ro",
+        "agent-messages-payments-api:/workspace/message:ro",
     ]
 
 
@@ -384,7 +384,7 @@ def test_start_agent_sets_insecure_default_ssh_config_without_known_hosts(tmp_pa
     assert env["GIT_SSH_COMMAND"] == "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     assert mounts == [
         "/run/user/1000/keyring/ssh:/run/secrets/ssh-auth.sock",
-        "/var/lib/codex-slack/messages/payments-api:/workspace/message:ro",
+        "agent-messages-payments-api:/workspace/message:ro",
     ]
 
 

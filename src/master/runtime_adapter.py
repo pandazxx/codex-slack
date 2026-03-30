@@ -79,27 +79,17 @@ class PodmanRuntimeAdapter:
         completed = self._run(["podman", "container", "exists", container_name], check=False)
         return completed.returncode == 0
 
-    @staticmethod
-    def _is_remote_podman_unshare_error(exc: RuntimeErrorAdapter) -> bool:
-        message = str(exc)
-        return "podman unshare" in message and "remote podman client" in message
-
-    def _ensure_bind_mount_sources(self, mounts: list[str]) -> None:
+    def _ensure_named_mount_volumes(self, mounts: list[str]) -> None:
         for mount in mounts:
             parts = mount.split(":")
             if len(parts) < 2:
                 continue
             source, target = parts[0], parts[1]
-            if not source.startswith("/"):
-                continue
             if target != "/workspace/message":
                 continue
-            try:
-                self._run(["podman", "unshare", "mkdir", "-p", source])
-            except RuntimeErrorAdapter as exc:
-                if not self._is_remote_podman_unshare_error(exc):
-                    raise
-                Path(source).mkdir(parents=True, exist_ok=True)
+            if source.startswith("/"):
+                continue
+            self._run(["podman", "volume", "create", source])
 
     def build_image(self, *, name: str, repo_path: str, context_rel: str, dockerfile_rel: str) -> str:
         image_tag = f"codex-agent-{name}:latest"
@@ -130,7 +120,7 @@ class PodmanRuntimeAdapter:
         if self._container_exists(container_name):
             self._run(["podman", "rm", "-f", container_name], check=False)
 
-        self._ensure_bind_mount_sources(mounts or [])
+        self._ensure_named_mount_volumes(mounts or [])
 
         cmd = [
             "podman",
