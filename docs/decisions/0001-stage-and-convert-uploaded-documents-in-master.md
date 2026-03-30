@@ -166,7 +166,7 @@ Decision: whether the original uploaded binary is committed is left to the proje
 
 ### 8. Request-specific storage location
 
-Decision: request-specific attachment storage lives outside `/workspace/repo/`, under `/workspace/message/<request-id>/...`, via a master-managed request-storage mount attached to the agent container.
+Decision: request-specific attachment storage lives outside `/workspace/repo/`, under `/workspace/message/<request-id>/...`, via a master-managed request-storage named volume shared between master and the agent container.
 
 ### 9. Request-storage lifecycle
 
@@ -174,13 +174,29 @@ Decision: master manages request storage and cleans up the request directory aft
 
 ### 10. Request-storage ownership and permissions
 
-Decision: master owns request storage writes. The agent mounts request storage read-only.
+Decision: master owns request storage writes through its own writable mount of the per-agent request-storage named volume. The agent mounts the same request storage read-only.
 
 Rationale:
 
 - request manifests, uploaded source files, converted Markdown, and extracted images are transport-scoped artifacts produced by master
 - agent-side durable output belongs in the repo, not in request storage
 - read-only request storage reduces accidental mutation of staged source and derived artifacts
+- using a named volume instead of a host bind avoids host-path coupling and remote-Podman bind-source provisioning problems
+
+### 13. Request-storage volume shape
+
+Decision: use one named volume per agent, such as `agent-messages-<agent-name>`.
+
+Mount shape:
+
+- master mount path: `/workspace/messages/<agent-name>` read-write
+- agent mount path: `/workspace/message` read-only
+
+Rationale:
+
+- preserves direct master-side filesystem writes without helper-container indirection
+- keeps agent-side paths stable and simple
+- aligns request storage with the repository's broader named-volume-first runtime model
 
 ### 11. Attachment acceptance policy
 

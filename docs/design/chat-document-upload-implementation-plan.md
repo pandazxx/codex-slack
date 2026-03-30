@@ -60,13 +60,28 @@ Request-specific storage lives outside the repo, under `/workspace/message/`, an
 
 ### Mount implementation choice
 
-For the first implementation, use a shared host bind path per agent.
+Use a shared named volume per agent for request storage.
 
 Suggested shape:
 
-- host path: `/var/lib/codex-slack/messages/<agent-name>/`
-- master path: writable direct filesystem access or equivalent writable mount inside the master runtime
+- volume name: `agent-messages-<agent-name>`
+- master mount path: `/workspace/messages/<agent-name>` as read-write
 - agent mount path: `/workspace/message` as read-only
+
+Rationale:
+
+- avoids host-path coupling to `/var/lib/...`
+- avoids remote-Podman bind-source provisioning issues
+- keeps request storage container-native like the existing agent workspace volume
+- preserves the intended ownership split: master writes request artifacts, agent reads them
+
+Implementation note:
+
+- master writes request files through its own writable volume mount path
+- the manifest stores agent-visible absolute paths under `/workspace/message/...`
+- master therefore needs a simple path translation between:
+  - master write path: `/workspace/messages/<agent-name>/<request-id>/...`
+  - agent read path: `/workspace/message/<request-id>/...`
 
 ### Layout
 
@@ -248,11 +263,11 @@ Files:
 - [src/master/service.py](/workspace/repo/src/master/service.py)
 - [src/master/runtime_adapter.py](/workspace/repo/src/master/runtime_adapter.py)
 
-At agent start time, mount the request-storage path into the container as:
+At agent start time, mount the request-storage volume into the container as:
 
-- host bind path -> `/workspace/message:ro`
+- named volume `agent-messages-<agent-name>` -> `/workspace/message:ro`
 
-Master owns this storage area and writes request-scoped subdirectories into it during dispatch.
+Master owns this storage area and writes request-scoped subdirectories into the same named volume through its own writable mount during dispatch.
 
 ### 6. Prompt handling
 
@@ -378,7 +393,7 @@ This retires the current special-case image prompt augmentation model.
 5. master dispatches prompt with `AGENT_REQUEST_MANIFEST`
 6. agent reads derived Markdown for documents and staged image paths for images
 7. agent replies in chat
-8. master cleans up `/workspace/message/<request-id>/`
+8. master cleans up `/workspace/messages/<agent-name>/<request-id>/`
 
 ### Modify-and-commit request
 
@@ -387,7 +402,7 @@ This retires the current special-case image prompt augmentation model.
 3. agent edits the derived Markdown content conceptually, but writes the durable final artifact into `/workspace/repo/...`
 4. agent commits and pushes
 5. agent replies with the resulting URL
-6. master cleans up `/workspace/message/<request-id>/`
+6. master cleans up `/workspace/messages/<agent-name>/<request-id>/`
 
 ## Important Boundaries
 
@@ -395,6 +410,18 @@ This retires the current special-case image prompt augmentation model.
 - request storage is transport-scoped and cleaned by master
 - durable output belongs in `/workspace/repo/...`, not in request storage
 - final durable output placement inside `/workspace/repo/...` is owned by the project/agent workflow, not by a platform-fixed path convention
+
+## Revised Request-Storage Runtime Contract
+
+To make the named-volume design concrete, the runtime contract is:
+
+- one request-storage named volume per agent: `agent-messages-<agent-name>`
+- master runtime mounts that volume at `/workspace/messages/<agent-name>` with read-write access
+- agent container mounts that same volume at `/workspace/message` with read-only access
+- master creates and removes per-request directories inside its writable mount
+- manifests always expose agent-facing absolute paths under `/workspace/message/...`
+
+This keeps the storage model aligned with the repository's named-volume workspace approach while avoiding direct host filesystem dependencies.
 
 ## Logging and Observability
 
