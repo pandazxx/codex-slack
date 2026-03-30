@@ -21,7 +21,7 @@ Only the Codex auth + sessions paths are mounted read-only; the rest of your hos
 - GitHub authentication is provided via `GH_TOKEN`.
 - `CODEX_HOME` selection on startup:
   1. Use explicit `CODEX_HOME` env var if set.
-  2. Else use `/workspace/.codex` if that directory exists.
+  2. Else use `/workspace/home/.codex` for the master-managed agent runtime.
   3. Else fallback to `/home/appuser/.codex`.
 
 ## Safe Forwarding of `auth.json`
