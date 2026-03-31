@@ -29,6 +29,7 @@ def _format_agent_list_table(result: CommandResult) -> str | None:
             (
                 f"• *{_clip(item.get('name', '-'), 24)}*"
                 f" | state=`{_clip(item.get('status', '-'), 12)}`"
+                f" | adapter=`{_clip(item.get('agent_adapter', '-'), 14)}`"
                 f" | channel=`{_clip(item.get('channel_id', '-'), 14)}`"
                 f" | ref=`{_clip(item.get('repo_ref', '-'), 12)}`"
                 f" | runtime=`{_clip(item.get('runtime', '-'), 10)}`"
