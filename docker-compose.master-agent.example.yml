@@ -27,9 +27,10 @@ services:
       MASTER_GIT_USER_NAME: ${MASTER_GIT_USER_NAME:-}
       MASTER_GIT_USER_EMAIL: ${MASTER_GIT_USER_EMAIL:-}
       MASTER_CODEX_AUTH_JSON_PATH: ${MASTER_CODEX_AUTH_JSON_PATH:-}
+      MASTER_CODEX_CONFIG_DIR_PATH: ${MASTER_CODEX_CONFIG_DIR_PATH:-}
       MASTER_CLAUDE_CONFIG_DIR_PATH: ${MASTER_CLAUDE_CONFIG_DIR_PATH:-}
-      # Host-side absolute path to this project directory (used to resolve
-      # config/claude-global/ as a bind-mount source for agent containers).
+      # Host-side absolute path to this project directory (used to auto-detect
+      # config/codex-global/ and config/claude-global/ for agent mounts).
       MASTER_PROJECT_DIR: ${MASTER_PROJECT_DIR:-}
       MASTER_SSH_AUTH_SOCK_PATH: ${MASTER_SSH_AUTH_SOCK_PATH:-}
       MASTER_SSH_KNOWN_HOSTS_PATH: ${MASTER_SSH_KNOWN_HOSTS_PATH:-}
