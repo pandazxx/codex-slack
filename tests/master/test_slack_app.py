@@ -280,6 +280,7 @@ def test_format_command_result_renders_agent_list_as_bullets() -> None:
                     {
                         "name": "aidotfile-agent",
                         "status": "running",
+                        "agent_adapter": "claude-code",
                         "channel_id": "C0123456789",
                         "repo_ref": "master",
                         "runtime": "podman",
@@ -292,6 +293,7 @@ def test_format_command_result_renders_agent_list_as_bullets() -> None:
     assert "*Total agents:* 1" in payload
     assert "• *aidotfile-agent*" in payload
     assert "state=`running`" in payload
+    assert "adapter=`claude-code`" in payload
     assert "aidotfile-agent" in payload
     assert "container=`agent-aidotfile-agent`" in payload
 
