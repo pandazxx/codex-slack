@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+LOGGER = logging.getLogger(__name__)
 
 
 class RuntimeErrorAdapter(RuntimeError):
@@ -108,6 +111,18 @@ class PodmanRuntimeAdapter:
         if self._container_exists(container_name):
             self._run(["podman", "rm", "-f", container_name], check=False)
 
+        env = env or {}
+        mounts = mounts or []
+        LOGGER.info(
+            "runtime.create_or_update_agent container=%s image=%s repo_volume=%s env_keys=%s global_codex_config_env=%s global_claude_config_env=%s mounts=%s",
+            container_name,
+            image,
+            repo_volume,
+            ",".join(sorted(env)) or "-",
+            env.get("AGENT_GLOBAL_CODEX_CONFIG_DIR", "-"),
+            env.get("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", "-"),
+            json.dumps(mounts),
+        )
         cmd = [
             "podman",
             "create",
@@ -119,9 +134,9 @@ class PodmanRuntimeAdapter:
             "-v",
             f"{repo_volume}:/workspace",
         ]
-        for mount in mounts or []:
+        for mount in mounts:
             cmd.extend(["-v", mount])
-        for key, value in sorted((env or {}).items()):
+        for key, value in sorted(env.items()):
             cmd.extend(["-e", f"{key}={value}"])
         cmd.append(image)
 

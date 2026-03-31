@@ -145,14 +145,40 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
     global_claude_config_raw = os.getenv("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", "").strip()
     repo_codex_dir = repo_dir / ".codex"
     home_claude_dir = home_dir / ".claude"
+    global_codex_config_path = Path(global_codex_config_raw) if global_codex_config_raw else None
+    global_claude_config_path = Path(global_claude_config_raw) if global_claude_config_raw else None
+
+    LOGGER.info(
+        "agent.workspace_prepare_paths codex_home=%s repo_codex_dir=%s global_codex_config_dir=%s global_codex_config_exists=%s global_codex_config_is_dir=%s global_claude_config_dir=%s global_claude_config_exists=%s global_claude_config_is_dir=%s",
+        codex_home,
+        repo_codex_dir,
+        global_codex_config_raw or "-",
+        global_codex_config_path.exists() if global_codex_config_path else False,
+        global_codex_config_path.is_dir() if global_codex_config_path else False,
+        global_claude_config_raw or "-",
+        global_claude_config_path.exists() if global_claude_config_path else False,
+        global_claude_config_path.is_dir() if global_claude_config_path else False,
+    )
 
     if global_codex_config_raw:
-        _copy_tree(Path(global_codex_config_raw), codex_home, overwrite=False)
+        _copy_tree(global_codex_config_path, codex_home, overwrite=False)
+        LOGGER.info(
+            "agent.workspace_prepare_copied target=%s source=%s target_entries=%d",
+            codex_home,
+            global_codex_config_raw,
+            sum(1 for _ in codex_home.rglob("*")),
+        )
     # repo_codex_dir (.codex/ in the cloned repo) is intentionally left in place.
     # Codex reads it as project-scope config from the working directory, which takes
     # precedence over user-scope settings in CODEX_HOME per the Codex scope hierarchy.
     if global_claude_config_raw:
-        _copy_tree(Path(global_claude_config_raw), home_claude_dir, overwrite=False)
+        _copy_tree(global_claude_config_path, home_claude_dir, overwrite=False)
+        LOGGER.info(
+            "agent.workspace_prepare_copied target=%s source=%s target_entries=%d",
+            home_claude_dir,
+            global_claude_config_raw,
+            sum(1 for _ in home_claude_dir.rglob("*")),
+        )
 
     git_user_name = os.getenv("AGENT_GIT_USER_NAME", "").strip()
     git_user_email = os.getenv("AGENT_GIT_USER_EMAIL", "").strip()
