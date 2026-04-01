@@ -130,7 +130,21 @@ class PodmanExecDispatcher:
                 lines.append(f"- remote url: {url}")
             prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
             effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
-
+        LOGGER.info(
+            "router.attachment_plan agent=%s container=%s platform=%s channel=%s thread_ts=%s input_urls=%d staged=%d passthrough=%d first_staged=%s first_passthrough=%s attachment_block=%s effective_prompt_chars=%d",
+            agent_name,
+            container_name,
+            platform,
+            channel_id,
+            thread_ts or "-",
+            len(image_urls),
+            len(staged_paths),
+            len(passthrough_urls),
+            staged_paths[0] if staged_paths else "-",
+            self._clip(passthrough_urls[0], 120) if passthrough_urls else "-",
+            bool(staged_paths or passthrough_urls),
+            len(effective_prompt),
+        )
         cmd = ["podman", "exec", "-i"]
         if self.codex_home:
             cmd.extend(["-e", f"CODEX_HOME={self.codex_home}"])
@@ -227,6 +241,12 @@ class PodmanExecDispatcher:
         for idx, url in enumerate(image_urls, start=1):
             tmp_path: str | None = None
             if "files.slack.com" not in url or not token:
+                LOGGER.info(
+                    "router.image_stage_passthrough container=%s reason=%s url=%s",
+                    container_name,
+                    "missing_slack_token" if "files.slack.com" in url and not token else "non_slack_url",
+                    self._clip(url, 120),
+                )
                 passthrough_urls.append(url)
                 continue
 
@@ -239,6 +259,13 @@ class PodmanExecDispatcher:
                 self._run_quiet(["podman", "exec", container_name, "sh", "-lc", f"mkdir -p '{self.workdir.rstrip('/')}/{rel_dir}'"])
                 tmp_path = self._download_slack_file(url=url, token=token, suffix=ext)
                 self._run_quiet(["podman", "cp", tmp_path, f"{container_name}:{target}"])
+                LOGGER.info(
+                    "router.image_staged container=%s source_url=%s target=%s bytes=%d",
+                    container_name,
+                    self._clip(url, 120),
+                    target,
+                    os.path.getsize(tmp_path),
+                )
                 staged_paths.append(target)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning(

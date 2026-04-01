@@ -113,7 +113,19 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
-            image_urls = extract_image_urls(event.get("files", []), event_ts)
+            files = event.get("files", [])
+            file_summary = summarize_slack_files(files, event_ts)
+            image_urls = extract_image_urls(files, event_ts)
+            LOGGER.info(
+                "mention file summary channel=%s thread_ts=%s total_files=%d matched_files=%d image_files=%d non_image_files=%d non_image_mimetypes=%s",
+                channel_id or "-",
+                thread_ts or "-",
+                file_summary["total_files"],
+                file_summary["matched_files"],
+                file_summary["image_files"],
+                file_summary["non_image_files"],
+                ",".join(file_summary["non_image_mimetypes"]) or "-",
+            )
 
             try:
                 say(text=format_forward_ack(text=text, image_count=len(image_urls)), thread_ts=thread_ts)
@@ -161,7 +173,20 @@ def create_master_app(
             event_ts = event.get("ts")
             text = event.get("text", "")
             user_id = event.get("user", "")
-            image_urls = extract_image_urls(event.get("files", []), event_ts)
+            files = event.get("files", [])
+            file_summary = summarize_slack_files(files, event_ts)
+            image_urls = extract_image_urls(files, event_ts)
+            LOGGER.info(
+                "thread file summary channel=%s thread_ts=%s subtype=%s total_files=%d matched_files=%d image_files=%d non_image_files=%d non_image_mimetypes=%s",
+                channel_id or "-",
+                thread_ts or "-",
+                subtype or "-",
+                file_summary["total_files"],
+                file_summary["matched_files"],
+                file_summary["image_files"],
+                file_summary["non_image_files"],
+                ",".join(file_summary["non_image_mimetypes"]) or "-",
+            )
             if image_urls:
                 LOGGER.info(
                     "thread image payload channel=%s thread_ts=%s subtype=%s image_count=%d first_image=%s",
@@ -286,6 +311,37 @@ def _file_matches_event_ts(file_item: dict, event_ts: str | None) -> bool:
                 if str(entry.get("ts", "")) == event_ts:
                     return True
     return False
+
+
+def summarize_slack_files(files: object, event_ts: str | None = None) -> dict[str, object]:
+    summary: dict[str, object] = {
+        "total_files": 0,
+        "matched_files": 0,
+        "image_files": 0,
+        "non_image_files": 0,
+        "non_image_mimetypes": [],
+    }
+    if not isinstance(files, list):
+        return summary
+
+    non_image_mimetypes: list[str] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        summary["total_files"] = int(summary["total_files"]) + 1
+        if not _file_matches_event_ts(item, event_ts):
+            continue
+        summary["matched_files"] = int(summary["matched_files"]) + 1
+        mimetype = str(item.get("mimetype", "")).strip() or "-"
+        if mimetype.startswith("image/"):
+            summary["image_files"] = int(summary["image_files"]) + 1
+            continue
+        summary["non_image_files"] = int(summary["non_image_files"]) + 1
+        if len(non_image_mimetypes) < 3:
+            non_image_mimetypes.append(mimetype)
+
+    summary["non_image_mimetypes"] = non_image_mimetypes
+    return summary
 
 
 def extract_image_urls(files: object, event_ts: str | None = None) -> list[str]:

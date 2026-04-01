@@ -20,6 +20,7 @@ from src.master.slack_app import (
     is_admin_channel,
     is_supported_thread_subtype,
     select_thread_image_urls,
+    summarize_slack_files,
 )
 
 
@@ -396,6 +397,20 @@ def test_extract_image_urls_keeps_file_without_shares_metadata() -> None:
         "1000.010",
     )
     assert urls == ["https://files.slack.com/no-shares.png"]
+
+
+def test_summarize_slack_files_counts_non_image_payloads() -> None:
+    summary = summarize_slack_files(
+        [
+            {"mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+            {"mimetype": "image/png", "url_private": "https://files.slack.com/no-shares.png"},
+        ]
+    )
+    assert summary["total_files"] == 2
+    assert summary["matched_files"] == 2
+    assert summary["image_files"] == 1
+    assert summary["non_image_files"] == 1
+    assert summary["non_image_mimetypes"] == ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
 
 
 def test_select_thread_image_urls_keeps_all_for_file_share() -> None:
