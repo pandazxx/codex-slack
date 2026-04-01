@@ -116,7 +116,7 @@ class PodmanExecDispatcher:
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
         image_urls = image_urls or []
-        staged_paths, passthrough_urls = self._stage_images(
+        staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=session_id,
             image_urls=image_urls,
@@ -129,7 +129,7 @@ class PodmanExecDispatcher:
             for url in passthrough_urls:
                 lines.append(f"- remote url: {url}")
             prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
-            effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
+            effective_prompt = f"{prefix}Attached files:\n" + "\n".join(lines)
         LOGGER.info(
             "router.attachment_plan agent=%s container=%s platform=%s channel=%s thread_ts=%s input_urls=%d staged=%d passthrough=%d first_staged=%s first_passthrough=%s attachment_block=%s effective_prompt_chars=%d",
             agent_name,
@@ -225,7 +225,7 @@ class PodmanExecDispatcher:
         )
         return response
 
-    def _stage_images(
+    def _stage_attachments(
         self,
         *,
         container_name: str,
@@ -240,11 +240,12 @@ class PodmanExecDispatcher:
 
         for idx, url in enumerate(image_urls, start=1):
             tmp_path: str | None = None
-            if "files.slack.com" not in url or not token:
+            is_slack_file = "files.slack.com" in url
+            if is_slack_file and not token:
                 LOGGER.info(
-                    "router.image_stage_passthrough container=%s reason=%s url=%s",
+                    "router.attachment_stage_passthrough container=%s reason=%s url=%s",
                     container_name,
-                    "missing_slack_token" if "files.slack.com" in url and not token else "non_slack_url",
+                    "missing_slack_token",
                     self._clip(url, 120),
                 )
                 passthrough_urls.append(url)
@@ -252,15 +253,15 @@ class PodmanExecDispatcher:
 
             parsed = urlparse(url)
             ext = os.path.splitext(parsed.path)[1] or ".bin"
-            rel_dir = f".slack_images/{session_id}"
+            rel_dir = f".attachments/{session_id}"
             rel_path = f"{rel_dir}/{time.time_ns()}-{idx}{ext}"
             target = f"{self.workdir.rstrip('/')}/{rel_path}" if self.workdir else rel_path
             try:
                 self._run_quiet(["podman", "exec", container_name, "sh", "-lc", f"mkdir -p '{self.workdir.rstrip('/')}/{rel_dir}'"])
-                tmp_path = self._download_slack_file(url=url, token=token, suffix=ext)
+                tmp_path = self._download_attachment(url=url, token=token if is_slack_file else None, suffix=ext)
                 self._run_quiet(["podman", "cp", tmp_path, f"{container_name}:{target}"])
                 LOGGER.info(
-                    "router.image_staged container=%s source_url=%s target=%s bytes=%d",
+                    "router.attachment_staged container=%s source_url=%s target=%s bytes=%d",
                     container_name,
                     self._clip(url, 120),
                     target,
@@ -269,7 +270,7 @@ class PodmanExecDispatcher:
                 staged_paths.append(target)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning(
-                    "router.image_stage_failed container=%s url=%s error=%s",
+                    "router.attachment_stage_failed container=%s url=%s error=%s",
                     container_name,
                     self._clip(url, 120),
                     exc,
@@ -281,8 +282,9 @@ class PodmanExecDispatcher:
 
         return staged_paths, passthrough_urls
 
-    def _download_slack_file(self, *, url: str, token: str, suffix: str) -> str:
-        req = Request(url, headers={"Authorization": f"Bearer {token}"})
+    def _download_attachment(self, *, url: str, token: str | None, suffix: str) -> str:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        req = Request(url, headers=headers)
         with urlopen(req, timeout=self.timeout_seconds or 30) as response:  # noqa: S310
             data = response.read()
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -472,7 +474,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
     ) -> str:
         LOGGER.info("router.claude_command_template template=%r", self.command_template)
         image_urls = image_urls or []
-        staged_paths, passthrough_urls = self._stage_images(
+        staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=channel_id,
             image_urls=image_urls,
@@ -485,7 +487,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             for url in passthrough_urls:
                 lines.append(f"- remote url: {url}")
             prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
-            effective_prompt = f"{prefix}Attached images:\n" + "\n".join(lines)
+            effective_prompt = f"{prefix}Attached files:\n" + "\n".join(lines)
 
         initial_action = "continue"
         retry_action: str | None = None

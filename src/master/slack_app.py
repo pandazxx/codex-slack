@@ -115,7 +115,7 @@ def create_master_app(
             user_id = event.get("user", "")
             files = event.get("files", [])
             file_summary = summarize_slack_files(files, event_ts)
-            image_urls = extract_image_urls(files, event_ts)
+            image_urls = extract_attachment_urls(files, event_ts)
             LOGGER.info(
                 "mention file summary channel=%s thread_ts=%s total_files=%d matched_files=%d image_files=%d non_image_files=%d non_image_mimetypes=%s",
                 channel_id or "-",
@@ -175,7 +175,7 @@ def create_master_app(
             user_id = event.get("user", "")
             files = event.get("files", [])
             file_summary = summarize_slack_files(files, event_ts)
-            image_urls = extract_image_urls(files, event_ts)
+            image_urls = extract_attachment_urls(files, event_ts)
             LOGGER.info(
                 "thread file summary channel=%s thread_ts=%s subtype=%s total_files=%d matched_files=%d image_files=%d non_image_files=%d non_image_mimetypes=%s",
                 channel_id or "-",
@@ -344,7 +344,7 @@ def summarize_slack_files(files: object, event_ts: str | None = None) -> dict[st
     return summary
 
 
-def extract_image_urls(files: object, event_ts: str | None = None) -> list[str]:
+def extract_attachment_urls(files: object, event_ts: str | None = None) -> list[str]:
     if not isinstance(files, list):
         return []
     urls: list[str] = []
@@ -352,9 +352,6 @@ def extract_image_urls(files: object, event_ts: str | None = None) -> list[str]:
         if not isinstance(item, dict):
             continue
         if not _file_matches_event_ts(item, event_ts):
-            continue
-        mimetype = str(item.get("mimetype", ""))
-        if not mimetype.startswith("image/"):
             continue
         url = str(item.get("url_private_download") or item.get("url_private") or "").strip()
         if url:
@@ -372,5 +369,5 @@ def format_forward_ack(*, text: str, image_count: int) -> str:
     text_chars = len(text)
     return (
         ":incoming_envelope: Received message and forwarded to agent. "
-        f"text_chars=`{text_chars}` images=`{image_count}`"
+        f"text_chars=`{text_chars}` attachments=`{image_count}`"
     )

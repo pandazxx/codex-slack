@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from src.master.discord_app import _extract_attachment_urls
 from src.master.discord_app import label_discord_chunks
 from src.master.discord_app import parse_admin_message_command
 from src.master.discord_app import split_discord_message
@@ -38,6 +39,21 @@ def test_split_discord_message_chunks_long_payload() -> None:
 def test_label_discord_chunks_adds_part_headers() -> None:
     chunks = label_discord_chunks(["alpha", "beta"])
     assert chunks == ["[1/2]\nalpha", "[2/2]\nbeta"]
+
+
+def test_extract_attachment_urls_keeps_non_image_files() -> None:
+    class Attachment:
+        def __init__(self, url: str, content_type: str) -> None:
+            self.url = url
+            self.content_type = content_type
+
+    urls = _extract_attachment_urls(
+        [
+            Attachment("https://cdn.discordapp.com/a.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            Attachment("https://cdn.discordapp.com/b.png", "image/png"),
+        ]
+    )
+    assert urls == ["https://cdn.discordapp.com/a.docx", "https://cdn.discordapp.com/b.png"]
 
 
 def test_sync_registered_commands_copies_global_commands_to_admin_guild() -> None:
