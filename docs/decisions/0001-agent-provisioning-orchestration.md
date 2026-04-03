@@ -82,6 +82,33 @@ Provisioning flow:
 4. call `load_agent()` with resolved `repo_path` / `repo_source` and `channel_id`
 5. return combined provisioning result
 
+### Provisioning boundary diagram
+
+```mermaid
+flowchart LR
+    OP[Operator]
+    FE[Slack / Discord Frontend]
+    PC[ProvisioningCoordinator]
+    CP[ChannelProvisioner]
+    RP[RepoProvisioner]
+    MS[MasterService]
+    REG[(Agent Registry)]
+    GIT[(GitHub)]
+    CHAT[(Slack / Discord APIs)]
+
+    OP --> FE
+    FE --> PC
+    PC --> RP
+    PC --> CP
+    RP --> GIT
+    CP --> CHAT
+    PC --> MS
+    MS --> REG
+
+    FE -. platform client context .-> CP
+    MS -. existing bind / checkout flow .-> REG
+```
+
 ### Persistence and results
 
 At minimum, the provisioning result should include:
