@@ -37,3 +37,9 @@ The container image does not include the `claude` CLI. Rebuild the base image fr
 **Q: Where do I find the agent registry?**
 
 Default path: `data/master/agents.json`. Override with `MASTER_REGISTRY_PATH`.
+
+---
+
+**Q: `/master-agent-provision` created the GitHub repo but failed with Discord `50013 Missing Permissions`. What does that mean?**
+
+The GitHub part succeeded and the Discord channel-creation step failed. Current Discord provisioning creates the new text channel in the same guild/category as the admin channel where you ran the command. The bot needs `Manage Channels` in that target category. If the category overrides deny it, move to a different admin channel/category or grant the bot `Manage Channels` there before retrying.

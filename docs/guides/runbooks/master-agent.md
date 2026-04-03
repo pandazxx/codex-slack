@@ -190,6 +190,25 @@ Omit the model argument to clear the override:
 ```
 - Re-run `/master-agent-load` for the new mapping.
 
+### Discord provisioning channel-create failure
+- If `/master-agent-provision` returns `ERR_PROVISION_FAILED` and master logs show `discord.errors.Forbidden: 403 Forbidden (error code: 50013): Missing Permissions`, the GitHub repo step may already have succeeded and only the Discord channel-create step failed.
+- Current behavior creates the new Discord text channel in the same guild/category as the admin channel where the provisioning command was invoked.
+- Required permission in that target location:
+  - `Manage Channels`
+- Check:
+  - the bot role has `Manage Channels` in the guild
+  - the category inherited from the admin channel does not override-deny `Manage Channels`
+  - the bot can view the target category
+- Fast recovery options:
+  - rerun the command from an admin channel in a category where the bot can create channels
+  - or grant the bot `Manage Channels` on the intended category before retrying
+- Useful provisioning logs:
+  - `master.provision_command_parsed`
+  - `provision.start`
+  - `provision.github_create_done`
+  - `provision.discord_channel_create_start`
+  - `provision.failed`
+
 ### Worker init failure
 - Inspect status file in agent container path:
 `/tmp/master-agent/status.json`
