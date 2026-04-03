@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import shlex
 
 from .provisioning import ProvisionContext, ProvisionRequest, ProvisioningCoordinator
 from .service import CommandResult, MasterService
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -217,6 +220,18 @@ def dispatch_command(
                 data={},
             )
         parsed = parse_provision_text(request.text)
+        LOGGER.info(
+            "master.provision_command_parsed platform=%s admin_channel=%s agent=%s repo_path=%s channel_id=%s create_repo=%s create_channel=%s repo_ref=%s adapter=%s",
+            request.platform,
+            provision_context.admin_channel_id,
+            parsed.name,
+            parsed.repo_path or "-",
+            parsed.channel_id or "-",
+            parsed.create_repo,
+            parsed.create_channel,
+            parsed.repo_ref,
+            parsed.agent_adapter or "-",
+        )
         return provisioning.provision_agent(
             ProvisionRequest(
                 **{
