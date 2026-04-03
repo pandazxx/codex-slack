@@ -10,6 +10,12 @@ from urllib.request import Request, urlopen
 
 from .command_runtime import execute_master_command
 from .dispatch_guard import in_flight_dispatch, is_shutting_down
+from .provisioning import (
+    DiscordChannelProvisioner,
+    ProvisionContext,
+    ProvisioningCoordinator,
+    RepoProvisioner,
+)
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import MasterService
 from .slack_app import format_forward_ack
@@ -256,6 +262,7 @@ def run_discord_frontend(
     service: MasterService,
     router: ChannelRouter,
     rate_limiter: object | None = None,
+    repo_provisioner: RepoProvisioner | None = None,
 ) -> None:
     try:
         import discord
@@ -268,6 +275,13 @@ def run_discord_frontend(
     intents.message_content = True
     client = discord.Client(intents=intents)
     tree = discord.app_commands.CommandTree(client)
+    provisioning = None
+    if repo_provisioner is not None:
+        provisioning = ProvisioningCoordinator(
+            service=service,
+            repo_provisioner=repo_provisioner,
+            channel_provisioner=DiscordChannelProvisioner(client),
+        )
 
     async def _send_messages(interaction, messages: list[str]) -> None:  # type: ignore[no-untyped-def]
         expanded: list[str] = []
@@ -317,7 +331,14 @@ def run_discord_frontend(
         for idx, buf in enumerate(mermaid_buffers, start=1):
             await thread.send(file=discord.File(buf, filename=f"diagram-{idx}.png"))
 
-    def _run_command(*, command_name: str, text: str, channel_id: str, user_id: str) -> list[str]:
+    def _run_command(
+        *,
+        command_name: str,
+        text: str,
+        channel_id: str,
+        user_id: str,
+        provision_context: ProvisionContext | None = None,
+    ) -> list[str]:
         return execute_master_command(
             platform="discord",
             command_name=command_name,
@@ -328,17 +349,30 @@ def run_discord_frontend(
             service=service,
             router=router,
             rate_limiter=rate_limiter,  # type: ignore[arg-type]
+            provisioning=provisioning,
+            provision_context=provision_context,
         )
 
     async def _execute_and_send(interaction, *, command_name: str, text: str) -> None:  # type: ignore[no-untyped-def]
         if not interaction.response.is_done():
             await interaction.response.defer(thinking=True)
+        channel = interaction.channel
+        guild_id = getattr(getattr(channel, "guild", None), "id", None)
+        category_id = getattr(getattr(channel, "category", None), "id", None)
+        provision_context = ProvisionContext(
+            platform="discord",
+            admin_channel_id=str(interaction.channel_id),
+            discord_guild_id=str(guild_id) if guild_id is not None else None,
+            discord_category_id=str(category_id) if category_id is not None else None,
+            discord_event_loop=asyncio.get_running_loop(),
+        )
         messages = await asyncio.to_thread(
             _run_command,
             command_name=command_name,
             text=text,
             channel_id=str(interaction.channel_id),
             user_id=str(interaction.user.id),
+            provision_context=provision_context,
         )
         await _send_messages(interaction, messages)
 
@@ -406,6 +440,13 @@ def run_discord_frontend(
                     text=args_text,
                     channel_id=admin_channel_id,
                     user_id=user_id,
+                    provision_context=ProvisionContext(
+                        platform="discord",
+                        admin_channel_id=admin_channel_id,
+                        discord_guild_id=str(getattr(getattr(message.channel, "guild", None), "id", "") or "") or None,
+                        discord_category_id=str(getattr(getattr(message.channel, "category", None), "id", "") or "") or None,
+                        discord_event_loop=asyncio.get_running_loop(),
+                    ),
                 )
                 for reply in messages:
                     await _reply_message_chunks(message, reply)
@@ -507,6 +548,47 @@ def run_discord_frontend(
     ) -> None:  # type: ignore[no-untyped-def]
         text = f"{name} {repo_path} {channel_id} {branch} --adapter {adapter}".strip()
         await _execute_and_send(interaction, command_name="/master-agent-load", text=text)
+
+    @tree.command(name="master-agent-provision", description="Provision an agent mapping")
+    async def cmd_provision(
+        interaction,
+        name: str,
+        repo_path: str = "",
+        channel_id: str = "",
+        branch: str = "main",
+        create_repo: bool = False,
+        repo_owner: str = "",
+        repo_name: str = "",
+        repo_visibility: str = "private",
+        create_channel: bool = False,
+        channel_name: str = "",
+        channel_visibility: str = "private",
+        adapter: str = "codex",
+    ) -> None:  # type: ignore[no-untyped-def]
+        parts = [name]
+        if repo_path:
+            parts.append(repo_path)
+        if channel_id:
+            parts.append(channel_id)
+        if branch:
+            parts.extend(["--branch", branch])
+        if create_repo:
+            parts.append("--create-repo")
+        if repo_owner:
+            parts.extend(["--repo-owner", repo_owner])
+        if repo_name:
+            parts.extend(["--repo-name", repo_name])
+        if repo_visibility:
+            parts.extend(["--repo-visibility", repo_visibility])
+        if create_channel:
+            parts.append("--create-channel")
+        if channel_name:
+            parts.extend(["--channel-name", channel_name])
+        if channel_visibility:
+            parts.extend(["--channel-visibility", channel_visibility])
+        if adapter:
+            parts.extend(["--adapter", adapter])
+        await _execute_and_send(interaction, command_name="/master-agent-provision", text=" ".join(parts))
 
     @tree.command(name="master-agent-start", description="Start an agent")
     async def cmd_start(interaction, name: str) -> None:  # type: ignore[no-untyped-def]

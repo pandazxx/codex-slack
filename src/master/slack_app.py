@@ -21,6 +21,7 @@ from .command_format import (
 from .command_runtime import execute_master_command
 from .command_runtime import is_admin_channel
 from .dispatch_guard import in_flight_dispatch, is_shutting_down
+from .provisioning import ProvisionContext, ProvisioningCoordinator, RepoProvisioner, SlackChannelProvisioner
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import CommandResult, MasterService
 
@@ -63,6 +64,7 @@ def _register_command(
     service: MasterService,
     router: ChannelRouter | None = None,
     rate_limiter: CommandRateLimiter | None = None,
+    provisioning: ProvisioningCoordinator | None = None,
 ) -> None:
     @app.command(command_name)
     def on_command(ack, respond, command: dict) -> None:  # type: ignore[no-untyped-def]
@@ -81,6 +83,8 @@ def _register_command(
             service=service,
             router=router,
             rate_limiter=rate_limiter,
+            provisioning=provisioning,
+            provision_context=ProvisionContext(platform="slack", admin_channel_id=channel_id),
         )
         for message in messages:
             respond(message)
@@ -93,8 +97,16 @@ def create_master_app(
     service: MasterService,
     router: ChannelRouter | None = None,
     rate_limiter: CommandRateLimiter | None = None,
+    repo_provisioner: RepoProvisioner | None = None,
 ) -> App:
     app = App(token=bot_token)
+    provisioning = None
+    if repo_provisioner is not None:
+        provisioning = ProvisioningCoordinator(
+            service=service,
+            repo_provisioner=repo_provisioner,
+            channel_provisioner=SlackChannelProvisioner(app.client),
+        )
     LOGGER.info(
         "master.slack_app_init admin_channels=%s router_enabled=%s rate_limiter_enabled=%s",
         ",".join(sorted(admin_channels)),
@@ -269,6 +281,7 @@ def create_master_app(
     for command_name in (
         "/master-agent-list",
         "/master-agent-load",
+        "/master-agent-provision",
         "/master-agent-start",
         "/master-agent-stop",
         "/master-agent-status",
@@ -285,6 +298,7 @@ def create_master_app(
             service=service,
             router=router,
             rate_limiter=rate_limiter,
+            provisioning=provisioning,
         )
         LOGGER.info("master.command_registered command=%s", command_name)
 
