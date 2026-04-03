@@ -141,6 +141,11 @@ def parse_provision_text(text: str) -> ProvisionRequest:
     if len(positional) >= 3:
         repo_ref = positional[2]
 
+    if repo_path is None:
+        create_repo = True
+    if channel_id is None:
+        create_channel = True
+
     return ProvisionRequest(
         name=name,
         platform="slack",

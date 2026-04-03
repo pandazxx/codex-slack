@@ -103,6 +103,22 @@ def test_parse_provision_text_accepts_existing_resources() -> None:
     )
 
 
+def test_parse_provision_text_defaults_to_creating_missing_repo_and_channel() -> None:
+    parsed = parse_provision_text("payments")
+    assert parsed.repo_path is None
+    assert parsed.channel_id is None
+    assert parsed.create_repo is True
+    assert parsed.create_channel is True
+
+
+def test_parse_provision_text_defaults_to_creating_only_missing_resource() -> None:
+    parsed = parse_provision_text("payments /tmp/repo")
+    assert parsed.repo_path == "/tmp/repo"
+    assert parsed.channel_id is None
+    assert parsed.create_repo is False
+    assert parsed.create_channel is True
+
+
 def test_parse_provision_text_accepts_create_flags() -> None:
     parsed = parse_provision_text(
         'payments --branch main --create-repo --repo-owner pandazxx --repo-name pay-api --repo-visibility public '
