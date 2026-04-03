@@ -46,6 +46,7 @@ class CreatedRepo:
     visibility: str
     html_url: str
     clone_url: str
+    ssh_url: str
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,7 @@ class GitHubRepoProvisioner:
             visibility="private" if bool(response.get("private")) else "public",
             html_url=str(response["html_url"]),
             clone_url=str(response["clone_url"]),
+            ssh_url=str(response["ssh_url"]),
         )
 
     def _fetch_token_identity(self) -> tuple[str, str]:
@@ -278,7 +280,7 @@ class ProvisioningCoordinator:
                     repo_name=request.repo_name,
                     visibility=request.repo_visibility,
                 )
-                resolved_repo_path = created_repo.clone_url
+                resolved_repo_path = created_repo.ssh_url or created_repo.clone_url
 
             if request.create_channel:
                 if self._channel_provisioner is None:

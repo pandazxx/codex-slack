@@ -60,6 +60,7 @@ class FakeRepoProvisioner:
             visibility=visibility,
             html_url=f"https://github.com/{owner or 'token-owner'}/{repo_name or agent_name}",
             clone_url=f"https://github.com/{owner or 'token-owner'}/{repo_name or agent_name}.git",
+            ssh_url=f"git@github.com:{owner or 'token-owner'}/{repo_name or agent_name}.git",
         )
 
 
@@ -150,7 +151,7 @@ def test_provisioning_coordinator_creates_repo_and_channel_before_load() -> None
     assert service.calls == [
         {
             "name": "payments",
-            "repo_path": "https://github.com/token-owner/payments.git",
+            "repo_path": "git@github.com:token-owner/payments.git",
             "channel_id": "C999",
             "repo_ref": "main",
             "platform": "slack",
@@ -158,6 +159,7 @@ def test_provisioning_coordinator_creates_repo_and_channel_before_load() -> None
         }
     ]
     assert result.data["created_repo"]["owner"] == "token-owner"
+    assert result.data["created_repo"]["ssh_url"] == "git@github.com:token-owner/payments.git"
     assert result.data["created_channel"]["channel_id"] == "C999"
 
 
