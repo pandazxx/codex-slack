@@ -202,6 +202,8 @@ Omit the model argument to clear the override:
 - Fast recovery options:
   - rerun the command from an admin channel in a category where the bot can create channels
   - or grant the bot `Manage Channels` on the intended category before retrying
+- Setup reference:
+  - `docs/guides/discord-setup.md`, section `Enable Bot-Driven Channel Creation`
 - Useful provisioning logs:
   - `master.provision_command_parsed`
   - `provision.start`
