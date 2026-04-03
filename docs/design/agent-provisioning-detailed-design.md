@@ -269,8 +269,11 @@ Provider output:
 
 Required inputs:
 
-- owner or org
 - repo name
+
+Optional inputs:
+
+- owner or org
 - visibility
 
 Optional later:
@@ -291,6 +294,13 @@ Provider output:
   "clone_url": "https://github.com/pandazxx/payments-api.git"
 }
 ```
+
+Default resolution rules:
+
+- if `owner` is omitted, resolve it from the current authenticated GitHub token identity
+- if the token belongs to a user account, create the repository under that user by default
+- if the token is scoped for org automation and repo creation should target an org, require an explicit owner override in v1
+- if `visibility` is omitted, default to `private`
 
 ### Existing repo reuse
 
