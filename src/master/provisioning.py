@@ -47,6 +47,7 @@ class CreatedRepo:
     owner: str
     repo_name: str
     visibility: str
+    default_branch: str | None
     html_url: str
     clone_url: str
     ssh_url: str
@@ -134,6 +135,7 @@ class GitHubRepoProvisioner:
         payload = {
             "name": resolved_repo_name,
             "private": visibility == "private",
+            "auto_init": True,
         }
         if is_org:
             response = self._request("POST", f"/orgs/{resolved_owner}/repos", payload)
@@ -145,16 +147,18 @@ class GitHubRepoProvisioner:
             owner=str(response["owner"]["login"]),
             repo_name=str(response["name"]),
             visibility="private" if bool(response.get("private")) else "public",
+            default_branch=str(response.get("default_branch") or "") or None,
             html_url=str(response["html_url"]),
             clone_url=str(response["clone_url"]),
             ssh_url=str(response["ssh_url"]),
         )
         LOGGER.info(
-            "provision.github_create_done agent=%s owner=%s repo_name=%s visibility=%s ssh_url=%s",
+            "provision.github_create_done agent=%s owner=%s repo_name=%s visibility=%s default_branch=%s ssh_url=%s",
             agent_name,
             created.owner,
             created.repo_name,
             created.visibility,
+            created.default_branch or "-",
             created.ssh_url,
         )
         return created
@@ -340,6 +344,7 @@ class ProvisioningCoordinator:
         created_channel: CreatedChannel | None = None
         resolved_repo_path = request.repo_path
         resolved_channel_id = request.channel_id
+        resolved_repo_ref = request.repo_ref
 
         try:
             if request.create_repo:
@@ -352,11 +357,14 @@ class ProvisioningCoordinator:
                     visibility=request.repo_visibility,
                 )
                 resolved_repo_path = created_repo.ssh_url or created_repo.clone_url
+                if request.repo_ref == "main" and created_repo.default_branch:
+                    resolved_repo_ref = created_repo.default_branch
                 LOGGER.info(
-                    "provision.repo_ready agent=%s repo_path=%s clone_url=%s",
+                    "provision.repo_ready agent=%s repo_path=%s clone_url=%s repo_ref=%s",
                     request.name,
                     resolved_repo_path,
                     created_repo.clone_url,
+                    resolved_repo_ref,
                 )
 
             if request.create_channel:
@@ -399,7 +407,7 @@ class ProvisioningCoordinator:
             request.name,
             resolved_repo_path or "-",
             resolved_channel_id or "-",
-            request.repo_ref,
+            resolved_repo_ref,
             request.platform,
             request.agent_adapter or "-",
         )
@@ -407,7 +415,7 @@ class ProvisioningCoordinator:
             name=request.name,
             repo_path=resolved_repo_path or "",
             channel_id=resolved_channel_id or "",
-            repo_ref=request.repo_ref,
+            repo_ref=resolved_repo_ref,
             platform=request.platform,
             agent_adapter=request.agent_adapter,
         )

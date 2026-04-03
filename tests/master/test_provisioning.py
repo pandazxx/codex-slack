@@ -58,6 +58,7 @@ class FakeRepoProvisioner:
             owner=owner or "token-owner",
             repo_name=repo_name or agent_name,
             visibility=visibility,
+            default_branch="main",
             html_url=f"https://github.com/{owner or 'token-owner'}/{repo_name or agent_name}",
             clone_url=f"https://github.com/{owner or 'token-owner'}/{repo_name or agent_name}.git",
             ssh_url=f"git@github.com:{owner or 'token-owner'}/{repo_name or agent_name}.git",
@@ -161,6 +162,64 @@ def test_provisioning_coordinator_creates_repo_and_channel_before_load() -> None
     assert result.data["created_repo"]["owner"] == "token-owner"
     assert result.data["created_repo"]["ssh_url"] == "git@github.com:token-owner/payments.git"
     assert result.data["created_channel"]["channel_id"] == "C999"
+
+
+def test_provisioning_coordinator_uses_created_repo_default_branch() -> None:
+    service = FakeService()
+
+    class TrunkRepoProvisioner(FakeRepoProvisioner):
+        def create_repo(
+            self,
+            *,
+            agent_name: str,
+            owner: str | None,
+            repo_name: str | None,
+            visibility: str,
+        ) -> CreatedRepo:
+            created = super().create_repo(
+                agent_name=agent_name,
+                owner=owner,
+                repo_name=repo_name,
+                visibility=visibility,
+            )
+            return CreatedRepo(
+                provider=created.provider,
+                owner=created.owner,
+                repo_name=created.repo_name,
+                visibility=created.visibility,
+                default_branch="trunk",
+                html_url=created.html_url,
+                clone_url=created.clone_url,
+                ssh_url=created.ssh_url,
+            )
+
+    coordinator = ProvisioningCoordinator(
+        service=service,  # type: ignore[arg-type]
+        repo_provisioner=TrunkRepoProvisioner(),
+        channel_provisioner=FakeChannelProvisioner(),
+    )
+
+    result = coordinator.provision_agent(
+        ProvisionRequest(
+            name="payments",
+            platform="slack",
+            repo_path=None,
+            channel_id=None,
+            repo_ref="main",
+            agent_adapter="codex",
+            create_repo=True,
+            repo_owner=None,
+            repo_name=None,
+            repo_visibility="private",
+            create_channel=True,
+            channel_name=None,
+            channel_visibility="private",
+        ),
+        context=ProvisionContext(platform="slack", admin_channel_id="CADMIN"),
+    )
+
+    assert result.ok is True
+    assert service.calls[0]["repo_ref"] == "trunk"
 
 
 def test_provisioning_coordinator_requires_repo_or_create_repo() -> None:
