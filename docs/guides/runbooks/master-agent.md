@@ -100,7 +100,10 @@ python -m src.master.main
 ```
 
 Important env notes:
-- Set `MASTER_AGENT_BASE_IMAGE` to the image tag you actually rebuilt for agent containers. If unset, default-image agents still start from `codex-slack-bot:latest`.
+- Set `MASTER_AGENT_BASE_IMAGE` to the default-image tag you want master to use for agents without `.prj_assistant/image/Dockerfile`.
+- Recommended published base image:
+  - `ghcr.io/<owner>/codex-slack-agent-minimal:<tag>`
+- If unset, default-image agents still start from `codex-slack-bot:latest`.
 - `MASTER_CODEX_AUTH_JSON_PATH` must be a host filesystem path visible to host Podman. It is mounted into each agent as `/run/secrets/codex_auth.json:ro`.
 - `MASTER_SSH_AUTH_SOCK_PATH` must be a host filesystem path visible to host Podman. It is mounted into each agent as `/run/secrets/ssh-auth.sock`.
 - The master container itself also needs the same SSH socket mounted separately, for example `-v /absolute/host/path/ssh-agent.sock:/ssh-agent`, with `SSH_AUTH_SOCK=/ssh-agent` so `/master-agent-load` can clone private repos over SSH.
@@ -110,6 +113,7 @@ Important env notes:
 - Default command template is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'`.
 - Default adapter is `MASTER_DEFAULT_AGENT_ADAPTER=codex`.
 - If you use the `claude-code` adapter, rebuild the base image from this branch so the agent container includes the `claude` CLI binary.
+- If a project repo contains `.prj_assistant/image/Dockerfile`, master builds that repo-local image on `/master-agent-start` and does not use `MASTER_AGENT_BASE_IMAGE` for that agent.
 
 Claude subscription auth in headless containers:
 - Generate `CLAUDE_CODE_OAUTH_TOKEN` on the host with:
