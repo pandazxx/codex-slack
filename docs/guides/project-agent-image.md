@@ -44,6 +44,11 @@ In the project repository:
 
 ## Minimal Example
 
+Important:
+- the published base image runs as `appuser`
+- package-manager commands such as `apt-get` will fail unless you switch to `USER root`
+- after installing packages, switch back to `USER appuser` before the Dockerfile ends
+
 ```dockerfile
 FROM ghcr.io/pandazxx/codex-slack-agent-minimal:latest
 
@@ -51,6 +56,19 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+USER appuser
+```
+
+Use this pattern whenever your project image needs OS packages:
+
+```dockerfile
+FROM ghcr.io/pandazxx/codex-slack-agent-minimal:latest
+
+USER root
+# install packages here
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    <packages> \
     && rm -rf /var/lib/apt/lists/*
 USER appuser
 ```
@@ -66,6 +84,11 @@ Use caution with:
 - changing `USER`
 - changing `WORKDIR`
 - adding startup-time side effects
+
+For `USER` specifically:
+- temporarily switching to `USER root` for package install is expected
+- leaving the final image on `USER root` is not recommended
+- always switch back to `USER appuser` unless you are intentionally taking ownership of a non-standard runtime contract
 
 ## Runtime Invariants
 
