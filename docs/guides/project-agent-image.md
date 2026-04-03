@@ -47,10 +47,12 @@ In the project repository:
 ```dockerfile
 FROM ghcr.io/pandazxx/codex-slack-agent-minimal:latest
 
+USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     ripgrep \
     && rm -rf /var/lib/apt/lists/*
+USER appuser
 ```
 
 ## Allowed Customization
