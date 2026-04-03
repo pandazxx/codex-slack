@@ -95,6 +95,38 @@ Usage model:
   - mapped to one agent
   - used for prompt routing and follow-up replies
 
+## 4A. Enable Bot-Driven Channel Creation
+If you want to use `/master-agent-provision` with Discord `create_channel=true`, the bot must be allowed to create channels in the target location.
+
+Current behavior:
+- Discord provisioning creates the new text channel in the same guild/category as the admin channel where you run `/master-agent-provision`.
+- The bot therefore needs channel-creation permission in that category, not just in the server generally.
+
+Required permission:
+- `Manage Channels`
+
+Recommended setup:
+1. Pick the category where provisioned agent channels should be created.
+2. Put your Discord admin channel inside that same category if you want provisioning to land there automatically.
+3. Open the category in Discord and choose **Edit Category**.
+4. Open **Permissions**.
+5. Add the bot role or the bot user explicitly.
+6. Grant at least:
+   - **View Channel**
+   - **Send Messages**
+   - **Read Message History**
+   - **Manage Channels**
+7. Save the category permission changes.
+8. Verify the bot role is not blocked by another category override.
+
+Recommended validation:
+1. Run `/master-agent-provision` from that admin channel.
+2. If it fails with Discord error code `50013` (`Missing Permissions`), re-check the category overrides first.
+
+Important:
+- Server-level bot permissions alone may not be enough if the category overrides deny `Manage Channels`.
+- If you run provisioning from a different admin channel in another category, the new channel will be created there instead.
+
 ## 5. Enable Developer Mode and Copy Channel IDs
 To obtain channel IDs for `DISCORD_ADMIN_CHANNELS` and `/master-agent-load`:
 1. In Discord, open **User Settings**.
@@ -201,6 +233,8 @@ Notes:
 ## 11. Common Discord Errors
 - `Missing Access` / command not visible:
   - Bot lacks required permissions or app command sync not complete.
+- `403 Forbidden (50013): Missing Permissions` during `/master-agent-provision`:
+  - Bot lacks `Manage Channels` in the category containing the admin channel used for provisioning.
 - Mention messages ignored:
   - Bot not present in channel, or Message Content Intent not enabled.
 - Command rejected as non-admin channel:

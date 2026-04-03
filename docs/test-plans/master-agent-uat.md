@@ -71,6 +71,10 @@ Expected:
 - Command behavior and response semantics match Slack command flow.
 - Admin-channel enforcement uses `DISCORD_ADMIN_CHANNELS`.
 
+Discord provisioning note:
+- When validating `/master-agent-provision` with `create_channel=true`, run it from an admin channel in the guild/category where the new channel should be created.
+- The bot must have `Manage Channels` in that target category. If provisioning fails with Discord error code `50013` (`Missing Permissions`), the repo-creation step may still have succeeded while channel creation failed.
+
 ### UAT-v3-005: Adapter Routing Selection
 Preconditions:
 - One agent loaded with `--adapter codex`.

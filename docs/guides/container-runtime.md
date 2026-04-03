@@ -6,12 +6,26 @@ This guide is operational. The canonical runtime contract for master-managed
 agent containers lives in
 `docs/design/agent-container-runtime-design.md`.
 
+## Runtime Images
+This repository currently has two container-image roles:
+
+- `Dockerfile`
+  - broader master/runtime image
+  - includes master-oriented tools such as `podman`, `gh`, `jq`, and `make`
+- `Dockerfile.agent-minimal`
+  - published base image for agent containers
+  - intended to be extended by project repos through `.prj_assistant/image/Dockerfile`
+
 ## Included Tools
-The image ships with:
+The published minimal agent base image from `Dockerfile.agent-minimal` ships with:
 - Python 3.11 runtime
 - `codex` CLI (installed via npm package `@openai/codex`)
 - `claude` CLI
-- `git`, `gh`, `curl`, `jq`, `make`, `openssh-client`
+- `git`
+- `openssh-client`
+- agent entrypoint and Python dependencies required by `src.agent.main`
+
+It intentionally does not include master-only tooling like `podman`, `gh`, `jq`, or `make`.
 
 For detailed master-agent operational steps, see
 `docs/guides/runbooks/master-agent.md`.
@@ -221,6 +235,33 @@ podman exec -it agent-<name> sh -lc 'ls -la /workspace/repo/.codex /workspace/re
 For auth/config injection details, user-scope vs project-scope paths, and
 request-manifest behavior, refer to
 `docs/design/agent-container-runtime-design.md`.
+
+## Published Base Image Contract
+Use the published minimal base image when a project needs extra packages or CLIs but should keep the standard agent runtime contract.
+
+- Published image:
+  - `ghcr.io/<owner>/codex-slack-agent-minimal:<tag>`
+- Recommended tag choices:
+  - `latest` for default-branch testing
+  - `vX.Y-rcN` or release tags for controlled rollout
+  - `sha-<commit>` for immutable pinning
+- Project customization path:
+  - `.prj_assistant/image/Dockerfile`
+
+Example project Dockerfile:
+
+```dockerfile
+FROM ghcr.io/<owner>/codex-slack-agent-minimal:latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    jq ripgrep && \
+    rm -rf /var/lib/apt/lists/*
+```
+
+Keep these invariants when extending the base:
+- preserve `/workspace`, `/workspace/repo`, and `/workspace/home`
+- preserve `CODEX_CONTAINER_MODE=agent-worker`
+- do not replace `docker/entrypoint.sh` behavior unless you are intentionally leaving the standard runtime contract
 
 ## Codex Sandbox Bypass
 Container mode is configured to run Codex with:

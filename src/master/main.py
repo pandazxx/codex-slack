@@ -11,6 +11,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from .config import load_master_settings
 from .discord_app import run_discord_frontend
 from .dispatch_guard import install_sigterm_handler
+from .provisioning import GitHubRepoProvisioner
 from .registry import AgentRegistry
 from .router import ChannelRouter, ClaudeCodeDispatcher, MultiAgentDispatcher, PodmanExecDispatcher
 from .runtime_adapter import PodmanRuntimeAdapter
@@ -105,6 +106,7 @@ def main() -> None:
         max_calls=settings.command_rate_limit_count,
         window_seconds=settings.command_rate_limit_window_seconds,
     )
+    repo_provisioner = GitHubRepoProvisioner()
 
     threads: list[Thread] = []
     if "slack" in settings.frontends:
@@ -114,6 +116,7 @@ def main() -> None:
             service=service,
             router=router,
             rate_limiter=rate_limiter,
+            repo_provisioner=repo_provisioner,
         )
         handler = SocketModeHandler(app, settings.slack_app_token)
         slack_thread = Thread(target=handler.start, name="frontend-slack", daemon=True)
@@ -130,6 +133,7 @@ def main() -> None:
                 "service": service,
                 "router": router,
                 "rate_limiter": rate_limiter,
+                "repo_provisioner": repo_provisioner,
             },
             name="frontend-discord",
             daemon=True,

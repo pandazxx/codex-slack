@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from src.master.command_runtime import execute_master_command
+from src.master.provisioning import ProvisionContext
 from src.master.service import CommandResult
 from src.master.slack_app import CommandRateLimiter
 
@@ -62,6 +63,23 @@ class FakeRouter:
                 "avg_latency_ms": 123.4,
             }
         ]
+
+
+class FakeProvisioning:
+    def provision_agent(self, request, *, context: ProvisionContext) -> CommandResult:  # type: ignore[no-untyped-def]
+        return CommandResult(
+            ok=True,
+            code="OK",
+            message="provisioned",
+            data={
+                "name": request.name,
+                "platform": request.platform,
+                "repo_path": request.repo_path,
+                "channel_id": request.channel_id,
+                "repo_ref": request.repo_ref,
+                "context_platform": context.platform,
+            },
+        )
 
 
 def test_execute_master_command_rejects_non_admin_channel() -> None:
@@ -145,3 +163,19 @@ def test_execute_master_command_infers_platform_from_frontend_context() -> None:
     )
     assert "platform\": \"discord\"" in messages[0]
     assert "agent_adapter\": \"claude-code\"" in messages[0]
+
+
+def test_execute_master_command_supports_provisioning_flow() -> None:
+    messages = execute_master_command(
+        platform="slack",
+        command_name="/master-agent-provision",
+        text="payments /tmp/repo C123 --branch release/1",
+        channel_id="CADMIN",
+        user_id="U1",
+        admin_channels={"CADMIN"},
+        service=FakeService(),
+        provisioning=FakeProvisioning(),  # type: ignore[arg-type]
+        provision_context=ProvisionContext(platform="slack", admin_channel_id="CADMIN"),
+    )
+    assert "provisioned" in messages[0]
+    assert "release/1" in messages[0]

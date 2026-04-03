@@ -1,0 +1,459 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+from dataclasses import dataclass
+from typing import Protocol
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+from .service import CommandResult, MasterService
+
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ProvisionRequest:
+    name: str
+    platform: str
+    repo_path: str | None
+    channel_id: str | None
+    repo_ref: str
+    agent_adapter: str | None
+    create_repo: bool
+    repo_owner: str | None
+    repo_name: str | None
+    repo_visibility: str
+    create_channel: bool
+    channel_name: str | None
+    channel_visibility: str
+
+
+@dataclass(frozen=True)
+class ProvisionContext:
+    platform: str
+    admin_channel_id: str
+    discord_guild_id: str | None = None
+    discord_category_id: str | None = None
+    discord_event_loop: asyncio.AbstractEventLoop | None = None
+
+
+@dataclass(frozen=True)
+class CreatedRepo:
+    provider: str
+    owner: str
+    repo_name: str
+    visibility: str
+    default_branch: str | None
+    html_url: str
+    clone_url: str
+    ssh_url: str
+
+
+@dataclass(frozen=True)
+class CreatedChannel:
+    platform: str
+    channel_id: str
+    channel_name: str
+    visibility: str | None = None
+    guild_id: str | None = None
+    category_id: str | None = None
+
+
+class RepoProvisioner(Protocol):
+    def create_repo(
+        self,
+        *,
+        agent_name: str,
+        owner: str | None,
+        repo_name: str | None,
+        visibility: str,
+    ) -> CreatedRepo:
+        ...
+
+
+class ChannelProvisioner(Protocol):
+    def create_channel(
+        self,
+        *,
+        agent_name: str,
+        channel_name: str | None,
+        visibility: str,
+        context: ProvisionContext,
+    ) -> CreatedChannel:
+        ...
+
+
+def normalize_repo_name(name: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9_.-]+", "-", name.strip()).strip(".-")
+    return value or "agent-repo"
+
+
+def normalize_channel_name(name: str) -> str:
+    value = re.sub(r"[^a-z0-9-]+", "-", name.strip().lower())
+    value = re.sub(r"-{2,}", "-", value).strip("-")
+    return value or "agent"
+
+
+class GitHubRepoProvisioner:
+    api_base_url = "https://api.github.com"
+
+    def __init__(self, token: str | None = None) -> None:
+        resolved = (token or os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN") or "").strip()
+        self._token = resolved
+
+    def create_repo(
+        self,
+        *,
+        agent_name: str,
+        owner: str | None,
+        repo_name: str | None,
+        visibility: str,
+    ) -> CreatedRepo:
+        if not self._token:
+            raise RuntimeError("GitHub repo provisioning requires GH_TOKEN or GITHUB_TOKEN")
+
+        resolved_repo_name = normalize_repo_name(repo_name or agent_name)
+        if visibility not in {"private", "public"}:
+            raise RuntimeError(f"unsupported repo visibility: {visibility}")
+
+        token_owner, token_owner_type = self._fetch_token_identity()
+        resolved_owner = owner or token_owner
+        is_org = token_owner_type.lower() == "organization" or (owner is not None and owner != token_owner)
+        LOGGER.info(
+            "provision.github_create_start agent=%s owner=%s owner_source=%s repo_name=%s visibility=%s mode=%s",
+            agent_name,
+            resolved_owner,
+            "explicit" if owner else "token",
+            resolved_repo_name,
+            visibility,
+            "org" if is_org else "user",
+        )
+        payload = {
+            "name": resolved_repo_name,
+            "private": visibility == "private",
+            "auto_init": True,
+        }
+        if is_org:
+            response = self._request("POST", f"/orgs/{resolved_owner}/repos", payload)
+        else:
+            response = self._request("POST", "/user/repos", payload)
+
+        created = CreatedRepo(
+            provider="github",
+            owner=str(response["owner"]["login"]),
+            repo_name=str(response["name"]),
+            visibility="private" if bool(response.get("private")) else "public",
+            default_branch=str(response.get("default_branch") or "") or None,
+            html_url=str(response["html_url"]),
+            clone_url=str(response["clone_url"]),
+            ssh_url=str(response["ssh_url"]),
+        )
+        LOGGER.info(
+            "provision.github_create_done agent=%s owner=%s repo_name=%s visibility=%s default_branch=%s ssh_url=%s",
+            agent_name,
+            created.owner,
+            created.repo_name,
+            created.visibility,
+            created.default_branch or "-",
+            created.ssh_url,
+        )
+        return created
+
+    def _fetch_token_identity(self) -> tuple[str, str]:
+        payload = self._request("GET", "/user")
+        return str(payload["login"]), str(payload.get("type") or "User")
+
+    def _request(self, method: str, path: str, payload: dict[str, object] | None = None) -> dict[str, object]:
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        request = Request(
+            f"{self.api_base_url}{path}",
+            data=body,
+            method=method,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self._token}",
+                "User-Agent": "codex-slack-master",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urlopen(request, timeout=15) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"github api error {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"github api request failed: {exc}") from exc
+
+        return json.loads(raw) if raw else {}
+
+
+class SlackChannelProvisioner:
+    def __init__(self, client: object) -> None:
+        self._client = client
+
+    def create_channel(
+        self,
+        *,
+        agent_name: str,
+        channel_name: str | None,
+        visibility: str,
+        context: ProvisionContext,
+    ) -> CreatedChannel:
+        if visibility not in {"private", "public"}:
+            raise RuntimeError(f"unsupported slack channel visibility: {visibility}")
+        resolved_name = normalize_channel_name(channel_name or f"agent-{agent_name}")
+        LOGGER.info(
+            "provision.slack_channel_create_start agent=%s admin_channel=%s channel_name=%s visibility=%s",
+            agent_name,
+            context.admin_channel_id,
+            resolved_name,
+            visibility,
+        )
+        result = self._client.conversations_create(name=resolved_name, is_private=(visibility == "private"))
+        channel = result.get("channel", {})
+        channel_id = str(channel.get("id") or "")
+        if not channel_id:
+            raise RuntimeError("slack channel create returned no channel id")
+        created = CreatedChannel(
+            platform="slack",
+            channel_id=channel_id,
+            channel_name=str(channel.get("name") or resolved_name),
+            visibility=visibility,
+        )
+        LOGGER.info(
+            "provision.slack_channel_create_done agent=%s channel_id=%s channel_name=%s visibility=%s",
+            agent_name,
+            created.channel_id,
+            created.channel_name,
+            created.visibility,
+        )
+        return created
+
+
+class DiscordChannelProvisioner:
+    def __init__(self, client: object) -> None:
+        self._client = client
+
+    def create_channel(
+        self,
+        *,
+        agent_name: str,
+        channel_name: str | None,
+        visibility: str,
+        context: ProvisionContext,
+    ) -> CreatedChannel:
+        if context.discord_event_loop is None:
+            raise RuntimeError("discord provisioning requires an event loop")
+        if not context.discord_guild_id:
+            raise RuntimeError("discord provisioning requires a guild id")
+        resolved_name = normalize_channel_name(channel_name or f"agent-{agent_name}")
+        LOGGER.info(
+            "provision.discord_channel_create_start agent=%s admin_channel=%s guild_id=%s category_id=%s channel_name=%s visibility=%s",
+            agent_name,
+            context.admin_channel_id,
+            context.discord_guild_id,
+            context.discord_category_id or "-",
+            resolved_name,
+            visibility,
+        )
+
+        async def _create() -> CreatedChannel:
+            guild = self._client.get_guild(int(context.discord_guild_id))
+            if guild is None:
+                guild = await self._client.fetch_guild(int(context.discord_guild_id))
+            category = None
+            if context.discord_category_id:
+                category = self._client.get_channel(int(context.discord_category_id))
+                if category is None:
+                    category = await self._client.fetch_channel(int(context.discord_category_id))
+            created = await guild.create_text_channel(resolved_name, category=category)
+            return CreatedChannel(
+                platform="discord",
+                channel_id=str(created.id),
+                channel_name=str(created.name),
+                visibility=visibility,
+                guild_id=str(guild.id),
+                category_id=str(getattr(category, "id", "") or ""),
+            )
+
+        future = asyncio.run_coroutine_threadsafe(_create(), context.discord_event_loop)
+        created = future.result(timeout=30)
+        LOGGER.info(
+            "provision.discord_channel_create_done agent=%s channel_id=%s channel_name=%s guild_id=%s category_id=%s",
+            agent_name,
+            created.channel_id,
+            created.channel_name,
+            created.guild_id or "-",
+            created.category_id or "-",
+        )
+        return created
+
+
+class ProvisioningCoordinator:
+    def __init__(
+        self,
+        *,
+        service: MasterService,
+        repo_provisioner: RepoProvisioner | None = None,
+        channel_provisioner: ChannelProvisioner | None = None,
+    ) -> None:
+        self._service = service
+        self._repo_provisioner = repo_provisioner
+        self._channel_provisioner = channel_provisioner
+
+    def provision_agent(self, request: ProvisionRequest, *, context: ProvisionContext) -> CommandResult:
+        LOGGER.info(
+            "provision.start agent=%s platform=%s repo_path=%s channel_id=%s create_repo=%s repo_owner=%s repo_name=%s repo_visibility=%s create_channel=%s channel_name=%s channel_visibility=%s repo_ref=%s adapter=%s admin_channel=%s",
+            request.name,
+            request.platform,
+            request.repo_path or "-",
+            request.channel_id or "-",
+            request.create_repo,
+            request.repo_owner or "-",
+            request.repo_name or "-",
+            request.repo_visibility,
+            request.create_channel,
+            request.channel_name or "-",
+            request.channel_visibility,
+            request.repo_ref,
+            request.agent_adapter or "-",
+            context.admin_channel_id,
+        )
+        if not request.repo_path and not request.create_repo:
+            return CommandResult(
+                ok=False,
+                code="ERR_INVALID_ARGS",
+                message="repo_path is required unless --create-repo is set",
+                data={"field": "repo_path"},
+            )
+        if not request.channel_id and not request.create_channel:
+            return CommandResult(
+                ok=False,
+                code="ERR_INVALID_ARGS",
+                message="channel_id is required unless --create-channel is set",
+                data={"field": "channel_id"},
+            )
+
+        created_repo: CreatedRepo | None = None
+        created_channel: CreatedChannel | None = None
+        resolved_repo_path = request.repo_path
+        resolved_channel_id = request.channel_id
+        resolved_repo_ref = request.repo_ref
+
+        try:
+            if request.create_repo:
+                if self._repo_provisioner is None:
+                    raise RuntimeError("repo provisioner is not configured")
+                created_repo = self._repo_provisioner.create_repo(
+                    agent_name=request.name,
+                    owner=request.repo_owner,
+                    repo_name=request.repo_name,
+                    visibility=request.repo_visibility,
+                )
+                resolved_repo_path = created_repo.ssh_url or created_repo.clone_url
+                if request.repo_ref == "main" and created_repo.default_branch:
+                    resolved_repo_ref = created_repo.default_branch
+                LOGGER.info(
+                    "provision.repo_ready agent=%s repo_path=%s clone_url=%s repo_ref=%s",
+                    request.name,
+                    resolved_repo_path,
+                    created_repo.clone_url,
+                    resolved_repo_ref,
+                )
+
+            if request.create_channel:
+                if self._channel_provisioner is None:
+                    raise RuntimeError("channel provisioner is not configured")
+                created_channel = self._channel_provisioner.create_channel(
+                    agent_name=request.name,
+                    channel_name=request.channel_name,
+                    visibility=request.channel_visibility,
+                    context=context,
+                )
+                resolved_channel_id = created_channel.channel_id
+                LOGGER.info(
+                    "provision.channel_ready agent=%s platform=%s channel_id=%s channel_name=%s",
+                    request.name,
+                    created_channel.platform,
+                    created_channel.channel_id,
+                    created_channel.channel_name,
+                )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception(
+                "provision.failed agent=%s platform=%s repo_step=%s channel_step=%s",
+                request.name,
+                request.platform,
+                "done" if created_repo else ("requested" if request.create_repo else "skipped"),
+                "done" if created_channel else ("requested" if request.create_channel else "skipped"),
+            )
+            return CommandResult(
+                ok=False,
+                code="ERR_PROVISION_FAILED",
+                message=str(exc),
+                data={
+                    "created_repo": created_repo.__dict__ if created_repo else None,
+                    "created_channel": created_channel.__dict__ if created_channel else None,
+                },
+            )
+
+        LOGGER.info(
+            "provision.load_agent_start agent=%s repo_path=%s channel_id=%s repo_ref=%s platform=%s adapter=%s",
+            request.name,
+            resolved_repo_path or "-",
+            resolved_channel_id or "-",
+            resolved_repo_ref,
+            request.platform,
+            request.agent_adapter or "-",
+        )
+        load_result = self._service.load_agent(
+            name=request.name,
+            repo_path=resolved_repo_path or "",
+            channel_id=resolved_channel_id or "",
+            repo_ref=resolved_repo_ref,
+            platform=request.platform,
+            agent_adapter=request.agent_adapter,
+        )
+        LOGGER.info(
+            "provision.load_agent_done agent=%s ok=%s code=%s message=%s",
+            request.name,
+            load_result.ok,
+            load_result.code,
+            load_result.message,
+        )
+        if not load_result.ok:
+            data = dict(load_result.data)
+            if created_repo:
+                data["created_repo"] = created_repo.__dict__
+            if created_channel:
+                data["created_channel"] = created_channel.__dict__
+            return CommandResult(
+                ok=False,
+                code=load_result.code,
+                message=load_result.message,
+                data=data,
+            )
+
+        data = dict(load_result.data)
+        if created_repo:
+            data["created_repo"] = created_repo.__dict__
+        if created_channel:
+            data["created_channel"] = created_channel.__dict__
+        LOGGER.info(
+            "provision.done agent=%s platform=%s created_repo=%s created_channel=%s",
+            request.name,
+            request.platform,
+            created_repo is not None,
+            created_channel is not None,
+        )
+        return CommandResult(
+            ok=True,
+            code="OK",
+            message=f"provisioned {request.name}",
+            data=data,
+        )

@@ -124,6 +124,10 @@ Use this when your project needs extra OS packages, CLI tools, or language runti
 1. Use the published minimal base image from registry (default path).
    - Base image:
      - `ghcr.io/<owner>/codex-slack-agent-minimal:latest`
+   - Tag guidance:
+     - `latest` for testing against current default branch
+     - `vX.Y-rcN` for release-candidate validation
+     - `sha-<commit>` for immutable pinning
    - Reason: no local base-image bootstrap is required for normal customization flow.
 
 2. Optional fallback for local-only development:
@@ -131,8 +135,8 @@ Use this when your project needs extra OS packages, CLI tools, or language runti
 
 ```bash
 cd /workspace/repo
-podman build -t codex-slack-bot:latest -f Dockerfile .
-podman tag codex-slack-bot:latest localhost/codex-slack-bot:latest
+podman build -t codex-slack-agent-minimal:latest -f Dockerfile.agent-minimal .
+podman tag codex-slack-agent-minimal:latest localhost/codex-slack-agent-minimal:latest
 ```
 
 3. Add project image files in your repo:
@@ -141,7 +145,7 @@ podman tag codex-slack-bot:latest localhost/codex-slack-bot:latest
    - Start with:
      - `FROM ghcr.io/<owner>/codex-slack-agent-minimal:latest`
    - Local fallback:
-     - `FROM localhost/codex-slack-bot:latest`
+     - `FROM localhost/codex-slack-agent-minimal:latest`
    - Install only project dependencies on top.
    - Do not override `ENTRYPOINT`, container mode env flow, or workspace mount assumptions unless required.
 5. Example Dockerfile:
@@ -162,6 +166,7 @@ podman build -t local-<project>-agent -f .prj_assistant/image/Dockerfile .prj_as
 
 7. Run a smoke test for base behavior compatibility:
    - Container starts successfully.
+   - `codex --version` and `claude --version` both work in the image.
    - `python -m src.agent.main` is still runnable in image context.
    - Required project tools are present (`jq`, `rg`, language runtime, etc.).
 

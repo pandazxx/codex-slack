@@ -5,6 +5,7 @@ from typing import Protocol
 
 from .command_dispatch import MasterCommandRequest, dispatch_command, parse_optional_name_text
 from .command_format import format_command_result, format_status_full_chunks, wants_full_status
+from .provisioning import ProvisionContext, ProvisioningCoordinator
 from .router import ChannelRouter
 from .service import CommandResult, MasterService
 
@@ -34,6 +35,8 @@ def execute_master_command(
     service: MasterService,
     router: ChannelRouter | None = None,
     rate_limiter: RateLimiter | None = None,
+    provisioning: ProvisioningCoordinator | None = None,
+    provision_context: ProvisionContext | None = None,
 ) -> list[str]:
     request = MasterCommandRequest(
         command_name=command_name,
@@ -102,7 +105,12 @@ def execute_master_command(
                     data={"usage": router.usage_summary(selected_agent)},
                 )
         else:
-            result = dispatch_command(service, request)
+            result = dispatch_command(
+                service,
+                request,
+                provisioning=provisioning,
+                provision_context=provision_context,
+            )
 
         LOGGER.info(
             "master.command_dispatch_done command=%s channel=%s user=%s ok=%s code=%s",
