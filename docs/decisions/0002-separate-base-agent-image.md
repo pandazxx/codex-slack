@@ -26,7 +26,11 @@ However, issue `#38` calls out that the contract is still incomplete:
 2. add CI/CD to publish it to GHCR
 3. provide clear project-facing instructions for building on it
 
-There is also an ambiguity around "project specific manifest". The current implemented customization contract is Dockerfile-based, not manifest-based:
+In this ADR, "project specific manifest" means the repo-local image customization contract:
+
+- `.prj_assistant/image/Dockerfile`
+
+That is already the implemented project-specific image input:
 
 - `MasterService._resolve_image_plan()` in `src/master/service.py` detects `.prj_assistant/image/Dockerfile`
 - there is no implemented project image manifest loader in the current runtime path
@@ -97,13 +101,13 @@ The project image contract is:
 - do not replace the entrypoint unless there is a documented reason
 - preserve the agent runtime assumptions around `/workspace`, `/workspace/home`, and `CODEX_CONTAINER_MODE=agent-worker`
 
-### Project manifest decision
+### Project-specific manifest decision
 
-Do not introduce a second project image manifest format in this change.
-
-For this issue, "project specific manifest" should be documented as the current repo-local image customization contract:
+Standardize the term "project specific manifest" in docs for this issue to mean:
 
 - `.prj_assistant/image/Dockerfile`
+
+Do not introduce a second project image metadata format in this change.
 
 A richer metadata manifest can be considered later, but it should not block:
 
