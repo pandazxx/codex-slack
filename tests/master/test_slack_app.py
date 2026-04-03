@@ -15,11 +15,12 @@ from src.master.command_format import (
 from src.master.service import CommandResult
 from src.master.slack_app import (
     CommandRateLimiter,
-    extract_image_urls,
+    extract_attachment_urls,
     format_forward_ack,
     is_admin_channel,
     is_supported_thread_subtype,
     select_thread_image_urls,
+    summarize_slack_files,
 )
 
 
@@ -280,6 +281,7 @@ def test_format_command_result_renders_agent_list_as_bullets() -> None:
                     {
                         "name": "aidotfile-agent",
                         "status": "running",
+                        "agent_adapter": "claude-code",
                         "channel_id": "C0123456789",
                         "repo_ref": "master",
                         "runtime": "podman",
@@ -292,6 +294,7 @@ def test_format_command_result_renders_agent_list_as_bullets() -> None:
     assert "*Total agents:* 1" in payload
     assert "• *aidotfile-agent*" in payload
     assert "state=`running`" in payload
+    assert "adapter=`claude-code`" in payload
     assert "aidotfile-agent" in payload
     assert "container=`agent-aidotfile-agent`" in payload
 
@@ -343,8 +346,8 @@ def test_status_full_messages_chunk_large_payload() -> None:
     assert "part 1/" in messages[0]
 
 
-def test_extract_image_urls_only_keeps_image_files() -> None:
-    urls = extract_image_urls(
+def test_extract_attachment_urls_keeps_all_matching_files() -> None:
+    urls = extract_attachment_urls(
         [
             {
                 "mimetype": "image/png",
@@ -354,11 +357,11 @@ def test_extract_image_urls_only_keeps_image_files() -> None:
             {"mimetype": "text/plain", "url_private": "https://files.slack.com/readme.txt"},
         ]
     )
-    assert urls == ["https://files.slack.com/a-download.png"]
+    assert urls == ["https://files.slack.com/a-download.png", "https://files.slack.com/readme.txt"]
 
 
-def test_extract_image_urls_filters_by_matching_event_ts_when_shares_present() -> None:
-    urls = extract_image_urls(
+def test_extract_attachment_urls_filters_by_matching_event_ts_when_shares_present() -> None:
+    urls = extract_attachment_urls(
         [
             {
                 "mimetype": "image/png",
@@ -388,12 +391,26 @@ def test_extract_image_urls_filters_by_matching_event_ts_when_shares_present() -
     assert urls == ["https://files.slack.com/b.png"]
 
 
-def test_extract_image_urls_keeps_file_without_shares_metadata() -> None:
-    urls = extract_image_urls(
+def test_extract_attachment_urls_keeps_file_without_shares_metadata() -> None:
+    urls = extract_attachment_urls(
         [{"mimetype": "image/png", "url_private": "https://files.slack.com/no-shares.png"}],
         "1000.010",
     )
     assert urls == ["https://files.slack.com/no-shares.png"]
+
+
+def test_summarize_slack_files_counts_non_image_payloads() -> None:
+    summary = summarize_slack_files(
+        [
+            {"mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+            {"mimetype": "image/png", "url_private": "https://files.slack.com/no-shares.png"},
+        ]
+    )
+    assert summary["total_files"] == 2
+    assert summary["matched_files"] == 2
+    assert summary["image_files"] == 1
+    assert summary["non_image_files"] == 1
+    assert summary["non_image_mimetypes"] == ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
 
 
 def test_select_thread_image_urls_keeps_all_for_file_share() -> None:
@@ -408,7 +425,7 @@ def test_format_forward_ack_contains_text_and_image_counts() -> None:
     payload = format_forward_ack(text="hello", image_count=2)
     assert "Received message and forwarded to agent." in payload
     assert "text_chars=`5`" in payload
-    assert "images=`2`" in payload
+    assert "attachments=`2`" in payload
 
 
 def test_command_rate_limiter_blocks_after_limit() -> None:

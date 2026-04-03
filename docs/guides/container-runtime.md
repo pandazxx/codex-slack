@@ -2,11 +2,19 @@
 
 This project includes a containerized runtime for the Slack bot.
 
+This guide is operational. The canonical runtime contract for master-managed
+agent containers lives in
+`docs/design/agent-container-runtime-design.md`.
+
 ## Included Tools
 The image ships with:
 - Python 3.11 runtime
 - `codex` CLI (installed via npm package `@openai/codex`)
+- `claude` CLI
 - `git`, `gh`, `curl`, `jq`, `make`, `openssh-client`
+
+For detailed master-agent operational steps, see
+`docs/guides/runbooks/master-agent.md`.
 
 ## Required Mounts
 The provided `docker-compose.yml` mounts:
@@ -18,10 +26,11 @@ The provided `docker-compose.yml` mounts:
 Only the Codex auth + sessions paths are mounted read-only; the rest of your host auth/config files are not required.
 - Slack secrets are provided via environment variables.
 - Codex authentication is provided by copying mounted auth cache into writable `CODEX_HOME` at startup.
+- Claude authentication is provided either by `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`.
 - GitHub authentication is provided via `GH_TOKEN`.
 - `CODEX_HOME` selection on startup:
   1. Use explicit `CODEX_HOME` env var if set.
-  2. Else use `/workspace/.codex` if that directory exists.
+  2. Else use `/workspace/home/.codex` for the master-managed agent runtime.
   3. Else fallback to `/home/appuser/.codex`.
 
 ## Safe Forwarding of `auth.json`
@@ -187,6 +196,31 @@ In your allowlisted Slack channel:
 1. Run `/codex-status`.
 2. Send `@codex hello`.
 3. Confirm the bot replies and logs are written to `./logs/bot.log`.
+
+## Master-Agent Container Operations
+When using the master-agent runtime, the normal agent container operations are:
+
+```text
+/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]
+/master-agent-start <name>
+/master-agent-status <name>
+/master-agent-stop <name>
+/master-agent-remove <name>
+/master-agent-refresh-auth <name>
+/master-agent-refresh-config <name>
+```
+
+Useful in-container checks after an agent starts:
+
+```bash
+podman exec -it agent-<name> sh -lc 'echo "$HOME" "$CODEX_HOME"'
+podman exec -it agent-<name> sh -lc 'ls -la /workspace/home/.codex /workspace/home/.claude'
+podman exec -it agent-<name> sh -lc 'ls -la /workspace/repo/.codex /workspace/repo/.claude 2>/dev/null || true'
+```
+
+For auth/config injection details, user-scope vs project-scope paths, and
+request-manifest behavior, refer to
+`docs/design/agent-container-runtime-design.md`.
 
 ## Codex Sandbox Bypass
 Container mode is configured to run Codex with:

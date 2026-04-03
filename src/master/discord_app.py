@@ -160,12 +160,9 @@ async def _read_text_attachments(attachments: list[Any]) -> str:
     return "\n\n".join(parts)
 
 
-def _extract_image_urls(attachments: list[Any]) -> list[str]:
+def _extract_attachment_urls(attachments: list[Any]) -> list[str]:
     urls: list[str] = []
     for item in attachments:
-        content_type = str(getattr(item, "content_type", "") or "")
-        if not content_type.startswith("image/"):
-            continue
         url = str(getattr(item, "url", "") or "").strip()
         if url:
             urls.append(url)
@@ -366,8 +363,19 @@ def run_discord_frontend(
         event_ts = str(message.id)
         text = str(message.content or "")
         user_id = str(message.author.id)
-        image_urls = _extract_image_urls(list(message.attachments))
-        text_attachment_content = await _read_text_attachments(list(message.attachments))
+        attachments = list(message.attachments)
+        image_urls = _extract_attachment_urls(attachments)
+        text_attachment_content = await _read_text_attachments(attachments)
+        LOGGER.info(
+            "discord attachment summary channel=%s message_id=%s attachment_count=%d routed_attachment_count=%d text_attachment_chars=%d is_thread=%s is_mention=%s",
+            getattr(message.channel, "id", "-"),
+            message.id,
+            len(attachments),
+            len(image_urls),
+            len(text_attachment_content),
+            isinstance(message.channel, discord.Thread),
+            client.user is not None and client.user.mentioned_in(message),
+        )
         if text_attachment_content:
             text = f"{text}\n\n{text_attachment_content}".strip()
         is_mention = client.user is not None and client.user.mentioned_in(message)

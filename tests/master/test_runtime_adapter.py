@@ -121,8 +121,8 @@ def test_refresh_agent_auth_replaces_auth_file_without_deleting_codex_home(monke
         "sh",
         "-lc",
         (
-            "mkdir -p /workspace/.codex && "
-            "cp /run/secrets/codex_auth.json /workspace/.codex/auth.json && "
-            "chmod 600 /workspace/.codex/auth.json"
+            "mkdir -p /workspace/home/.codex && "
+            "cp /run/secrets/codex_auth.json /workspace/home/.codex/auth.json && "
+            "chmod 600 /workspace/home/.codex/auth.json"
         ),
     ]

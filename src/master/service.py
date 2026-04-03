@@ -187,12 +187,26 @@ class MasterService:
                     dockerfile_rel=str(record.image_plan["dockerfile"]),
                 )
 
+            env = self._build_agent_env(record)
+            mounts = self._build_agent_mounts()
+            LOGGER.info(
+                "master.start_agent_config agent=%s container=%s repo_ref=%s adapter=%s codex_home=%s global_codex_config_env=%s global_codex_config_mount=%s global_claude_config_env=%s global_claude_config_mount=%s",
+                record.name,
+                record.container_name,
+                record.repo_ref,
+                record.agent_adapter,
+                env.get("CODEX_HOME", "-"),
+                env.get("AGENT_GLOBAL_CODEX_CONFIG_DIR", "-"),
+                GLOBAL_CODEX_CONFIG_MOUNT if self._agent_codex_config_dir_path else "-",
+                env.get("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", "-"),
+                GLOBAL_CLAUDE_CONFIG_MOUNT if self._agent_claude_config_dir_path else "-",
+            )
             self._runtime.create_or_update_agent(
                 container_name=record.container_name,
                 image=image,
                 repo_volume=f"agent-workspace-{record.name}",
-                env=self._build_agent_env(record),
-                mounts=self._build_agent_mounts(),
+                env=env,
+                mounts=mounts,
             )
             self._runtime.start_agent(record.container_name)
         except Exception as exc:  # noqa: BLE001
@@ -448,7 +462,7 @@ class MasterService:
             "CODEX_CONTAINER_MODE": "agent-worker",
             "HOME": "/workspace/home",
             "XDG_CONFIG_HOME": "/workspace/home/.config",
-            "CODEX_HOME": "/workspace/.codex",
+            "CODEX_HOME": "/workspace/home/.codex",
             "AGENT_REPO_URL": record.repo_source or record.repo_path,
             "AGENT_REPO_REF": record.repo_ref,
             "AGENT_REPO_DIR": "repo",

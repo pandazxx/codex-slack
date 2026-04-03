@@ -53,6 +53,31 @@ def _log_env(name: str, value: str | None, *, secret: bool = False) -> None:
         LOGGER.info("master.env %s=%r", name, value)
 
 
+def _auto_detect_project_config_dir(
+    *,
+    env_name: str,
+    project_dir: str | None,
+    candidates: list[str],
+) -> str | None:
+    if not project_dir:
+        LOGGER.info("master.env %s=<auto-detect skipped> reason=MASTER_PROJECT_DIR_not_set", env_name)
+        return None
+
+    for rel_path in candidates:
+        candidate = Path(project_dir) / rel_path
+        if candidate.is_dir():
+            LOGGER.info("master.env %s=<auto-detected> path=%s", env_name, candidate)
+            return str(candidate)
+
+    LOGGER.info(
+        "master.env %s=<auto-detect skipped> reason=dir_not_found project_dir=%s candidates=%s",
+        env_name,
+        project_dir,
+        ",".join(candidates),
+    )
+    return None
+
+
 def load_master_settings() -> MasterSettings:
     LOGGER.info("master.env_load start")
 
@@ -89,19 +114,22 @@ def load_master_settings() -> MasterSettings:
     _log_env("MASTER_CODEX_AUTH_JSON_PATH", os.getenv("MASTER_CODEX_AUTH_JSON_PATH"))
     agent_codex_config_dir_path = os.getenv("MASTER_CODEX_CONFIG_DIR_PATH", "").strip() or None
     _log_env("MASTER_CODEX_CONFIG_DIR_PATH", os.getenv("MASTER_CODEX_CONFIG_DIR_PATH"))
+    project_dir = os.getenv("MASTER_PROJECT_DIR", "").strip() or None
+    _log_env("MASTER_PROJECT_DIR", os.getenv("MASTER_PROJECT_DIR"))
+    if not agent_codex_config_dir_path:
+        agent_codex_config_dir_path = _auto_detect_project_config_dir(
+            env_name="MASTER_CODEX_CONFIG_DIR_PATH",
+            project_dir=project_dir,
+            candidates=["config/codex-global", "config/codex"],
+        )
     agent_claude_config_dir_path = os.getenv("MASTER_CLAUDE_CONFIG_DIR_PATH", "").strip() or None
     _log_env("MASTER_CLAUDE_CONFIG_DIR_PATH", os.getenv("MASTER_CLAUDE_CONFIG_DIR_PATH"))
     if not agent_claude_config_dir_path:
-        _project_dir = os.getenv("MASTER_PROJECT_DIR", "").strip()
-        if _project_dir:
-            _candidate = Path(_project_dir) / "config/claude-global"
-            if _candidate.is_dir():
-                agent_claude_config_dir_path = str(_candidate)
-                LOGGER.info("master.env MASTER_CLAUDE_CONFIG_DIR_PATH=<auto-detected> path=%s", agent_claude_config_dir_path)
-            else:
-                LOGGER.info("master.env MASTER_CLAUDE_CONFIG_DIR_PATH=<auto-detect skipped> reason=dir_not_found path=%s", _candidate)
-        else:
-            LOGGER.info("master.env MASTER_CLAUDE_CONFIG_DIR_PATH=<auto-detect skipped> reason=MASTER_PROJECT_DIR_not_set")
+        agent_claude_config_dir_path = _auto_detect_project_config_dir(
+            env_name="MASTER_CLAUDE_CONFIG_DIR_PATH",
+            project_dir=project_dir,
+            candidates=["config/claude-global"],
+        )
     agent_ssh_auth_sock_path = os.getenv("MASTER_SSH_AUTH_SOCK_PATH", "").strip() or None
     _log_env("MASTER_SSH_AUTH_SOCK_PATH", os.getenv("MASTER_SSH_AUTH_SOCK_PATH"))
     agent_ssh_known_hosts_path = os.getenv("MASTER_SSH_KNOWN_HOSTS_PATH", "").strip() or None

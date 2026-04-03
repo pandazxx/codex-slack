@@ -77,7 +77,7 @@ def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -
 
     assert settings.thread_state_path == "data/master/thread_state.json"
     assert settings.codex_command_template == "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
-    assert settings.claude_command_template == "claude -p --dangerously-skip-permissions"
+    assert settings.claude_command_template == "claude -p --output-format json --dangerously-skip-permissions"
     assert settings.default_agent_adapter == "codex"
 
 
@@ -90,6 +90,25 @@ def test_load_master_settings_rejects_unknown_default_agent_adapter(monkeypatch)
 
     with pytest.raises(ValueError, match="MASTER_DEFAULT_AGENT_ADAPTER"):
         load_master_settings()
+
+
+def test_load_master_settings_auto_detects_project_config_dirs(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    project_dir = tmp_path / "project"
+    (project_dir / "config" / "codex-global").mkdir(parents=True)
+    (project_dir / "config" / "claude-global").mkdir(parents=True)
+
+    monkeypatch.setenv("MASTER_FRONTENDS", "slack")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
+    monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123")
+    monkeypatch.setenv("MASTER_PROJECT_DIR", str(project_dir))
+    monkeypatch.delenv("MASTER_CODEX_CONFIG_DIR_PATH", raising=False)
+    monkeypatch.delenv("MASTER_CLAUDE_CONFIG_DIR_PATH", raising=False)
+
+    settings = load_master_settings()
+
+    assert settings.agent_codex_config_dir_path == str(project_dir / "config" / "codex-global")
+    assert settings.agent_claude_config_dir_path == str(project_dir / "config" / "claude-global")
 
 
 def test_load_master_settings_discord_frontend_requires_discord_fields(monkeypatch) -> None:  # type: ignore[no-untyped-def]

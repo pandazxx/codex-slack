@@ -32,6 +32,9 @@ This directory is the canonical home for repository documentation.
 
 ## Design
 
+- `docs/design/agent-container-runtime-design.md` — canonical runtime contract for agent containers
+- `docs/design/master-agent-interface-design.md` — canonical interface between master and agent containers
+- `docs/design/frontend-master-interface-design.md` — canonical interface between Slack/Discord and master
 - `docs/design/master-agent-architecture.md` — architecture background and constraints
 - `docs/design/master-agent-implementation-plan.md` — phased implementation plan
 - `docs/design/v3-0-multi-adapter-frontend-plan.md` — v3.0 adapter/frontend design plan

@@ -1,0 +1,5 @@
+# Global Codex defaults for codex-slack agents.
+#
+# Keep user-scope runtime behavior in instructions.md unless a Codex
+# setting must be enforced here. Repos can override this file with
+# `.codex/config.toml` at project scope.

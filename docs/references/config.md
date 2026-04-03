@@ -31,8 +31,9 @@ This page summarizes the main configuration keys loaded directly from the curren
 | `MASTER_DRY_RUN` | No | `false` | Disable side-effecting runtime actions |
 | `MASTER_AGENT_BASE_IMAGE` | No | `codex-slack-bot:latest` | Default image for new agents |
 | `MASTER_CODEX_AUTH_JSON_PATH` | No | unset | Shared Codex auth file |
-| `MASTER_CODEX_CONFIG_DIR_PATH` | No | unset | Shared Codex config directory |
-| `MASTER_CLAUDE_CONFIG_DIR_PATH` | No | unset or auto-detected | Shared Claude config directory |
+| `MASTER_CODEX_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/codex-global`, fallback `config/codex`) | Shared Codex config directory |
+| `MASTER_CLAUDE_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/claude-global`) | Shared Claude config directory |
+| `MASTER_PROJECT_DIR` | No | unset | Host project root used for global config auto-detection |
 | `MASTER_SSH_AUTH_SOCK_PATH` | No | unset | SSH agent socket path |
 | `MASTER_SSH_KNOWN_HOSTS_PATH` | No | unset | Known hosts path |
 | `MASTER_GIT_USER_NAME` | No | unset | Git author name for agent workspaces |
