@@ -13,6 +13,7 @@ This directory is the canonical home for repository documentation.
 - `docs/guides/container-runtime.md` — container runtime behavior and mounts
 - `docs/guides/slack-setup.md` — Slack application setup
 - `docs/guides/discord-setup.md` — Discord application setup
+- `docs/guides/project-agent-image.md` — standalone guide for project-specific agent images
 - `docs/guides/multi-agent-setup.md` — historical pre-master multi-agent setup
 - `docs/guides/tutorials.md` — tutorials and guided examples
 - `docs/guides/runbooks/master-agent.md` — master-agent operational runbook
