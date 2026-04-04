@@ -94,7 +94,7 @@ def test_create_or_update_agent_adds_extra_mounts(monkeypatch) -> None:  # type:
     ]
 
 
-def test_build_image_pulls_newer_base_layers(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_build_image_always_pulls_base_layers(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
     adapter = PodmanRuntimeAdapter()
     seen: list[list[str]] = []
     repo = tmp_path / "repo"
@@ -120,7 +120,7 @@ def test_build_image_pulls_newer_base_layers(monkeypatch, tmp_path) -> None:  # 
     assert seen == [[
         "podman",
         "build",
-        "--pull=newer",
+        "--pull=always",
         "-t",
         "codex-agent-payments-api:latest",
         "-f",
