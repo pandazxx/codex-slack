@@ -57,25 +57,27 @@ Issue `#39` adds semantic split hints ahead of those heuristics. It does not rem
 
 ## Design
 
-### Shared Splitter
+### Shared Parsing, Frontend-Owned Delivery
 
-Introduce a shared response-splitting helper in master that works in two phases:
+Introduce a shared split-hint parser in master, but keep transport delivery decisions in each frontend.
 
-1. split the full response on exact `🔹🔹🔹` lines
-2. for each resulting section, apply the existing size-based splitter if the section is still too long for the target frontend
-
-Recommended shape:
+Recommended shared helper shape:
 
 ```python
-split_response_for_frontend(text: str, *, limit: int) -> list[str]
+split_on_hint_lines(text: str) -> list[str]
 ```
 
-Recommended internal helpers:
+The parser should:
 
-- `split_on_hint_lines(text: str) -> list[str]`
-- `split_by_size(text: str, *, limit: int) -> list[str]`
+- split only on exact `🔹🔹🔹` lines
+- preserve section order
+- preserve the marker line within the emitted chunk text
 
-The splitter should preserve section order and preserve the marker line within the emitted chunk text.
+Each frontend should then decide how to deliver those parsed sections, including:
+
+- size-based fallback splitting when no hint lines are present
+- frontend-specific hard limits
+- frontend-specific file fallback behavior
 
 ### Why Preserve the Marker Line
 
@@ -92,29 +94,45 @@ That keeps the separator visually associated with the new section and avoids sil
 
 ### Frontend Integration
 
-Both Slack and Discord should consume the same split-hint-aware chunk list before sending responses.
+Both Slack and Discord should consume the same parsed hint sections before sending responses, but each frontend remains responsible for its own transport behavior.
 
 #### Discord
 
 Update the routed-reply path in `src/master/discord_app.py`:
 
-- use the shared split-hint-aware splitter
+- use the shared hint parser
 - remove `[1/2]` chunk labels from routed replies
-- continue using file fallback when the full response exceeds the existing file threshold
+- if no exact hint lines are present, keep current size-based message splitting
+- if any hinted section exceeds the Discord fallback threshold, send the whole response as a markdown file
+
+Recommended v1 threshold:
+
+- `2000` characters per hinted section
+
+This keeps the implementation simple and avoids mixing semantic sections with additional partial splitting inside a section.
 
 `label_discord_chunks()` should not be part of the routed reply flow after this change.
 
 #### Slack
 
-Slack should use the same shared splitter with the Slack send limit. The visible output should be exactly the emitted chunks with no extra part labels.
+Slack should use the same shared hint parser, but the Slack frontend should own the final delivery strategy.
+
+Slack v1 behavior should mirror the same high-level rule:
+
+- if no exact hint lines are present, use Slack's current size-based delivery path
+- if hinted sections are present and any section exceeds the Slack fallback threshold, send the whole response using Slack's file fallback path instead of partially splitting hinted sections
+
+This boundary is intentionally frontend-owned so Slack and Discord can diverge later without changing the shared protocol.
 
 ### Fallback Behavior
 
-Fallback behavior remains unchanged in spirit:
+Fallback behavior is frontend-owned:
 
-- if no exact hint lines are present, split purely by size
-- if a hinted section exceeds the frontend-safe size, split that section further by size
-- if the response exceeds a separate file-upload threshold for a frontend, keep the existing file fallback behavior
+- if no exact hint lines are present, use the frontend's current size-based splitting path
+- if exact hint lines are present and every section is within the frontend threshold, send one message per section
+- if exact hint lines are present and any section exceeds the frontend threshold, fall back to a single markdown file for the whole response
+
+V1 should not size-split an individual hinted section after parsing. Oversized hinted sections trigger whole-response file fallback instead.
 
 ## Length Guidance
 
@@ -156,10 +174,11 @@ Required test coverage:
 
 - exact marker line produces multiple sections
 - non-exact variants such as ` 🔹🔹🔹 ` do not trigger hint splitting
-- oversized hinted section is further split by size
+- oversized hinted section triggers whole-response file fallback
 - no hint falls back to current splitter behavior
 - Discord routed replies do not add `[1/2]` labels after the change
-- Slack and Discord both preserve visible `🔹🔹🔹` lines in delivered content
+- Slack and Discord both preserve visible `🔹🔹🔹` lines in delivered content when sending split messages
+- Slack and Discord can use different file fallback implementations while sharing the same parser
 
 ## UAT Expectations
 
@@ -167,15 +186,15 @@ Expected operator-visible behavior:
 
 - a long agent response authored with `🔹🔹🔹` separators arrives as multiple messages at those boundaries
 - the separator line remains visible if included by the agent
-- when a section is still too long, master may split it further
+- when a hinted section is too long, the frontend falls back to sending the whole response as a markdown file
 - when no hints are present, behavior remains compatible with today’s heuristic splitting
 
 ## Implementation Notes
 
 Recommended sequence:
 
-1. add shared split-hint parsing and size-fallback helpers in master
-2. wire Discord routed replies to that helper and remove chunk labeling
-3. wire Slack routed replies to the same helper
+1. add shared split-hint parsing helpers in master
+2. wire Discord routed replies to that parser, remove chunk labeling, and apply frontend-owned fallback
+3. wire Slack routed replies to the same parser with Slack-owned fallback
 4. update static global instructions for Codex and Claude
 5. add unit coverage for the splitter and frontend integration paths
