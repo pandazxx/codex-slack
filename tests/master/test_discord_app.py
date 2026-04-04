@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 
 from src.master.discord_app import _extract_attachment_urls
-from src.master.discord_app import label_discord_chunks
+from src.master.discord_app import build_discord_reply_plan
 from src.master.discord_app import parse_admin_message_command
 from src.master.discord_app import split_discord_message
 from src.master.discord_app import sync_registered_commands
+from src.master.response_split import SPLIT_HINT_LINE, split_on_hint_lines
 
 
 def test_parse_admin_message_command_accepts_plain_text_command() -> None:
@@ -36,9 +37,33 @@ def test_split_discord_message_chunks_long_payload() -> None:
     assert chunks[1] == "b" * 50
 
 
-def test_label_discord_chunks_adds_part_headers() -> None:
-    chunks = label_discord_chunks(["alpha", "beta"])
-    assert chunks == ["[1/2]\nalpha", "[2/2]\nbeta"]
+def test_split_on_hint_lines_preserves_visible_marker_with_next_section() -> None:
+    parts = split_on_hint_lines(f"alpha\n\n{SPLIT_HINT_LINE}\n\nbeta")
+    assert parts == ["alpha", f"{SPLIT_HINT_LINE}\n\nbeta"]
+
+
+def test_split_on_hint_lines_requires_exact_match() -> None:
+    parts = split_on_hint_lines("alpha\n 🔹🔹🔹 \nbeta")
+    assert parts == ["alpha\n 🔹🔹🔹 \nbeta"]
+
+
+def test_build_discord_reply_plan_uses_hint_sections_when_within_limit() -> None:
+    plan = build_discord_reply_plan(f"alpha\n\n{SPLIT_HINT_LINE}\n\nbeta")
+    assert plan.send_as_file is False
+    assert plan.messages == ["alpha", f"{SPLIT_HINT_LINE}\n\nbeta"]
+
+
+def test_build_discord_reply_plan_falls_back_to_file_when_hinted_section_too_long() -> None:
+    oversized = "a" * 1901
+    plan = build_discord_reply_plan(f"alpha\n\n{SPLIT_HINT_LINE}\n\n{oversized}")
+    assert plan.send_as_file is True
+    assert plan.file_text == f"alpha\n\n{SPLIT_HINT_LINE}\n\n{oversized}"
+
+
+def test_build_discord_reply_plan_uses_file_for_very_large_unhinted_response() -> None:
+    plan = build_discord_reply_plan("x" * 8100)
+    assert plan.send_as_file is True
+    assert plan.file_text == "x" * 8100
 
 
 def test_extract_attachment_urls_keeps_non_image_files() -> None:

@@ -14,6 +14,9 @@ Never assume the user can inspect files locally.
 - Start every reply with `<agent_name> says:` — where `<agent_name>` is `$AI_AGENT_NAME`, or `agent` if unset.
 - Check `AGENT_FRONTEND`: if `discord`, apply the `discord_msg_formatter` skill; if `slack` or unset, apply the `slack_msg_formatter` skill.
 - Unless the reply is 4 sentences or fewer, structure it into meaningful sections and paragraphs with bold labels.
+- For long replies that need multiple chat messages, insert `🔹🔹🔹` on its own line between sections.
+- When using that marker, aim to keep each section around 1700 characters when practical.
+- Use the exact marker line only. Do not add numbering or extra text on the marker line.
 
 ## Project Scope
 

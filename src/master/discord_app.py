@@ -16,6 +16,7 @@ from .provisioning import (
     ProvisioningCoordinator,
     RepoProvisioner,
 )
+from .response_split import ReplyDeliveryPlan, split_by_size, split_on_hint_lines
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import MasterService
 from .slack_app import format_forward_ack
@@ -24,6 +25,7 @@ LOGGER = logging.getLogger(__name__)
 DISCORD_COMMAND_PATTERN = re.compile(r"^<@!?\d+>\s*")
 DISCORD_MESSAGE_LIMIT = 1900
 DISCORD_FILE_THRESHOLD = 8000  # send as file attachment above this length
+DISCORD_HINT_SECTION_LIMIT = DISCORD_MESSAGE_LIMIT
 
 _MERMAID_FENCE = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 _MD_TABLE_ROW = re.compile(r"^\|.+\|$")
@@ -186,30 +188,24 @@ def parse_admin_message_command(text: str) -> tuple[str, str] | None:
 
 
 def split_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
-    if len(text) <= limit:
-        return [text]
-
-    chunks: list[str] = []
-    remaining = text
-    while len(remaining) > limit:
-        split_at = remaining.rfind("\n", 0, limit)
-        if split_at <= 0:
-            # No newline found — split at last space to avoid mid-word cuts.
-            split_at = remaining.rfind(" ", 0, limit)
-        if split_at <= 0:
-            split_at = limit
-        chunks.append(remaining[:split_at].rstrip())
-        remaining = remaining[split_at:].lstrip("\n").lstrip(" ")
-    if remaining:
-        chunks.append(remaining)
-    return [chunk for chunk in chunks if chunk]
+    return split_by_size(text, limit=limit)
 
 
-def label_discord_chunks(chunks: list[str]) -> list[str]:
-    total = len(chunks)
-    if total <= 1:
-        return list(chunks)
-    return [f"[{idx}/{total}]\n{chunk}" for idx, chunk in enumerate(chunks, start=1)]
+def build_discord_reply_plan(
+    text: str,
+    *,
+    message_limit: int = DISCORD_MESSAGE_LIMIT,
+    hint_section_limit: int = DISCORD_HINT_SECTION_LIMIT,
+    file_threshold: int = DISCORD_FILE_THRESHOLD,
+) -> ReplyDeliveryPlan:
+    sections = split_on_hint_lines(text)
+    if len(sections) > 1:
+        if any(len(section) > hint_section_limit for section in sections):
+            return ReplyDeliveryPlan(messages=[], file_text=text)
+        return ReplyDeliveryPlan(messages=sections)
+    if len(text) > file_threshold:
+        return ReplyDeliveryPlan(messages=[], file_text=text)
+    return ReplyDeliveryPlan(messages=split_discord_message(text, limit=message_limit))
 
 
 def _make_file(text: str, filename: str = "response.md"):  # type: ignore[no-untyped-def]
@@ -301,7 +297,8 @@ def run_discord_frontend(
         text = preprocess_for_discord(text)
         text = _convert_markdown_tables(text)
         text, mermaid_buffers = await _render_mermaid_blocks(text)
-        if len(text) > DISCORD_FILE_THRESHOLD:
+        plan = build_discord_reply_plan(text)
+        if plan.send_as_file:
             buf, fname = _make_file(text)
             await message.reply(
                 f"Response is too long ({len(text):,} chars) — sending as file.",
@@ -309,7 +306,7 @@ def run_discord_frontend(
                 mention_author=False,
             )
         else:
-            for chunk in split_discord_message(text):
+            for chunk in plan.messages:
                 await message.reply(chunk, mention_author=False)
         for idx, buf in enumerate(mermaid_buffers, start=1):
             await message.reply(file=discord.File(buf, filename=f"diagram-{idx}.png"), mention_author=False)
@@ -319,14 +316,15 @@ def run_discord_frontend(
         text = preprocess_for_discord(text)
         text = _convert_markdown_tables(text)
         text, mermaid_buffers = await _render_mermaid_blocks(text)
-        if len(text) > DISCORD_FILE_THRESHOLD:
+        plan = build_discord_reply_plan(text)
+        if plan.send_as_file:
             buf, fname = _make_file(text)
             await thread.send(
                 f"Response is too long ({len(text):,} chars) — sending as file.",
                 file=discord.File(buf, filename=fname),
             )
         else:
-            for chunk in split_discord_message(text):
+            for chunk in plan.messages:
                 await thread.send(chunk)
         for idx, buf in enumerate(mermaid_buffers, start=1):
             await thread.send(file=discord.File(buf, filename=f"diagram-{idx}.png"))

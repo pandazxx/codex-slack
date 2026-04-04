@@ -15,13 +15,16 @@ from src.master.command_format import (
 from src.master.service import CommandResult
 from src.master.slack_app import (
     CommandRateLimiter,
+    build_slack_reply_plan,
     extract_attachment_urls,
     format_forward_ack,
     is_admin_channel,
     is_supported_thread_subtype,
+    send_slack_reply,
     select_thread_image_urls,
     summarize_slack_files,
 )
+from src.master.response_split import SPLIT_HINT_LINE
 
 
 class FakeMasterService:
@@ -358,6 +361,65 @@ def test_extract_attachment_urls_keeps_all_matching_files() -> None:
         ]
     )
     assert urls == ["https://files.slack.com/a-download.png", "https://files.slack.com/readme.txt"]
+
+
+def test_build_slack_reply_plan_uses_hint_sections_when_within_limit() -> None:
+    plan = build_slack_reply_plan(f"alpha\n\n{SPLIT_HINT_LINE}\n\nbeta")
+    assert plan.send_as_file is False
+    assert plan.messages == ["alpha", f"{SPLIT_HINT_LINE}\n\nbeta"]
+
+
+def test_build_slack_reply_plan_falls_back_to_file_when_hinted_section_too_long() -> None:
+    oversized = "a" * 2001
+    plan = build_slack_reply_plan(f"alpha\n\n{SPLIT_HINT_LINE}\n\n{oversized}")
+    assert plan.send_as_file is True
+    assert plan.file_text == f"alpha\n\n{SPLIT_HINT_LINE}\n\n{oversized}"
+
+
+def test_send_slack_reply_sends_split_messages() -> None:
+    sent: list[tuple[str, str]] = []
+
+    def say(*, text: str, thread_ts: str) -> None:
+        sent.append((text, thread_ts))
+
+    class FakeClient:
+        def files_upload_v2(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            raise AssertionError("file upload should not be used")
+
+    send_slack_reply(
+        say=say,
+        client=FakeClient(),
+        channel_id="C123",
+        thread_ts="1000.1",
+        text=f"alpha\n\n{SPLIT_HINT_LINE}\n\nbeta",
+    )
+
+    assert sent == [("alpha", "1000.1"), (f"{SPLIT_HINT_LINE}\n\nbeta", "1000.1")]
+
+
+def test_send_slack_reply_uploads_file_for_oversized_hinted_section() -> None:
+    uploads: list[dict] = []
+
+    def say(*, text: str, thread_ts: str) -> None:
+        raise AssertionError("say should not be used when file fallback triggers")
+
+    class FakeClient:
+        def files_upload_v2(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            uploads.append(kwargs)
+
+    text = f"alpha\n\n{SPLIT_HINT_LINE}\n\n{'a' * 2001}"
+    send_slack_reply(
+        say=say,
+        client=FakeClient(),
+        channel_id="C123",
+        thread_ts="1000.1",
+        text=text,
+    )
+
+    assert len(uploads) == 1
+    assert uploads[0]["channel"] == "C123"
+    assert uploads[0]["thread_ts"] == "1000.1"
+    assert uploads[0]["content"] == text
 
 
 def test_extract_attachment_urls_filters_by_matching_event_ts_when_shares_present() -> None:

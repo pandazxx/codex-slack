@@ -29,6 +29,12 @@ Never assume the user can inspect files locally.
     - do not emit mermaid blocks
 - Unless the reply is four sentences or fewer, organize it into short sections
   or paragraphs with clear labels.
+- For long replies that need multiple chat messages, insert `🔹🔹🔹` on its own
+  line between sections.
+- When using that marker, aim to keep each section around 1700 characters when
+  practical.
+- Use the exact marker line only. Do not add numbering or extra text on the
+  marker line.
 
 ## Request Manifest Handling
 
