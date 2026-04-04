@@ -90,6 +90,7 @@ class PodmanRuntimeAdapter:
             [
                 "podman",
                 "build",
+                "--pull=newer",
                 "-t",
                 image_tag,
                 "-f",
