@@ -16,6 +16,14 @@ fi
 export CODEX_HOME="${CODEX_HOME_PATH}"
 mkdir -p "${CODEX_HOME_PATH}"
 
+# Copy global codex config into CODEX_HOME so codex has a writable user-scope config dir.
+# Prefer the host-mounted path, fall back to the baked-in image path.
+if [[ -d "/run/secrets/master_codex_config" ]]; then
+  cp -an /run/secrets/master_codex_config/. "${CODEX_HOME_PATH}/"
+elif [[ -d "/opt/codex-slack/config/codex-global" ]]; then
+  cp -an /opt/codex-slack/config/codex-global/. "${CODEX_HOME_PATH}/"
+fi
+
 if [[ -f "/run/secrets/codex_auth.json" && ! -f "${CODEX_HOME_PATH}/auth.json" ]]; then
   cp "/run/secrets/codex_auth.json" "${CODEX_HOME_PATH}/auth.json"
   chmod 600 "${CODEX_HOME_PATH}/auth.json"
