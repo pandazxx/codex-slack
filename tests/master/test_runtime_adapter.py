@@ -94,6 +94,41 @@ def test_create_or_update_agent_adds_extra_mounts(monkeypatch) -> None:  # type:
     ]
 
 
+def test_build_image_pulls_newer_base_layers(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    adapter = PodmanRuntimeAdapter()
+    seen: list[list[str]] = []
+    repo = tmp_path / "repo"
+    image_dir = repo / ".prj_assistant" / "image"
+    image_dir.mkdir(parents=True)
+    dockerfile = image_dir / "Dockerfile"
+    dockerfile.write_text("FROM ghcr.io/pandazxx/codex-slack-agent-minimal:latest\n", encoding="utf-8")
+
+    def fake_run(cmd: list[str], cwd: str | None = None, check: bool = True):  # type: ignore[no-untyped-def]
+        seen.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(adapter, "_run", fake_run)
+
+    image = adapter.build_image(
+        name="payments-api",
+        repo_path=str(repo),
+        context_rel=".prj_assistant/image",
+        dockerfile_rel=".prj_assistant/image/Dockerfile",
+    )
+
+    assert image == "codex-agent-payments-api:latest"
+    assert seen == [[
+        "podman",
+        "build",
+        "--pull=newer",
+        "-t",
+        "codex-agent-payments-api:latest",
+        "-f",
+        str(dockerfile),
+        str(image_dir),
+    ]]
+
+
 def test_refresh_agent_auth_replaces_auth_file_without_deleting_codex_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = PodmanRuntimeAdapter()
     seen: list[list[str]] = []
