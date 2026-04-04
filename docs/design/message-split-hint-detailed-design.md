@@ -165,7 +165,7 @@ Malformed or missing hints simply degrade to existing size-based splitting behav
 Examples:
 
 - no exact marker line found: split by size only
-- marker line present but one section is too large: split that section by size
+- marker line present but one section is too large: send the whole response as a markdown file
 - repeated blank lines without marker: no special handling
 
 ## Tests
