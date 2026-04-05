@@ -186,15 +186,19 @@ class MasterService:
                     context_rel=str(record.image_plan["context"]),
                     dockerfile_rel=str(record.image_plan["dockerfile"]),
                 )
+            else:
+                self._runtime.pull_image(image)
 
             env = self._build_agent_env(record)
             mounts = self._build_agent_mounts()
             LOGGER.info(
-                "master.start_agent_config agent=%s container=%s repo_ref=%s adapter=%s codex_home=%s global_codex_config_env=%s global_codex_config_mount=%s global_claude_config_env=%s global_claude_config_mount=%s",
+                "master.start_agent_config agent=%s container=%s repo_ref=%s adapter=%s image_plan=%s resolved_image=%s codex_home=%s global_codex_config_env=%s global_codex_config_mount=%s global_claude_config_env=%s global_claude_config_mount=%s",
                 record.name,
                 record.container_name,
                 record.repo_ref,
                 record.agent_adapter,
+                record.image_plan.get("type", "-"),
+                image,
                 env.get("CODEX_HOME", "-"),
                 env.get("AGENT_GLOBAL_CODEX_CONFIG_DIR", "-"),
                 GLOBAL_CODEX_CONFIG_MOUNT if self._agent_codex_config_dir_path else "-",

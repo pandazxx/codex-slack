@@ -8,6 +8,9 @@ class FakeRuntime:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
 
+    def pull_image(self, image: str) -> None:
+        self.calls.append(("pull_image", image))
+
     def build_image(self, *, name: str, repo_path: str, context_rel: str, dockerfile_rel: str) -> str:
         self.calls.append(("build_image", {"name": name, "repo_path": repo_path}))
         return f"codex-agent-{name}:latest"
@@ -203,8 +206,10 @@ def test_start_agent_uses_configured_default_image(tmp_path) -> None:
     start_result = service.start_agent(name="payments-api")
     assert start_result.ok is True
     assert start_result.data["resolved_image"] == "codex-slack-v1-uat"
-    assert runtime.calls[0][0] == "create_or_update_agent"
-    assert runtime.calls[0][1]["image"] == "codex-slack-v1-uat"
+    assert runtime.calls[0] == ("pull_image", "codex-slack-v1-uat")
+    assert runtime.calls[1][0] == "create_or_update_agent"
+    assert runtime.calls[1][1]["image"] == "codex-slack-v1-uat"
+    assert runtime.calls[2] == ("start_agent", "agent-payments-api")
 
 
 def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -225,8 +230,9 @@ def test_start_agent_passes_through_shared_auth_env(tmp_path, monkeypatch) -> No
 
     start_result = service.start_agent(name="payments-api")
     assert start_result.ok is True
-    assert runtime.calls[0][0] == "create_or_update_agent"
-    env = runtime.calls[0][1]["env"]
+    assert runtime.calls[0][0] == "pull_image"
+    assert runtime.calls[1][0] == "create_or_update_agent"
+    env = runtime.calls[1][1]["env"]
     assert env["HOME"] == "/workspace/home"
     assert env["XDG_CONFIG_HOME"] == "/workspace/home/.config"
     assert env["CODEX_HOME"] == "/workspace/home/.codex"
@@ -254,7 +260,8 @@ def test_start_agent_passes_git_identity_to_agent(tmp_path) -> None:
 
     start_result = service.start_agent(name="payments-api")
     assert start_result.ok is True
-    env = runtime.calls[0][1]["env"]
+    assert runtime.calls[0][0] == "pull_image"
+    env = runtime.calls[1][1]["env"]
     assert env["AGENT_GIT_USER_NAME"] == "Test User"
     assert env["AGENT_GIT_USER_EMAIL"] == "test@example.com"
 
@@ -276,8 +283,9 @@ def test_start_agent_mounts_codex_auth_json_only(tmp_path) -> None:
 
     start_result = service.start_agent(name="payments-api")
     assert start_result.ok is True
-    assert runtime.calls[0][0] == "create_or_update_agent"
-    mounts = runtime.calls[0][1]["mounts"]
+    assert runtime.calls[0][0] == "pull_image"
+    assert runtime.calls[1][0] == "create_or_update_agent"
+    mounts = runtime.calls[1][1]["mounts"]
     assert mounts == ["/host/secrets/codex-auth.json:/run/secrets/codex_auth.json:ro"]
 
 
@@ -299,8 +307,9 @@ def test_start_agent_mounts_global_codex_and_claude_config_dirs(tmp_path) -> Non
 
     start_result = service.start_agent(name="payments-api")
     assert start_result.ok is True
-    env = runtime.calls[0][1]["env"]
-    mounts = runtime.calls[0][1]["mounts"]
+    assert runtime.calls[0][0] == "pull_image"
+    env = runtime.calls[1][1]["env"]
+    mounts = runtime.calls[1][1]["mounts"]
     assert env["AGENT_GLOBAL_CODEX_CONFIG_DIR"] == "/run/secrets/master_codex_config"
     assert env["AGENT_GLOBAL_CLAUDE_CONFIG_DIR"] == "/run/secrets/master_claude_config"
     assert mounts == [
@@ -327,9 +336,10 @@ def test_start_agent_mounts_ssh_forwarding_and_sets_env(tmp_path) -> None:
 
     start_result = service.start_agent(name="payments-api")
     assert start_result.ok is True
-    assert runtime.calls[0][0] == "create_or_update_agent"
-    env = runtime.calls[0][1]["env"]
-    mounts = runtime.calls[0][1]["mounts"]
+    assert runtime.calls[0][0] == "pull_image"
+    assert runtime.calls[1][0] == "create_or_update_agent"
+    env = runtime.calls[1][1]["env"]
+    mounts = runtime.calls[1][1]["mounts"]
     assert env["SSH_AUTH_SOCK"] == "/run/secrets/ssh-auth.sock"
     assert env["GIT_SSH_COMMAND"] == "ssh -o UserKnownHostsFile=/run/secrets/ssh_known_hosts"
     assert mounts == [
@@ -355,8 +365,9 @@ def test_start_agent_sets_insecure_default_ssh_config_without_known_hosts(tmp_pa
 
     start_result = service.start_agent(name="payments-api")
     assert start_result.ok is True
-    env = runtime.calls[0][1]["env"]
-    mounts = runtime.calls[0][1]["mounts"]
+    assert runtime.calls[0][0] == "pull_image"
+    env = runtime.calls[1][1]["env"]
+    mounts = runtime.calls[1][1]["mounts"]
     assert env["SSH_AUTH_SOCK"] == "/run/secrets/ssh-auth.sock"
     assert env["GIT_SSH_COMMAND"] == "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     assert mounts == ["/run/user/1000/keyring/ssh:/run/secrets/ssh-auth.sock"]
