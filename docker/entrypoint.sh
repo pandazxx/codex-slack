@@ -19,9 +19,9 @@ mkdir -p "${CODEX_HOME_PATH}"
 # Copy global codex config into CODEX_HOME so codex has a writable user-scope config dir.
 # Prefer the host-mounted path, fall back to the baked-in image path.
 if [[ -d "/run/secrets/master_codex_config" ]]; then
-  cp -an /run/secrets/master_codex_config/. "${CODEX_HOME_PATH}/"
+  cp -af /run/secrets/master_codex_config/. "${CODEX_HOME_PATH}/"
 elif [[ -d "/opt/codex-slack/config/codex-global" ]]; then
-  cp -an /opt/codex-slack/config/codex-global/. "${CODEX_HOME_PATH}/"
+  cp -af /opt/codex-slack/config/codex-global/. "${CODEX_HOME_PATH}/"
 fi
 
 if [[ -f "/run/secrets/codex_auth.json" && ! -f "${CODEX_HOME_PATH}/auth.json" ]]; then
@@ -44,10 +44,10 @@ fi
 CLAUDE_HOME="${HOME:-/workspace/home}/.claude"
 if [[ -d "/run/secrets/master_claude_config" ]]; then
   mkdir -p "${CLAUDE_HOME}"
-  cp -a /run/secrets/master_claude_config/. "${CLAUDE_HOME}/"
+  cp -af /run/secrets/master_claude_config/. "${CLAUDE_HOME}/"
 elif [[ -d "/opt/codex-slack/config/claude-global" ]]; then
   mkdir -p "${CLAUDE_HOME}"
-  cp -a /opt/codex-slack/config/claude-global/. "${CLAUDE_HOME}/"
+  cp -af /opt/codex-slack/config/claude-global/. "${CLAUDE_HOME}/"
 fi
 
 if [[ -n "${GIT_USER_NAME:-}" ]]; then
