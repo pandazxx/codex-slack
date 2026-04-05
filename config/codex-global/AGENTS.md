@@ -28,13 +28,9 @@ Never assume the user can inspect files locally.
     - keep pipe tables as plain text tables
     - do not emit mermaid blocks
 - Unless the reply is four sentences or fewer, organize it into short sections
-  or paragraphs with clear labels.
-- For long replies that need multiple chat messages, insert `🔹🔹🔹` on its own
-  line between sections.
-- When using that marker, aim to keep each section around 1700 characters when
-  practical.
-- Use the exact marker line only. Do not add numbering or extra text on the
-  marker line.
+  or paragraphs with clear labels. Keey each section under 1700 characters.
+- In between of every sections or paragraphs, insert `🔹🔹🔹` on its own
+  line.
 
 ## Request Manifest Handling
 
