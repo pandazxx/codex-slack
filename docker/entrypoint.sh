@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set -x
 
 entrypoint_log() {
   echo "agent.entrypoint $*" >&2
