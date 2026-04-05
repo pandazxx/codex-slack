@@ -218,6 +218,53 @@ def test_stage_workspace_prepare_applies_global_codex_config_as_user_scope(tmp_p
     assert (codex_home / "global-only.txt").read_text(encoding="utf-8") == "global\n"
 
 
+def test_stage_workspace_prepare_logs_codex_copy_result(tmp_path, monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+    repo_path = Path(_create_local_repo(tmp_path / "src"))
+    global_codex = tmp_path / "global-codex"
+    global_codex.mkdir()
+    (global_codex / "instructions.md").write_text("global instructions\n", encoding="utf-8")
+    (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
+    monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
+
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path),
+        repo_url=str(repo_path),
+        repo_ref="main",
+        repo_dir_name="src",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex-home"),
+        ready_poll_seconds=0.1,
+    )
+
+    caplog.set_level("INFO")
+    stage_workspace_prepare(settings)
+
+    assert "agent.workspace_prepare_copied" in caplog.text
+    assert "target_instructions_md=True" in caplog.text
+    assert "target_config_toml=True" in caplog.text
+
+
+def test_stage_workspace_prepare_logs_codex_copy_skip_state(tmp_path, monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+    repo_path = Path(_create_local_repo(tmp_path / "src"))
+    monkeypatch.delenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", raising=False)
+
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path),
+        repo_url=str(repo_path),
+        repo_ref="main",
+        repo_dir_name="src",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex-home"),
+        ready_poll_seconds=0.1,
+    )
+
+    caplog.set_level("INFO")
+    stage_workspace_prepare(settings)
+
+    assert "agent.workspace_prepare_copy_skipped" in caplog.text
+    assert "reason=missing_global_codex_config" in caplog.text
+
+
 def test_stage_workspace_prepare_leaves_repo_codex_as_project_scope(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Repo .codex/ is NOT copied into CODEX_HOME; it stays in the repo dir as project-scope
     config, which Codex reads naturally from the working directory and which takes precedence
