@@ -27,7 +27,7 @@ Never assume the user can inspect files locally.
     - no markdown headers with `#`
     - keep pipe tables as plain text tables
     - do not emit mermaid blocks
-- Organize the reply into short sections or paragraphs with clear labels. Keep each section under 300 characters. In between of every sections or paragraphs, insert a split marker line. The split marker line should contain only `🔹🔹🔹`.
+- Organize the reply into short sections with clear labels. In between of every sections, insert a split marker line. The split marker line should contain only `🔹🔹🔹`.
 
 ## Request Manifest Handling
 
