@@ -33,6 +33,9 @@ This directory is the canonical home for repository documentation.
 
 ## Design
 
+- `docs/design/containers/master-container-design.md` — master container startup, interfaces, lifecycle, and storage
+- `docs/design/containers/agent-container-design.md` — agent container entrypoint, worker lifecycle, and runtime contract
+- `docs/design/containers/cd-container-design.md` — CD daemon container startup, deploy loop, rollback, and state
 - `docs/design/agent-container-runtime-design.md` — canonical runtime contract for agent containers
 - `docs/design/agent-provisioning-detailed-design.md` — detailed design for agent/channel/repo provisioning
 - `docs/design/master-agent-interface-design.md` — canonical interface between master and agent containers
