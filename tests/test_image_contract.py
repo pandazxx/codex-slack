@@ -16,3 +16,6 @@ def test_entrypoint_has_baked_in_codex_and_claude_global_fallbacks() -> None:
     assert "/opt/codex-slack/config/claude-global" in entrypoint
     assert 'cp -af /run/secrets/master_codex_config/. "${CODEX_HOME_PATH}/"' in entrypoint
     assert 'cp -af /opt/codex-slack/config/codex-global/. "${CODEX_HOME_PATH}/"' in entrypoint
+    assert 'entrypoint_log "startup ' in entrypoint
+    assert 'entrypoint_log "codex_config_result ' in entrypoint
+    assert 'entrypoint_log "claude_config_result ' in entrypoint
