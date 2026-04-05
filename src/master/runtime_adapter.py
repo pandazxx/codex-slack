@@ -16,6 +16,9 @@ class RuntimeErrorAdapter(RuntimeError):
 
 
 class RuntimeAdapter(Protocol):
+    def pull_image(self, image: str) -> None:
+        ...
+
     def build_image(self, *, name: str, repo_path: str, context_rel: str, dockerfile_rel: str) -> str:
         ...
 
@@ -81,6 +84,9 @@ class PodmanRuntimeAdapter:
     def _container_exists(self, container_name: str) -> bool:
         completed = self._run(["podman", "container", "exists", container_name], check=False)
         return completed.returncode == 0
+
+    def pull_image(self, image: str) -> None:
+        self._run(["podman", "pull", image])
 
     def build_image(self, *, name: str, repo_path: str, context_rel: str, dockerfile_rel: str) -> str:
         image_tag = f"codex-agent-{name}:latest"
