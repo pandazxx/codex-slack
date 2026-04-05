@@ -140,7 +140,7 @@ The `1700` target is not a programmatic enforcement rule.
 
 Instead, it is a static instruction for the agent under:
 
-- `config/codex-global/instructions.md`
+- `config/codex-global/AGENTS.md`
 - `config/claude-global/CLAUDE.md`
 
 The implementation should not reject, warn, or reflow content purely because a section exceeds `1700` characters. The master only needs to honor hints where possible and then keep transport-safe behavior.

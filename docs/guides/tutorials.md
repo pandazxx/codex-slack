@@ -184,7 +184,7 @@ Use this when you want master to provide shared default agent configuration whil
 ```text
 /opt/codex-slack/config/codex/
   config.toml
-  instructions.md
+  AGENTS.md
 
 /opt/codex-slack/config/claude/
   settings.json

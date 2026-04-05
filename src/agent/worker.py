@@ -160,10 +160,10 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
         global_claude_config_path.is_dir() if global_claude_config_path else False,
     )
     LOGGER.info(
-        "agent.workspace_prepare_state codex_home_exists=%s codex_home_entries=%d codex_home_instructions_md=%s codex_home_config_toml=%s home_claude_dir=%s home_claude_exists=%s home_claude_entries=%d home_claude_md=%s home_claude_settings_json=%s",
+        "agent.workspace_prepare_state codex_home_exists=%s codex_home_entries=%d codex_home_agents_md=%s codex_home_config_toml=%s home_claude_dir=%s home_claude_exists=%s home_claude_entries=%d home_claude_md=%s home_claude_settings_json=%s",
         codex_home.exists(),
         sum(1 for _ in codex_home.rglob("*")) if codex_home.exists() else 0,
-        (codex_home / "instructions.md").exists(),
+        (codex_home / "AGENTS.md").exists(),
         (codex_home / "config.toml").exists(),
         home_claude_dir,
         home_claude_dir.exists(),
@@ -175,31 +175,31 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
     if global_codex_config_raw:
         _copy_tree(global_codex_config_path, codex_home, overwrite=True)
         LOGGER.info(
-            "agent.workspace_prepare_copied target=%s source=%s source_entries=%d target_entries=%d target_instructions_md=%s target_config_toml=%s",
+            "agent.workspace_prepare_copied target=%s source=%s source_entries=%d target_entries=%d target_agents_md=%s target_config_toml=%s",
             codex_home,
             global_codex_config_raw,
             sum(1 for _ in global_codex_config_path.rglob("*")) if global_codex_config_path and global_codex_config_path.exists() else 0,
             sum(1 for _ in codex_home.rglob("*")),
-            (codex_home / "instructions.md").exists(),
+            (codex_home / "AGENTS.md").exists(),
             (codex_home / "config.toml").exists(),
         )
     else:
         LOGGER.info(
-            "agent.workspace_prepare_copy_skipped target=%s source=- reason=missing_global_codex_config target_entries=%d target_instructions_md=%s target_config_toml=%s",
+            "agent.workspace_prepare_copy_skipped target=%s source=- reason=missing_global_codex_config target_entries=%d target_agents_md=%s target_config_toml=%s",
             codex_home,
             sum(1 for _ in codex_home.rglob("*")),
-            (codex_home / "instructions.md").exists(),
+            (codex_home / "AGENTS.md").exists(),
             (codex_home / "config.toml").exists(),
         )
     # repo_codex_dir (.codex/ in the cloned repo) is intentionally left in place.
     # Codex reads it as project-scope config from the working directory, which takes
     # precedence over user-scope settings in CODEX_HOME per the Codex scope hierarchy.
     LOGGER.info(
-        "agent.workspace_prepare_repo_scope repo_codex_dir=%s exists=%s entries=%d repo_instructions_md=%s repo_config_toml=%s",
+        "agent.workspace_prepare_repo_scope repo_codex_dir=%s exists=%s entries=%d repo_agents_md=%s repo_config_toml=%s",
         repo_codex_dir,
         repo_codex_dir.exists(),
         sum(1 for _ in repo_codex_dir.rglob("*")) if repo_codex_dir.exists() else 0,
-        (repo_codex_dir / "instructions.md").exists(),
+        (repo_codex_dir / "AGENTS.md").exists(),
         (repo_codex_dir / "config.toml").exists(),
     )
     if global_claude_config_raw:

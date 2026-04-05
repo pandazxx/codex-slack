@@ -194,7 +194,7 @@ def test_stage_workspace_prepare_applies_global_codex_config_as_user_scope(tmp_p
     global_codex = tmp_path / "global-codex"
     global_codex.mkdir()
     (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
-    (global_codex / "instructions.md").write_text("global instructions\n", encoding="utf-8")
+    (global_codex / "AGENTS.md").write_text("global instructions\n", encoding="utf-8")
     (global_codex / "global-only.txt").write_text("global\n", encoding="utf-8")
 
     monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
@@ -214,7 +214,7 @@ def test_stage_workspace_prepare_applies_global_codex_config_as_user_scope(tmp_p
 
     # Global config lands in CODEX_HOME (user scope).
     assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'global'\n"
-    assert (codex_home / "instructions.md").read_text(encoding="utf-8") == "global instructions\n"
+    assert (codex_home / "AGENTS.md").read_text(encoding="utf-8") == "global instructions\n"
     assert (codex_home / "global-only.txt").read_text(encoding="utf-8") == "global\n"
 
 
@@ -222,7 +222,7 @@ def test_stage_workspace_prepare_logs_codex_copy_result(tmp_path, monkeypatch, c
     repo_path = Path(_create_local_repo(tmp_path / "src"))
     global_codex = tmp_path / "global-codex"
     global_codex.mkdir()
-    (global_codex / "instructions.md").write_text("global instructions\n", encoding="utf-8")
+    (global_codex / "AGENTS.md").write_text("global instructions\n", encoding="utf-8")
     (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
     monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
 
@@ -240,7 +240,7 @@ def test_stage_workspace_prepare_logs_codex_copy_result(tmp_path, monkeypatch, c
     stage_workspace_prepare(settings)
 
     assert "agent.workspace_prepare_copied" in caplog.text
-    assert "target_instructions_md=True" in caplog.text
+    assert "target_agents_md=True" in caplog.text
     assert "target_config_toml=True" in caplog.text
 
 
@@ -305,13 +305,13 @@ def test_stage_workspace_prepare_overwrites_stale_global_codex_files(tmp_path, m
     repo_path = Path(_create_local_repo(tmp_path / "src"))
     global_codex = tmp_path / "global-codex"
     global_codex.mkdir()
-    (global_codex / "instructions.md").write_text("new instructions\n", encoding="utf-8")
+    (global_codex / "AGENTS.md").write_text("new instructions\n", encoding="utf-8")
     (global_codex / "config.toml").write_text("source = 'new'\n", encoding="utf-8")
     monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
 
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
-    (codex_home / "instructions.md").write_text("old instructions\n", encoding="utf-8")
+    (codex_home / "AGENTS.md").write_text("old instructions\n", encoding="utf-8")
     (codex_home / "config.toml").write_text("source = 'old'\n", encoding="utf-8")
     (codex_home / "auth.json").write_text('{"token":"keep"}\n', encoding="utf-8")
 
@@ -327,7 +327,7 @@ def test_stage_workspace_prepare_overwrites_stale_global_codex_files(tmp_path, m
 
     stage_workspace_prepare(settings)
 
-    assert (codex_home / "instructions.md").read_text(encoding="utf-8") == "new instructions\n"
+    assert (codex_home / "AGENTS.md").read_text(encoding="utf-8") == "new instructions\n"
     assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'new'\n"
     assert (codex_home / "auth.json").read_text(encoding="utf-8") == '{"token":"keep"}\n'
 
