@@ -121,7 +121,7 @@ Shared Codex defaults are provided from a host directory:
 This directory may include files such as:
 
 - `config.toml`
-- `instructions.md`
+- `AGENTS.md`
 
 These are user-scope defaults for every agent.
 

@@ -22,10 +22,13 @@ from .command_runtime import execute_master_command
 from .command_runtime import is_admin_channel
 from .dispatch_guard import in_flight_dispatch, is_shutting_down
 from .provisioning import ProvisionContext, ProvisioningCoordinator, RepoProvisioner, SlackChannelProvisioner
+from .response_split import ReplyDeliveryPlan, split_by_size, split_on_hint_lines
 from .router import ChannelRouter, RouteError, RouteSkip
 from .service import CommandResult, MasterService
 
 LOGGER = logging.getLogger(__name__)
+SLACK_MESSAGE_LIMIT = 2800
+SLACK_HINT_SECTION_LIMIT = 2000
 
 
 @dataclass
@@ -54,6 +57,43 @@ def is_supported_thread_subtype(subtype: str | None) -> bool:
     if not subtype:
         return True
     return subtype in {"file_share"}
+
+
+def build_slack_reply_plan(
+    text: str,
+    *,
+    message_limit: int = SLACK_MESSAGE_LIMIT,
+    hint_section_limit: int = SLACK_HINT_SECTION_LIMIT,
+) -> ReplyDeliveryPlan:
+    sections = split_on_hint_lines(text)
+    if len(sections) > 1:
+        if any(len(section) > hint_section_limit for section in sections):
+            return ReplyDeliveryPlan(messages=[], file_text=text)
+        return ReplyDeliveryPlan(messages=sections)
+    return ReplyDeliveryPlan(messages=split_by_size(text, limit=message_limit))
+
+
+def send_slack_reply(
+    *,
+    say,
+    client,
+    channel_id: str,
+    thread_ts: str,
+    text: str,
+) -> None:
+    plan = build_slack_reply_plan(text)
+    if plan.send_as_file:
+        client.files_upload_v2(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            content=plan.file_text,
+            filename=plan.file_name,
+            title=plan.file_name,
+            initial_comment=f"Response is too long ({len(text):,} chars) — sending as file.",
+        )
+        return
+    for message in plan.messages:
+        say(text=message, thread_ts=thread_ts)
 
 
 def _register_command(
@@ -153,7 +193,13 @@ def create_master_app(
                             user_id=user_id,
                             image_urls=image_urls,
                         )
-                    say(text=response, thread_ts=thread_ts)
+                    send_slack_reply(
+                        say=say,
+                        client=client,
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        text=response,
+                    )
                 finally:
                     client.reactions_remove(channel=channel_id, timestamp=event_ts, name="hourglass_flowing_sand")
             except RouteSkip as exc:
@@ -259,7 +305,13 @@ def create_master_app(
                             user_id=user_id,
                             image_urls=image_urls,
                         )
-                    say(text=response, thread_ts=thread_ts)
+                    send_slack_reply(
+                        say=say,
+                        client=client,
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        text=response,
+                    )
                     LOGGER.info(
                         "thread route dispatch_done channel=%s thread_ts=%s user=%s response_chars=%d",
                         channel_id,

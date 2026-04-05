@@ -129,6 +129,21 @@ def test_build_image_always_pulls_base_layers(monkeypatch, tmp_path) -> None:  #
     ]]
 
 
+def test_pull_image_uses_podman_pull(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    adapter = PodmanRuntimeAdapter()
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], cwd: str | None = None, check: bool = True):  # type: ignore[no-untyped-def]
+        seen.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(adapter, "_run", fake_run)
+
+    adapter.pull_image("ghcr.io/pandazxx/codex-slack-agent-minimal:latest")
+
+    assert seen == [["podman", "pull", "ghcr.io/pandazxx/codex-slack-agent-minimal:latest"]]
+
+
 def test_refresh_agent_auth_replaces_auth_file_without_deleting_codex_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = PodmanRuntimeAdapter()
     seen: list[list[str]] = []
