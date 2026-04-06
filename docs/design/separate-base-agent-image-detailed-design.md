@@ -2,7 +2,7 @@
 
 **Status:** proposed  
 **Issue:** [#38](https://github.com/pandazxx/codex-slack/issues/38)  
-**ADR:** `docs/decisions/0002-separate-base-agent-image.md`
+**ADR:** [`docs/decisions/0002-separate-base-agent-image.md`](../decisions/0002-separate-base-agent-image.md)
 
 ## Goal
 
@@ -193,9 +193,9 @@ Implementation should produce or update:
 
 Recommended doc touch points:
 
-- `docs/guides/tutorials.md`
-- `docs/guides/container-runtime.md`
-- `docs/guides/runbooks/master-agent.md`
+- [`docs/guides/tutorials.md`](../guides/tutorials.md)
+- [`docs/guides/container-runtime.md`](../guides/container-runtime.md)
+- [`docs/guides/runbooks/master-agent.md`](../guides/runbooks/master-agent.md)
 - FAQ entry if needed
 
 ## CI/CD Design

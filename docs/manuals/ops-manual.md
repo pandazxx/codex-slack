@@ -10,15 +10,15 @@ This manual is the primary entry point for setting up, deploying, and operating 
 
 ## Start Here
 
-1. Read `README.md` for the project overview and deployment options.
-2. Follow `docs/guides/slack-setup.md` and `docs/guides/discord-setup.md` for chat frontend setup.
-3. Use `docs/guides/container-runtime.md` for container runtime details, mounts, and auth handling.
-4. Use `docs/guides/runbooks/master-agent.md` for production runtime operation.
-5. Use `docs/guides/runbooks/cd-daemon.md` when enabling automated deployments.
+1. Read [`README.md`](../../README.md) for the project overview and deployment options.
+2. Follow [`docs/guides/slack-setup.md`](../guides/slack-setup.md) and [`docs/guides/discord-setup.md`](../guides/discord-setup.md) for chat frontend setup.
+3. Use [`docs/guides/container-runtime.md`](../guides/container-runtime.md) for container runtime details, mounts, and auth handling.
+4. Use [`docs/guides/runbooks/master-agent.md`](../guides/runbooks/master-agent.md) for production runtime operation.
+5. Use [`docs/guides/runbooks/cd-daemon.md`](../guides/runbooks/cd-daemon.md) when enabling automated deployments.
 
 ## Related References
 
-- `docs/references/config.md` for configuration keys
-- `docs/references/logging.md` for log destinations and verbosity
-- `docs/test-plans/master-agent-uat.md` for acceptance verification
+- [`docs/references/config.md`](../references/config.md) for configuration keys
+- [`docs/references/logging.md`](../references/logging.md) for log destinations and verbosity
+- [`docs/test-plans/master-agent-uat.md`](../test-plans/master-agent-uat.md) for acceptance verification
 - `docs/releases/` for release-specific changes and migration notes

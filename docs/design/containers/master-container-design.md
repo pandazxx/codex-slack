@@ -15,11 +15,11 @@ Define the behavior of the master container as a runtime unit:
 
 This document describes the container itself. It complements:
 
-- `docs/design/master-agent-interface-design.md`
-- `docs/design/frontend-master-interface-design.md`
-- `docs/guides/runbooks/master-agent.md`
-- `docs/references/config.md`
-- `docs/references/logging.md`
+- [`docs/design/master-agent-interface-design.md`](../master-agent-interface-design.md)
+- [`docs/design/frontend-master-interface-design.md`](../frontend-master-interface-design.md)
+- [`docs/guides/runbooks/master-agent.md`](../../guides/runbooks/master-agent.md)
+- [`docs/references/config.md`](../../references/config.md)
+- [`docs/references/logging.md`](../../references/logging.md)
 
 ## Responsibilities
 
@@ -129,8 +129,8 @@ The master is the only control plane for agents. It injects:
 
 Detailed agent-side semantics belong in:
 
-- `docs/design/agent-container-runtime-design.md`
-- `docs/design/master-agent-interface-design.md`
+- [`docs/design/agent-container-runtime-design.md`](../agent-container-runtime-design.md)
+- [`docs/design/master-agent-interface-design.md`](../master-agent-interface-design.md)
 
 ## Lifecycle
 
@@ -253,10 +253,10 @@ The master container must preserve these invariants:
 
 ## Related Documents
 
-- `docs/design/master-agent-interface-design.md`
-- `docs/design/frontend-master-interface-design.md`
-- `docs/design/containers/environment-variable-passdown-design.md`
-- `docs/guides/runbooks/master-agent.md`
-- `docs/references/config.md`
-- `docs/references/logging.md`
-- `docs/guides/runbooks/cd-daemon.md`
+- [`docs/design/master-agent-interface-design.md`](../master-agent-interface-design.md)
+- [`docs/design/frontend-master-interface-design.md`](../frontend-master-interface-design.md)
+- [`docs/design/containers/environment-variable-passdown-design.md`](environment-variable-passdown-design.md)
+- [`docs/guides/runbooks/master-agent.md`](../../guides/runbooks/master-agent.md)
+- [`docs/references/config.md`](../../references/config.md)
+- [`docs/references/logging.md`](../../references/logging.md)
+- [`docs/guides/runbooks/cd-daemon.md`](../../guides/runbooks/cd-daemon.md)

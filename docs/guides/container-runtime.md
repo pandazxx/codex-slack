@@ -4,7 +4,7 @@ This project includes a containerized runtime for the Slack bot.
 
 This guide is operational. The canonical runtime contract for master-managed
 agent containers lives in
-`docs/design/agent-container-runtime-design.md`.
+[`docs/design/agent-container-runtime-design.md`](../design/agent-container-runtime-design.md).
 
 ## Runtime Images
 This repository currently has two container-image roles:
@@ -28,7 +28,7 @@ The published minimal agent base image from `Dockerfile.agent-minimal` ships wit
 It intentionally does not include master-only tooling like `podman`, `gh`, `jq`, or `make`.
 
 For detailed master-agent operational steps, see
-`docs/guides/runbooks/master-agent.md`.
+[`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md).
 
 ## Required Mounts
 The provided `docker-compose.yml` mounts:
@@ -234,7 +234,7 @@ podman exec -it agent-<name> sh -lc 'ls -la /workspace/repo/.codex /workspace/re
 
 For auth/config injection details, user-scope vs project-scope paths, and
 request-manifest behavior, refer to
-`docs/design/agent-container-runtime-design.md`.
+[`docs/design/agent-container-runtime-design.md`](../design/agent-container-runtime-design.md).
 
 ## Published Base Image Contract
 Use the published minimal base image when a project needs extra packages or CLIs but should keep the standard agent runtime contract.

@@ -2,7 +2,7 @@
 
 **Status:** proposed  
 **Issue:** [#37](https://github.com/pandazxx/codex-slack/issues/37)  
-**ADR:** `docs/decisions/0001-agent-provisioning-orchestration.md`
+**ADR:** [`docs/decisions/0001-agent-provisioning-orchestration.md`](../decisions/0001-agent-provisioning-orchestration.md)
 
 ## Goal
 

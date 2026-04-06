@@ -2,7 +2,7 @@
 
 **Status:** proposed  
 **Issue:** [#39](https://github.com/pandazxx/codex-slack/issues/39)  
-**ADR:** `docs/decisions/0003-message-split-hint-protocol.md`
+**ADR:** [`docs/decisions/0003-message-split-hint-protocol.md`](../decisions/0003-message-split-hint-protocol.md)
 
 ## Goal
 

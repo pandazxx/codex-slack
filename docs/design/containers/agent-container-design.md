@@ -15,10 +15,10 @@ Define the agent container as a runtime unit:
 
 This is the container-focused companion to:
 
-- `docs/design/agent-container-runtime-design.md`
-- `docs/design/master-agent-interface-design.md`
-- `docs/references/config.md`
-- `docs/references/logging.md`
+- [`docs/design/agent-container-runtime-design.md`](../agent-container-runtime-design.md)
+- [`docs/design/master-agent-interface-design.md`](../master-agent-interface-design.md)
+- [`docs/references/config.md`](../../references/config.md)
+- [`docs/references/logging.md`](../../references/logging.md)
 
 ## Responsibilities
 
@@ -290,10 +290,10 @@ The agent container must preserve these invariants:
 
 ## Related Documents
 
-- `docs/design/agent-container-runtime-design.md`
-- `docs/design/master-agent-interface-design.md`
-- `docs/design/containers/environment-variable-passdown-design.md`
-- `docs/guides/container-runtime.md`
-- `docs/references/config.md`
-- `docs/references/logging.md`
-- `docs/guides/runbooks/master-agent.md`
+- [`docs/design/agent-container-runtime-design.md`](../agent-container-runtime-design.md)
+- [`docs/design/master-agent-interface-design.md`](../master-agent-interface-design.md)
+- [`docs/design/containers/environment-variable-passdown-design.md`](environment-variable-passdown-design.md)
+- [`docs/guides/container-runtime.md`](../../guides/container-runtime.md)
+- [`docs/references/config.md`](../../references/config.md)
+- [`docs/references/logging.md`](../../references/logging.md)
+- [`docs/guides/runbooks/master-agent.md`](../../guides/runbooks/master-agent.md)

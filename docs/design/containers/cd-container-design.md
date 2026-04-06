@@ -14,9 +14,9 @@ Define the CD daemon container as a runtime unit:
 
 This document complements:
 
-- `docs/guides/runbooks/cd-daemon.md`
-- `docs/references/config.md`
-- `docs/references/logging.md`
+- [`docs/guides/runbooks/cd-daemon.md`](../../guides/runbooks/cd-daemon.md)
+- [`docs/references/config.md`](../../references/config.md)
+- [`docs/references/logging.md`](../../references/logging.md)
 
 ## Responsibilities
 
@@ -252,8 +252,8 @@ The CD container must preserve these invariants:
 
 ## Related Documents
 
-- `docs/guides/runbooks/cd-daemon.md`
-- `docs/design/containers/environment-variable-passdown-design.md`
-- `docs/references/config.md`
-- `docs/references/logging.md`
-- `docs/manuals/ops-manual.md`
+- [`docs/guides/runbooks/cd-daemon.md`](../../guides/runbooks/cd-daemon.md)
+- [`docs/design/containers/environment-variable-passdown-design.md`](environment-variable-passdown-design.md)
+- [`docs/references/config.md`](../../references/config.md)
+- [`docs/references/logging.md`](../../references/logging.md)
+- [`docs/manuals/ops-manual.md`](../../manuals/ops-manual.md)

@@ -13,7 +13,7 @@ Define the authoritative contract between master and agent so that:
 - agents know which inputs are durable versus transient
 - testing and implementation can target stable boundaries
 
-This document complements `docs/design/agent-container-runtime-design.md` by
+This document complements [`docs/design/agent-container-runtime-design.md`](agent-container-runtime-design.md) by
 focusing on the cross-runtime interface rather than the internal agent home
 layout.
 

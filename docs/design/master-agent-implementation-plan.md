@@ -1,7 +1,7 @@
 # Master-Agent Implementation Plan (Draft)
 
 This is a living phased plan for the master -> agent orchestration feature.
-For current operator-facing behavior and command surface, use `docs/README.md`, `docs/references/api.md`, and `docs/guides/runbooks/master-agent.md`.
+For current operator-facing behavior and command surface, use [`docs/README.md`](../README.md), [`docs/references/api.md`](../references/api.md), and [`docs/guides/runbooks/master-agent.md`](../guides/runbooks/master-agent.md).
 
 ## Design Freeze Status (v1)
 - Status: frozen for implementation.
@@ -30,8 +30,8 @@ For current operator-facing behavior and command surface, use `docs/README.md`, 
 - Finalize agent initialization stages and status reporting contract (no in-agent control service).
 
 Deliverables:
-- `docs/design/master-agent-architecture.md`
-- `docs/design/master-agent-implementation-plan.md`
+- [`docs/design/master-agent-architecture.md`](master-agent-architecture.md)
+- [`docs/design/master-agent-implementation-plan.md`](master-agent-implementation-plan.md)
 - sample registry JSON
 - sample project manifest (`.prj_assistant/agent.toml`)
 - master command contract + idempotency rules

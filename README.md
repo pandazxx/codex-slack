@@ -43,7 +43,7 @@ export UID="$(id -u)" GID="$(id -g)"
 podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build -d
 ```
 
-Full setup and runtime guides live under `docs/`; use `docs/manuals/ops-manual.md` as the primary entry point.
+Full setup and runtime guides live under `docs/`; use [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) as the primary entry point.
 For Codex contributors, repository workflow instructions live in `AGENTS.md` and repo-local skills live under `.agents/skills/`.
 
 ## Project structure
@@ -86,14 +86,14 @@ For Codex contributors, repository workflow instructions live in `AGENTS.md` and
 
 ## Further reading
 
-- `docs/README.md` — documentation map and category index
-- `docs/manuals/ops-manual.md` — setup, deployment, and operations entry point
-- `docs/manuals/user-manual.md` — day-to-day usage entry point
-- `docs/guides/slack-setup.md` — detailed Slack app configuration
-- `docs/guides/discord-setup.md` — Discord app setup for master mode
-- `docs/guides/container-runtime.md` — container runtime, Podman socket, and mounts
-- `docs/guides/runbooks/master-agent.md` — master-agent operational runbook
-- `docs/guides/runbooks/cd-daemon.md` — CD daemon operational runbook
-- `docs/guides/tutorials.md` — step-by-step tutorials and checklists
-- `docs/references/api.md` — implemented command surface
-- `docs/references/config.md` — configuration keys and defaults
+- [`docs/README.md`](docs/README.md) — documentation map and category index
+- [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) — setup, deployment, and operations entry point
+- [`docs/manuals/user-manual.md`](docs/manuals/user-manual.md) — day-to-day usage entry point
+- [`docs/guides/slack-setup.md`](docs/guides/slack-setup.md) — detailed Slack app configuration
+- [`docs/guides/discord-setup.md`](docs/guides/discord-setup.md) — Discord app setup for master mode
+- [`docs/guides/container-runtime.md`](docs/guides/container-runtime.md) — container runtime, Podman socket, and mounts
+- [`docs/guides/runbooks/master-agent.md`](docs/guides/runbooks/master-agent.md) — master-agent operational runbook
+- [`docs/guides/runbooks/cd-daemon.md`](docs/guides/runbooks/cd-daemon.md) — CD daemon operational runbook
+- [`docs/guides/tutorials.md`](docs/guides/tutorials.md) — step-by-step tutorials and checklists
+- [`docs/references/api.md`](docs/references/api.md) — implemented command surface
+- [`docs/references/config.md`](docs/references/config.md) — configuration keys and defaults

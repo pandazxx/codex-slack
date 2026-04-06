@@ -16,10 +16,10 @@ Explain the end-to-end environment-variable flow with explicit ownership:
 
 This document focuses on environment flow. It complements:
 
-- `docs/references/config.md`
-- `docs/design/containers/master-container-design.md`
-- `docs/design/containers/agent-container-design.md`
-- `docs/design/containers/cd-container-design.md`
+- [`docs/references/config.md`](../../references/config.md)
+- [`docs/design/containers/master-container-design.md`](master-container-design.md)
+- [`docs/design/containers/agent-container-design.md`](agent-container-design.md)
+- [`docs/design/containers/cd-container-design.md`](cd-container-design.md)
 
 ## High-Level Flow
 
@@ -260,8 +260,8 @@ Use them in order:
 
 ## Related Documents
 
-- `docs/references/config.md`
-- `docs/references/logging.md`
-- `docs/design/containers/master-container-design.md`
-- `docs/design/containers/agent-container-design.md`
-- `docs/design/containers/cd-container-design.md`
+- [`docs/references/config.md`](../../references/config.md)
+- [`docs/references/logging.md`](../../references/logging.md)
+- [`docs/design/containers/master-container-design.md`](master-container-design.md)
+- [`docs/design/containers/agent-container-design.md`](agent-container-design.md)
+- [`docs/design/containers/cd-container-design.md`](cd-container-design.md)
