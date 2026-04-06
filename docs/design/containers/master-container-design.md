@@ -18,6 +18,8 @@ This document describes the container itself. It complements:
 - `docs/design/master-agent-interface-design.md`
 - `docs/design/frontend-master-interface-design.md`
 - `docs/guides/runbooks/master-agent.md`
+- `docs/references/config.md`
+- `docs/references/logging.md`
 
 ## Responsibilities
 
@@ -253,5 +255,8 @@ The master container must preserve these invariants:
 
 - `docs/design/master-agent-interface-design.md`
 - `docs/design/frontend-master-interface-design.md`
+- `docs/design/containers/environment-variable-passdown-design.md`
 - `docs/guides/runbooks/master-agent.md`
+- `docs/references/config.md`
+- `docs/references/logging.md`
 - `docs/guides/runbooks/cd-daemon.md`

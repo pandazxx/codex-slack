@@ -17,6 +17,8 @@ This is the container-focused companion to:
 
 - `docs/design/agent-container-runtime-design.md`
 - `docs/design/master-agent-interface-design.md`
+- `docs/references/config.md`
+- `docs/references/logging.md`
 
 ## Responsibilities
 
@@ -290,5 +292,8 @@ The agent container must preserve these invariants:
 
 - `docs/design/agent-container-runtime-design.md`
 - `docs/design/master-agent-interface-design.md`
+- `docs/design/containers/environment-variable-passdown-design.md`
 - `docs/guides/container-runtime.md`
+- `docs/references/config.md`
+- `docs/references/logging.md`
 - `docs/guides/runbooks/master-agent.md`
