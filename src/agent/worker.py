@@ -72,21 +72,6 @@ def _run_git(args: list[str], cwd: str | None = None) -> subprocess.CompletedPro
     return completed
 
 
-def _copy_tree(src: Path, dst: Path, *, overwrite: bool) -> None:
-    if not src.exists() or not src.is_dir():
-        return
-    dst.mkdir(parents=True, exist_ok=True)
-    for entry in src.iterdir():
-        target = dst / entry.name
-        if entry.is_dir():
-            _copy_tree(entry, target, overwrite=overwrite)
-            continue
-        if target.exists() and not overwrite:
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(entry.read_bytes())
-
-
 def stage_preflight(settings: WorkerSettings) -> None:
     workspace = Path(settings.workspace_path)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -120,16 +105,20 @@ def stage_repo_sync(settings: WorkerSettings) -> Path:
         raise AgentInitError("repo_sync", "AGENT_REPO_URL is required")
 
     repo_dir = Path(settings.workspace_path) / settings.repo_dir_name
-    git_dir = repo_dir / ".git"
-
-    if not git_dir.exists():
+    if not repo_dir.exists():
         repo_dir.parent.mkdir(parents=True, exist_ok=True)
         _run_git(["git", "clone", "--branch", settings.repo_ref, settings.repo_url, str(repo_dir)])
         return repo_dir
 
-    _run_git(["git", "fetch", "origin", settings.repo_ref], cwd=str(repo_dir))
-    _run_git(["git", "checkout", settings.repo_ref], cwd=str(repo_dir))
-    _run_git(["git", "reset", "--hard", f"origin/{settings.repo_ref}"], cwd=str(repo_dir))
+    try:
+        completed = _run_git(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(repo_dir))
+    except RuntimeError as exc:
+        raise AgentInitError("repo_sync", f"existing repo path is not a valid git repo: {repo_dir} ({exc})") from exc
+
+    if completed.stdout.strip() != "true":
+        raise AgentInitError("repo_sync", f"existing repo path is not a valid git repo: {repo_dir}")
+
+    LOGGER.info("agent.repo_sync_existing_repo repo_dir=%s action=noop", repo_dir)
     return repo_dir
 
 
@@ -141,23 +130,14 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
     codex_home = Path(settings.codex_home)
     codex_home.mkdir(parents=True, exist_ok=True)
     repo_dir = Path(settings.workspace_path) / settings.repo_dir_name
-    global_codex_config_raw = os.getenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", "").strip()
-    global_claude_config_raw = os.getenv("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", "").strip()
     repo_codex_dir = repo_dir / ".codex"
     home_claude_dir = home_dir / ".claude"
-    global_codex_config_path = Path(global_codex_config_raw) if global_codex_config_raw else None
-    global_claude_config_path = Path(global_claude_config_raw) if global_claude_config_raw else None
 
     LOGGER.info(
-        "agent.workspace_prepare_paths codex_home=%s repo_codex_dir=%s global_codex_config_dir=%s global_codex_config_exists=%s global_codex_config_is_dir=%s global_claude_config_dir=%s global_claude_config_exists=%s global_claude_config_is_dir=%s",
+        "agent.workspace_prepare_paths codex_home=%s repo_codex_dir=%s home_claude_dir=%s",
         codex_home,
         repo_codex_dir,
-        global_codex_config_raw or "-",
-        global_codex_config_path.exists() if global_codex_config_path else False,
-        global_codex_config_path.is_dir() if global_codex_config_path else False,
-        global_claude_config_raw or "-",
-        global_claude_config_path.exists() if global_claude_config_path else False,
-        global_claude_config_path.is_dir() if global_claude_config_path else False,
+        home_claude_dir,
     )
     LOGGER.info(
         "agent.workspace_prepare_state codex_home_exists=%s codex_home_entries=%d codex_home_agents_md=%s codex_home_config_toml=%s home_claude_dir=%s home_claude_exists=%s home_claude_entries=%d home_claude_md=%s home_claude_settings_json=%s",
@@ -172,25 +152,6 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
         (home_claude_dir / "settings.json").exists(),
     )
 
-    if global_codex_config_raw:
-        _copy_tree(global_codex_config_path, codex_home, overwrite=True)
-        LOGGER.info(
-            "agent.workspace_prepare_copied target=%s source=%s source_entries=%d target_entries=%d target_agents_md=%s target_config_toml=%s",
-            codex_home,
-            global_codex_config_raw,
-            sum(1 for _ in global_codex_config_path.rglob("*")) if global_codex_config_path and global_codex_config_path.exists() else 0,
-            sum(1 for _ in codex_home.rglob("*")),
-            (codex_home / "AGENTS.md").exists(),
-            (codex_home / "config.toml").exists(),
-        )
-    else:
-        LOGGER.info(
-            "agent.workspace_prepare_copy_skipped target=%s source=- reason=missing_global_codex_config target_entries=%d target_agents_md=%s target_config_toml=%s",
-            codex_home,
-            sum(1 for _ in codex_home.rglob("*")),
-            (codex_home / "AGENTS.md").exists(),
-            (codex_home / "config.toml").exists(),
-        )
     # repo_codex_dir (.codex/ in the cloned repo) is intentionally left in place.
     # Codex reads it as project-scope config from the working directory, which takes
     # precedence over user-scope settings in CODEX_HOME per the Codex scope hierarchy.
@@ -202,26 +163,6 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
         (repo_codex_dir / "AGENTS.md").exists(),
         (repo_codex_dir / "config.toml").exists(),
     )
-    if global_claude_config_raw:
-        _copy_tree(global_claude_config_path, home_claude_dir, overwrite=True)
-        LOGGER.info(
-            "agent.workspace_prepare_copied target=%s source=%s source_entries=%d target_entries=%d target_claude_md=%s target_settings_json=%s",
-            home_claude_dir,
-            global_claude_config_raw,
-            sum(1 for _ in global_claude_config_path.rglob("*")) if global_claude_config_path and global_claude_config_path.exists() else 0,
-            sum(1 for _ in home_claude_dir.rglob("*")),
-            (home_claude_dir / "CLAUDE.md").exists(),
-            (home_claude_dir / "settings.json").exists(),
-        )
-    else:
-        LOGGER.info(
-            "agent.workspace_prepare_copy_skipped target=%s source=- reason=missing_global_claude_config target_entries=%d target_claude_md=%s target_settings_json=%s",
-            home_claude_dir,
-            sum(1 for _ in home_claude_dir.rglob("*")) if home_claude_dir.exists() else 0,
-            (home_claude_dir / "CLAUDE.md").exists(),
-            (home_claude_dir / "settings.json").exists(),
-        )
-
     git_user_name = os.getenv("AGENT_GIT_USER_NAME", "").strip()
     git_user_email = os.getenv("AGENT_GIT_USER_EMAIL", "").strip()
 

@@ -126,8 +126,8 @@ vars or mount points.
 |---|---|---|---|---|
 | `MASTER_AGENT_BASE_IMAGE` | `agent_base_image` | not a path | none | image reference used at container create/start time |
 | `MASTER_CODEX_AUTH_JSON_PATH` | `agent_codex_auth_json_path` | host path | none | mount at `/run/secrets/codex_auth.json` |
-| `MASTER_CODEX_CONFIG_DIR_PATH` | `agent_codex_config_dir_path` | host path | `AGENT_GLOBAL_CODEX_CONFIG_DIR` | env value `/run/secrets/master_codex_config` plus matching mount |
-| `MASTER_CLAUDE_CONFIG_DIR_PATH` | `agent_claude_config_dir_path` | host path | `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | env value `/run/secrets/master_claude_config` plus matching mount |
+| `MASTER_CODEX_CONFIG_DIR_PATH` | `agent_codex_config_dir_path` | host path | none | deprecated legacy setting; no longer passed into agents |
+| `MASTER_CLAUDE_CONFIG_DIR_PATH` | `agent_claude_config_dir_path` | host path | none | deprecated legacy setting; no longer passed into agents |
 | `MASTER_SSH_AUTH_SOCK_PATH` | `agent_ssh_auth_sock_path` | host path | `SSH_AUTH_SOCK` | env value `/run/secrets/ssh-auth.sock` plus matching mount |
 | `MASTER_SSH_KNOWN_HOSTS_PATH` | `agent_ssh_known_hosts_path` | host path | `GIT_SSH_COMMAND` | env embeds mounted in-container path `/run/secrets/ssh_known_hosts` if configured |
 | `MASTER_GIT_USER_NAME` | `git_user_name` | not a path | `AGENT_GIT_USER_NAME` | string passed through |
@@ -142,9 +142,7 @@ vars or mount points.
 `MASTER_PROJECT_DIR` is special:
 
 - it is loaded by `load_master_settings()`
-- it may be used to auto-detect:
-  - `MASTER_CODEX_CONFIG_DIR_PATH`
-  - `MASTER_CLAUDE_CONFIG_DIR_PATH`
+- it may still be used to auto-detect historical config-dir env vars
 - it is not passed to the agent directly
 
 ## 3. Master-to-Agent Env Construction
@@ -175,8 +173,6 @@ The important agent env keys built by master are:
 | `AGENT_REPO_URL` | agent record `repo_source`; not a path | worker |
 | `AGENT_REPO_REF` | agent record `repo_ref`; not a path | worker |
 | `AGENT_ADAPTER` | agent record or master default; not a path | dispatch-time semantics and logs |
-| `AGENT_GLOBAL_CODEX_CONFIG_DIR` | master mount contract; mounted in-container path | worker |
-| `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | master mount contract; mounted in-container path | worker |
 | `AGENT_GIT_USER_NAME` | `MASTER_GIT_USER_NAME`; not a path | worker |
 | `AGENT_GIT_USER_EMAIL` | `MASTER_GIT_USER_EMAIL`; not a path | worker |
 | `SSH_AUTH_SOCK` | SSH mount contract; mounted in-container path | worker / git |
@@ -216,7 +212,7 @@ The agent consumes env in two stages:
 It uses those values to:
 
 - choose the writable Codex home
-- seed global config and auth from mounted sources
+- seed baked-in global config and auth into writable homes
 - configure global Git identity
 - decide whether to launch `src.agent.main`
 
@@ -237,8 +233,6 @@ It uses those values to:
 The worker also reads some env directly instead of storing them in
 `WorkerSettings`:
 
-- `AGENT_GLOBAL_CODEX_CONFIG_DIR`
-- `AGENT_GLOBAL_CLAUDE_CONFIG_DIR`
 - `SSH_AUTH_SOCK`
 - `GH_TOKEN`
 - `GITHUB_TOKEN`
@@ -252,8 +246,6 @@ The main env-name translation patterns are:
 
 | Host-side name | Agent-side name | Reason |
 |---|---|---|
-| `MASTER_CODEX_CONFIG_DIR_PATH` | `AGENT_GLOBAL_CODEX_CONFIG_DIR` | host path becomes in-container mounted source path |
-| `MASTER_CLAUDE_CONFIG_DIR_PATH` | `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | same pattern for Claude |
 | `MASTER_GIT_USER_NAME` | `AGENT_GIT_USER_NAME` | explicit agent-scoped identity input |
 | `MASTER_GIT_USER_EMAIL` | `AGENT_GIT_USER_EMAIL` | explicit agent-scoped identity input |
 | `CD_*` | none | CD settings stay local to the daemon |
@@ -263,8 +255,6 @@ Mount-path translation is just as important as env translation:
 | Host path env | In-container mounted path |
 |---|---|
 | `MASTER_CODEX_AUTH_JSON_PATH` | `/run/secrets/codex_auth.json` |
-| `MASTER_CODEX_CONFIG_DIR_PATH` | `/run/secrets/master_codex_config` |
-| `MASTER_CLAUDE_CONFIG_DIR_PATH` | `/run/secrets/master_claude_config` |
 | `MASTER_SSH_AUTH_SOCK_PATH` | `/run/secrets/ssh-auth.sock` |
 
 ## 6. Observability

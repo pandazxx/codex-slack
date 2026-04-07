@@ -289,7 +289,7 @@ def test_start_agent_mounts_codex_auth_json_only(tmp_path) -> None:
     assert mounts == ["/host/secrets/codex-auth.json:/run/secrets/codex_auth.json:ro"]
 
 
-def test_start_agent_mounts_global_codex_and_claude_config_dirs(tmp_path) -> None:
+def test_start_agent_ignores_legacy_global_config_mount_settings(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -310,12 +310,9 @@ def test_start_agent_mounts_global_codex_and_claude_config_dirs(tmp_path) -> Non
     assert runtime.calls[0][0] == "pull_image"
     env = runtime.calls[1][1]["env"]
     mounts = runtime.calls[1][1]["mounts"]
-    assert env["AGENT_GLOBAL_CODEX_CONFIG_DIR"] == "/run/secrets/master_codex_config"
-    assert env["AGENT_GLOBAL_CLAUDE_CONFIG_DIR"] == "/run/secrets/master_claude_config"
-    assert mounts == [
-        "/host/config/codex:/run/secrets/master_codex_config:ro",
-        "/host/config/claude:/run/secrets/master_claude_config:ro",
-    ]
+    assert "AGENT_GLOBAL_CODEX_CONFIG_DIR" not in env
+    assert "AGENT_GLOBAL_CLAUDE_CONFIG_DIR" not in env
+    assert mounts == []
 
 
 def test_start_agent_mounts_ssh_forwarding_and_sets_env(tmp_path) -> None:
@@ -475,6 +472,27 @@ def test_refresh_agent_auth_propagates_runtime_failure(tmp_path) -> None:
     refreshed = service.refresh_agent_auth(name="payments-api")
     assert refreshed.ok is False
     assert refreshed.code == "ERR_RUNTIME_FAILED"
+
+
+def test_refresh_agent_config_is_no_longer_supported(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_claude_config_dir_path="/host/config/claude",
+    )
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert loaded.ok is True
+
+    refreshed = service.refresh_agent_config(name="payments-api")
+    assert refreshed.ok is False
+    assert refreshed.code == "ERR_RUNTIME_FAILED"
+    assert "no longer supported" in refreshed.message
 
 
 def test_load_agent_invalid_name_returns_invalid_args(tmp_path) -> None:
