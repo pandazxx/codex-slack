@@ -42,7 +42,7 @@ This directory is the canonical home for repository documentation.
 - [`docs/design/master-agent-interface-design.md`](design/master-agent-interface-design.md) — canonical interface between master and agent containers
 - [`docs/design/frontend-master-interface-design.md`](design/frontend-master-interface-design.md) — canonical interface between Slack/Discord and master
 - [`docs/design/master-agent-architecture.md`](design/master-agent-architecture.md) — architecture background and constraints
-- [`docs/design/master-agent-implementation-plan.md`](design/master-agent-implementation-plan.md) — phased implementation plan
+- [`docs/design/master-agent-implementation-plan.md`](design/master-agent-implementation-plan.md) — archived historical implementation plan
 - [`docs/design/message-split-hint-detailed-design.md`](design/message-split-hint-detailed-design.md) — detailed design for agent-authored message split hints
 - [`docs/design/separate-base-agent-image-detailed-design.md`](design/separate-base-agent-image-detailed-design.md) — detailed design for publishing and consuming the base agent image
 - [`docs/design/v3-0-multi-adapter-frontend-plan.md`](design/v3-0-multi-adapter-frontend-plan.md) — v3.0 adapter/frontend design plan

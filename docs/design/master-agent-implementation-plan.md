@@ -1,6 +1,14 @@
-# Master-Agent Implementation Plan (Draft)
+# Master-Agent Implementation Plan
 
-This is a living phased plan for the master -> agent orchestration feature.
+**Status:** archived historical plan  
+**Superseded by:** [`docs/design/master-agent-architecture.md`](master-agent-architecture.md), [`docs/design/master-agent-interface-design.md`](master-agent-interface-design.md), [`docs/design/frontend-master-interface-design.md`](frontend-master-interface-design.md), and the container design set under [`docs/design/containers/`](containers/)
+
+This document is preserved as historical implementation planning context for the
+initial master -> agent rollout.
+
+It is no longer the canonical source for the current architecture or runtime
+contracts.
+
 For current operator-facing behavior and command surface, use [`docs/README.md`](../README.md), [`docs/references/api.md`](../references/api.md), and [`docs/guides/runbooks/master-agent.md`](../guides/runbooks/master-agent.md).
 
 ## Design Freeze Status (v1)
