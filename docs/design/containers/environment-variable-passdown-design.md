@@ -87,6 +87,19 @@ Important nuance:
 The master container loads env in `src/master/main.py` and normalizes it in
 `src/master/config.py` into `MasterSettings`.
 
+The source of those env vars is:
+
+- `.env` loaded by `load_dotenv()` in `src/master/main.py`
+- the process environment already present in the master container
+- values injected by compose or the container runtime when the master container
+  starts
+
+After that initial load:
+
+- `load_master_settings()` reads and normalizes the source env into
+  `MasterSettings`
+- `MasterService` then passes a selected subset down into agent env or mounts
+
 ### Frontend and process-local settings
 
 | Host env key | Loaded by | Stored as | Used by | Passed to agent |
@@ -110,7 +123,7 @@ These host env vars are loaded into `MasterSettings`, then later transformed by
 vars or mount points.
 
 | Host env key | Stored as | Path type at source | Agent sees env name | Agent sees mount / value |
-|---|---|---|---|
+|---|---|---|---|---|
 | `MASTER_AGENT_BASE_IMAGE` | `agent_base_image` | not a path | none | image reference used at container create/start time |
 | `MASTER_CODEX_AUTH_JSON_PATH` | `agent_codex_auth_json_path` | host path | none | mount at `/run/secrets/codex_auth.json` |
 | `MASTER_CODEX_CONFIG_DIR_PATH` | `agent_codex_config_dir_path` | host path | `AGENT_GLOBAL_CODEX_CONFIG_DIR` | env value `/run/secrets/master_codex_config` plus matching mount |

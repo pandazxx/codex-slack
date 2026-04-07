@@ -270,6 +270,9 @@ Claude auth:
       - `git reset --hard origin/<AGENT_REPO_REF>`
     - this is not a merge-style `git pull`; it forcibly aligns the local repo to
       the requested remote ref
+    - later-phase cleanup target:
+      - remove this destructive hard-reset update behavior and replace it with a
+        less destructive repo refresh strategy
 - prepare workspace/home directories
 - copy shared global config into writable user scope again from the mounted env
   path when configured
