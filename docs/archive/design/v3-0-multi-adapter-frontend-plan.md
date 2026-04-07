@@ -1,5 +1,14 @@
 # v3.0 Plan: Multi-Adapter + Multi-Frontend Master Runtime
 
+**Status:** archived historical plan  
+**Superseded by:** [`docs/design/frontend-master-interface-design.md`](../../design/frontend-master-interface-design.md), [`docs/design/master-agent-architecture.md`](../../design/master-agent-architecture.md), and the container design set under [`docs/design/containers/`](../../design/containers/)
+
+This document is preserved as historical planning context for the v3.0
+multi-adapter frontend rollout.
+
+It is no longer the canonical source for the current frontend or architecture
+contract.
+
 ## Scope and Decisions (Locked)
 This plan implements the following confirmed decisions:
 

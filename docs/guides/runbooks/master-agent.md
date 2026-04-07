@@ -6,7 +6,7 @@ Operational guide for the master->agent v3.0 stack:
 - agent worker containers (no direct Slack connection)
 - Podman host socket control path
 
-See `docs/test-plans/master-agent-uat.md` for step-by-step user acceptance test cases.
+See [`docs/test-plans/master-agent-uat.md`](../../test-plans/master-agent-uat.md) for step-by-step user acceptance test cases.
 Containerized UAT is required for v3.0 sign-off.
 
 ## Prerequisites
@@ -203,7 +203,7 @@ Omit the model argument to clear the override:
   - rerun the command from an admin channel in a category where the bot can create channels
   - or grant the bot `Manage Channels` on the intended category before retrying
 - Setup reference:
-  - `docs/guides/discord-setup.md`, section `Enable Bot-Driven Channel Creation`
+  - [`docs/guides/discord-setup.md`](../discord-setup.md), section `Enable Bot-Driven Channel Creation`
 - Useful provisioning logs:
   - `master.provision_command_parsed`
   - `provision.start`

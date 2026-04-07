@@ -182,7 +182,7 @@ If you used `USER root` during package install:
 
 ## Related Docs
 
-- `docs/guides/container-runtime.md`
-- `docs/guides/tutorials.md`
-- `docs/decisions/0002-separate-base-agent-image.md`
-- `docs/design/separate-base-agent-image-detailed-design.md`
+- [`docs/guides/container-runtime.md`](container-runtime.md)
+- [`docs/guides/tutorials.md`](tutorials.md)
+- [`docs/decisions/0002-separate-base-agent-image.md`](../decisions/0002-separate-base-agent-image.md)
+- [`docs/design/separate-base-agent-image-detailed-design.md`](../design/separate-base-agent-image-detailed-design.md)

@@ -47,7 +47,7 @@ pip install -r requirements.txt
 pytest -q                  # run full test suite
 ```
 
-For containerised development, start with `docs/manuals/ops-manual.md` and `docs/guides/container-runtime.md`.
+For containerised development, start with [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) and [`docs/guides/container-runtime.md`](docs/guides/container-runtime.md).
 
 ## Coding Style & Naming Conventions
 

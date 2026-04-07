@@ -10,12 +10,12 @@ This manual is the primary entry point for using the bot and master runtime day 
 
 ## Start Here
 
-1. Read `README.md` for the product overview.
-2. Use `docs/guides/tutorials.md` for guided examples.
-3. Use `docs/references/api.md` for the implemented command set.
-4. Use `docs/references/logging.md` when debugging runtime behavior.
+1. Read [`README.md`](../../README.md) for the product overview.
+2. Use [`docs/guides/tutorials.md`](../guides/tutorials.md) for guided examples.
+3. Use [`docs/references/api.md`](../references/api.md) for the implemented command set.
+4. Use [`docs/references/logging.md`](../references/logging.md) when debugging runtime behavior.
 
 ## Related Operator Docs
 
-- `docs/manuals/ops-manual.md` for setup and deployment
-- `docs/guides/runbooks/master-agent.md` for operational procedures
+- [`docs/manuals/ops-manual.md`](ops-manual.md) for setup and deployment
+- [`docs/guides/runbooks/master-agent.md`](../guides/runbooks/master-agent.md) for operational procedures
