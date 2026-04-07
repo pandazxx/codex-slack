@@ -88,7 +88,7 @@ should stop seeding `CODEX_HOME/sessions` from it.
 Session state becomes local runtime state inside the agent workspace volume,
 not startup passdown state.
 
-### 4. Non-destructive repo refresh
+### 4. Clone-only startup repo behavior
 
 The agent worker should stop force-aligning existing repos with:
 
@@ -97,8 +97,8 @@ The agent worker should stop force-aligning existing repos with:
 The cleanup target is:
 
 - clone when the repo is absent
-- when the repo already exists, update only if the working tree is clean
-- fail explicitly when local modifications or divergence would be overwritten
+- if `/workspace/repo` is already a valid git repo, do nothing during startup
+- treat repo startup as repo presence validation, not repo refresh
 
 This makes repo startup behavior safer and easier to diagnose.
 
@@ -114,8 +114,7 @@ flowchart TD
     F --> G[worker repo sync]
     G --> H{repo exists?}
     H -->|no| I[git clone]
-    H -->|yes and clean| J[safe fetch and checkout/update]
-    H -->|yes and dirty/diverged| K[fail with explicit status]
+    H -->|yes| J[leave existing repo unchanged]
 ```
 
 ## Target Runtime Contract
@@ -186,7 +185,7 @@ Positive:
 - startup behavior becomes deterministic
 - agent images become the single source of shared default instructions
 - durable session state is no longer injected from master
-- repo refresh is safer for durable workspaces
+- startup no longer mutates an existing durable repo checkout
 - troubleshooting becomes simpler because path precedence shrinks
 
 Tradeoffs:
@@ -204,14 +203,14 @@ Implementation should land in a coordinated slice:
 1. remove `/workspace/.codex` selection from `docker/entrypoint.sh`
 2. remove master-side mounted global config passdown
 3. remove session-seed mount and startup copy
-4. replace destructive repo refresh with a safe clean-tree-only update path
+4. replace destructive repo refresh with clone-only startup behavior
 5. update docs and startup diagnostics to reflect the simplified contract
 
 During rollout, operator guidance should explicitly note:
 
 - shared global instruction changes now require a newer agent image
 - `/master-agent-start` must refresh the image source before recreating agents
-- dirty repo worktrees will now fail startup instead of being silently reset
+- existing valid repo checkouts will now be left unchanged during startup
 
 ## Implementation Guidance
 
@@ -221,6 +220,7 @@ through `#56`:
 - remove `/workspace/.codex` support from master-managed startup
 - remove mounted global Codex and Claude config support
 - remove Codex session passthrough support
-- replace destructive repo reset with a non-destructive update policy
+- replace destructive repo reset with clone-only startup behavior for existing
+  valid repos
 - update tests and docs together because this changes the published runtime
   contract

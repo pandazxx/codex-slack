@@ -14,7 +14,7 @@ This design covers:
 - fixed `CODEX_HOME` behavior
 - removal of mounted global config support
 - removal of Codex session passthrough
-- non-destructive repo refresh rules
+- clone-only repo startup rules
 - required code, test, and documentation updates
 
 ## Current Behavior
@@ -61,7 +61,8 @@ Master-managed agent startup should behave as follows:
 3. entrypoint copies baked-in Codex config into `CODEX_HOME`
 4. entrypoint copies baked-in Claude config into `~/.claude`
 5. worker does not re-import shared config from master-mounted paths
-6. worker syncs the repo safely without destructive reset
+6. worker clones the repo only when absent and otherwise leaves an existing
+   valid repo unchanged
 
 ## Component Changes
 
@@ -130,7 +131,7 @@ The remaining workspace prepare responsibilities should be:
 - log repo-local project-scope config state
 - apply repo-local git identity
 
-### Replace destructive update path
+### Replace destructive update path with clone-only startup
 
 Current update path:
 
@@ -140,32 +141,29 @@ git checkout <ref>
 git reset --hard origin/<ref>
 ```
 
-Target update policy:
+Target startup policy:
 
 1. if `/workspace/repo/.git` is missing:
    - `git clone --branch <ref> <url> /workspace/repo`
 2. if repo exists:
-   - verify the checkout is clean before changing it
-   - fetch the target ref
-   - switch to the requested ref only when safe
-   - align to the fetched target only when there are no local modifications to
-     overwrite
-3. if the repo is dirty or otherwise unsafe to update:
+   - validate that `/workspace/repo` is a git repo
+   - do not fetch
+   - do not checkout
+   - do not reset
+   - leave the existing repo unchanged
+3. if the path exists but is not a valid git repo:
    - fail startup with an explicit `AgentInitError("repo_sync", ...)`
 
-### Safe-update checks
+### Repo validation rule
 
-The worker should inspect:
+The worker should treat repo startup as a presence/validity check:
 
-- `git status --porcelain`
-- current branch / detached state as needed
+- absent repo: clone
+- valid git repo: keep as-is
+- invalid repo path: fail
 
-If any local modifications are present, the worker should fail instead of
-discarding them.
-
-The v1 cleanup does not need automatic stash, merge, or branch-repair logic.
-
-Failure is the intended safe behavior.
+The v1 cleanup intentionally removes startup-time branch alignment and remote
+refresh from the worker lifecycle.
 
 ### 3. `src/master/service.py`
 
@@ -235,7 +233,7 @@ Keep:
 
 - `agent.worker_settings`
 - repo-local scope logs
-- safe repo-sync status and failure reason
+- clone-vs-existing-repo status and failure reason
 
 Remove references to:
 
@@ -250,10 +248,10 @@ stateDiagram-v2
     Starting --> SeedHome
     SeedHome --> Preflight
     Preflight --> RepoClone: repo absent
-    Preflight --> RepoRefresh: repo present
+    Preflight --> RepoValidate: repo present
     RepoClone --> WorkspacePrepare
-    RepoRefresh --> WorkspacePrepare: clean and updated
-    RepoRefresh --> Failed: dirty or unsafe to update
+    RepoValidate --> WorkspacePrepare: valid git repo
+    RepoValidate --> Failed: invalid repo path
     WorkspacePrepare --> Ready
     Ready --> Dispatching
     Dispatching --> Ready
@@ -270,9 +268,9 @@ flowchart TD
     D --> E[preflight auth check]
     E --> F{repo exists?}
     F -->|no| G[git clone]
-    F -->|yes| H[check clean worktree]
-    H -->|dirty| I[fail repo_sync]
-    H -->|clean| J[fetch and safe checkout/update]
+    F -->|yes| H[validate .git]
+    H -->|invalid| I[fail repo_sync]
+    H -->|valid| J[leave repo unchanged]
     G --> K[workspace prepare]
     J --> K
     K --> L[ready]
@@ -287,7 +285,7 @@ This cleanup intentionally breaks these transitional behaviors:
 - `/workspace/.codex` no longer acts as an implicit user-scope home
 - master-side mounted global config no longer overrides image defaults
 - Codex sessions are no longer seeded from master-managed mounts
-- dirty repo worktrees no longer survive by being reset; startup fails instead
+- existing valid repo worktrees are no longer refreshed or aligned on startup
 
 ### Operational impact
 
@@ -303,9 +301,9 @@ Update or add coverage for:
 - entrypoint fixed `CODEX_HOME` selection
 - entrypoint baked-in config seeding without mounted-config branches
 - absence of session seed handling
-- worker safe repo clone path
-- worker safe repo refresh path on clean repo
-- worker failure on dirty repo
+- worker repo clone path
+- worker no-op path for an existing valid git repo
+- worker failure on an existing invalid repo path
 - master env/mount generation without global config passthrough
 
 ### Regression tests
@@ -315,7 +313,8 @@ Add explicit tests that:
 - `/workspace/.codex` is ignored by the startup contract
 - mounted global config env vars are not passed into agents
 - startup no longer references `codex_sessions`
-- dirty repo startup returns a repo-sync failure instead of discarding changes
+- startup leaves an existing valid repo unchanged
+- existing non-git repo paths fail with a repo-sync error
 
 ### Manual validation
 
@@ -323,9 +322,8 @@ UAT should verify:
 
 1. a fresh agent starts and receives baked-in Codex/Claude config
 2. updating the agent image and restarting refreshes shared defaults
-3. a dirty `/workspace/repo` causes startup to fail with an explicit repo-sync
-   error
-4. an existing clean repo updates safely without destructive reset
+3. an existing valid `/workspace/repo` is left unchanged on startup
+4. an invalid `/workspace/repo` path causes an explicit repo-sync error
 
 ## Documentation Updates
 
@@ -347,7 +345,7 @@ Recommended implementation order:
 1. remove master-side global config and session passdown
 2. simplify entrypoint startup sources
 3. simplify worker workspace-prepare logic
-4. replace repo reset with safe update/fail behavior
+4. replace repo reset with clone-only/no-op repo behavior
 5. update docs and UAT guidance
 
 This order keeps the contract moving from many sources to one source instead of
