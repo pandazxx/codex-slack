@@ -16,6 +16,7 @@ Define the agent container as a runtime unit:
 This is the container-focused companion to:
 
 - [`docs/design/agent-container-runtime-design.md`](../agent-container-runtime-design.md)
+- [`docs/design/agent-runtime-cleanup-detailed-design.md`](../agent-runtime-cleanup-detailed-design.md)
 - [`docs/design/master-agent-interface-design.md`](../master-agent-interface-design.md)
 - [`docs/references/config.md`](../../references/config.md)
 - [`docs/references/logging.md`](../../references/logging.md)

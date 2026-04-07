@@ -38,6 +38,7 @@ This directory is the canonical home for repository documentation.
 - [`docs/design/containers/cd-container-design.md`](design/containers/cd-container-design.md) — CD daemon container startup, deploy loop, rollback, and state
 - [`docs/design/containers/environment-variable-passdown-design.md`](design/containers/environment-variable-passdown-design.md) — environment variable loading, normalization, and passdown across CD, master, and agent
 - [`docs/design/agent-container-runtime-design.md`](design/agent-container-runtime-design.md) — canonical runtime contract for agent containers
+- [`docs/design/agent-runtime-cleanup-detailed-design.md`](design/agent-runtime-cleanup-detailed-design.md) — proposed cleanup of transitional agent runtime startup behavior
 - [`docs/design/agent-provisioning-detailed-design.md`](design/agent-provisioning-detailed-design.md) — detailed design for agent/channel/repo provisioning
 - [`docs/design/master-agent-interface-design.md`](design/master-agent-interface-design.md) — canonical interface between master and agent containers
 - [`docs/design/frontend-master-interface-design.md`](design/frontend-master-interface-design.md) — canonical interface between Slack/Discord and master
@@ -48,6 +49,7 @@ This directory is the canonical home for repository documentation.
 ## Decisions
 
 - [`docs/decisions/README.md`](decisions/README.md) — ADR directory conventions
+- [`docs/decisions/0004-agent-runtime-cleanup.md`](decisions/0004-agent-runtime-cleanup.md) — proposed simplification of agent startup config, session, and repo-refresh behavior
 
 ## Archive
 
