@@ -123,6 +123,11 @@ The master typically mounts:
 - SSH agent socket at `/run/secrets/ssh-auth.sock`
 - transient request data under `/workspace/message/...`
 
+Later-phase cleanup target:
+
+- remove the mounted Codex session-seed passthrough and simplify startup so
+  session state is no longer seeded from `/run/secrets/codex_sessions`
+
 ## Storage Layout
 
 Important paths inside the running container:
@@ -185,10 +190,16 @@ stateDiagram-v2
 The entrypoint chooses `CODEX_HOME` in this order:
 
 1. explicit `CODEX_HOME`
-2. project-level `/workspace/.codex` if present
+2. project-level `/workspace/.codex` if it already exists in the mounted
+   workspace volume before the entrypoint runs
 3. default `/home/appuser/.codex`
 
-It then ensures the directory exists and refreshes global config into it.
+In normal master-managed agent startup, `/workspace` is a named volume and
+usually starts empty, so the second case normally does not apply unless
+something created `/workspace/.codex` in that volume earlier.
+
+It then ensures the selected directory exists and refreshes global config into
+it.
 
 ### 2. Global config refresh
 
@@ -198,11 +209,21 @@ Codex:
 - falls back to baked-in `/opt/codex-slack/config/codex-global`
 - copies into writable `CODEX_HOME`
 
+Later-phase cleanup target:
+
+- remove the mounted global Codex config passthrough and rely on baked-in global
+  Codex config as the single shared-default source
+
 Claude:
 
 - prefers `/run/secrets/master_claude_config`
 - falls back to baked-in `/opt/codex-slack/config/claude-global`
 - copies into writable `~/.claude`
+
+Later-phase cleanup target:
+
+- remove the mounted global Claude config passthrough and rely on baked-in
+  global Claude config as the single shared-default source
 
 ### 3. Auth/session seeding
 
@@ -216,19 +237,44 @@ Codex sessions:
 - copies `/run/secrets/codex_sessions` into `CODEX_HOME/sessions` only when the
   target session directory is absent or empty
 
+Later-phase cleanup target:
+
+- remove the mounted Codex session seed and stop treating session data as a
+  startup passthrough concern
+
 Claude auth:
 
 - remains env-driven, not file-copy driven
+- master passes `CLAUDE_CODE_OAUTH_TOKEN` when present
+- if that is absent, master falls back to `ANTHROPIC_API_KEY`
 
 ### 4. Repo sync and workspace prepare
 
 `src.agent.main` and the worker then:
 
 - verify prerequisites
+  - repo auth is accepted from any one of:
+    - `SSH_AUTH_SOCK` pointing to an existing socket
+    - `GH_TOKEN`
+    - `GITHUB_TOKEN`
+    - `GH_TOKEN_FILE` pointing to an absolute existing file
 - clone or update the target repo into `/workspace/repo`
+  - clone path:
+    - used when `/workspace/repo/.git` does not exist
+    - command: `git clone --branch <AGENT_REPO_REF> <AGENT_REPO_URL> /workspace/repo`
+  - update path:
+    - used when `/workspace/repo/.git` already exists
+    - commands:
+      - `git fetch origin <AGENT_REPO_REF>`
+      - `git checkout <AGENT_REPO_REF>`
+      - `git reset --hard origin/<AGENT_REPO_REF>`
+    - this is not a merge-style `git pull`; it forcibly aligns the local repo to
+      the requested remote ref
 - prepare workspace/home directories
 - copy shared global config into writable user scope again from the mounted env
   path when configured
+  - `AGENT_GLOBAL_CODEX_CONFIG_DIR` for Codex
+  - `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` for Claude
 - record status for master-side inspection
 
 ## Request Handling Contract
