@@ -8,6 +8,11 @@ def test_agent_minimal_image_copies_config_directory() -> None:
     assert "COPY --chown=appuser:appuser config ./config" in dockerfile
 
 
+def test_agent_minimal_image_installs_github_cli() -> None:
+    dockerfile = Path("Dockerfile.agent-minimal").read_text(encoding="utf-8")
+    assert "gh \\" in dockerfile
+
+
 def test_entrypoint_has_baked_in_codex_and_claude_global_fallbacks() -> None:
     entrypoint = Path("docker/entrypoint.sh").read_text(encoding="utf-8")
     assert "set -x" in entrypoint
