@@ -62,6 +62,7 @@ This directory is the canonical home for repository documentation.
 
 - [`docs/releases/v3.2.md`](releases/v3.2.md)
 - [`docs/releases/v3.3.md`](releases/v3.3.md)
+- [`docs/releases/v3.9.md`](releases/v3.9.md)
 
 ## Compatibility Entry Points
 
