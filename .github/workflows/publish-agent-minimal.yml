@@ -58,6 +58,7 @@ jobs:
           docker run --rm codex-slack-agent-minimal:smoke sh -lc '
             codex --version &&
             claude --version &&
+            gh --version &&
             python -m src.agent.main --help >/dev/null
           '
 
