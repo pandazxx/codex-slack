@@ -1,6 +1,6 @@
 # Separate Base Agent Image Detailed Design
 
-**Status:** proposed  
+**Status:** canonical design  
 **Issue:** [#38](https://github.com/pandazxx/codex-slack/issues/38)  
 **ADR:** [`docs/decisions/0002-separate-base-agent-image.md`](../decisions/0002-separate-base-agent-image.md)
 
@@ -17,9 +17,9 @@ This design covers:
 
 ## Product Decision
 
-The canonical published agent base image should come from `Dockerfile.agent-minimal`.
+The canonical published agent base image comes from `Dockerfile.agent-minimal`.
 
-Projects should customize agent runtime through:
+Projects customize agent runtime through:
 
 - `.prj_assistant/image/Dockerfile`
 
@@ -35,13 +35,13 @@ The repository currently has:
 - `Dockerfile.agent-minimal`
   - leaner image closer to agent-worker needs
 
-The docs already reference a published base image, but the workflow is not yet defined as a complete contract.
+The publication workflow and the project-consumption contract are now implemented.
 
-## Desired State
+## Current Canonical State
 
 ### Base image role
 
-The base image should provide only the stable runtime needed by agent containers:
+The base image provides the stable runtime needed by agent containers:
 
 - Python runtime
 - `codex` CLI
@@ -61,7 +61,7 @@ Do not include master-only tooling by default:
 - `jq`
 - `make`
 
-Projects that need additional tools should extend the base image in their own `.prj_assistant/image/Dockerfile`.
+Projects that need additional tools extend the base image in their own `.prj_assistant/image/Dockerfile`.
 
 ## Architecture Boundary
 
@@ -103,7 +103,7 @@ Required tags:
 
 ### Trigger policy
 
-Recommended workflow triggers:
+Current workflow triggers:
 
 - pushes to default branch affecting agent runtime/image inputs
 - git tags for release and RC builds
@@ -111,7 +111,7 @@ Recommended workflow triggers:
 
 ### Build inputs
 
-Workflow should build from:
+The workflow builds from:
 
 - `Dockerfile.agent-minimal`
 
@@ -132,7 +132,7 @@ Publish image metadata including:
 
 ### Required path
 
-Project repos should customize through:
+Project repos customize through:
 
 - `.prj_assistant/image/Dockerfile`
 
@@ -183,7 +183,7 @@ The master-side contract remains:
 
 ## Documentation Deliverables
 
-Implementation should produce or update:
+The implementation produces and updates:
 
 1. project-facing guide for using the base image
 2. clear example `.prj_assistant/image/Dockerfile`
@@ -191,7 +191,7 @@ Implementation should produce or update:
 4. explanation of which runtime invariants must be preserved
 5. clarification that "project specific manifest" means `.prj_assistant/image/Dockerfile`
 
-Recommended doc touch points:
+Current doc touch points:
 
 - [`docs/guides/tutorials.md`](../guides/tutorials.md)
 - [`docs/guides/container-runtime.md`](../guides/container-runtime.md)
@@ -205,7 +205,7 @@ Recommended doc touch points:
 - build the base image
 - log in to GHCR
 - publish required tags
-- optionally emit a summary with pushed image references
+- emit a standard GitHub Actions job summary and pushed image references through the workflow run
 
 ### Inputs and secrets
 
@@ -214,7 +214,7 @@ Recommended doc touch points:
 
 ### Validation
 
-The workflow should verify:
+The workflow verifies:
 
 - image builds successfully from `Dockerfile.agent-minimal`
 - `python -m src.agent.main` remains runnable
@@ -227,7 +227,7 @@ The workflow should verify:
 - build test for `Dockerfile.agent-minimal`
 - smoke check that `codex` and `claude` binaries exist
 - smoke check that entrypoint can launch `src.agent.main`
-- image tag calculation tests if implemented in scripts
+- image tag calculation through the GitHub Actions metadata step
 
 ### Manual / UAT
 
@@ -235,17 +235,19 @@ The workflow should verify:
 - master loads and starts an agent using the project image path
 - agent still honors auth/config injection and workspace layout
 
-## Rollout Plan
+## Delivery State
 
-Recommended delivery order:
+Delivered order:
 
 1. finalize base image package contents
 2. add GHCR publication workflow
 3. update docs with project consumption guidance
 4. verify one sample project image build from the published base
 
-## Open Questions
+## Current Resolved Decisions and Remaining Gaps
 
-- should `latest` track only default branch, or only accepted releases?
-- should GHCR publication include both public and internal/private package guidance?
-- do we want a sample project repo or only in-repo docs/examples?
+- `latest` tracks the default branch through the publish workflow
+- git tags, including RC tags, are mirrored as published image tags
+- immutable `sha-*` tags are published for traceability
+- project customization remains the repo-local `.prj_assistant/image/Dockerfile` contract
+- the current docs rely on in-repo guides and examples rather than a separate sample project repo
