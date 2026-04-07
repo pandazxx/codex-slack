@@ -1,12 +1,13 @@
 # Message Split Hint Detailed Design
 
-**Status:** proposed  
+**Status:** canonical design  
 **Issue:** [#39](https://github.com/pandazxx/codex-slack/issues/39)  
 **ADR:** [`docs/decisions/0003-message-split-hint-protocol.md`](../decisions/0003-message-split-hint-protocol.md)
 
 ## Goal
 
-Implement a minimal split-hint protocol that lets agents choose semantic message boundaries while preserving the current size-based fallback path.
+Document the implemented split-hint protocol that lets agents choose semantic
+message boundaries while preserving the current size-based fallback path.
 
 The primary product goal is to avoid ugly frontend auto-splitting or truncation. The secondary goal is to improve readability of long answers.
 
@@ -35,7 +36,8 @@ The agent may separate intended sections with an exact standalone marker line:
 🔹🔹🔹
 ```
 
-The master treats a line as a split hint only when the line content is exactly `🔹🔹🔹`.
+The master treats a line as a split hint only when the line content is exactly
+`🔹🔹🔹`.
 
 No looser variant is accepted in v1:
 
@@ -55,25 +57,26 @@ Today, long responses are split heuristically by frontend-specific size helpers:
 
 Issue `#39` adds semantic split hints ahead of those heuristics. It does not remove the size-based fallback path.
 
-## Design
+## Current Design
 
 ### Shared Parsing, Frontend-Owned Delivery
 
-Introduce a shared split-hint parser in master, but keep transport delivery decisions in each frontend.
+The shared split-hint parser lives in `src/master/response_split.py`, while
+transport delivery decisions remain frontend-owned.
 
-Recommended shared helper shape:
+Current shared helper:
 
 ```python
 split_on_hint_lines(text: str) -> list[str]
 ```
 
-The parser should:
+The parser:
 
 - split only on exact `🔹🔹🔹` lines
 - preserve section order
 - preserve the marker line within the emitted chunk text
 
-Each frontend should then decide how to deliver those parsed sections, including:
+Each frontend then decides how to deliver those parsed sections, including:
 
 - size-based fallback splitting when no hint lines are present
 - frontend-specific hard limits
@@ -86,7 +89,7 @@ The product decision is to keep the visible token if it leaks. The simplest impl
 - use the marker line as the boundary between sections
 - keep it attached to either the end of the previous section or the start of the next section
 
-Recommended v1 behavior:
+Current behavior:
 
 - attach the marker line to the following section when splitting on boundaries
 
@@ -94,33 +97,41 @@ That keeps the separator visually associated with the new section and avoids sil
 
 ### Frontend Integration
 
-Both Slack and Discord should consume the same parsed hint sections before sending responses, but each frontend remains responsible for its own transport behavior.
+Both Slack and Discord consume the same parsed hint sections before sending
+responses, but each frontend remains responsible for its own transport
+behavior.
 
 #### Discord
 
-Update the routed-reply path in `src/master/discord_app.py`:
+The routed-reply path in `src/master/discord_app.py` uses:
 
-- use the shared hint parser
-- remove `[1/2]` chunk labels from routed replies
-- if no exact hint lines are present, keep current size-based message splitting
-- if any hinted section exceeds the Discord fallback threshold, send the whole response as a markdown file
+- `build_discord_reply_plan(text)`
+- the shared hint parser from `response_split.py`
+- no `[1/2]` chunk labels in routed replies
+- current size-based fallback splitting when no exact hint lines are present
+- whole-response markdown file fallback when any hinted section exceeds the
+  Discord fallback threshold
 
-Recommended v1 threshold:
+Current threshold:
 
 - `2000` characters per hinted section
 
 This keeps the implementation simple and avoids mixing semantic sections with additional partial splitting inside a section.
 
-`label_discord_chunks()` should not be part of the routed reply flow after this change.
+`label_discord_chunks()` is not part of the routed reply flow.
 
 #### Slack
 
-Slack should use the same shared hint parser, but the Slack frontend should own the final delivery strategy.
+Slack uses the same shared hint parser, but the Slack frontend owns the final
+delivery strategy.
 
-Slack v1 behavior should mirror the same high-level rule:
+The Slack routed reply path uses:
 
-- if no exact hint lines are present, use Slack's current size-based delivery path
-- if hinted sections are present and any section exceeds the Slack fallback threshold, send the whole response using Slack's file fallback path instead of partially splitting hinted sections
+- `build_slack_reply_plan(text)`
+- the shared hint parser from `response_split.py`
+- current size-based delivery when no exact hint lines are present
+- whole-response file fallback when any hinted section exceeds the Slack
+  fallback threshold instead of partially splitting a hinted section
 
 This boundary is intentionally frontend-owned so Slack and Discord can diverge later without changing the shared protocol.
 
@@ -132,7 +143,9 @@ Fallback behavior is frontend-owned:
 - if exact hint lines are present and every section is within the frontend threshold, send one message per section
 - if exact hint lines are present and any section exceeds the frontend threshold, fall back to a single markdown file for the whole response
 
-V1 should not size-split an individual hinted section after parsing. Oversized hinted sections trigger whole-response file fallback instead.
+The current implementation does not size-split an individual hinted section
+after parsing. Oversized hinted sections trigger whole-response file fallback
+instead.
 
 ## Length Guidance
 
@@ -143,11 +156,13 @@ Instead, it is a static instruction for the agent under:
 - `config/codex-global/AGENTS.md`
 - `config/claude-global/CLAUDE.md`
 
-The implementation should not reject, warn, or reflow content purely because a section exceeds `1700` characters. The master only needs to honor hints where possible and then keep transport-safe behavior.
+The implementation does not reject, warn, or reflow content purely because a
+section exceeds `1700` characters. The master only needs to honor hints where
+possible and then keep transport-safe behavior.
 
 ## Static Instruction Contract
 
-Global instructions should tell the agent:
+Global instructions tell the agent:
 
 - when producing a long reply, organize it into short sections
 - place `🔹🔹🔹` on its own line between sections
@@ -170,7 +185,7 @@ Examples:
 
 ## Tests
 
-Required test coverage:
+Test coverage:
 
 - exact marker line produces multiple sections
 - non-exact variants such as ` 🔹🔹🔹 ` do not trigger hint splitting
@@ -189,12 +204,19 @@ Expected operator-visible behavior:
 - when a hinted section is too long, the frontend falls back to sending the whole response as a markdown file
 - when no hints are present, behavior remains compatible with today’s heuristic splitting
 
-## Implementation Notes
+## Implemented Components
 
-Recommended sequence:
+The current implementation is spread across:
 
-1. add shared split-hint parsing helpers in master
-2. wire Discord routed replies to that parser, remove chunk labeling, and apply frontend-owned fallback
-3. wire Slack routed replies to the same parser with Slack-owned fallback
-4. update static global instructions for Codex and Claude
-5. add unit coverage for the splitter and frontend integration paths
+1. `src/master/response_split.py`
+   - `SPLIT_HINT_LINE`
+   - `split_on_hint_lines()`
+   - `split_by_size()`
+   - `ReplyDeliveryPlan`
+2. `src/master/discord_app.py`
+   - `build_discord_reply_plan()`
+3. `src/master/slack_app.py`
+   - `build_slack_reply_plan()`
+4. static global instructions:
+   - `config/codex-global/AGENTS.md`
+   - `config/claude-global/CLAUDE.md`
