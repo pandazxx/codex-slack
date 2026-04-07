@@ -45,7 +45,7 @@ This directory is the canonical home for repository documentation.
 - [`docs/design/master-agent-implementation-plan.md`](design/master-agent-implementation-plan.md) — archived historical implementation plan
 - [`docs/design/message-split-hint-detailed-design.md`](design/message-split-hint-detailed-design.md) — detailed design for agent-authored message split hints
 - [`docs/design/separate-base-agent-image-detailed-design.md`](design/separate-base-agent-image-detailed-design.md) — detailed design for publishing and consuming the base agent image
-- [`docs/design/v3-0-multi-adapter-frontend-plan.md`](design/v3-0-multi-adapter-frontend-plan.md) — v3.0 adapter/frontend design plan
+- [`docs/design/v3-0-multi-adapter-frontend-plan.md`](design/v3-0-multi-adapter-frontend-plan.md) — archived historical v3.0 adapter/frontend plan
 
 ## Decisions
 
