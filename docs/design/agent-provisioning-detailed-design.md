@@ -1,6 +1,6 @@
 # Agent Provisioning Detailed Design
 
-**Status:** proposed  
+**Status:** canonical design  
 **Issue:** [#37](https://github.com/pandazxx/codex-slack/issues/37)  
 **ADR:** [`docs/decisions/0001-agent-provisioning-orchestration.md`](../decisions/0001-agent-provisioning-orchestration.md)
 
@@ -34,9 +34,9 @@ This design covers:
 
 ## Product Decision
 
-The provisioning workflow should be a new command, not a change to `/master-agent-load`.
+The provisioning workflow is a new command, not a change to `/master-agent-load`.
 
-Recommended command:
+Command:
 
 - `/master-agent-provision`
 
@@ -116,9 +116,9 @@ This layer is the orchestration boundary. It should not directly own frontend SD
 
 ### RepoProvisioner
 
-GitHub-specific repository creation should be implemented behind a provider interface.
+GitHub-specific repository creation is implemented behind a provider interface.
 
-Recommended v1 provider:
+Current provider:
 
 - GitHub REST API provider using `GH_TOKEN` or `GITHUB_TOKEN`
 
@@ -132,7 +132,7 @@ Why REST API instead of `gh repo create`:
 
 ### Slack
 
-Recommended text form:
+Current text form:
 
 ```text
 /master-agent-provision <name> [repo_spec] [--create-repo] [--repo-owner <owner>] [--repo-name <name>] [--repo-visibility private|public] [--create-channel] [--channel-name <name>] [--adapter codex|claude-code] [--branch <branch>]
@@ -140,7 +140,7 @@ Recommended text form:
 
 ### Discord
 
-Recommended application command arguments:
+Current application command arguments:
 
 - `name`
 - `repo_spec`
@@ -161,7 +161,7 @@ Recommended application command arguments:
 
 ## Request Model
 
-Recommended internal request shape:
+Current internal request shape:
 
 ```json
 {
@@ -218,7 +218,7 @@ Rules:
 
 ### Slack
 
-Recommended v1 behavior:
+Current behavior:
 
 - create a text channel named `agent-<name>`
 - default to a policy-driven channel type:
@@ -239,7 +239,7 @@ Provider output:
 
 ### Discord
 
-Recommended v1 behavior:
+Current behavior:
 
 - create a text channel, not a thread
 - create it in a configured guild/category
@@ -291,7 +291,8 @@ Provider output:
   "repo_name": "payments-api",
   "visibility": "private",
   "html_url": "https://github.com/pandazxx/payments-api",
-  "clone_url": "https://github.com/pandazxx/payments-api.git"
+  "clone_url": "https://github.com/pandazxx/payments-api.git",
+  "ssh_url": "git@github.com:pandazxx/payments-api.git"
 }
 ```
 
@@ -301,19 +302,21 @@ Default resolution rules:
 - if the token belongs to a user account, create the repository under that user by default
 - if the token is scoped for org automation and repo creation should target an org, require an explicit owner override in v1
 - if `visibility` is omitted, default to `private`
+- new repositories are auto-initialized so the requested default branch exists before `load_agent()` binds the repo
+- when provisioning creates a repo, the final agent bind uses `ssh_url` rather than `clone_url`
 
 ### Existing repo reuse
 
-Recommended behavior:
+Current behavior:
 
-- if repo creation was requested but the repo already exists and is accessible, return a structured conflict or explicit reuse path
-- do not silently adopt an existing repo without confirming the ownership/name match expected by the request
+- if repo creation was requested and the target repo already exists, provisioning fails instead of silently reusing it
+- there is no explicit reuse-if-exists mode yet
 
 ## Persistence Design
 
 ### Immediate result payload
 
-The provisioning response should return:
+The provisioning response returns:
 
 - final `channel_id`
 - final `repo_source`
@@ -324,7 +327,7 @@ The provisioning response should return:
 
 ### Registry extension
 
-Recommended optional registry fields:
+Optional registry fields:
 
 - `channel_name`
 - `provisioned_channel`
@@ -336,7 +339,7 @@ These fields are useful for later operator visibility and diagnostics but are no
 
 ## Error Handling
 
-Recommended stable provisioning error codes:
+Stable provisioning error codes:
 
 - `ERR_PROVISION_INVALID_ARGS`
 - `ERR_CHANNEL_CREATE_FAILED`
@@ -367,7 +370,7 @@ Example:
 
 ## Rollout Strategy
 
-Recommended delivery order:
+Rollout order used:
 
 1. request/result types and coordinator
 2. GitHub repo provisioner
@@ -403,9 +406,11 @@ Recommended delivery order:
 
 ## Open Questions
 
-These do not block the design, but they must be decided before implementation:
+Current resolved decisions and remaining gaps:
 
-- Slack default channel type: private or public?
-- Discord target guild/category source: config-driven or inferred from invoking admin channel?
-- should repo/channel creation support an explicit "reuse existing if present" mode?
-- should provisioning immediately call `/master-agent-start`, or remain load-only in v1?
+- Discord target guild/category is inferred from the invoking admin channel
+- provisioning remains load-only in v1 and does not auto-start the agent
+- omitted repo input defaults to create-repo
+- omitted channel input defaults to create-channel
+- explicit reuse-if-exists mode is still not implemented
+- Slack default channel type still depends on the current frontend implementation and runtime permissions; operators should treat it as an implementation detail unless a stronger product rule is added
