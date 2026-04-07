@@ -42,6 +42,18 @@ flowchart LR
 - Other host inputs are passed as mounts and then represented inside the agent as
   mount paths such as `/run/secrets/...`.
 
+## Path Semantics
+
+For any env var that carries a filesystem path, this document uses three
+different meanings:
+
+- host path
+  - a path on the machine running Podman or compose
+- container-visible path
+  - a path as seen inside the current container process
+- mounted in-container path
+  - the final path exposed inside a downstream container after bind-mounting
+
 ## 1. CD Container Env Flow
 
 The CD container loads env in `src/cd/main.py` and normalizes it in
@@ -97,20 +109,20 @@ These host env vars are loaded into `MasterSettings`, then later transformed by
 `MasterService._build_agent_env()` and `_build_agent_mounts()` into agent env
 vars or mount points.
 
-| Host env key | Stored as | Agent sees env name | Agent sees mount / value |
+| Host env key | Stored as | Path type at source | Agent sees env name | Agent sees mount / value |
 |---|---|---|---|
-| `MASTER_AGENT_BASE_IMAGE` | `agent_base_image` | none | image reference used at container create/start time |
-| `MASTER_CODEX_AUTH_JSON_PATH` | `agent_codex_auth_json_path` | none | mount at `/run/secrets/codex_auth.json` |
-| `MASTER_CODEX_CONFIG_DIR_PATH` | `agent_codex_config_dir_path` | `AGENT_GLOBAL_CODEX_CONFIG_DIR` | env value `/run/secrets/master_codex_config` plus matching mount |
-| `MASTER_CLAUDE_CONFIG_DIR_PATH` | `agent_claude_config_dir_path` | `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | env value `/run/secrets/master_claude_config` plus matching mount |
-| `MASTER_SSH_AUTH_SOCK_PATH` | `agent_ssh_auth_sock_path` | `SSH_AUTH_SOCK` | env value `/run/secrets/ssh-auth.sock` plus matching mount |
-| `MASTER_SSH_KNOWN_HOSTS_PATH` | `agent_ssh_known_hosts_path` | `GIT_SSH_COMMAND` | env embeds known-hosts path if configured |
-| `MASTER_GIT_USER_NAME` | `git_user_name` | `AGENT_GIT_USER_NAME` and `GIT_USER_NAME` | string passed through |
-| `MASTER_GIT_USER_EMAIL` | `git_user_email` | `AGENT_GIT_USER_EMAIL` and `GIT_USER_EMAIL` | string passed through |
-| `MASTER_DEFAULT_AGENT_ADAPTER` | `default_agent_adapter` | `AGENT_ADAPTER` | selected per agent record |
-| `MASTER_CODEX_COMMAND_TEMPLATE` | `codex_command_template` | none | used only by master dispatcher |
-| `MASTER_CLAUDE_COMMAND_TEMPLATE` | `claude_command_template` | none | used only by master dispatcher |
-| `MASTER_AGENT_TIMEOUT_SECONDS` | `dispatch_timeout_seconds` | none | used only by master dispatcher |
+| `MASTER_AGENT_BASE_IMAGE` | `agent_base_image` | not a path | none | image reference used at container create/start time |
+| `MASTER_CODEX_AUTH_JSON_PATH` | `agent_codex_auth_json_path` | host path | none | mount at `/run/secrets/codex_auth.json` |
+| `MASTER_CODEX_CONFIG_DIR_PATH` | `agent_codex_config_dir_path` | host path | `AGENT_GLOBAL_CODEX_CONFIG_DIR` | env value `/run/secrets/master_codex_config` plus matching mount |
+| `MASTER_CLAUDE_CONFIG_DIR_PATH` | `agent_claude_config_dir_path` | host path | `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | env value `/run/secrets/master_claude_config` plus matching mount |
+| `MASTER_SSH_AUTH_SOCK_PATH` | `agent_ssh_auth_sock_path` | host path | `SSH_AUTH_SOCK` | env value `/run/secrets/ssh-auth.sock` plus matching mount |
+| `MASTER_SSH_KNOWN_HOSTS_PATH` | `agent_ssh_known_hosts_path` | host path | `GIT_SSH_COMMAND` | env embeds mounted in-container path `/run/secrets/ssh_known_hosts` if configured |
+| `MASTER_GIT_USER_NAME` | `git_user_name` | not a path | `AGENT_GIT_USER_NAME` | string passed through |
+| `MASTER_GIT_USER_EMAIL` | `git_user_email` | not a path | `AGENT_GIT_USER_EMAIL` | string passed through |
+| `MASTER_DEFAULT_AGENT_ADAPTER` | `default_agent_adapter` | not a path | `AGENT_ADAPTER` | selected per agent record |
+| `MASTER_CODEX_COMMAND_TEMPLATE` | `codex_command_template` | not a path | none | used only by master dispatcher |
+| `MASTER_CLAUDE_COMMAND_TEMPLATE` | `claude_command_template` | not a path | none | used only by master dispatcher |
+| `MASTER_AGENT_TIMEOUT_SECONDS` | `dispatch_timeout_seconds` | not a path | none | used only by master dispatcher |
 
 ### Auto-detected master env
 
@@ -144,21 +156,21 @@ The important agent env keys built by master are:
 | Agent env key | Built from | Consumed by |
 |---|---|---|
 | `HOME` | fixed runtime contract | entrypoint and worker |
-| `XDG_CONFIG_HOME` | fixed runtime contract | entrypoint and worker |
-| `CODEX_HOME` | fixed runtime contract | entrypoint and worker |
-| `AGENT_REPO_DIR` | fixed runtime contract / registry | worker |
-| `AGENT_REPO_URL` | agent record `repo_source` | worker |
-| `AGENT_REPO_REF` | agent record `repo_ref` | worker |
-| `AGENT_ADAPTER` | agent record or master default | dispatch-time semantics and logs |
-| `AGENT_GLOBAL_CODEX_CONFIG_DIR` | master mount contract | worker |
-| `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | master mount contract | worker |
-| `AGENT_GIT_USER_NAME` | `MASTER_GIT_USER_NAME` | worker |
-| `AGENT_GIT_USER_EMAIL` | `MASTER_GIT_USER_EMAIL` | worker |
-| `SSH_AUTH_SOCK` | SSH mount contract | worker / git |
-| `GIT_SSH_COMMAND` | known-hosts handling | git subprocesses |
-| `GH_TOKEN` | host runtime env | worker preflight / git auth |
-| `OPENAI_API_KEY` | host runtime env | Codex runtime |
-| `CLAUDE_CODE_OAUTH_TOKEN` | host runtime env | Claude runtime |
+| `XDG_CONFIG_HOME` | fixed runtime contract; container path | entrypoint and worker |
+| `CODEX_HOME` | fixed runtime contract; container path | entrypoint and worker |
+| `AGENT_REPO_DIR` | fixed runtime contract / registry; relative container path fragment | worker |
+| `AGENT_REPO_URL` | agent record `repo_source`; not a path | worker |
+| `AGENT_REPO_REF` | agent record `repo_ref`; not a path | worker |
+| `AGENT_ADAPTER` | agent record or master default; not a path | dispatch-time semantics and logs |
+| `AGENT_GLOBAL_CODEX_CONFIG_DIR` | master mount contract; mounted in-container path | worker |
+| `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | master mount contract; mounted in-container path | worker |
+| `AGENT_GIT_USER_NAME` | `MASTER_GIT_USER_NAME`; not a path | worker |
+| `AGENT_GIT_USER_EMAIL` | `MASTER_GIT_USER_EMAIL`; not a path | worker |
+| `SSH_AUTH_SOCK` | SSH mount contract; mounted in-container path | worker / git |
+| `GIT_SSH_COMMAND` | known-hosts handling; string containing mounted in-container path when configured | git subprocesses |
+| `GH_TOKEN` | host runtime env; not a path | worker preflight / git auth |
+| `OPENAI_API_KEY` | host runtime env; not a path | Codex runtime |
+| `CLAUDE_CODE_OAUTH_TOKEN` | host runtime env; not a path | Claude runtime |
 
 Important nuance:
 
@@ -176,9 +188,13 @@ The agent consumes env in two stages:
 `docker/entrypoint.sh` reads:
 
 - `CODEX_WORKSPACE_PATH`
+  - container-visible path inside the agent
 - `CODEX_HOME`
+  - container-visible path inside the agent
 - `HOME`
+  - container-visible path inside the agent
 - `XDG_CONFIG_HOME`
+  - container-visible path inside the agent
 - `CODEX_CONTAINER_MODE`
 - `CODEX_SESSION_ID`
 - `GIT_USER_NAME`
@@ -197,12 +213,12 @@ It uses those values to:
 
 | Agent env key | Stored as | Used for |
 |---|---|---|
-| `CODEX_WORKSPACE_PATH` | `WorkerSettings.workspace_path` | workspace root |
-| `AGENT_REPO_URL` | `WorkerSettings.repo_url` | clone/fetch source |
+| `CODEX_WORKSPACE_PATH` | `WorkerSettings.workspace_path` | container path for workspace root |
+| `AGENT_REPO_URL` | `WorkerSettings.repo_url` | repo source string, not a path |
 | `AGENT_REPO_REF` | `WorkerSettings.repo_ref` | branch/ref sync |
-| `AGENT_REPO_DIR` | `WorkerSettings.repo_dir_name` | repo checkout dir |
-| `AGENT_STATUS_FILE` | `WorkerSettings.status_file` | status JSON path |
-| `CODEX_HOME` | `WorkerSettings.codex_home` | writable Codex home |
+| `AGENT_REPO_DIR` | `WorkerSettings.repo_dir_name` | relative checkout dir name inside the workspace |
+| `AGENT_STATUS_FILE` | `WorkerSettings.status_file` | container path for the status JSON file |
+| `CODEX_HOME` | `WorkerSettings.codex_home` | container path for the writable Codex home |
 | `AGENT_READY_POLL_SECONDS` | `WorkerSettings.ready_poll_seconds` | readiness polling |
 
 The worker also reads some env directly instead of storing them in

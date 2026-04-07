@@ -26,16 +26,16 @@ This page summarizes the main configuration keys loaded directly from the curren
 | `MASTER_ADMIN_CHANNELS` | Slack only | None | Slack admin channels |
 | `DISCORD_BOT_TOKEN` | Discord only | None | Discord bot token |
 | `DISCORD_ADMIN_CHANNELS` | Discord only | None | Discord admin channels |
-| `MASTER_REGISTRY_PATH` | No | `data/master/agents.json` | Agent registry file |
-| `MASTER_THREAD_STATE_PATH` | No | sibling of registry path | Thread tracking state |
+| `MASTER_REGISTRY_PATH` | No | `data/master/agents.json` | Container path inside the master container for the agent registry file |
+| `MASTER_THREAD_STATE_PATH` | No | sibling of registry path | Container path inside the master container for thread tracking state |
 | `MASTER_DRY_RUN` | No | `false` | Disable side-effecting runtime actions |
 | `MASTER_AGENT_BASE_IMAGE` | No | `codex-slack-bot:latest` | Default image for new agents |
-| `MASTER_CODEX_AUTH_JSON_PATH` | No | unset | Shared Codex auth file |
-| `MASTER_CODEX_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/codex-global`, fallback `config/codex`) | Shared Codex config directory |
-| `MASTER_CLAUDE_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/claude-global`) | Shared Claude config directory |
+| `MASTER_CODEX_AUTH_JSON_PATH` | No | unset | Host path to the shared Codex auth file mounted into agents |
+| `MASTER_CODEX_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/codex-global`, fallback `config/codex`) | Host path to the shared Codex config directory mounted into agents |
+| `MASTER_CLAUDE_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/claude-global`) | Host path to the shared Claude config directory mounted into agents |
 | `MASTER_PROJECT_DIR` | No | unset | Host project root used for global config auto-detection |
-| `MASTER_SSH_AUTH_SOCK_PATH` | No | unset | SSH agent socket path |
-| `MASTER_SSH_KNOWN_HOSTS_PATH` | No | unset | Known hosts path |
+| `MASTER_SSH_AUTH_SOCK_PATH` | No | unset | Host path to the SSH agent socket mounted into master/agents |
+| `MASTER_SSH_KNOWN_HOSTS_PATH` | No | unset | Host path to the SSH known-hosts file mounted into agents |
 | `MASTER_GIT_USER_NAME` | No | unset | Git author name for agent workspaces |
 | `MASTER_GIT_USER_EMAIL` | No | unset | Git author email for agent workspaces |
 | `MASTER_AGENT_COMMAND_TEMPLATE` | No | `codex exec --dangerously-bypass-approvals-and-sandbox resume --last -` | Legacy default command template |
@@ -50,20 +50,20 @@ This page summarizes the main configuration keys loaded directly from the curren
 
 | Key | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `CODEX_WORKSPACE_PATH` | No | `/workspace` | Agent workspace mount |
+| `CODEX_WORKSPACE_PATH` | No | `/workspace` | Container path inside the agent for the workspace mount |
 | `AGENT_REPO_URL` | No | empty | Repository to clone |
 | `AGENT_REPO_REF` | No | `main` | Ref to check out |
 | `AGENT_REPO_DIR` | No | `repo` | Checkout directory name |
-| `AGENT_STATUS_FILE` | No | `/tmp/master-agent/status.json` | Status file for readiness |
-| `CODEX_HOME` | No | `/home/appuser/.codex` | Writable Codex home inside the container |
+| `AGENT_STATUS_FILE` | No | `/tmp/master-agent/status.json` | Container path inside the agent for the readiness status file |
+| `CODEX_HOME` | No | `/home/appuser/.codex` | Container path inside the agent for the writable Codex home |
 | `AGENT_READY_POLL_SECONDS` | No | `5` | Readiness polling interval |
-| `AGENT_GLOBAL_CODEX_CONFIG_DIR` | No | empty | Shared Codex config source |
-| `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | No | empty | Shared Claude config source |
+| `AGENT_GLOBAL_CODEX_CONFIG_DIR` | No | empty | Container path inside the agent pointing at the mounted shared Codex config source |
+| `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | No | empty | Container path inside the agent pointing at the mounted shared Claude config source |
 | `AGENT_GIT_USER_NAME` | No | empty | Per-agent Git author name |
 | `AGENT_GIT_USER_EMAIL` | No | empty | Per-agent Git author email |
-| `SSH_AUTH_SOCK` | No | empty | SSH agent socket passed through |
-| `GH_TOKEN` / `GITHUB_TOKEN` | No | empty | GitHub token for repo access |
-| `GH_TOKEN_FILE` | No | empty | Token file for repo access |
+| `SSH_AUTH_SOCK` | No | empty | Container path inside the agent to the passed-through SSH agent socket |
+| `GH_TOKEN` / `GITHUB_TOKEN` | No | empty | Token value, not a path |
+| `GH_TOKEN_FILE` | No | empty | Container path inside the agent to a token file for repo access |
 
 ## CD Daemon
 
@@ -72,11 +72,11 @@ This page summarizes the main configuration keys loaded directly from the curren
 | `CD_IMAGE` | Yes | None | Image repository to track |
 | `CD_IMAGE_TAG` | No | `latest` | Tag to watch |
 | `CD_CONTAINER_NAME` | No | `codex-slack-master` | Target container name |
-| `CD_COMPOSE_FILE` | No | `docker-compose.master-agent.example.yml` | Compose file path |
+| `CD_COMPOSE_FILE` | No | `docker-compose.master-agent.example.yml` | Container-visible path inside the CD runtime to the compose file |
 | `CD_COMPOSE_SERVICE` | No | `codex-slack-master` | Compose service name |
 | `CD_COMPOSE_BINARY` | No | `podman-compose` | Compose command |
-| `CD_ENV_FILE` | No | unset | Optional env file passed to compose |
-| `CD_STATE_FILE` | No | `data/cd/state.json` | Persisted daemon state |
+| `CD_ENV_FILE` | No | unset | Container-visible path inside the CD runtime to the env file passed to compose |
+| `CD_STATE_FILE` | No | `data/cd/state.json` | Container path inside the CD runtime for persisted daemon state |
 | `CD_POLL_INTERVAL_SECONDS` | No | `300` | Registry poll interval |
 | `CD_HEALTH_CHECK_DELAY_SECONDS` | No | `30` | Post-deploy health delay |
 | `CD_ROLLBACK_ON_FAILURE` | No | `true` | Enable rollback on failed deploy |
