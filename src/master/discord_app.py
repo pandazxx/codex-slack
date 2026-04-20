@@ -171,7 +171,8 @@ async def _read_text_attachments(attachments: list[Any]) -> str:
 def _extract_attachment_urls(attachments: list[Any]) -> list[str]:
     urls: list[str] = []
     for item in attachments:
-        url = str(getattr(item, "url", "") or "").strip()
+        proxy_url = str(getattr(item, "proxy_url", "") or "").strip()
+        url = proxy_url or str(getattr(item, "url", "") or "").strip()
         if url:
             urls.append(url)
     return urls

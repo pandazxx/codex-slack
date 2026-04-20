@@ -68,8 +68,9 @@ def test_build_discord_reply_plan_uses_file_for_very_large_unhinted_response() -
 
 def test_extract_attachment_urls_keeps_non_image_files() -> None:
     class Attachment:
-        def __init__(self, url: str, content_type: str) -> None:
+        def __init__(self, url: str, content_type: str, proxy_url: str = "") -> None:
             self.url = url
+            self.proxy_url = proxy_url
             self.content_type = content_type
 
     urls = _extract_attachment_urls(
@@ -79,6 +80,35 @@ def test_extract_attachment_urls_keeps_non_image_files() -> None:
         ]
     )
     assert urls == ["https://cdn.discordapp.com/a.docx", "https://cdn.discordapp.com/b.png"]
+
+
+def test_extract_attachment_urls_prefers_proxy_url_when_available() -> None:
+    class Attachment:
+        def __init__(self, url: str, proxy_url: str) -> None:
+            self.url = url
+            self.proxy_url = proxy_url
+
+    urls = _extract_attachment_urls(
+        [
+            Attachment(
+                "https://cdn.discordapp.com/attachments/original.png",
+                "https://media.discordapp.net/attachments/proxy.png",
+            )
+        ]
+    )
+
+    assert urls == ["https://media.discordapp.net/attachments/proxy.png"]
+
+
+def test_extract_attachment_urls_falls_back_to_primary_url_without_proxy() -> None:
+    class Attachment:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.proxy_url = ""
+
+    urls = _extract_attachment_urls([Attachment("https://cdn.discordapp.com/attachments/original.png")])
+
+    assert urls == ["https://cdn.discordapp.com/attachments/original.png"]
 
 
 def test_sync_registered_commands_copies_global_commands_to_admin_guild() -> None:
