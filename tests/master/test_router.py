@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 
 import pytest
@@ -320,6 +321,84 @@ def test_thread_tracking_persists_across_router_restarts(tmp_path) -> None:
         tracked_threads_path=str(state_path),
     )
     assert restarted.is_tracked_thread(channel_id="CAGENT", thread_ts="1730000000.9999") is True
+
+
+def test_claude_dispatcher_persists_created_session_across_restarts(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    state_path = tmp_path / "thread_state.json"
+    first_dispatcher = ClaudeCodeDispatcher(command_template="claude -p", state_path=str(state_path))
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    first_dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="first",
+        platform="discord",
+        channel_id="123456789",
+        thread_ts="55555",
+        user_id="U123",
+    )
+
+    restarted_dispatcher = ClaudeCodeDispatcher(command_template="claude -p", state_path=str(state_path))
+    restarted_dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="second",
+        platform="discord",
+        channel_id="123456789",
+        thread_ts="99999",
+        user_id="U123",
+    )
+
+    assert " claude -n " in f" {' '.join(seen[0])} "
+    assert " claude -r " in f" {' '.join(seen[1])} "
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted["claude_channel_sessions"]["payments-agent:discord:123456789"] == {
+        "created": True,
+        "session_name": "claude-payments-agent-discord-123456789",
+    }
+
+
+def test_claude_dispatcher_session_persistence_preserves_tracked_threads(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    registry = AgentRegistry(tmp_path / "agents.json")
+    state_path = tmp_path / "thread_state.json"
+    router = ChannelRouter(
+        registry=registry,
+        dispatcher=FakeDispatcher(),
+        admin_channels={"CADMIN"},
+        tracked_threads_path=str(state_path),
+    )
+    router.track_thread(channel_id="CAGENT", thread_ts="1730000000.9999")
+
+    dispatcher = ClaudeCodeDispatcher(command_template="claude -p", state_path=str(state_path))
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        platform="slack",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    restarted_router = ChannelRouter(
+        registry=registry,
+        dispatcher=FakeDispatcher(),
+        admin_channels={"CADMIN"},
+        tracked_threads_path=str(state_path),
+    )
+    assert restarted_router.is_tracked_thread(channel_id="CAGENT", thread_ts="1730000000.9999") is True
 
 
 def test_podman_exec_dispatcher_includes_exit_and_output_details(monkeypatch) -> None:  # type: ignore[no-untyped-def]
