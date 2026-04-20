@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 
 import pytest
@@ -474,7 +475,7 @@ def test_multi_agent_dispatcher_selects_adapter_by_name() -> None:
     assert len(claude.calls) == 1
 
 
-def test_claude_dispatcher_uses_continue_and_permission_bypass(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_claude_dispatcher_creates_session_and_injects_permission_bypass(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
     seen: dict[str, object] = {}
 
@@ -494,12 +495,13 @@ def test_claude_dispatcher_uses_continue_and_permission_bypass(monkeypatch) -> N
         user_id="U123",
     )
 
-    assert seen["cmd"][-1].startswith("claude -p ")
-    assert " --continue" in seen["cmd"][-1]
+    assert seen["cmd"][-1].startswith("claude ")
+    assert " -n --session-id " in seen["cmd"][-1]
+    assert " --continue" not in seen["cmd"][-1]
     assert " --dangerously-skip-permissions" in seen["cmd"][-1]
 
 
-def test_claude_dispatcher_uses_continue_for_same_channel(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_claude_dispatcher_resumes_with_same_session_for_same_channel(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
     seen: list[list[str]] = []
 
@@ -528,8 +530,46 @@ def test_claude_dispatcher_uses_continue_for_same_channel(monkeypatch) -> None: 
         user_id="U123",
     )
 
-    assert " --continue" in seen[0][-1]
-    assert " --continue" in seen[1][-1]
+    assert " -n --session-id " in seen[0][-1]
+    assert " -r " in seen[1][-1]
+    first_session_id = re.search(r"--session-id ([^ ]+)", seen[0][-1]).group(1)  # type: ignore[union-attr]
+    second_session_id = re.search(r"-r ([^ ]+)", seen[1][-1]).group(1)  # type: ignore[union-attr]
+    assert first_session_id == second_session_id
+
+
+def test_claude_dispatcher_uses_distinct_sessions_for_distinct_channels(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        platform="slack",
+        channel_id="CAGENT",
+        thread_ts="1730000000.0001",
+        user_id="U123",
+    )
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello again",
+        platform="slack",
+        channel_id="COTHER",
+        thread_ts="1730000000.0002",
+        user_id="U123",
+    )
+
+    first_session_id = re.search(r"--session-id ([^ ]+)", seen[0][-1]).group(1)  # type: ignore[union-attr]
+    second_session_id = re.search(r"--session-id ([^ ]+)", seen[1][-1]).group(1)  # type: ignore[union-attr]
+    assert first_session_id != second_session_id
+
 
 def test_claude_dispatcher_retries_with_create_when_session_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
@@ -539,64 +579,41 @@ def test_claude_dispatcher_retries_with_create_when_session_missing(monkeypatch)
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
         seen.append(cmd)
         calls["count"] += 1
-        if calls["count"] == 1:
+        if calls["count"] == 2:
             return subprocess.CompletedProcess(
                 args=cmd,
                 returncode=1,
                 stdout="",
-                stderr="Error: no session found for continue.",
+                stderr="Error: no session found for resume.",
             )
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
 
+    first = dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        platform="slack",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
     response = dispatcher.send_prompt(
         agent_name="payments-agent",
         container_name="agent-payments",
-        prompt="hello",
+        prompt="again",
         platform="slack",
         channel_id="CAGENT",
-        thread_ts="1730000000.1234",
+        thread_ts="1730000000.5678",
         user_id="U123",
     )
 
+    assert first == "ok"
     assert response == "ok"
-    assert " --continue" in seen[0][-1]
-    assert seen[1][-1] == "claude -p --dangerously-skip-permissions"
-
-
-def test_claude_dispatcher_preserves_explicit_session_placeholder_text(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    dispatcher = ClaudeCodeDispatcher(command_template="claude -p --session-id {session_id}")
-    seen: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        seen.append(cmd)
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
-
-    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
-
-    dispatcher.send_prompt(
-        agent_name="payments-agent",
-        container_name="agent-payments",
-        prompt="hello",
-        platform="slack",
-        channel_id="CAGENT",
-        thread_ts="1730000000.1234",
-        user_id="U123",
-    )
-    dispatcher.send_prompt(
-        agent_name="payments-agent",
-        container_name="agent-payments",
-        prompt="second",
-        platform="slack",
-        channel_id="CAGENT",
-        thread_ts="1730000001.1234",
-        user_id="U123",
-    )
-
-    assert seen[0][-1].count("--session-id") == 1
-    assert "{session_id}" in seen[0][-1]
-    assert " --continue " in f" {seen[1][-1]} "
+    assert " -n --session-id " in seen[0][-1]
+    assert " -r " in seen[1][-1]
+    assert " -n --session-id " in seen[2][-1]
 
 
 def test_podman_exec_dispatcher_injects_claude_permission_bypass(monkeypatch) -> None:  # type: ignore[no-untyped-def]
