@@ -13,7 +13,6 @@ import time
 from typing import Protocol
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
-import uuid
 
 from .registry import AgentRegistry
 
@@ -352,6 +351,12 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         return f"{agent_name}:{platform}:{channel_id}"
 
     @staticmethod
+    def _session_name(*, agent_name: str, platform: str, channel_id: str) -> str:
+        raw = f"claude-{agent_name}-{platform}-{channel_id}"
+        normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", raw).strip("-")
+        return normalized or "claude-session"
+
+    @staticmethod
     def _strip_session_flags(command: str) -> str:
         stripped = command.rstrip()
         patterns = [
@@ -368,7 +373,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
     @staticmethod
     def _inject_session_flags(*, command: str, action: str, session_id: str) -> str:
         if action == "create":
-            return re.sub(r"\bclaude\b", f"claude -n --session-id {session_id}", command, count=1)
+            return re.sub(r"\bclaude\b", f"claude -n {session_id}", command, count=1)
         if action == "resume":
             return re.sub(r"\bclaude\b", f"claude -r {session_id}", command, count=1)
         raise ValueError(f"unsupported claude action: {action}")
@@ -525,7 +530,11 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         with self._session_lock:
             known_session_id = self._channel_sessions.get(conversation_key)
         initial_action = "resume" if known_session_id else "create"
-        initial_session_id = known_session_id or str(uuid.uuid4())
+        initial_session_id = known_session_id or self._session_name(
+            agent_name=agent_name,
+            platform=platform,
+            channel_id=channel_id,
+        )
         retry_action: str | None = None
         effective_session_id = initial_session_id
         rendered_command = self._render_command(action=initial_action, session_id=effective_session_id)
@@ -572,7 +581,11 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                 retry_action = "create"
                 with self._session_lock:
                     self._channel_sessions.pop(conversation_key, None)
-                effective_session_id = str(uuid.uuid4())
+                effective_session_id = self._session_name(
+                    agent_name=agent_name,
+                    platform=platform,
+                    channel_id=channel_id,
+                )
                 LOGGER.info(
                     "router.dispatch_retry agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s claude_retry_action=%s session_id=%s retry_reason=%r",
                     agent_name,

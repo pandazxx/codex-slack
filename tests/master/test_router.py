@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import subprocess
 
 import pytest
@@ -496,7 +495,8 @@ def test_claude_dispatcher_creates_session_and_injects_permission_bypass(monkeyp
     )
 
     assert seen["cmd"][-1].startswith("claude ")
-    assert " -n --session-id " in seen["cmd"][-1]
+    assert " -n " in seen["cmd"][-1]
+    assert " --session-id " not in seen["cmd"][-1]
     assert " --continue" not in seen["cmd"][-1]
     assert " --dangerously-skip-permissions" in seen["cmd"][-1]
 
@@ -530,11 +530,10 @@ def test_claude_dispatcher_resumes_with_same_session_for_same_channel(monkeypatc
         user_id="U123",
     )
 
-    assert " -n --session-id " in seen[0][-1]
+    assert " -n " in seen[0][-1]
     assert " -r " in seen[1][-1]
-    first_session_id = re.search(r"--session-id ([^ ]+)", seen[0][-1]).group(1)  # type: ignore[union-attr]
-    second_session_id = re.search(r"-r ([^ ]+)", seen[1][-1]).group(1)  # type: ignore[union-attr]
-    assert first_session_id == second_session_id
+    assert "claude-payments-agent-discord-123456789" in seen[0][-1]
+    assert "claude-payments-agent-discord-123456789" in seen[1][-1]
 
 
 def test_claude_dispatcher_uses_distinct_sessions_for_distinct_channels(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -566,9 +565,8 @@ def test_claude_dispatcher_uses_distinct_sessions_for_distinct_channels(monkeypa
         user_id="U123",
     )
 
-    first_session_id = re.search(r"--session-id ([^ ]+)", seen[0][-1]).group(1)  # type: ignore[union-attr]
-    second_session_id = re.search(r"--session-id ([^ ]+)", seen[1][-1]).group(1)  # type: ignore[union-attr]
-    assert first_session_id != second_session_id
+    assert "claude-payments-agent-slack-CAGENT" in seen[0][-1]
+    assert "claude-payments-agent-slack-COTHER" in seen[1][-1]
 
 
 def test_claude_dispatcher_retries_with_create_when_session_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -611,9 +609,9 @@ def test_claude_dispatcher_retries_with_create_when_session_missing(monkeypatch)
 
     assert first == "ok"
     assert response == "ok"
-    assert " -n --session-id " in seen[0][-1]
+    assert " -n " in seen[0][-1]
     assert " -r " in seen[1][-1]
-    assert " -n --session-id " in seen[2][-1]
+    assert " -n " in seen[2][-1]
 
 
 def test_podman_exec_dispatcher_injects_claude_permission_bypass(monkeypatch) -> None:  # type: ignore[no-untyped-def]
