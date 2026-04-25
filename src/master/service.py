@@ -43,7 +43,7 @@ class MasterService:
         git_user_name: str | None = None,
         git_user_email: str | None = None,
         default_agent_adapter: str = DEFAULT_AGENT_ADAPTER,
-        auth_refresh_max_age_days: int = 7,
+        auth_refresh_max_age_days: int = 2,
     ) -> None:
         self._registry = registry
         self._runtime = runtime

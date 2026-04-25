@@ -81,7 +81,7 @@ def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -
     assert settings.codex_command_template == "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
     assert settings.claude_command_template == "claude -p --output-format json --dangerously-skip-permissions"
     assert settings.default_agent_adapter == "codex"
-    assert settings.auth_refresh_max_age_days == 7
+    assert settings.auth_refresh_max_age_days == 2
 
 
 def test_load_master_settings_rejects_unknown_default_agent_adapter(monkeypatch) -> None:  # type: ignore[no-untyped-def]

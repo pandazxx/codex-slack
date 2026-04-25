@@ -518,6 +518,7 @@ def test_prepare_agent_for_message_starts_stopped_agent_and_refreshes_stale_auth
     assert "inspect_agent" in call_names
     assert "start_agent" in call_names
     assert "refresh_agent_auth" in call_names
+    assert call_names.index("start_agent") < call_names.index("refresh_agent_auth")
 
 
 def test_prepare_agent_for_message_refreshes_missing_auth_timestamp_for_running_codex_agent(tmp_path) -> None:
