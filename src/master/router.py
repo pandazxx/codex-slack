@@ -58,7 +58,7 @@ class PodmanExecDispatcher:
     workdir: str = "/workspace/repo"
     codex_home: str = "/workspace/home/.codex"
     slack_bot_token: str | None = None
-    agent_start_callback: Callable[[str], None] | None = None
+    agent_prepare_callback: Callable[[str], None] | None = None
 
     @staticmethod
     def _clip(value: str, limit: int = 240) -> str:
@@ -118,18 +118,6 @@ class PodmanExecDispatcher:
             raise RouteError("podman CLI is not available in the master runtime") from exc
 
         if inspected.returncode != 0:
-            if self.agent_start_callback is not None:
-                LOGGER.info(
-                    "router.container_autostart_via_master agent=%s container=%s previous_status=%s",
-                    agent_name,
-                    container_name,
-                    "absent",
-                )
-                try:
-                    self.agent_start_callback(agent_name)
-                except Exception as exc:  # noqa: BLE001
-                    raise RouteError(f"failed to auto-start {agent_name}: {exc}") from exc
-                return
             stderr_text = self._clip(inspected.stderr)
             raise RouteError(f"agent container is not running and auto-start is not configured: {container_name}" + (f" ({stderr_text})" if stderr_text else ""))
 
@@ -147,20 +135,15 @@ class PodmanExecDispatcher:
         if running:
             return
 
-        if self.agent_start_callback is not None:
-            LOGGER.info(
-                "router.container_autostart_via_master agent=%s container=%s previous_status=%s",
-                agent_name,
-                container_name,
-                status,
-            )
-            try:
-                self.agent_start_callback(agent_name)
-            except Exception as exc:  # noqa: BLE001
-                raise RouteError(f"failed to auto-start {agent_name}: {exc}") from exc
-            return
-
         raise RouteError(f"agent container is not running and auto-start is not configured: {container_name} (status={status})")
+
+    def _prepare_agent_for_dispatch(self, *, agent_name: str) -> None:
+        if self.agent_prepare_callback is None:
+            return
+        try:
+            self.agent_prepare_callback(agent_name)
+        except Exception as exc:  # noqa: BLE001
+            raise RouteError(f"failed to prepare {agent_name}: {exc}") from exc
 
     def send_prompt(
         self,
@@ -180,6 +163,7 @@ class PodmanExecDispatcher:
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
         image_urls = image_urls or []
+        self._prepare_agent_for_dispatch(agent_name=agent_name)
         self._ensure_container_running(agent_name=agent_name, container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
@@ -572,6 +556,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
     ) -> str:
         LOGGER.info("router.claude_command_template template=%r", self.command_template)
         image_urls = image_urls or []
+        self._prepare_agent_for_dispatch(agent_name=agent_name)
         self._ensure_container_running(agent_name=agent_name, container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import re
 import shutil
 import subprocess
 
-from .registry import AgentRecord, AgentRegistry
+from .registry import AgentRecord, AgentRegistry, utc_now_iso
 from .runtime_adapter import RuntimeAdapter
 
 DEFAULT_IMAGE = "codex-slack-bot:latest"
@@ -42,6 +43,7 @@ class MasterService:
         git_user_name: str | None = None,
         git_user_email: str | None = None,
         default_agent_adapter: str = DEFAULT_AGENT_ADAPTER,
+        auth_refresh_max_age_days: int = 7,
     ) -> None:
         self._registry = registry
         self._runtime = runtime
@@ -54,6 +56,7 @@ class MasterService:
         self._git_user_name = git_user_name
         self._git_user_email = git_user_email
         self._default_agent_adapter = default_agent_adapter if default_agent_adapter in SUPPORTED_AGENT_ADAPTERS else DEFAULT_AGENT_ADAPTER
+        self._auth_refresh_max_age_days = max(auth_refresh_max_age_days, 0)
 
     def list_agents(self) -> CommandResult:
         agents = []
@@ -343,6 +346,9 @@ class MasterService:
             self._audit(command="refresh-auth", agent=name, result=result)
             return result
 
+        record.auth_refreshed_at = utc_now_iso()
+        self._registry.upsert(record)
+
         result = CommandResult(
             ok=True,
             code="OK",
@@ -351,9 +357,50 @@ class MasterService:
                 "refreshed": True,
                 "volume_name": f"agent-workspace-{record.name}",
                 "auth_source": self._agent_codex_auth_json_path,
+                "auth_refreshed_at": record.auth_refreshed_at,
             },
         )
         self._audit(command="refresh-auth", agent=name, result=result)
+        return result
+
+    def prepare_agent_for_message(self, *, name: str) -> CommandResult:
+        record = self._registry.get(name)
+        if not record:
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="prepare-message", agent=name, result=result)
+            return result
+
+        inspect = self._runtime.inspect_agent(record.container_name)
+        started = False
+        refreshed_auth = False
+
+        if not self._is_runtime_running(inspect):
+            started_result = self.start_agent(name=name)
+            if not started_result.ok:
+                self._audit(command="prepare-message", agent=name, result=started_result)
+                return started_result
+            started = True
+            record = self._registry.get(name) or record
+
+        if self._should_refresh_agent_auth(record):
+            refresh_result = self.refresh_agent_auth(name=name)
+            if not refresh_result.ok:
+                self._audit(command="prepare-message", agent=name, result=refresh_result)
+                return refresh_result
+            refreshed_auth = True
+            record = self._registry.get(name) or record
+
+        result = CommandResult(
+            ok=True,
+            code="OK",
+            message=f"prepared {name} for message",
+            data={
+                "started": started,
+                "refreshed_auth": refreshed_auth,
+                "auth_refreshed_at": record.auth_refreshed_at,
+            },
+        )
+        self._audit(command="prepare-message", agent=name, result=result)
         return result
 
     def refresh_agent_config(self, *, name: str) -> CommandResult:
@@ -505,6 +552,35 @@ class MasterService:
         # causes claude to hang on its first write attempt.
 
         return env
+
+    @staticmethod
+    def _is_runtime_running(inspect: object) -> bool:
+        if not isinstance(inspect, dict):
+            return False
+        state = inspect.get("State")
+        if isinstance(state, dict):
+            return bool(state.get("Running", False))
+        if isinstance(state, str):
+            return state == "running"
+        return False
+
+    def _should_refresh_agent_auth(self, record: AgentRecord) -> bool:
+        if record.agent_adapter != "codex":
+            return False
+        if not self._agent_codex_auth_json_path:
+            return False
+        if self._auth_refresh_max_age_days <= 0:
+            return False
+        if not record.auth_refreshed_at:
+            return True
+        try:
+            refreshed_at = datetime.fromisoformat(record.auth_refreshed_at)
+        except ValueError:
+            return True
+        if refreshed_at.tzinfo is None:
+            refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - refreshed_at.astimezone(timezone.utc)
+        return age >= timedelta(days=self._auth_refresh_max_age_days)
 
     def _build_agent_mounts(self) -> list[str]:
         mounts: list[str] = []

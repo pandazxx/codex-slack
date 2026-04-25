@@ -511,7 +511,7 @@ def test_multi_agent_dispatcher_selects_adapter_by_name() -> None:
 
 def test_podman_exec_dispatcher_uses_master_start_callback_when_container_is_not_running(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     started: list[str] = []
-    dispatcher = PodmanExecDispatcher(agent_start_callback=started.append)
+    dispatcher = PodmanExecDispatcher(agent_prepare_callback=started.append)
     seen: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
@@ -520,11 +520,9 @@ def test_podman_exec_dispatcher_uses_master_start_callback_when_container_is_not
             return subprocess.CompletedProcess(
                 args=cmd,
                 returncode=0,
-                stdout='[{"State":{"Running":false,"Status":"exited"}}]',
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
                 stderr="",
             )
-        if cmd[:2] == ["podman", "start"]:
-            raise AssertionError("direct podman start should not be used when callback is provided")
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
@@ -593,13 +591,16 @@ def test_podman_exec_dispatcher_reports_stopped_container_without_callback(monke
 
 def test_podman_exec_dispatcher_uses_master_start_callback_when_container_is_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     started: list[str] = []
-    dispatcher = PodmanExecDispatcher(agent_start_callback=started.append)
+    dispatcher = PodmanExecDispatcher(agent_prepare_callback=started.append)
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
         if cmd[:4] == ["podman", "inspect", "--type", "container"]:
-            return subprocess.CompletedProcess(args=cmd, returncode=125, stdout="", stderr="no such container")
-        if cmd[:2] == ["podman", "start"]:
-            raise AssertionError("direct podman start should not be used when callback is provided")
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
