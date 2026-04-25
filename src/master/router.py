@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from threading import Lock
 import time
-from typing import Protocol
+from typing import Callable, Protocol
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -58,6 +58,7 @@ class PodmanExecDispatcher:
     workdir: str = "/workspace/repo"
     codex_home: str = "/workspace/home/.codex"
     slack_bot_token: str | None = None
+    agent_start_callback: Callable[[str], None] | None = None
 
     @staticmethod
     def _clip(value: str, limit: int = 240) -> str:
@@ -98,7 +99,7 @@ class PodmanExecDispatcher:
             return stripped
         return f"{stripped} --dangerously-skip-permissions"
 
-    def _ensure_container_running(self, *, container_name: str) -> None:
+    def _ensure_container_running(self, *, agent_name: str, container_name: str) -> None:
         try:
             inspected = subprocess.run(
                 ["podman", "inspect", "--type", "container", container_name],
@@ -117,6 +118,18 @@ class PodmanExecDispatcher:
             raise RouteError("podman CLI is not available in the master runtime") from exc
 
         if inspected.returncode != 0:
+            if self.agent_start_callback is not None:
+                LOGGER.info(
+                    "router.container_autostart_via_master agent=%s container=%s previous_status=%s",
+                    agent_name,
+                    container_name,
+                    "absent",
+                )
+                try:
+                    self.agent_start_callback(agent_name)
+                except Exception as exc:  # noqa: BLE001
+                    raise RouteError(f"failed to auto-start {agent_name}: {exc}") from exc
+                return
             stderr_text = self._clip(inspected.stderr)
             raise RouteError(
                 f"agent container is not available: {container_name}"
@@ -135,6 +148,19 @@ class PodmanExecDispatcher:
         status = str(state.get("Status", "unknown"))
         running = bool(state.get("Running", False))
         if running:
+            return
+
+        if self.agent_start_callback is not None:
+            LOGGER.info(
+                "router.container_autostart_via_master agent=%s container=%s previous_status=%s",
+                agent_name,
+                container_name,
+                status,
+            )
+            try:
+                self.agent_start_callback(agent_name)
+            except Exception as exc:  # noqa: BLE001
+                raise RouteError(f"failed to auto-start {agent_name}: {exc}") from exc
             return
 
         LOGGER.info(
@@ -181,7 +207,7 @@ class PodmanExecDispatcher:
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
         image_urls = image_urls or []
-        self._ensure_container_running(container_name=container_name)
+        self._ensure_container_running(agent_name=agent_name, container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=session_id,
@@ -573,7 +599,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
     ) -> str:
         LOGGER.info("router.claude_command_template template=%r", self.command_template)
         image_urls = image_urls or []
-        self._ensure_container_running(container_name=container_name)
+        self._ensure_container_running(agent_name=agent_name, container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=channel_id,

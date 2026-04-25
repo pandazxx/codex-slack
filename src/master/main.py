@@ -34,6 +34,15 @@ def mask_token(token: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
+def build_auto_start_callback(service: MasterService):  # type: ignore[no-untyped-def]
+    def auto_start(agent_name: str) -> None:
+        result = service.start_agent(name=agent_name)
+        if not result.ok:
+            raise RuntimeError(result.message)
+
+    return auto_start
+
+
 def main() -> None:
     load_dotenv()
     configure_logging()
@@ -82,15 +91,18 @@ def main() -> None:
         git_user_email=settings.git_user_email,
         default_agent_adapter=settings.default_agent_adapter,
     )
+    auto_start_callback = build_auto_start_callback(service)
     codex_dispatcher = PodmanExecDispatcher(
         command_template=settings.codex_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
         slack_bot_token=settings.slack_bot_token,
+        agent_start_callback=auto_start_callback,
     )
     claude_dispatcher = ClaudeCodeDispatcher(
         command_template=settings.claude_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
         slack_bot_token=settings.slack_bot_token,
+        agent_start_callback=auto_start_callback,
     )
     dispatcher = MultiAgentDispatcher(
         dispatchers={"codex": codex_dispatcher, "claude-code": claude_dispatcher},
