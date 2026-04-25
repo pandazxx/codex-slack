@@ -98,6 +98,71 @@ class PodmanExecDispatcher:
             return stripped
         return f"{stripped} --dangerously-skip-permissions"
 
+    def _ensure_container_running(self, *, container_name: str) -> None:
+        try:
+            inspected = subprocess.run(
+                ["podman", "inspect", "--type", "container", container_name],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RouteError(f"dispatch timed out after {self.timeout_seconds}s") from exc
+        except FileNotFoundError as exc:
+            LOGGER.warning(
+                "router.dispatch_failed agent_container=%s reason=missing_binary error=%s",
+                container_name,
+                exc,
+            )
+            raise RouteError("podman CLI is not available in the master runtime") from exc
+
+        if inspected.returncode != 0:
+            stderr_text = self._clip(inspected.stderr)
+            raise RouteError(
+                f"agent container is not available: {container_name}"
+                + (f" ({stderr_text})" if stderr_text else "")
+            )
+
+        try:
+            payload = json.loads(inspected.stdout)
+        except json.JSONDecodeError as exc:
+            raise RouteError(f"failed to inspect agent container {container_name}: invalid inspect output") from exc
+
+        if not payload:
+            raise RouteError(f"agent container is not available: {container_name}")
+
+        state = payload[0].get("State", {})
+        status = str(state.get("Status", "unknown"))
+        running = bool(state.get("Running", False))
+        if running:
+            return
+
+        LOGGER.info(
+            "router.container_autostart_begin container=%s previous_status=%s",
+            container_name,
+            status,
+        )
+        try:
+            started = subprocess.run(
+                ["podman", "start", container_name],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RouteError(f"dispatch timed out after {self.timeout_seconds}s") from exc
+        if started.returncode != 0:
+            stderr_text = self._clip(started.stderr)
+            raise RouteError(
+                f"failed to start agent container {container_name}"
+                + (f" ({stderr_text})" if stderr_text else "")
+            )
+        LOGGER.info(
+            "router.container_autostart_done container=%s previous_status=%s",
+            container_name,
+            status,
+        )
+
     def send_prompt(
         self,
         *,
@@ -116,6 +181,7 @@ class PodmanExecDispatcher:
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
         image_urls = image_urls or []
+        self._ensure_container_running(container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=session_id,
@@ -507,6 +573,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
     ) -> str:
         LOGGER.info("router.claude_command_template template=%r", self.command_template)
         image_urls = image_urls or []
+        self._ensure_container_running(container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=channel_id,
