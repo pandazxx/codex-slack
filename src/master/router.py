@@ -131,10 +131,7 @@ class PodmanExecDispatcher:
                     raise RouteError(f"failed to auto-start {agent_name}: {exc}") from exc
                 return
             stderr_text = self._clip(inspected.stderr)
-            raise RouteError(
-                f"agent container is not available: {container_name}"
-                + (f" ({stderr_text})" if stderr_text else "")
-            )
+            raise RouteError(f"agent container is not running and auto-start is not configured: {container_name}" + (f" ({stderr_text})" if stderr_text else ""))
 
         try:
             payload = json.loads(inspected.stdout)
@@ -163,31 +160,7 @@ class PodmanExecDispatcher:
                 raise RouteError(f"failed to auto-start {agent_name}: {exc}") from exc
             return
 
-        LOGGER.info(
-            "router.container_autostart_begin container=%s previous_status=%s",
-            container_name,
-            status,
-        )
-        try:
-            started = subprocess.run(
-                ["podman", "start", container_name],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RouteError(f"dispatch timed out after {self.timeout_seconds}s") from exc
-        if started.returncode != 0:
-            stderr_text = self._clip(started.stderr)
-            raise RouteError(
-                f"failed to start agent container {container_name}"
-                + (f" ({stderr_text})" if stderr_text else "")
-            )
-        LOGGER.info(
-            "router.container_autostart_done container=%s previous_status=%s",
-            container_name,
-            status,
-        )
+        raise RouteError(f"agent container is not running and auto-start is not configured: {container_name} (status={status})")
 
     def send_prompt(
         self,
