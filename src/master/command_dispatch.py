@@ -195,6 +195,15 @@ def parse_set_model_text(text: str, command_name: str = "/master-agent-set-model
     return parts[0], parts[1] or None
 
 
+def parse_set_subagent_text(text: str, command_name: str = "/master-agent-set-subagent") -> tuple[str, str | None]:
+    parts = [part.strip() for part in text.split(maxsplit=1) if part.strip()]
+    if not parts:
+        raise ValueError(f"usage: {command_name} <name> [subagent]")
+    if len(parts) == 1:
+        return parts[0], None
+    return parts[0], parts[1] or None
+
+
 def dispatch_command(
     service: MasterService,
     request: MasterCommandRequest,
@@ -274,5 +283,9 @@ def dispatch_command(
     if request.command_name == "/master-agent-set-model":
         name, model = parse_set_model_text(request.text, request.command_name)
         return service.set_agent_model(name=name, model=model)
+
+    if request.command_name == "/master-agent-set-subagent":
+        name, subagent = parse_set_subagent_text(request.text, request.command_name)
+        return service.set_agent_subagent(name=name, subagent=subagent)
 
     return CommandResult(ok=False, code="ERR_INVALID_ARGS", message=f"unsupported command: {request.command_name}", data={})

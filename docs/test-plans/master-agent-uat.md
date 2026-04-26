@@ -440,6 +440,28 @@ Expected:
 - Registry record includes an updated `auth_refreshed_at` timestamp.
 - Existing Codex session state in the agent workspace is preserved.
 
+## UAT-005D: Claude Subagent Override
+Preconditions:
+- Agent is loaded with `--adapter claude-code`.
+
+Steps:
+1. In `CADMIN`, run:
+```text
+/master-agent-set-subagent payments-agent code-reviewer
+```
+2. Send a routed prompt to the mapped agent channel.
+3. Inspect master dispatch logs or the full status payload.
+4. Clear the override:
+```text
+/master-agent-set-subagent payments-agent
+```
+
+Expected:
+- Set command returns `ok=true`.
+- Registry record includes `claude_subagent=code-reviewer`.
+- Claude Code dispatch includes `--agent code-reviewer`.
+- Clear command removes the registry value.
+
 ## UAT-006: Admin Channel Enforcement
 Preconditions:
 - Master running.

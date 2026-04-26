@@ -58,7 +58,9 @@ Create these commands in **Slash Commands**:
 - `/master-agent-usage`
 - `/master-agent-remove`
 - `/master-agent-refresh-auth`
+- `/master-agent-refresh-config`
 - `/master-agent-set-model`
+- `/master-agent-set-subagent`
 
 For each command:
 1. Click **Create New Command**.
@@ -146,8 +148,13 @@ python -m src.master.main
 /master-agent-set-model <name> claude-opus-4-5
 ```
 Omit the model to clear the override and revert to the default.
-8. In the mapped agent channel, mention the bot with a prompt.
-9. Reply in the same thread without mentioning the bot again.
+8. To override the Claude Code subagent for a specific agent:
+```text
+/master-agent-set-subagent <name> code-reviewer
+```
+Omit the subagent to clear the override.
+9. In the mapped agent channel, mention the bot with a prompt.
+10. Reply in the same thread without mentioning the bot again.
 10. Confirm master routes both messages to the mapped agent.
 
 ## 11. Channel Usage Rules

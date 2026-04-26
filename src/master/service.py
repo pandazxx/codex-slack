@@ -466,6 +466,24 @@ class MasterService:
         self._audit(command="set-model", agent=name, result=result)
         return result
 
+    def set_agent_subagent(self, *, name: str, subagent: str | None) -> CommandResult:
+        record = self._registry.get(name)
+        if not record:
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="set-subagent", agent=name, result=result)
+            return result
+
+        record.claude_subagent = subagent
+        self._registry.upsert(record)
+        result = CommandResult(
+            ok=True,
+            code="OK",
+            message=f"subagent set to {subagent!r} for {name}" if subagent else f"subagent cleared for {name}",
+            data={"name": name, "claude_subagent": subagent},
+        )
+        self._audit(command="set-subagent", agent=name, result=result)
+        return result
+
     def _validate_load_inputs(self, *, name: str, channel_id: str, platform: str) -> CommandResult | None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,30}", name):
             return CommandResult(

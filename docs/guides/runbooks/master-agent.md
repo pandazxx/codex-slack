@@ -170,6 +170,15 @@ Omit the model argument to clear the override:
 ```text
 /master-agent-set-model <name>
 ```
+8. Override the Claude Code subagent for a specific agent (persisted in registry, no restart needed):
+```text
+/master-agent-set-subagent <name> code-reviewer
+```
+Omit the subagent argument to clear the override:
+```text
+/master-agent-set-subagent <name>
+```
+When set, master injects `--agent <subagent>` into the Claude Code CLI command before dispatch.
 
 ## Routing Validation
 1. In mapped non-admin channel, mention bot with prompt.

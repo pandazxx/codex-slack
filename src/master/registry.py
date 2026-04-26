@@ -30,6 +30,7 @@ class AgentRecord:
     resolved_image: str | None = None
     last_error: str | None = None
     claude_model: str | None = None
+    claude_subagent: str | None = None
     auth_refreshed_at: str | None = None
     created_at: str = ""
     updated_at: str = ""
@@ -78,6 +79,7 @@ class AgentRegistry:
         normalized = dict(item)
         normalized.setdefault("platform", "slack")
         normalized.setdefault("agent_adapter", "codex")
+        normalized.setdefault("claude_subagent", None)
         normalized.setdefault("auth_refreshed_at", None)
         return normalized
 

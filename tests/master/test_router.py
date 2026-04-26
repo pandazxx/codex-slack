@@ -32,6 +32,7 @@ class FakeDispatcher:
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
+        claude_subagent: str | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -45,6 +46,7 @@ class FakeDispatcher:
                 "user_id": user_id,
                 "image_urls": image_urls or [],
                 "claude_model": claude_model,
+                "claude_subagent": claude_subagent,
             }
         )
         return f"{agent_name}:{prompt}"
@@ -123,6 +125,27 @@ def test_route_prompt_uses_recorded_claude_adapter(tmp_path) -> None:
     assert dispatcher.calls[0]["agent_adapter"] == "claude-code"
 
 
+def test_route_prompt_passes_recorded_claude_subagent(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    record = registry.get("payments-agent")
+    assert record is not None
+    record.agent_adapter = "claude-code"
+    record.claude_subagent = "code-reviewer"
+    registry.upsert(record)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    router.route_prompt(
+        channel_id="CAGENT",
+        text="<@U123> review this",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert dispatcher.calls[0]["claude_subagent"] == "code-reviewer"
+
+
 def test_route_prompt_allows_image_only_message(tmp_path) -> None:
     registry = AgentRegistry(tmp_path / "agents.json")
     _seed_registry(registry)
@@ -174,6 +197,7 @@ class FailingDispatcher(FakeDispatcher):
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
+        claude_subagent: str | None = None,
     ) -> str:
         raise RouteError("codex exec failed")
 
@@ -650,6 +674,38 @@ def test_claude_dispatcher_creates_session_and_injects_permission_bypass(monkeyp
     assert " --session-id " not in seen["cmd"][-1]
     assert " --continue" not in seen["cmd"][-1]
     assert " --dangerously-skip-permissions" in seen["cmd"][-1]
+
+
+def test_claude_dispatcher_injects_subagent_flag(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        platform="slack",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+        claude_subagent="code-reviewer",
+    )
+
+    assert " --agent code-reviewer " in f" {seen['cmd'][-1]} "
+    assert " -n " in seen["cmd"][-1]
 
 
 def test_claude_dispatcher_resumes_with_same_session_for_same_channel(monkeypatch) -> None:  # type: ignore[no-untyped-def]

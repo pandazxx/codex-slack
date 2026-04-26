@@ -61,6 +61,7 @@ Master controls agent containers through these operations:
 - refresh-auth
 - refresh-config
 - set-model
+- set-subagent
 
 ### Load
 
@@ -231,6 +232,7 @@ The manifest is the canonical descriptor for:
 - auth comes from env, not a copied auth file
 - shared Claude config refresh writes to `/workspace/home/.claude/`
 - optional model override may be injected per agent
+- optional subagent override may be injected per agent as `--agent <subagent>`
 
 ## Observability Contract
 
