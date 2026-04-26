@@ -43,6 +43,7 @@ This page summarizes the main configuration keys loaded directly from the curren
 | `MASTER_CLAUDE_COMMAND_TEMPLATE` | No | `claude -p --output-format json --dangerously-skip-permissions` | Claude dispatch command |
 | `MASTER_DEFAULT_AGENT_ADAPTER` | No | `codex` | Default agent adapter |
 | `MASTER_AGENT_TIMEOUT_SECONDS` | No | unset | Dispatch timeout |
+| `MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS` | No | `2` | Maximum age, in days, for persisted Codex auth refresh state before routed Codex prompts refresh auth again |
 | `MASTER_COMMAND_RATE_LIMIT_COUNT` | No | `20` | Per-user command burst limit |
 | `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` | No | `60` | Rate-limit window size |
 

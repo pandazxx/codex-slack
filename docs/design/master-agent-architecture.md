@@ -172,14 +172,19 @@ sequenceDiagram
     participant U as User
     participant FE as Frontend Adapter
     participant RT as ChannelRouter
+    participant M as MasterService
     participant DISP as Dispatcher
     participant AG as Agent Container
 
     U->>FE: mention / follow-up message
     FE->>RT: normalized prompt + attachments
     RT->>RT: validate mapping and thread continuity
-    RT->>RT: stage request input if needed
     RT->>DISP: dispatch prompt
+    DISP->>M: prepare_agent_for_message(name)
+    M->>M: start agent if container is absent/stopped
+    M->>M: refresh stale Codex auth if due
+    DISP->>DISP: verify container is running
+    RT->>RT: stage request input if needed
     DISP->>AG: podman exec / adapter command
     AG-->>DISP: response text
     DISP-->>RT: normalized result
@@ -229,8 +234,10 @@ stateDiagram-v2
     [*] --> MasterRunning
     MasterRunning --> AgentLoaded: /master-agent-load
     AgentLoaded --> AgentRunning: /master-agent-start
+    AgentLoaded --> AgentRunning: routed prompt prepare step
     AgentRunning --> AgentStopped: /master-agent-stop
     AgentStopped --> AgentRunning: /master-agent-start
+    AgentStopped --> AgentRunning: routed prompt prepare step
     AgentLoaded --> AgentRemoved: /master-agent-remove
     AgentStopped --> AgentRemoved: /master-agent-remove
     AgentRunning --> AgentError: runtime or dispatch failure

@@ -31,6 +31,7 @@ class MasterSettings:
     codex_command_template: str
     claude_command_template: str
     dispatch_timeout_seconds: int | None
+    auth_refresh_max_age_days: int
     command_rate_limit_count: int
     command_rate_limit_window_seconds: int
 
@@ -159,6 +160,11 @@ def load_master_settings() -> MasterSettings:
     dispatch_timeout_seconds = int(raw_dispatch_timeout) if raw_dispatch_timeout else None
     if dispatch_timeout_seconds is not None and dispatch_timeout_seconds <= 0:
         dispatch_timeout_seconds = None
+    raw_auth_refresh_days = os.getenv("MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS", "2").strip()
+    _log_env("MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS", os.getenv("MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS"))
+    auth_refresh_max_age_days = int(raw_auth_refresh_days) if raw_auth_refresh_days else 2
+    if auth_refresh_max_age_days < 0:
+        auth_refresh_max_age_days = 0
     raw_rate_limit_count = os.getenv("MASTER_COMMAND_RATE_LIMIT_COUNT", "20").strip()
     _log_env("MASTER_COMMAND_RATE_LIMIT_COUNT", os.getenv("MASTER_COMMAND_RATE_LIMIT_COUNT"))
     raw_rate_limit_window = os.getenv("MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS", "60").strip()
@@ -213,6 +219,7 @@ def load_master_settings() -> MasterSettings:
         codex_command_template=codex_command_template,
         claude_command_template=claude_command_template,
         dispatch_timeout_seconds=dispatch_timeout_seconds,
+        auth_refresh_max_age_days=auth_refresh_max_age_days,
         command_rate_limit_count=command_rate_limit_count,
         command_rate_limit_window_seconds=command_rate_limit_window_seconds,
     )

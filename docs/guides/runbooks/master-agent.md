@@ -112,6 +112,7 @@ Important env notes:
 - If `MASTER_GIT_USER_NAME` and `MASTER_GIT_USER_EMAIL` are set, the master passes them into each agent and the worker writes them into the checked-out repo's local Git config during startup.
 - Default command template is `MASTER_AGENT_COMMAND_TEMPLATE='codex exec --dangerously-bypass-approvals-and-sandbox resume --last -'`.
 - Default adapter is `MASTER_DEFAULT_AGENT_ADAPTER=codex`.
+- `MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS` defaults to `2`. For Codex agents, routed prompts run a master-side prepare step that refreshes workspace auth when the registry timestamp is missing or older than this threshold.
 - If you use the `claude-code` adapter, rebuild the base image from this branch so the agent container includes the `claude` CLI binary.
 - If a project repo contains `.prj_assistant/image/Dockerfile`, master builds that repo-local image on `/master-agent-start` and does not use `MASTER_AGENT_BASE_IMAGE` for that agent.
 
@@ -125,6 +126,7 @@ claude setup-token
 
 Persistence notes:
 - Without the `data/master` volume mount, `agents.json` is lost when the master container exits, so `/master-agent-list` will look empty after restart.
+- The agent registry also stores `auth_refreshed_at` for Codex agents. Keep `data/master` mounted if you want automatic auth refresh age checks to survive master restarts.
 - The repo includes `docker-compose.master-agent.example.yml` as the baseline Compose definition for the master runtime.
 2. Verify startup logs include:
 - loaded admin channels
@@ -171,9 +173,12 @@ Omit the model argument to clear the override:
 
 ## Routing Validation
 1. In mapped non-admin channel, mention bot with prompt.
-2. Confirm master logs routing event for mapped agent.
-3. Reply in the same thread without mention.
-4. Confirm thread follow-up routes to same agent.
+2. Confirm master runs the message prepare step before dispatch.
+3. If the agent container is absent or stopped, confirm master uses the same startup flow as `/master-agent-start` before dispatching.
+4. For Codex agents, if `auth_refreshed_at` is missing or stale, confirm master refreshes auth before dispatching.
+5. Confirm master logs routing event for mapped agent.
+6. Reply in the same thread without mention.
+7. Confirm thread follow-up routes to same agent.
 
 ## Failure Recovery
 ### Build or start failure
@@ -235,6 +240,7 @@ ls -l "$MASTER_SSH_AUTH_SOCK_PATH"
 ```
 - This updates `/workspace/home/.codex/auth.json` in the agent home and preserves existing `.codex` session state files.
 - You do not need to remove the agent container for this recovery path.
+- Routed Codex prompts also refresh auth automatically when `auth_refreshed_at` is missing or older than `MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS`. Manual `/master-agent-refresh-auth` is still useful immediately after rotating the host auth source or when validating auth recovery.
 
 ### Rate-limited commands
 - Master returns `ERR_RATE_LIMITED`.

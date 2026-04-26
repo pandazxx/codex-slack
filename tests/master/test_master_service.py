@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from src.master.registry import AgentRegistry
 from src.master.service import MasterService
 
@@ -7,6 +9,7 @@ from src.master.service import MasterService
 class FakeRuntime:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
+        self.inspect_result: dict[str, object] | None = {"Name": "agent", "State": "running"}
 
     def pull_image(self, image: str) -> None:
         self.calls.append(("pull_image", image))
@@ -45,7 +48,11 @@ class FakeRuntime:
 
     def inspect_agent(self, name: str) -> dict[str, str] | None:
         self.calls.append(("inspect_agent", name))
-        return {"Name": name, "State": "running"}
+        if self.inspect_result is None:
+            return None
+        payload = dict(self.inspect_result)
+        payload["Name"] = name
+        return payload
 
     def tail_logs(self, name: str, lines: int) -> str:
         self.calls.append(("tail_logs", {"name": name, "lines": lines}))
@@ -439,6 +446,10 @@ def test_refresh_agent_auth_reseeds_workspace_codex_home(tmp_path) -> None:
             "host_auth_path": "/host/secrets/codex-auth.json",
         },
     )
+    saved = registry.get("payments-api")
+    assert saved is not None
+    assert saved.auth_refreshed_at is not None
+    assert refreshed.data["auth_refreshed_at"] == saved.auth_refreshed_at
 
 
 def test_refresh_agent_auth_requires_configured_auth_source(tmp_path) -> None:
@@ -475,6 +486,114 @@ def test_refresh_agent_auth_propagates_runtime_failure(tmp_path) -> None:
     refreshed = service.refresh_agent_auth(name="payments-api")
     assert refreshed.ok is False
     assert refreshed.code == "ERR_RUNTIME_FAILED"
+
+
+def test_prepare_agent_for_message_starts_stopped_agent_and_refreshes_stale_auth(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    runtime.inspect_result = {"State": {"Running": False, "Status": "exited"}}
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_codex_auth_json_path="/host/secrets/codex-auth.json",
+        auth_refresh_max_age_days=7,
+    )
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert loaded.ok is True
+    record = registry.get("payments-api")
+    assert record is not None
+    record.auth_refreshed_at = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    registry.upsert(record)
+
+    prepared = service.prepare_agent_for_message(name="payments-api")
+
+    assert prepared.ok is True
+    assert prepared.data["started"] is True
+    assert prepared.data["refreshed_auth"] is True
+    call_names = [call[0] for call in runtime.calls]
+    assert "inspect_agent" in call_names
+    assert "start_agent" in call_names
+    assert "refresh_agent_auth" in call_names
+    assert call_names.index("start_agent") < call_names.index("refresh_agent_auth")
+
+
+def test_prepare_agent_for_message_refreshes_missing_auth_timestamp_for_running_codex_agent(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    runtime.inspect_result = {"State": {"Running": True, "Status": "running"}}
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_codex_auth_json_path="/host/secrets/codex-auth.json",
+        auth_refresh_max_age_days=7,
+    )
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert loaded.ok is True
+
+    prepared = service.prepare_agent_for_message(name="payments-api")
+
+    assert prepared.ok is True
+    assert prepared.data["started"] is False
+    assert prepared.data["refreshed_auth"] is True
+
+
+def test_prepare_agent_for_message_skips_refresh_for_fresh_auth_timestamp(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    runtime.inspect_result = {"State": {"Running": True, "Status": "running"}}
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_codex_auth_json_path="/host/secrets/codex-auth.json",
+        auth_refresh_max_age_days=7,
+    )
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert loaded.ok is True
+    record = registry.get("payments-api")
+    assert record is not None
+    record.auth_refreshed_at = datetime.now(timezone.utc).isoformat()
+    registry.upsert(record)
+
+    prepared = service.prepare_agent_for_message(name="payments-api")
+
+    assert prepared.ok is True
+    assert prepared.data["started"] is False
+    assert prepared.data["refreshed_auth"] is False
+
+
+def test_prepare_agent_for_message_skips_codex_auth_refresh_for_claude_agent(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    runtime.inspect_result = {"State": {"Running": True, "Status": "running"}}
+    service = MasterService(
+        registry=registry,
+        runtime=runtime,
+        agent_codex_auth_json_path="/host/secrets/codex-auth.json",
+        auth_refresh_max_age_days=7,
+    )
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123", agent_adapter="claude-code")
+    assert loaded.ok is True
+
+    prepared = service.prepare_agent_for_message(name="payments-api")
+
+    assert prepared.ok is True
+    assert prepared.data["refreshed_auth"] is False
 
 
 def test_load_agent_invalid_name_returns_invalid_args(tmp_path) -> None:

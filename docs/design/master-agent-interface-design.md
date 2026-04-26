@@ -219,6 +219,10 @@ The manifest is the canonical descriptor for:
 - primary execution path is `codex exec ...`
 - user-scope config lives under `/workspace/home/.codex`
 - auth refresh writes to `/workspace/home/.codex/auth.json`
+- routed prompts trigger a master-side prepare step before dispatch; if
+  `auth_refreshed_at` is missing or older than
+  `MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS`, master refreshes Codex auth before
+  executing the prompt
 
 ### Claude Code
 
