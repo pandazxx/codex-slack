@@ -89,6 +89,7 @@ Topic namespace:
 ```
 codex-slack/workspace/{workspace_id}/topic/{topic_id}/prompt
   payload: {
+    "message_id": "<uuid>",
     "subagent": "engineer",
     "worktree": "/workspace/worktrees/<topic-id>",
     "session_id": "<llm-session-id>",
@@ -101,6 +102,8 @@ codex-slack/workspace/{workspace_id}/topic/{topic_id}/status
 
 codex-slack/workspace/{workspace_id}/topic/{topic_id}/response
   payload: {
+    "message_id": "<uuid>",
+    "reply_to": "<prompt-message-id>",
     "last_response": "...",
     "transcript": "...",
     "session_id": "<llm-session-id>"
@@ -142,7 +145,7 @@ Primary views:
 
 ### Data Model (SQLite)
 
-Database file: `/data/master/v3.db` on master's durable volume.
+Database file: `/data/master/master_data.db` on master's durable volume.
 
 ```
 workspaces
@@ -152,7 +155,7 @@ workspaces
   container_name TEXT
   created_at    TEXT NOT NULL
 
-workspace_agents
+workspace_agents  -- NOTE: detailed design TBD; further discussion needed
   id            TEXT PRIMARY KEY
   workspace_id  TEXT NOT NULL REFERENCES workspaces(id)
   agent_name    TEXT NOT NULL   -- e.g. "engineer", "tester"
@@ -181,6 +184,7 @@ messages
   sender        TEXT NOT NULL  -- "user" | "agent" | "system"
   agent_name    TEXT           -- set when sender = "agent"
   text          TEXT NOT NULL
+  transcript    TEXT           -- full LLM transcript; set when sender = "agent"
   attachments_json TEXT        -- JSON array of attachment metadata
   created_at    TEXT NOT NULL
 ```
@@ -232,13 +236,10 @@ alternatives analysis.
 
 ## Open Questions
 
-- Codex session key mechanism — needs verification against current Codex CLI
-  to confirm the flag or env var to resume a named session.
-- MQTT authentication — Mosquitto runs on the internal compose network;
-  confirm whether unauthenticated local-only access is acceptable for v3.0 or
-  whether password auth is required.
-- Worktree cleanup policy — when should a worktree be removed? On topic close,
-  on PR merge, or never (manual only)?
-- Attachment storage for the web frontend — v2 staged attachments from Slack/
-  Discord. v3 receives uploads from the browser; need to define upload endpoint,
-  staging path, and size limits.
+- Codex session key mechanism — deferred to implementation phase.
+- MQTT authentication — Mosquitto runs on the internal compose network,
+  local access only; no authentication required for v3.0.
+- Worktree cleanup policy — worktree is removed when its topic is archived.
+- Attachment storage for the web frontend — uploaded files are stored on a
+  separate durable shared volume mounted by both master and agent containers.
+  Migration to S3-compatible object storage is a future option.
