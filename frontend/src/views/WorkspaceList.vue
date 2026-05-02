@@ -34,7 +34,7 @@ const form = ref({ name: '', repo_url: '' })
 async function load() {
   loading.value = true
   try {
-    const r = await fetch('/workspaces')
+    const r = await fetch('/api/workspaces')
     workspaces.value = await r.json()
   } finally {
     loading.value = false
@@ -45,7 +45,7 @@ async function createWorkspace() {
   creating.value = true
   createError.value = ''
   try {
-    const r = await fetch('/workspaces', {
+    const r = await fetch('/api/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(form.value),

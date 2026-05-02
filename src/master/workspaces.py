@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -7,7 +8,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from .agent_runner import spawn_agent, stop_agent, container_name
 from .db import get_connection
+
+LOGGER = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
@@ -24,6 +28,7 @@ def _now() -> str:
 class WorkspaceCreate(BaseModel):
     name: str
     repo_url: str
+    repo_ref: str = "master"
 
 
 class WorkspaceAgentOut(BaseModel):
@@ -100,6 +105,39 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
     finally:
         conn.close()
     assert result is not None
+
+    settings = request.app.state.settings
+    try:
+        name = spawn_agent(
+            runtime=settings.container_runtime,
+            workspace_id=workspace_id,
+            repo_url=body.repo_url.strip(),
+            repo_ref=body.repo_ref.strip(),
+            image=settings.agent_base_image,
+            mqtt_host=settings.mqtt_host,
+            mqtt_port=settings.mqtt_port,
+            network=settings.agent_network,
+            claude_code_oauth_token=settings.claude_code_oauth_token,
+            anthropic_api_key=settings.anthropic_api_key,
+            openai_api_key=settings.openai_api_key,
+            gh_token=settings.gh_token,
+            ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
+            ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
+            dry_run=settings.dry_run,
+        )
+        conn2 = get_connection(request.app.state.db_path)
+        try:
+            conn2.execute(
+                "UPDATE workspaces SET container_name = ? WHERE id = ?",
+                (name, workspace_id),
+            )
+            conn2.commit()
+            result = result.model_copy(update={"container_name": name})
+        finally:
+            conn2.close()
+    except Exception:
+        LOGGER.exception("workspace.agent_spawn_failed workspace_id=%s", workspace_id)
+
     return result
 
 
@@ -132,12 +170,30 @@ def delete_workspace(workspace_id: str, request: Request) -> None:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id FROM workspaces WHERE id = ?", (workspace_id,)
+            "SELECT id, container_name FROM workspaces WHERE id = ?", (workspace_id,)
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
+        existing_container = row["container_name"] or container_name(workspace_id)
+        topic_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM topics WHERE workspace_id = ?", (workspace_id,)
+        ).fetchall()]
+        for tid in topic_ids:
+            conn.execute("DELETE FROM messages WHERE topic_id = ?", (tid,))
+            conn.execute("DELETE FROM sessions WHERE topic_id = ?", (tid,))
+        conn.execute("DELETE FROM topics WHERE workspace_id = ?", (workspace_id,))
         conn.execute("DELETE FROM workspace_agents WHERE workspace_id = ?", (workspace_id,))
         conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
         conn.commit()
     finally:
         conn.close()
+
+    settings = request.app.state.settings
+    try:
+        stop_agent(
+            runtime=settings.container_runtime,
+            name=existing_container,
+            dry_run=settings.dry_run,
+        )
+    except Exception:
+        LOGGER.exception("workspace.agent_stop_failed container=%s", existing_container)

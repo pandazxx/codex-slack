@@ -29,6 +29,8 @@ services:
       SSH_AUTH_SOCK: /run/ssh-agent.sock
     ports:
       - "${MASTER_PORT:-8080}:8080"
+    group_add:
+      - "${DOCKER_GID:-999}"
     volumes:
       - master_data:/opt/codex-slack/data/master
       - ${MASTER_SSH_AUTH_SOCK_PATH:-/dev/null}:/run/ssh-agent.sock
