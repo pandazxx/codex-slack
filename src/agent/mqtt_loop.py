@@ -58,20 +58,31 @@ def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str) -> None:
 
 
 def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str | None) -> tuple[str, str | None, str | None]:
-    cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions"]
+    cmd = ["claude", "--print", "--output-format", "stream-json", "--dangerously-skip-permissions"]
     if session_id:
         cmd += ["--resume", session_id]
     cmd.append(text)
     try:
         result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True, timeout=_LLM_TIMEOUT)
-        raw = result.stdout.strip()
-        try:
-            data = json.loads(raw)
-            new_session_id = data.get("session_id")
-            output = data.get("result") or data.get("last_response") or "(no output)"
-            return output, new_session_id, raw
-        except (json.JSONDecodeError, AttributeError):
-            return raw or result.stderr.strip() or "(no output)", None, None
+        events = []
+        new_session_id = None
+        output = None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+                events.append(event)
+                if event.get("type") == "result":
+                    new_session_id = event.get("session_id")
+                    output = event.get("result") or event.get("last_response")
+            except (json.JSONDecodeError, AttributeError):
+                continue
+        transcript = json.dumps(events) if events else None
+        if not output:
+            output = result.stderr.strip() or "(no output)"
+        return output, new_session_id, transcript
     except subprocess.TimeoutExpired:
         return f"(claude timed out after {_LLM_TIMEOUT}s)", None, None
     except FileNotFoundError:

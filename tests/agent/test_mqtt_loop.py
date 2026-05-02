@@ -36,16 +36,24 @@ def test_parse_prompt_topic_rejects_malformed():
 # --- _run_claude ---
 
 def test_run_claude_returns_stdout(tmp_path):
+    import json as _json
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello from claude"}]}},
+        {"type": "result", "result": "Hello from claude", "session_id": None, "cost_usd": 0.0, "duration_ms": 100, "is_error": False},
+    ]
+    stream = "\n".join(_json.dumps(e) for e in events)
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="Hello from claude\n", stderr="", returncode=0)
+        mock_run.return_value = MagicMock(stdout=stream, stderr="", returncode=0)
         text, session, transcript = _run_claude(str(tmp_path), "say hi", None, None)
     assert text == "Hello from claude"
     assert session is None
+    assert transcript is not None
+    assert isinstance(_json.loads(transcript), list)
 
 
 def test_run_claude_includes_resume_when_session_id(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="ok", stderr="", returncode=0)
+        mock_run.return_value = MagicMock(stdout='{"type":"result","result":"ok","session_id":"ses-123"}', stderr="", returncode=0)
         _run_claude(str(tmp_path), "continue", "ses-123", None)
     cmd = mock_run.call_args.args[0]
     assert "--resume" in cmd
@@ -166,7 +174,7 @@ def test_process_prompt_skips_empty_text(tmp_path):
 
 def test_process_prompt_response_payload_fields(tmp_path):
     client = MagicMock()
-    with patch("src.agent.mqtt_loop._run_claude", return_value=("the answer", None, '{"result":"the answer"}')):
+    with patch("src.agent.mqtt_loop._run_claude", return_value=("the answer", None, '[{"type":"result","result":"the answer"}]')):
         with patch("src.agent.mqtt_loop._ensure_worktree"):
             _process_prompt(
                 client, "ws1", "t1",
