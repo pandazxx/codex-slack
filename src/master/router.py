@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import json
 import logging
 import os
@@ -18,6 +18,63 @@ from .registry import AgentRegistry
 
 LOGGER = logging.getLogger(__name__)
 MENTION_PATTERN = re.compile(r"<@[^>]+>")
+_ROUTER_STATE_FILE_LOCK = Lock()
+
+
+@dataclass(frozen=True)
+class ClaudeChannelSession:
+    session_name: str
+    created: bool
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "ClaudeChannelSession | None":
+        if not isinstance(raw, dict):
+            return None
+        session_name = str(raw.get("session_name") or "").strip()
+        created = bool(raw.get("created", False))
+        if not session_name:
+            return None
+        return cls(session_name=session_name, created=created)
+
+
+def _load_router_state(path: str | None) -> dict[str, object]:
+    state_path = Path((path or "").strip())
+    if not str(state_path):
+        return {}
+    if not state_path.exists():
+        return {}
+    with _ROUTER_STATE_FILE_LOCK:
+        try:
+            raw = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("router.state_load_failed path=%s error=%s", state_path, exc)
+            return {}
+    if not isinstance(raw, dict):
+        LOGGER.warning("router.state_load_failed path=%s error=invalid_root_type", state_path)
+        return {}
+    return raw
+
+
+def _update_router_state(path: str | None, update: Callable[[dict[str, object]], dict[str, object]]) -> None:
+    state_path_raw = (path or "").strip()
+    if not state_path_raw:
+        return
+    state_path = Path(state_path_raw)
+    with _ROUTER_STATE_FILE_LOCK:
+        try:
+            existing: dict[str, object]
+            if state_path.exists():
+                raw = json.loads(state_path.read_text(encoding="utf-8"))
+                existing = raw if isinstance(raw, dict) else {}
+            else:
+                existing = {}
+            payload = update(dict(existing))
+            if not isinstance(payload, dict):
+                raise ValueError("router state updater must return a dict payload")
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("router.state_persist_failed path=%s error=%s", state_path, exc)
 
 
 def _inject_claude_model(command: str, model: str) -> str:
@@ -392,8 +449,12 @@ class MultiAgentDispatcher:
 @dataclass(frozen=True)
 class ClaudeCodeDispatcher(PodmanExecDispatcher):
     command_template: str = "claude -p --output-format json"
-    _channel_sessions: dict[str, str] = field(default_factory=dict, init=False, repr=False, compare=False)
+    state_path: str | None = None
+    _channel_sessions: dict[str, ClaudeChannelSession] = field(default_factory=dict, init=False, repr=False, compare=False)
     _session_lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_channel_sessions", self._load_channel_sessions())
 
     @staticmethod
     def _conversation_key(*, agent_name: str, platform: str, channel_id: str) -> str:
@@ -404,6 +465,30 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         raw = f"claude-{agent_name}-{platform}-{channel_id}"
         normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", raw).strip("-")
         return normalized or "claude-session"
+
+    def _load_channel_sessions(self) -> dict[str, ClaudeChannelSession]:
+        raw = _load_router_state(self.state_path).get("claude_channel_sessions")
+        if not isinstance(raw, dict):
+            return {}
+        result: dict[str, ClaudeChannelSession] = {}
+        for key, value in raw.items():
+            if not isinstance(key, str):
+                continue
+            session = ClaudeChannelSession.from_dict(value)
+            if session is not None:
+                result[key] = session
+        return result
+
+    def _persist_channel_sessions(self) -> None:
+        with self._session_lock:
+            payload = {key: asdict(value) for key, value in sorted(self._channel_sessions.items())}
+
+        def updater(existing: dict[str, object]) -> dict[str, object]:
+            updated = dict(existing)
+            updated["claude_channel_sessions"] = payload
+            return updated
+
+        _update_router_state(self.state_path, updater)
 
     @staticmethod
     def _strip_session_flags(command: str) -> str:
@@ -579,13 +664,13 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             channel_id=channel_id,
         )
         with self._session_lock:
-            known_session_id = self._channel_sessions.get(conversation_key)
-        initial_action = "resume" if known_session_id else "create"
-        initial_session_id = known_session_id or self._session_name(
+            known_session = self._channel_sessions.get(conversation_key)
+        initial_session_id = (known_session.session_name if known_session else "") or self._session_name(
             agent_name=agent_name,
             platform=platform,
             channel_id=channel_id,
         )
+        initial_action = "resume" if known_session and known_session.created else "create"
         retry_action: str | None = None
         effective_session_id = initial_session_id
         rendered_command = self._render_command(action=initial_action, session_id=effective_session_id)
@@ -631,7 +716,11 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             if self._should_retry_with_create(stderr_text):
                 retry_action = "create"
                 with self._session_lock:
-                    self._channel_sessions.pop(conversation_key, None)
+                    self._channel_sessions[conversation_key] = ClaudeChannelSession(
+                        session_name=effective_session_id,
+                        created=False,
+                    )
+                self._persist_channel_sessions()
                 effective_session_id = self._session_name(
                     agent_name=agent_name,
                     platform=platform,
@@ -695,7 +784,11 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
 
         response = self._parse_response(completed.stdout.strip())
         with self._session_lock:
-            self._channel_sessions[conversation_key] = effective_session_id
+            self._channel_sessions[conversation_key] = ClaudeChannelSession(
+                session_name=effective_session_id,
+                created=True,
+            )
+        self._persist_channel_sessions()
         LOGGER.info(
             "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s session_id=%s response_chars=%d",
             agent_name,
@@ -896,33 +989,20 @@ class ChannelRouter:
         return True
 
     def _load_tracked_threads(self) -> set[str]:
-        path = (self.tracked_threads_path or "").strip()
-        if not path:
-            return set()
-        state_path = Path(path)
-        if not state_path.exists():
-            return set()
-        try:
-            raw = json.loads(state_path.read_text(encoding="utf-8"))
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("router.thread_state_load_failed path=%s error=%s", path, exc)
-            return set()
-        entries = raw.get("tracked_threads")
+        entries = _load_router_state(self.tracked_threads_path).get("tracked_threads")
         if not isinstance(entries, list):
             return set()
         return {str(item) for item in entries if isinstance(item, str)}
 
     def _persist_tracked_threads_unlocked(self) -> None:
-        path = (self.tracked_threads_path or "").strip()
-        if not path:
-            return
-        state_path = Path(path)
-        payload = {"tracked_threads": sorted(self._tracked_threads)}
-        try:
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("router.thread_state_persist_failed path=%s error=%s", path, exc)
+        tracked_threads = sorted(self._tracked_threads)
+
+        def updater(existing: dict[str, object]) -> dict[str, object]:
+            updated = dict(existing)
+            updated["tracked_threads"] = tracked_threads
+            return updated
+
+        _update_router_state(self.tracked_threads_path, updater)
 
     def _record_usage(
         self,

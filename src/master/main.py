@@ -104,6 +104,7 @@ def main() -> None:
         command_template=settings.claude_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
         slack_bot_token=settings.slack_bot_token,
+        state_path=settings.thread_state_path,
         agent_prepare_callback=agent_prepare_callback,
     )
     dispatcher = MultiAgentDispatcher(
