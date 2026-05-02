@@ -58,7 +58,7 @@ def send_message(workspace_id: str, topic_id: str, body: MessageSend, request: R
         if conn.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone() is None:
             raise HTTPException(404, "workspace not found")
         topic = conn.execute(
-            "SELECT id, worktree_path FROM topics WHERE id = ? AND workspace_id = ?",
+            "SELECT id, worktree_path, branch_name FROM topics WHERE id = ? AND workspace_id = ?",
             (topic_id, workspace_id),
         ).fetchone()
         if topic is None:
@@ -86,8 +86,10 @@ def send_message(workspace_id: str, topic_id: str, body: MessageSend, request: R
 
     payload = json.dumps({
         "message_id": message_id,
+        "adapter": agent["adapter"],
         "subagent": agent["subagent"],
         "worktree": topic["worktree_path"],
+        "branch": topic["branch_name"],
         "session_id": llm_session_id,
         "text": body.text.strip(),
         "attachments": [],
