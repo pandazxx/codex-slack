@@ -6,7 +6,7 @@ from pathlib import Path
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS workspaces (
     id             TEXT PRIMARY KEY,
-    name           TEXT NOT NULL,
+    name           TEXT NOT NULL UNIQUE,
     repo_url       TEXT NOT NULL,
     container_name TEXT,
     created_at     TEXT NOT NULL
