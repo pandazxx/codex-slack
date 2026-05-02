@@ -20,7 +20,7 @@
             <RouterLink :to="`/workspaces/${id}/topics/${t.id}`">{{ t.subject }}</RouterLink>
             <span class="muted small"> — branch: {{ t.branch_name }}</span>
           </span>
-          <button class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Delete topic">✕</button>
+          <button class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Archive topic">Archive</button>
         </li>
       </ul>
     </section>
@@ -143,7 +143,7 @@ async function addAgent() {
 }
 
 async function deleteTopic(topicId, subject) {
-  if (!confirm(`Delete topic "${subject}"? This cannot be undone.`)) return
+  if (!confirm(`Archive topic "${subject}"?`)) return
   await fetch(`/api/workspaces/${id}/topics/${topicId}`, { method: 'DELETE' })
   await load()
 }

@@ -19,7 +19,7 @@
         <div class="list-row">
           <RouterLink :to="`/workspaces/${ws.id}`">{{ ws.name }}</RouterLink>
           <span class="muted small"> — {{ ws.repo_url }}</span>
-          <button class="remove-btn" @click.prevent="deleteWorkspace(ws.id, ws.name)" title="Delete workspace">✕</button>
+          <button class="remove-btn" @click.prevent="deleteWorkspace(ws.id, ws.name)" title="Archive workspace">Archive</button>
         </div>
       </li>
     </ul>
@@ -69,7 +69,7 @@ async function createWorkspace() {
 }
 
 async function deleteWorkspace(id, name) {
-  if (!confirm(`Delete workspace "${name}"? This cannot be undone.`)) return
+  if (!confirm(`Archive workspace "${name}"?`)) return
   await fetch(`/api/workspaces/${id}`, { method: 'DELETE' })
   await load()
 }

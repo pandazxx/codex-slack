@@ -50,7 +50,8 @@ class WorkspaceOut(BaseModel):
 
 def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
     row = conn.execute(
-        "SELECT id, name, repo_url, container_name, created_at FROM workspaces WHERE id = ?",
+        "SELECT id, name, repo_url, container_name, created_at FROM workspaces"
+        " WHERE id = ? AND archived_at IS NULL",
         (workspace_id,),
     ).fetchone()
     if row is None:
@@ -146,7 +147,7 @@ def list_workspaces(request: Request) -> list[WorkspaceOut]:
     conn = get_connection(request.app.state.db_path)
     try:
         rows = conn.execute(
-            "SELECT id FROM workspaces ORDER BY created_at"
+            "SELECT id FROM workspaces WHERE archived_at IS NULL ORDER BY created_at"
         ).fetchall()
         return [w for row in rows if (w := _fetch_workspace(conn, row["id"])) is not None]
     finally:
@@ -170,20 +171,20 @@ def delete_workspace(workspace_id: str, request: Request) -> None:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id, container_name FROM workspaces WHERE id = ?", (workspace_id,)
+            "SELECT id, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
+            (workspace_id,),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
         existing_container = row["container_name"] or container_name(workspace_id)
-        topic_ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM topics WHERE workspace_id = ?", (workspace_id,)
-        ).fetchall()]
-        for tid in topic_ids:
-            conn.execute("DELETE FROM messages WHERE topic_id = ?", (tid,))
-            conn.execute("DELETE FROM sessions WHERE topic_id = ?", (tid,))
-        conn.execute("DELETE FROM topics WHERE workspace_id = ?", (workspace_id,))
-        conn.execute("DELETE FROM workspace_agents WHERE workspace_id = ?", (workspace_id,))
-        conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
+        now = _now()
+        conn.execute(
+            "UPDATE workspaces SET archived_at = ? WHERE id = ?", (now, workspace_id)
+        )
+        conn.execute(
+            "UPDATE topics SET archived_at = ? WHERE workspace_id = ? AND archived_at IS NULL",
+            (now, workspace_id),
+        )
         conn.commit()
     finally:
         conn.close()
