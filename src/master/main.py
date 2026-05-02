@@ -11,8 +11,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..logging_utils import LocalTimeFormatter
+from .agent_runner import container_name, spawn_agent, stop_agent
 from .config import load_master_settings
-from .db import init_db, schema_info
+from .db import get_connection, init_db, schema_info
 from .messages import router as messages_router
 from .mqtt_client import build_client as build_mqtt_client
 from .topics import router as topics_router
@@ -32,6 +33,55 @@ def configure_logging() -> None:
 
 def _db_path(data_dir: str) -> str:
     return str(Path(data_dir) / "master_data.db")
+
+
+def _respawn_agents(settings, db_path: str) -> None:
+    """Respawn agent containers for all workspaces on master startup."""
+    import docker
+    import docker.errors
+    try:
+        docker_client = docker.from_env()
+    except Exception:
+        LOGGER.warning("master.respawn_skip reason=docker_unavailable")
+        return
+
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, repo_url, container_name FROM workspaces WHERE container_name IS NOT NULL"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for row in rows:
+        ws_id = row["id"]
+        cname = row["container_name"]
+        try:
+            docker_client.containers.get(cname)
+            LOGGER.info("master.respawn_skip container=%s reason=already_running", cname)
+            continue
+        except docker.errors.NotFound:
+            pass
+        try:
+            spawn_agent(
+                runtime=settings.container_runtime,
+                workspace_id=ws_id,
+                repo_url=row["repo_url"],
+                image=settings.agent_base_image,
+                mqtt_host=settings.mqtt_host,
+                mqtt_port=settings.mqtt_port,
+                network=settings.agent_network,
+                claude_code_oauth_token=settings.claude_code_oauth_token,
+                anthropic_api_key=settings.anthropic_api_key,
+                openai_api_key=settings.openai_api_key,
+                gh_token=settings.gh_token,
+                ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
+                ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
+                dry_run=settings.dry_run,
+            )
+            LOGGER.info("master.respawned container=%s workspace_id=%s", cname, ws_id)
+        except Exception:
+            LOGGER.exception("master.respawn_failed workspace_id=%s", ws_id)
 
 
 @asynccontextmanager
@@ -60,6 +110,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     app.state.db_path = db_path
     app.state.hub = hub
     app.state.mqtt = mqtt
+    _respawn_agents(settings, db_path)
     yield
     mqtt.loop_stop()
     mqtt.disconnect()
