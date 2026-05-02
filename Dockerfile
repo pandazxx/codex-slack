@@ -11,7 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
     curl \
-    docker.io \
     git \
     gh \
     jq \

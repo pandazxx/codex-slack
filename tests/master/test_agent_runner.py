@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
+import docker.errors
 import pytest
 
 from src.master.agent_runner import container_name, spawn_agent, stop_agent
@@ -13,9 +14,15 @@ def test_container_name_format():
 
 # --- spawn_agent ---
 
-def test_spawn_agent_runs_docker_run():
-    with patch("src.master.agent_runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+def _mock_docker_client():
+    client = MagicMock()
+    client.containers.get.side_effect = docker.errors.NotFound("not found")
+    return client
+
+
+def test_spawn_agent_calls_containers_run():
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
         spawn_agent(
             runtime="docker",
             workspace_id="ws1",
@@ -25,21 +32,36 @@ def test_spawn_agent_runs_docker_run():
             mqtt_port=1883,
             network="codex-slack_internal",
         )
-    calls = [c.args[0] for c in mock_run.call_args_list]
-    run_cmd = next(c for c in calls if "run" in c)
-    assert "docker" in run_cmd
-    assert "run" in run_cmd
-    assert "-d" in run_cmd
-    assert "--network" in run_cmd
-    assert "codex-slack_internal" in run_cmd
-    assert any("WORKSPACE_ID=ws1" in a for a in run_cmd)
-    assert any("MQTT_HOST=mosquitto" in a for a in run_cmd)
-    assert any("AGENT_REPO_URL=https://github.com/x/y" in a for a in run_cmd)
+    mock_client.containers.run.assert_called_once()
+    _, kwargs = mock_client.containers.run.call_args
+    assert kwargs["name"] == "codex-agent-ws1"
+    assert kwargs["network"] == "codex-slack_internal"
+    assert kwargs["detach"] is True
+
+
+def test_spawn_agent_sets_environment():
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
+        spawn_agent(
+            runtime="docker",
+            workspace_id="ws1",
+            repo_url="https://github.com/x/y",
+            image="img",
+            mqtt_host="mosquitto",
+            mqtt_port=1883,
+            network="net",
+        )
+    _, kwargs = mock_client.containers.run.call_args
+    env = kwargs["environment"]
+    assert env["WORKSPACE_ID"] == "ws1"
+    assert env["MQTT_HOST"] == "mosquitto"
+    assert env["MQTT_PORT"] == "1883"
+    assert env["AGENT_REPO_URL"] == "https://github.com/x/y"
 
 
 def test_spawn_agent_returns_container_name():
-    with patch("src.master.agent_runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
         name = spawn_agent(
             runtime="docker",
             workspace_id="ws-42",
@@ -53,8 +75,8 @@ def test_spawn_agent_returns_container_name():
 
 
 def test_spawn_agent_forwards_oauth_token():
-    with patch("src.master.agent_runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
         spawn_agent(
             runtime="docker",
             workspace_id="ws1",
@@ -65,14 +87,13 @@ def test_spawn_agent_forwards_oauth_token():
             network="net",
             claude_code_oauth_token="mytoken",
         )
-    calls = [c.args[0] for c in mock_run.call_args_list]
-    run_cmd = next(c for c in calls if "run" in c)
-    assert any("CLAUDE_CODE_OAUTH_TOKEN=mytoken" in a for a in run_cmd)
+    _, kwargs = mock_client.containers.run.call_args
+    assert kwargs["environment"]["CLAUDE_CODE_OAUTH_TOKEN"] == "mytoken"
 
 
 def test_spawn_agent_omits_empty_credentials():
-    with patch("src.master.agent_runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
         spawn_agent(
             runtime="docker",
             workspace_id="ws1",
@@ -84,15 +105,14 @@ def test_spawn_agent_omits_empty_credentials():
             claude_code_oauth_token=None,
             anthropic_api_key=None,
         )
-    calls = [c.args[0] for c in mock_run.call_args_list]
-    run_cmd = next(c for c in calls if "run" in c)
-    assert not any("CLAUDE_CODE_OAUTH_TOKEN" in a for a in run_cmd)
-    assert not any("ANTHROPIC_API_KEY" in a for a in run_cmd)
+    _, kwargs = mock_client.containers.run.call_args
+    env = kwargs["environment"]
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+    assert "ANTHROPIC_API_KEY" not in env
 
 
 def test_spawn_agent_dry_run_skips_docker():
-    with patch("src.master.agent_runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+    with patch("src.master.agent_runner._client") as mock_client_fn:
         name = spawn_agent(
             runtime="docker",
             workspace_id="ws1",
@@ -103,34 +123,30 @@ def test_spawn_agent_dry_run_skips_docker():
             network="net",
             dry_run=True,
         )
-    # Only the rm -f cleanup call should happen, not the run
-    calls = [c.args[0] for c in mock_run.call_args_list]
-    assert not any("run" in c for c in calls)
+    mock_client_fn.assert_not_called()
     assert name == "codex-agent-ws1"
 
 
-def test_spawn_agent_raises_on_docker_failure():
-    with patch("src.master.agent_runner.subprocess.run") as mock_run:
-        # First call (rm -f) succeeds, second (run) fails
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stderr=""),
-            MagicMock(returncode=1, stderr="image not found"),
-        ]
-        with pytest.raises(RuntimeError, match="image not found"):
-            spawn_agent(
-                runtime="docker",
-                workspace_id="ws1",
-                repo_url="https://github.com/x/y",
-                image="bad-image",
-                mqtt_host="broker",
-                mqtt_port=1883,
-                network="net",
-            )
+def test_spawn_agent_removes_existing_container():
+    mock_client = MagicMock()
+    existing = MagicMock()
+    mock_client.containers.get.return_value = existing
+    with patch("src.master.agent_runner._client", return_value=mock_client):
+        spawn_agent(
+            runtime="docker",
+            workspace_id="ws1",
+            repo_url="https://github.com/x/y",
+            image="img",
+            mqtt_host="broker",
+            mqtt_port=1883,
+            network="net",
+        )
+    existing.remove.assert_called_once_with(force=True)
 
 
 def test_spawn_agent_uses_gh_token_fallback_when_none():
-    with patch("src.master.agent_runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
         spawn_agent(
             runtime="docker",
             workspace_id="ws1",
@@ -141,23 +157,30 @@ def test_spawn_agent_uses_gh_token_fallback_when_none():
             network="net",
             gh_token=None,
         )
-    calls = [c.args[0] for c in mock_run.call_args_list]
-    run_cmd = next(c for c in calls if "run" in c)
-    assert any("GH_TOKEN=" in a for a in run_cmd)
-    assert not any("GH_TOKEN=None" in a for a in run_cmd)
+    _, kwargs = mock_client.containers.run.call_args
+    gh = kwargs["environment"]["GH_TOKEN"]
+    assert gh and gh != "None"
 
 
 # --- stop_agent ---
 
-def test_stop_agent_runs_rm_f():
-    with patch("src.master.agent_runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
+def test_stop_agent_removes_container():
+    mock_client = MagicMock()
+    container = MagicMock()
+    mock_client.containers.get.return_value = container
+    with patch("src.master.agent_runner._client", return_value=mock_client):
         stop_agent(runtime="docker", name="codex-agent-ws1")
-    cmd = mock_run.call_args.args[0]
-    assert cmd == ["docker", "rm", "-f", "codex-agent-ws1"]
+    container.remove.assert_called_once_with(force=True)
+
+
+def test_stop_agent_ignores_not_found():
+    mock_client = MagicMock()
+    mock_client.containers.get.side_effect = docker.errors.NotFound("not found")
+    with patch("src.master.agent_runner._client", return_value=mock_client):
+        stop_agent(runtime="docker", name="codex-agent-ws1")
 
 
 def test_stop_agent_dry_run_skips_call():
-    with patch("src.master.agent_runner.subprocess.run") as mock_run:
+    with patch("src.master.agent_runner._client") as mock_client_fn:
         stop_agent(runtime="docker", name="codex-agent-ws1", dry_run=True)
-    mock_run.assert_not_called()
+    mock_client_fn.assert_not_called()

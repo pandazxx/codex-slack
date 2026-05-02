@@ -1,8 +1,10 @@
-"""Spawn and stop per-workspace agent containers."""
+"""Spawn and stop per-workspace agent containers via Docker SDK."""
 from __future__ import annotations
 
 import logging
-import subprocess
+
+import docker
+import docker.errors
 
 LOGGER = logging.getLogger(__name__)
 
@@ -14,10 +16,8 @@ def container_name(workspace_id: str) -> str:
     return f"codex-agent-{workspace_id}"
 
 
-def _run(cmd: list[str]) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"command failed: {' '.join(cmd)}")
+def _client() -> docker.DockerClient:
+    return docker.from_env()
 
 
 def spawn_agent(
@@ -37,36 +37,41 @@ def spawn_agent(
 ) -> str:
     name = container_name(workspace_id)
 
-    if not dry_run:
-        subprocess.run([runtime, "rm", "-f", name], capture_output=True, check=False)
-
-    cmd = [
-        runtime, "run", "-d",
-        "--name", name,
-        "--network", network,
-        "--restart", "unless-stopped",
-        "-e", f"WORKSPACE_ID={workspace_id}",
-        "-e", f"MQTT_HOST={mqtt_host}",
-        "-e", f"MQTT_PORT={mqtt_port}",
-        "-e", f"AGENT_REPO_URL={repo_url}",
-        "-e", f"GH_TOKEN={gh_token or _GH_TOKEN_FALLBACK}",
-    ]
+    env = {
+        "WORKSPACE_ID": workspace_id,
+        "MQTT_HOST": mqtt_host,
+        "MQTT_PORT": str(mqtt_port),
+        "AGENT_REPO_URL": repo_url,
+        "GH_TOKEN": gh_token or _GH_TOKEN_FALLBACK,
+    }
     for key, val in [
         ("CLAUDE_CODE_OAUTH_TOKEN", claude_code_oauth_token),
         ("ANTHROPIC_API_KEY", anthropic_api_key),
         ("OPENAI_API_KEY", openai_api_key),
     ]:
         if val:
-            cmd += ["-e", f"{key}={val}"]
-
-    cmd += [image, "python", "-m", "src.agent.main"]
+            env[key] = val
 
     if dry_run:
-        LOGGER.info("agent_runner.dry_run_spawn container=%s cmd=%s", name, " ".join(cmd))
-    else:
-        _run(cmd)
-        LOGGER.info("agent_runner.spawned container=%s workspace_id=%s", name, workspace_id)
+        LOGGER.info("agent_runner.dry_run_spawn container=%s image=%s", name, image)
+        return name
 
+    c = _client()
+    try:
+        c.containers.get(name).remove(force=True)
+    except docker.errors.NotFound:
+        pass
+
+    c.containers.run(
+        image,
+        command=["python", "-m", "src.agent.main"],
+        name=name,
+        network=network,
+        environment=env,
+        restart_policy={"Name": "unless-stopped"},
+        detach=True,
+    )
+    LOGGER.info("agent_runner.spawned container=%s workspace_id=%s", name, workspace_id)
     return name
 
 
@@ -79,5 +84,10 @@ def stop_agent(
     if dry_run:
         LOGGER.info("agent_runner.dry_run_stop container=%s", name)
         return
-    subprocess.run([runtime, "rm", "-f", name], capture_output=True, check=False)
-    LOGGER.info("agent_runner.stopped container=%s", name)
+
+    c = _client()
+    try:
+        c.containers.get(name).remove(force=True)
+        LOGGER.info("agent_runner.stopped container=%s", name)
+    except docker.errors.NotFound:
+        pass
