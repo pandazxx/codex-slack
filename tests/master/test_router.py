@@ -374,13 +374,15 @@ def test_claude_dispatcher_persists_created_session_across_restarts(tmp_path, mo
     seen: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+        if _is_podman_inspect(cmd):
             return subprocess.CompletedProcess(
                 args=cmd,
                 returncode=0,
                 stdout=json.dumps([{"State": {"Running": True, "Status": "running"}}]),
                 stderr="",
             )
+        if _is_workdir_probe(cmd):
+            return _ready_workdir_result(cmd)
         seen.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
@@ -430,13 +432,15 @@ def test_claude_dispatcher_session_persistence_preserves_tracked_threads(tmp_pat
     dispatcher = ClaudeCodeDispatcher(command_template="claude -p", state_path=str(state_path))
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+        if _is_podman_inspect(cmd):
             return subprocess.CompletedProcess(
                 args=cmd,
                 returncode=0,
                 stdout=json.dumps([{"State": {"Running": True, "Status": "running"}}]),
                 stderr="",
             )
+        if _is_workdir_probe(cmd):
+            return _ready_workdir_result(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
