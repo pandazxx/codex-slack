@@ -58,7 +58,7 @@ def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str) -> None:
 
 
 def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str | None) -> tuple[str, str | None, str | None]:
-    cmd = ["claude", "--print", "--output-format", "stream-json", "--dangerously-skip-permissions"]
+    cmd = ["claude", "--print", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions"]
     if session_id:
         cmd += ["--resume", session_id]
     cmd.append(text)
