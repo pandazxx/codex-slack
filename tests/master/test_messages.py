@@ -21,15 +21,15 @@ def client(tmp_path, monkeypatch):
 @pytest.fixture()
 def workspace_topic(client):
     c, _ = client
-    ws = c.post("/workspaces", json={"name": "repo", "repo_url": "https://github.com/x/y"}).json()
-    topic = c.post(f"/workspaces/{ws['id']}/topics", json={"subject": "Fix bug"}).json()
+    ws = c.post("/api/workspaces", json={"name": "repo", "repo_url": "https://github.com/x/y"}).json()
+    topic = c.post(f"/api/workspaces/{ws['id']}/topics", json={"subject": "Fix bug"}).json()
     return ws["id"], topic["id"]
 
 
 def send(client, ws_id, topic_id, text="Hello", agent="claude"):
     c, _ = client
     return c.post(
-        f"/workspaces/{ws_id}/topics/{topic_id}/messages",
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/messages",
         json={"text": text, "agent_name": agent},
     )
 
@@ -68,21 +68,21 @@ def test_send_saves_user_message(client, workspace_topic):
     c, _ = client
     ws_id, topic_id = workspace_topic
     send(client, ws_id, topic_id, text="Remember this")
-    msgs = c.get(f"/workspaces/{ws_id}/topics/{topic_id}/messages").json()
+    msgs = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages").json()
     assert any(m["sender"] == "user" and m["text"] == "Remember this" for m in msgs)
 
 
 def test_send_unknown_workspace(client, workspace_topic):
     _, topic_id = workspace_topic
     c, _ = client
-    r = c.post(f"/workspaces/no-such/topics/{topic_id}/messages", json={"text": "hi"})
+    r = c.post(f"/api/workspaces/no-such/topics/{topic_id}/messages", json={"text": "hi"})
     assert r.status_code == 404
 
 
 def test_send_unknown_topic(client, workspace_topic):
     ws_id, _ = workspace_topic
     c, _ = client
-    r = c.post(f"/workspaces/{ws_id}/topics/no-such/messages", json={"text": "hi"})
+    r = c.post(f"/api/workspaces/{ws_id}/topics/no-such/messages", json={"text": "hi"})
     assert r.status_code == 404
 
 
@@ -97,7 +97,7 @@ def test_send_unknown_agent(client, workspace_topic):
 def test_list_messages_empty(client, workspace_topic):
     c, _ = client
     ws_id, topic_id = workspace_topic
-    r = c.get(f"/workspaces/{ws_id}/topics/{topic_id}/messages")
+    r = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages")
     assert r.status_code == 200
     assert r.json() == []
 
@@ -107,13 +107,13 @@ def test_list_messages_ordered(client, workspace_topic):
     send(client, ws_id, topic_id, text="First")
     send(client, ws_id, topic_id, text="Second")
     c, _ = client
-    msgs = c.get(f"/workspaces/{ws_id}/topics/{topic_id}/messages").json()
+    msgs = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages").json()
     assert [m["text"] for m in msgs] == ["First", "Second"]
 
 
 def test_list_messages_unknown_workspace(client):
     c, _ = client
-    r = c.get("/workspaces/no-such/topics/no-such/messages")
+    r = c.get("/api/workspaces/no-such/topics/no-such/messages")
     assert r.status_code == 404
 
 

@@ -17,7 +17,7 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def workspace_id(client):
-    r = client.post("/workspaces", json={"name": "repo", "repo_url": "https://github.com/x/y"})
+    r = client.post("/api/workspaces", json={"name": "repo", "repo_url": "https://github.com/x/y"})
     return r.json()["id"]
 
 
@@ -25,7 +25,7 @@ def create_topic(client, workspace_id, subject="Fix the bug", branch_name=None):
     body = {"subject": subject}
     if branch_name:
         body["branch_name"] = branch_name
-    return client.post(f"/workspaces/{workspace_id}/topics", json=body)
+    return client.post(f"/api/workspaces/{workspace_id}/topics", json=body)
 
 
 # --- slugify ---
@@ -76,7 +76,7 @@ def test_create_topic_unknown_workspace(client):
 # --- list ---
 
 def test_list_topics_empty(client, workspace_id):
-    r = client.get(f"/workspaces/{workspace_id}/topics")
+    r = client.get(f"/api/workspaces/{workspace_id}/topics")
     assert r.status_code == 200
     assert r.json() == []
 
@@ -84,14 +84,14 @@ def test_list_topics_empty(client, workspace_id):
 def test_list_topics_returns_all(client, workspace_id):
     create_topic(client, workspace_id, subject="Topic A")
     create_topic(client, workspace_id, subject="Topic B")
-    r = client.get(f"/workspaces/{workspace_id}/topics")
+    r = client.get(f"/api/workspaces/{workspace_id}/topics")
     assert r.status_code == 200
     subjects = {t["subject"] for t in r.json()}
     assert subjects == {"Topic A", "Topic B"}
 
 
 def test_list_topics_unknown_workspace(client):
-    r = client.get("/workspaces/no-such/topics")
+    r = client.get("/api/workspaces/no-such/topics")
     assert r.status_code == 404
 
 
@@ -99,13 +99,13 @@ def test_list_topics_unknown_workspace(client):
 
 def test_get_topic_by_id(client, workspace_id):
     topic_id = create_topic(client, workspace_id).json()["id"]
-    r = client.get(f"/workspaces/{workspace_id}/topics/{topic_id}")
+    r = client.get(f"/api/workspaces/{workspace_id}/topics/{topic_id}")
     assert r.status_code == 200
     assert r.json()["id"] == topic_id
 
 
 def test_get_topic_not_found(client, workspace_id):
-    r = client.get(f"/workspaces/{workspace_id}/topics/no-such")
+    r = client.get(f"/api/workspaces/{workspace_id}/topics/no-such")
     assert r.status_code == 404
 
 
@@ -113,17 +113,17 @@ def test_get_topic_not_found(client, workspace_id):
 
 def test_delete_topic_returns_204(client, workspace_id):
     topic_id = create_topic(client, workspace_id).json()["id"]
-    r = client.delete(f"/workspaces/{workspace_id}/topics/{topic_id}")
+    r = client.delete(f"/api/workspaces/{workspace_id}/topics/{topic_id}")
     assert r.status_code == 204
 
 
 def test_delete_topic_removes_it(client, workspace_id):
     topic_id = create_topic(client, workspace_id).json()["id"]
-    client.delete(f"/workspaces/{workspace_id}/topics/{topic_id}")
-    assert client.get(f"/workspaces/{workspace_id}/topics/{topic_id}").status_code == 404
-    assert all(t["id"] != topic_id for t in client.get(f"/workspaces/{workspace_id}/topics").json())
+    client.delete(f"/api/workspaces/{workspace_id}/topics/{topic_id}")
+    assert client.get(f"/api/workspaces/{workspace_id}/topics/{topic_id}").status_code == 404
+    assert all(t["id"] != topic_id for t in client.get(f"/api/workspaces/{workspace_id}/topics").json())
 
 
 def test_delete_topic_not_found(client, workspace_id):
-    r = client.delete(f"/workspaces/{workspace_id}/topics/no-such")
+    r = client.delete(f"/api/workspaces/{workspace_id}/topics/no-such")
     assert r.status_code == 404

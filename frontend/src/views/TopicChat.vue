@@ -69,8 +69,8 @@ async function load() {
   loading.value = true
   try {
     const [topicRes, msgsRes] = await Promise.all([
-      fetch(`/workspaces/${wsId}/topics/${topicId}`),
-      fetch(`/workspaces/${wsId}/topics/${topicId}/messages`),
+      fetch(`/api/workspaces/${wsId}/topics/${topicId}`),
+      fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages`),
     ])
     topic.value = await topicRes.json()
     messages.value = await msgsRes.json()
@@ -110,7 +110,7 @@ async function sendMessage() {
   if (!msg || sending.value) return
   sending.value = true
   try {
-    const r = await fetch(`/workspaces/${wsId}/topics/${topicId}/messages`, {
+    const r = await fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: msg }),

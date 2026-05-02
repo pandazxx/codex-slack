@@ -17,7 +17,7 @@ def client(tmp_path, monkeypatch):
 
 
 def create_ws(client, name="myrepo", repo_url="https://github.com/x/y"):
-    return client.post("/workspaces", json={"name": name, "repo_url": repo_url})
+    return client.post("/api/workspaces", json={"name": name, "repo_url": repo_url})
 
 
 # --- create ---
@@ -49,12 +49,12 @@ def test_create_workspace_inserts_default_agents(client):
 
 def test_create_workspace_duplicate_name_returns_409(client):
     create_ws(client, name="same")
-    r = client.post("/workspaces", json={"name": "same", "repo_url": "https://github.com/x/z"})
+    r = client.post("/api/workspaces", json={"name": "same", "repo_url": "https://github.com/x/z"})
     assert r.status_code == 409
 
 
 def test_create_workspace_strips_whitespace(client):
-    r = client.post("/workspaces", json={"name": "  repo  ", "repo_url": "  https://github.com/x/y  "})
+    r = client.post("/api/workspaces", json={"name": "  repo  ", "repo_url": "  https://github.com/x/y  "})
     body = r.json()
     assert body["name"] == "repo"
     assert body["repo_url"] == "https://github.com/x/y"
@@ -63,7 +63,7 @@ def test_create_workspace_strips_whitespace(client):
 # --- list ---
 
 def test_list_workspaces_empty(client):
-    r = client.get("/workspaces")
+    r = client.get("/api/workspaces")
     assert r.status_code == 200
     assert r.json() == []
 
@@ -71,7 +71,7 @@ def test_list_workspaces_empty(client):
 def test_list_workspaces_returns_all(client):
     create_ws(client, name="a", repo_url="https://github.com/x/a")
     create_ws(client, name="b", repo_url="https://github.com/x/b")
-    r = client.get("/workspaces")
+    r = client.get("/api/workspaces")
     assert r.status_code == 200
     names = {w["name"] for w in r.json()}
     assert names == {"a", "b"}
@@ -81,13 +81,13 @@ def test_list_workspaces_returns_all(client):
 
 def test_get_workspace_by_id(client):
     ws_id = create_ws(client).json()["id"]
-    r = client.get(f"/workspaces/{ws_id}")
+    r = client.get(f"/api/workspaces/{ws_id}")
     assert r.status_code == 200
     assert r.json()["id"] == ws_id
 
 
 def test_get_workspace_not_found(client):
-    r = client.get("/workspaces/does-not-exist")
+    r = client.get("/api/workspaces/does-not-exist")
     assert r.status_code == 404
 
 
@@ -95,17 +95,17 @@ def test_get_workspace_not_found(client):
 
 def test_delete_workspace_returns_204(client):
     ws_id = create_ws(client).json()["id"]
-    r = client.delete(f"/workspaces/{ws_id}")
+    r = client.delete(f"/api/workspaces/{ws_id}")
     assert r.status_code == 204
 
 
 def test_delete_workspace_removes_it(client):
     ws_id = create_ws(client).json()["id"]
-    client.delete(f"/workspaces/{ws_id}")
-    assert client.get(f"/workspaces/{ws_id}").status_code == 404
-    assert all(w["id"] != ws_id for w in client.get("/workspaces").json())
+    client.delete(f"/api/workspaces/{ws_id}")
+    assert client.get(f"/api/workspaces/{ws_id}").status_code == 404
+    assert all(w["id"] != ws_id for w in client.get("/api/workspaces").json())
 
 
 def test_delete_workspace_not_found(client):
-    r = client.delete("/workspaces/does-not-exist")
+    r = client.delete("/api/workspaces/does-not-exist")
     assert r.status_code == 404

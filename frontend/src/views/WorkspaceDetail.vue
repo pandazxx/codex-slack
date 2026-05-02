@@ -40,8 +40,8 @@ async function load() {
   loading.value = true
   try {
     const [wsRes, topicsRes] = await Promise.all([
-      fetch(`/workspaces/${id}`),
-      fetch(`/workspaces/${id}/topics`),
+      fetch(`/api/workspaces/${id}`),
+      fetch(`/api/workspaces/${id}/topics`),
     ])
     workspace.value = await wsRes.json()
     topics.value = await topicsRes.json()
@@ -54,7 +54,7 @@ async function createTopic() {
   creating.value = true
   createError.value = ''
   try {
-    const r = await fetch(`/workspaces/${id}/topics`, {
+    const r = await fetch(`/api/workspaces/${id}/topics`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject: subject.value }),

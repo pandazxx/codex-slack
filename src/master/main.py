@@ -118,9 +118,9 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
 
 
 app = FastAPI(lifespan=lifespan)
-app.include_router(workspaces_router)
-app.include_router(topics_router)
-app.include_router(messages_router)
+app.include_router(workspaces_router, prefix="/api")
+app.include_router(topics_router, prefix="/api")
+app.include_router(messages_router, prefix="/api")
 
 if (_STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="static-assets")
