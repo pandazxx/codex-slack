@@ -57,7 +57,13 @@ def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str) -> None:
         LOGGER.info("agent.worktree_reused path=%s branch=%s", worktree_path, branch)
 
 
-def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str | None) -> tuple[str, str | None, str | None]:
+_SESSION_NOT_FOUND = "No conversation found with session ID"
+
+
+def _run_claude_once(
+    worktree: str, text: str, session_id: str | None, subagent: str | None
+) -> tuple[str, str | None, str | None, bool]:
+    """Returns (output, new_session_id, transcript, is_error)."""
     cmd = ["claude", "--print", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions"]
     if session_id:
         cmd += ["--resume", session_id]
@@ -67,6 +73,7 @@ def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str 
         events = []
         new_session_id = None
         output = None
+        is_error = False
         for line in result.stdout.splitlines():
             line = line.strip()
             if not line:
@@ -77,18 +84,27 @@ def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str 
                 if event.get("type") == "result":
                     new_session_id = event.get("session_id")
                     output = event.get("result") or event.get("last_response")
+                    is_error = bool(event.get("is_error"))
             except (json.JSONDecodeError, AttributeError):
                 continue
         transcript = json.dumps(events) if events else None
         if not output:
             output = result.stderr.strip() or "(no output)"
-        return output, new_session_id, transcript
+        return output, new_session_id, transcript, is_error
     except subprocess.TimeoutExpired:
-        return f"(claude timed out after {_LLM_TIMEOUT}s)", None, None
+        return f"(claude timed out after {_LLM_TIMEOUT}s)", None, None, True
     except FileNotFoundError:
-        return "(claude CLI not found in agent container)", None, None
+        return "(claude CLI not found in agent container)", None, None, True
     except Exception as exc:
-        return f"(claude error: {exc})", None, None
+        return f"(claude error: {exc})", None, None, True
+
+
+def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str | None) -> tuple[str, str | None, str | None]:
+    output, new_session_id, transcript, is_error = _run_claude_once(worktree, text, session_id, subagent)
+    if session_id and is_error and _SESSION_NOT_FOUND in (output or ""):
+        LOGGER.warning("agent.session_expired sid=%s retrying_fresh", session_id)
+        output, new_session_id, transcript, _ = _run_claude_once(worktree, text, None, subagent)
+    return output, new_session_id, transcript
 
 
 def _run_codex(worktree: str, text: str) -> tuple[str, str | None, str | None]:

@@ -60,6 +60,42 @@ def test_run_claude_includes_resume_when_session_id(tmp_path):
     assert "ses-123" in cmd
 
 
+def test_run_claude_retries_fresh_on_session_not_found(tmp_path):
+    import json as _json
+    error_event = [{"type": "result", "is_error": True, "result": "No conversation found with session ID: old-sid", "session_id": "dead-sid"}]
+    ok_event = [{"type": "result", "is_error": False, "result": "Hello fresh", "session_id": "new-sid"}]
+    call_count = {"n": 0}
+
+    def side_effect(cmd, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return MagicMock(stdout="\n".join(_json.dumps(e) for e in error_event), stderr="", returncode=1)
+        return MagicMock(stdout="\n".join(_json.dumps(e) for e in ok_event), stderr="", returncode=0)
+
+    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
+        text, sid, transcript = _run_claude(str(tmp_path), "hi", "old-sid", None)
+
+    assert call_count["n"] == 2
+    assert text == "Hello fresh"
+    assert sid == "new-sid"
+    assert "--resume" not in json.loads(transcript)[0].get("result", "")
+
+
+def test_run_claude_does_not_retry_without_session(tmp_path):
+    import json as _json
+    error_event = [{"type": "result", "is_error": True, "result": "some other error", "session_id": None}]
+    call_count = {"n": 0}
+
+    def side_effect(cmd, **kwargs):
+        call_count["n"] += 1
+        return MagicMock(stdout=_json.dumps(error_event[0]), stderr="", returncode=1)
+
+    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
+        _run_claude(str(tmp_path), "hi", None, None)
+
+    assert call_count["n"] == 1
+
+
 def test_run_claude_not_found(tmp_path):
     import subprocess as sp
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=FileNotFoundError()):
