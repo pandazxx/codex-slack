@@ -16,8 +16,6 @@ DEFAULT_IMAGE = "codex-slack-bot:latest"
 DEFAULT_RUNTIME = "podman"
 DEFAULT_AGENT_ADAPTER = "codex"
 SUPPORTED_AGENT_ADAPTERS = {"codex", "claude-code"}
-GLOBAL_CODEX_CONFIG_MOUNT = "/run/secrets/master_codex_config"
-GLOBAL_CLAUDE_CONFIG_MOUNT = "/run/secrets/master_claude_config"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -195,7 +193,7 @@ class MasterService:
             env = self._build_agent_env(record)
             mounts = self._build_agent_mounts()
             LOGGER.info(
-                "master.start_agent_config agent=%s container=%s repo_ref=%s adapter=%s image_plan=%s resolved_image=%s codex_home=%s global_codex_config_env=%s global_codex_config_mount=%s global_claude_config_env=%s global_claude_config_mount=%s",
+                "master.start_agent_config agent=%s container=%s repo_ref=%s adapter=%s image_plan=%s resolved_image=%s codex_home=%s",
                 record.name,
                 record.container_name,
                 record.repo_ref,
@@ -203,10 +201,6 @@ class MasterService:
                 record.image_plan.get("type", "-"),
                 image,
                 env.get("CODEX_HOME", "-"),
-                env.get("AGENT_GLOBAL_CODEX_CONFIG_DIR", "-"),
-                GLOBAL_CODEX_CONFIG_MOUNT if self._agent_codex_config_dir_path else "-",
-                env.get("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", "-"),
-                GLOBAL_CLAUDE_CONFIG_MOUNT if self._agent_claude_config_dir_path else "-",
             )
             self._runtime.create_or_update_agent(
                 container_name=record.container_name,
@@ -410,40 +404,11 @@ class MasterService:
             self._audit(command="refresh-config", agent=name, result=result)
             return result
 
-        if not self._agent_claude_config_dir_path:
-            result = CommandResult(
-                ok=False,
-                code="ERR_RUNTIME_FAILED",
-                message="agent claude config source is not configured",
-                data={},
-            )
-            self._audit(command="refresh-config", agent=name, result=result)
-            return result
-
-        try:
-            self._runtime.refresh_agent_config(
-                volume_name=f"agent-workspace-{record.name}",
-                host_config_dir=self._agent_claude_config_dir_path,
-            )
-        except Exception as exc:  # noqa: BLE001
-            result = CommandResult(
-                ok=False,
-                code="ERR_RUNTIME_FAILED",
-                message=f"failed to refresh config for {name}: {exc}",
-                data={},
-            )
-            self._audit(command="refresh-config", agent=name, result=result)
-            return result
-
         result = CommandResult(
-            ok=True,
-            code="OK",
-            message=f"refreshed config for {name}",
-            data={
-                "refreshed": True,
-                "volume_name": f"agent-workspace-{record.name}",
-                "config_source": self._agent_claude_config_dir_path,
-            },
+            ok=False,
+            code="ERR_RUNTIME_FAILED",
+            message="agent config passthrough is no longer supported; update the agent image and restart the agent",
+            data={"name": name},
         )
         self._audit(command="refresh-config", agent=name, result=result)
         return result
@@ -553,10 +518,6 @@ class MasterService:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = claude_code_oauth_token
         elif anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = anthropic_api_key
-        if self._agent_codex_config_dir_path:
-            env["AGENT_GLOBAL_CODEX_CONFIG_DIR"] = GLOBAL_CODEX_CONFIG_MOUNT
-        if self._agent_claude_config_dir_path:
-            env["AGENT_GLOBAL_CLAUDE_CONFIG_DIR"] = GLOBAL_CLAUDE_CONFIG_MOUNT
         if self._git_user_name:
             env["AGENT_GIT_USER_NAME"] = self._git_user_name
         if self._git_user_email:
@@ -564,10 +525,9 @@ class MasterService:
         if self._agent_ssh_auth_sock_path:
             env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
             env["GIT_SSH_COMMAND"] = self._agent_git_ssh_command()
-        # CLAUDE_CONFIG_DIR is intentionally NOT set here. The entrypoint copies
-        # /run/secrets/master_claude_config into ~/.claude/ so claude can write
-        # session data there. Pointing CLAUDE_CONFIG_DIR at the read-only mount
-        # causes claude to hang on its first write attempt.
+        # CLAUDE_CONFIG_DIR is intentionally NOT set here. The entrypoint seeds
+        # baked-in Claude config into a writable ~/.claude/ inside the workspace
+        # volume, and Claude must not be pointed at a read-only path.
 
         return env
 
@@ -604,10 +564,6 @@ class MasterService:
         mounts: list[str] = []
         if self._agent_codex_auth_json_path:
             mounts.append(f"{self._agent_codex_auth_json_path}:/run/secrets/codex_auth.json:ro")
-        if self._agent_codex_config_dir_path:
-            mounts.append(f"{self._agent_codex_config_dir_path}:{GLOBAL_CODEX_CONFIG_MOUNT}:ro")
-        if self._agent_claude_config_dir_path:
-            mounts.append(f"{self._agent_claude_config_dir_path}:{GLOBAL_CLAUDE_CONFIG_MOUNT}:ro")
         if self._agent_ssh_auth_sock_path:
             mounts.append(f"{self._agent_ssh_auth_sock_path}:/run/secrets/ssh-auth.sock")
         if self._agent_ssh_known_hosts_path:

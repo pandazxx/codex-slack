@@ -121,13 +121,11 @@ class PodmanRuntimeAdapter:
         env = env or {}
         mounts = mounts or []
         LOGGER.info(
-            "runtime.create_or_update_agent container=%s image=%s repo_volume=%s env_keys=%s global_codex_config_env=%s global_claude_config_env=%s mounts=%s",
+            "runtime.create_or_update_agent container=%s image=%s repo_volume=%s env_keys=%s mounts=%s",
             container_name,
             image,
             repo_volume,
             ",".join(sorted(env)) or "-",
-            env.get("AGENT_GLOBAL_CODEX_CONFIG_DIR", "-"),
-            env.get("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", "-"),
             json.dumps(mounts),
         )
         cmd = [
