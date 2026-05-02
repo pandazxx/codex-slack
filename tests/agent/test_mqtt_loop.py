@@ -38,7 +38,7 @@ def test_parse_prompt_topic_rejects_malformed():
 def test_run_claude_returns_stdout(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout="Hello from claude\n", stderr="", returncode=0)
-        text, session = _run_claude(str(tmp_path), "say hi", None, None)
+        text, session, transcript = _run_claude(str(tmp_path), "say hi", None, None)
     assert text == "Hello from claude"
     assert session is None
 
@@ -55,14 +55,14 @@ def test_run_claude_includes_resume_when_session_id(tmp_path):
 def test_run_claude_not_found(tmp_path):
     import subprocess as sp
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=FileNotFoundError()):
-        text, _ = _run_claude(str(tmp_path), "hi", None, None)
+        text, _, _t = _run_claude(str(tmp_path), "hi", None, None)
     assert "not found" in text
 
 
 def test_run_claude_timeout(tmp_path):
     import subprocess as sp
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=sp.TimeoutExpired("claude", 300)):
-        text, _ = _run_claude(str(tmp_path), "hi", None, None)
+        text, _, _t = _run_claude(str(tmp_path), "hi", None, None)
     assert "timed out" in text
 
 
@@ -71,14 +71,15 @@ def test_run_claude_timeout(tmp_path):
 def test_run_codex_returns_stdout(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout="codex output\n", stderr="", returncode=0)
-        text, session = _run_codex(str(tmp_path), "do it")
+        text, session, transcript = _run_codex(str(tmp_path), "do it")
     assert text == "codex output"
     assert session is None
+    assert transcript is None
 
 
 def test_run_codex_not_found(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=FileNotFoundError()):
-        text, _ = _run_codex(str(tmp_path), "hi")
+        text, _, _t = _run_codex(str(tmp_path), "hi")
     assert "not found" in text
 
 
@@ -126,7 +127,7 @@ def test_ensure_worktree_falls_back_on_existing_branch(tmp_path):
 
 def test_process_prompt_publishes_thinking_then_response(tmp_path):
     client = MagicMock()
-    with patch("src.agent.mqtt_loop._run_claude", return_value=("response text", None)):
+    with patch("src.agent.mqtt_loop._run_claude", return_value=("response text", None, None)):
         with patch("src.agent.mqtt_loop._ensure_worktree"):
             _process_prompt(
                 client, "ws1", "t1",
@@ -141,7 +142,7 @@ def test_process_prompt_publishes_thinking_then_response(tmp_path):
 
 def test_process_prompt_uses_codex_adapter(tmp_path):
     client = MagicMock()
-    with patch("src.agent.mqtt_loop._run_codex", return_value=("codex out", None)) as mock_codex:
+    with patch("src.agent.mqtt_loop._run_codex", return_value=("codex out", None, None)) as mock_codex:
         with patch("src.agent.mqtt_loop._ensure_worktree"):
             _process_prompt(
                 client, "ws1", "t1",
@@ -165,7 +166,7 @@ def test_process_prompt_skips_empty_text(tmp_path):
 
 def test_process_prompt_response_payload_fields(tmp_path):
     client = MagicMock()
-    with patch("src.agent.mqtt_loop._run_claude", return_value=("the answer", None)):
+    with patch("src.agent.mqtt_loop._run_claude", return_value=("the answer", None, '{"result":"the answer"}')):
         with patch("src.agent.mqtt_loop._ensure_worktree"):
             _process_prompt(
                 client, "ws1", "t1",
@@ -182,6 +183,7 @@ def test_process_prompt_response_payload_fields(tmp_path):
     assert payload["reply_to"] == "orig-id"
     assert payload["last_response"] == "the answer"
     assert "message_id" in payload
+    assert "transcript" in payload
 
 
 # --- _on_message dispatch ---

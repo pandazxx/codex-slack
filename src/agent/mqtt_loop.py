@@ -57,7 +57,7 @@ def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str) -> None:
         LOGGER.info("agent.worktree_reused path=%s branch=%s", worktree_path, branch)
 
 
-def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str | None) -> tuple[str, str | None]:
+def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str | None) -> tuple[str, str | None, str | None]:
     cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions"]
     if session_id:
         cmd += ["--resume", session_id]
@@ -69,30 +69,29 @@ def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str 
             data = json.loads(raw)
             new_session_id = data.get("session_id")
             output = data.get("result") or data.get("last_response") or "(no output)"
-            return output, new_session_id
+            return output, new_session_id, raw
         except (json.JSONDecodeError, AttributeError):
-            # Fallback: treat stdout as plain text (older claude versions)
-            return raw or result.stderr.strip() or "(no output)", None
+            return raw or result.stderr.strip() or "(no output)", None, None
     except subprocess.TimeoutExpired:
-        return f"(claude timed out after {_LLM_TIMEOUT}s)", None
+        return f"(claude timed out after {_LLM_TIMEOUT}s)", None, None
     except FileNotFoundError:
-        return "(claude CLI not found in agent container)", None
+        return "(claude CLI not found in agent container)", None, None
     except Exception as exc:
-        return f"(claude error: {exc})", None
+        return f"(claude error: {exc})", None, None
 
 
-def _run_codex(worktree: str, text: str) -> tuple[str, str | None]:
+def _run_codex(worktree: str, text: str) -> tuple[str, str | None, str | None]:
     cmd = ["codex", "--full-auto", "-q", text]
     try:
         result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True, timeout=_LLM_TIMEOUT)
         output = result.stdout.strip() or result.stderr.strip() or "(no output)"
-        return output, None
+        return output, None, None
     except subprocess.TimeoutExpired:
-        return f"(codex timed out after {_LLM_TIMEOUT}s)", None
+        return f"(codex timed out after {_LLM_TIMEOUT}s)", None, None
     except FileNotFoundError:
-        return "(codex CLI not found in agent container)", None
+        return "(codex CLI not found in agent container)", None, None
     except Exception as exc:
-        return f"(codex error: {exc})", None
+        return f"(codex error: {exc})", None, None
 
 
 def _process_prompt(
@@ -127,9 +126,9 @@ def _process_prompt(
     cwd = worktree if (worktree and Path(worktree).exists()) else repo_dir or "/"
 
     if adapter == "codex":
-        response_text, new_session_id = _run_codex(cwd, text)
+        response_text, new_session_id, transcript = _run_codex(cwd, text)
     else:
-        response_text, new_session_id = _run_claude(cwd, text, session_id, subagent)
+        response_text, new_session_id, transcript = _run_claude(cwd, text, session_id, subagent)
 
     LOGGER.info("agent.llm_done topic_id=%s chars=%d", topic_id, len(response_text))
 
@@ -140,7 +139,7 @@ def _process_prompt(
             "agent_name": agent_name,
             "reply_to": message_id,
             "last_response": response_text,
-            "transcript": None,
+            "transcript": transcript,
             "session_id": new_session_id,
         }),
         qos=1,

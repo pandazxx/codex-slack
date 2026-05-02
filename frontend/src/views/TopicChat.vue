@@ -21,6 +21,10 @@
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name || 'Agent') }}</span>
         <div class="bubble">{{ m.text }}</div>
+        <details v-if="m.sender === 'agent' && m.transcript" class="detail-panel">
+          <summary class="detail-toggle">Details</summary>
+          <pre class="detail-body">{{ formatTranscript(m.transcript) }}</pre>
+        </details>
         <span class="ts">{{ m.created_at }}</span>
       </div>
     </div>
@@ -94,6 +98,7 @@ function connectWs() {
         sender: data.sender || 'agent',
         agent_name: data.agent_name || null,
         text: data.last_response || data.text || '',
+        transcript: data.transcript || null,
         created_at: new Date().toISOString(),
       })
       scrollToBottom()
@@ -132,6 +137,14 @@ async function sendMessage() {
   }
 }
 
+function formatTranscript(raw) {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
+}
+
 onMounted(() => {
   load()
   connectWs()
@@ -155,6 +168,10 @@ onUnmounted(() => {
 .message.user .bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 3px; }
 .message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; }
 .ts { font-size: 0.7em; color: #94a3b8; margin-top: 2px; }
+.detail-panel { margin-top: 4px; max-width: 100%; }
+.detail-toggle { font-size: 0.72em; color: #94a3b8; cursor: pointer; user-select: none; }
+.detail-toggle:hover { color: #64748b; }
+.detail-body { font-size: 0.72em; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 0.5rem 0.75rem; margin-top: 4px; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; color: #334155; }
 .send-form { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
 .send-form textarea { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; resize: none; font-family: inherit; font-size: 0.95rem; }
 .send-form button { padding: 0.5rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; align-self: flex-end; }
