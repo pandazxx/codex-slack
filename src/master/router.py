@@ -123,6 +123,7 @@ class PodmanExecDispatcher:
     codex_home: str = "/workspace/home/.codex"
     slack_bot_token: str | None = None
     agent_prepare_callback: Callable[[str], None] | None = None
+    workdir_ready_timeout_seconds: float = 60.0
 
     @staticmethod
     def _clip(value: str, limit: int = 240) -> str:
@@ -209,6 +210,55 @@ class PodmanExecDispatcher:
         except Exception as exc:  # noqa: BLE001
             raise RouteError(f"failed to prepare {agent_name}: {exc}") from exc
 
+    def _ensure_workdir_ready(self, *, agent_name: str, container_name: str) -> None:
+        if not self.workdir:
+            return
+
+        deadline = time.monotonic() + max(self.workdir_ready_timeout_seconds, 0)
+        attempt = 0
+        last_stderr = ""
+        quoted_workdir = shlex.quote(self.workdir)
+        while True:
+            attempt += 1
+            try:
+                completed = subprocess.run(
+                    ["podman", "exec", container_name, "sh", "-lc", f"test -d {quoted_workdir}"],
+                    text=True,
+                    capture_output=True,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RouteError(f"timed out while waiting for agent workdir {self.workdir}") from exc
+            except FileNotFoundError as exc:
+                raise RouteError("podman CLI is not available in the master runtime") from exc
+
+            if completed.returncode == 0:
+                if attempt > 1:
+                    LOGGER.info(
+                        "router.workdir_ready agent=%s container=%s workdir=%s attempts=%d",
+                        agent_name,
+                        container_name,
+                        self.workdir,
+                        attempt,
+                    )
+                return
+
+            last_stderr = self._clip(completed.stderr)
+            if time.monotonic() >= deadline:
+                LOGGER.warning(
+                    "router.workdir_not_ready agent=%s container=%s workdir=%s attempts=%d stderr=%r",
+                    agent_name,
+                    container_name,
+                    self.workdir,
+                    attempt,
+                    last_stderr,
+                )
+                details = f" ({last_stderr})" if last_stderr else ""
+                raise RouteError(f"agent workdir is not ready: {self.workdir}{details}")
+
+            time.sleep(0.5)
+
     def send_prompt(
         self,
         *,
@@ -230,6 +280,7 @@ class PodmanExecDispatcher:
         image_urls = image_urls or []
         self._prepare_agent_for_dispatch(agent_name=agent_name)
         self._ensure_container_running(agent_name=agent_name, container_name=container_name)
+        self._ensure_workdir_ready(agent_name=agent_name, container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=session_id,
@@ -654,6 +705,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         image_urls = image_urls or []
         self._prepare_agent_for_dispatch(agent_name=agent_name)
         self._ensure_container_running(agent_name=agent_name, container_name=container_name)
+        self._ensure_workdir_ready(agent_name=agent_name, container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=channel_id,
