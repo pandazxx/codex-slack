@@ -103,6 +103,7 @@ def _process_prompt(
     repo_dir: str,
 ) -> None:
     message_id = payload.get("message_id") or str(uuid.uuid4())
+    agent_name = payload.get("agent_name", "claude")
     worktree = payload.get("worktree", "")
     branch = payload.get("branch", "")
     text = payload.get("text", "")
@@ -136,6 +137,7 @@ def _process_prompt(
         _response_topic(workspace_id, topic_id),
         json.dumps({
             "message_id": str(uuid.uuid4()),
+            "agent_name": agent_name,
             "reply_to": message_id,
             "last_response": response_text,
             "transcript": None,

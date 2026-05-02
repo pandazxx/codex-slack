@@ -16,8 +16,11 @@
       <p v-else-if="!topics.length" class="muted">No topics yet.</p>
       <ul v-else class="list">
         <li v-for="t in topics" :key="t.id">
-          <RouterLink :to="`/workspaces/${id}/topics/${t.id}`">{{ t.subject }}</RouterLink>
-          <span class="muted small"> — branch: {{ t.branch_name }}</span>
+          <span class="topic-row">
+            <RouterLink :to="`/workspaces/${id}/topics/${t.id}`">{{ t.subject }}</RouterLink>
+            <span class="muted small"> — branch: {{ t.branch_name }}</span>
+          </span>
+          <button class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Delete topic">✕</button>
         </li>
       </ul>
     </section>
@@ -139,6 +142,12 @@ async function addAgent() {
   }
 }
 
+async function deleteTopic(topicId, subject) {
+  if (!confirm(`Delete topic "${subject}"? This cannot be undone.`)) return
+  await fetch(`/api/workspaces/${id}/topics/${topicId}`, { method: 'DELETE' })
+  await load()
+}
+
 async function removeAgent(agentId) {
   await fetch(`/api/workspaces/${id}/agents/${agentId}`, { method: 'DELETE' })
   await load()
@@ -157,7 +166,8 @@ section { margin-bottom: 2rem; }
 .create-form button { padding: 0.4rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
 .create-form button:disabled { opacity: 0.6; cursor: default; }
 .list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
-.list li { background: #fff; padding: 0.75rem 1rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.list li { background: #fff; padding: 0.75rem 1rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); display: flex; align-items: center; justify-content: space-between; }
+.topic-row { display: flex; align-items: center; gap: 0.5rem; flex: 1; }
 .agent-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
 .agent-table th { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 2px solid #e2e8f0; color: #64748b; font-weight: 600; }
 .agent-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; }

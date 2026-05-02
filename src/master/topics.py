@@ -119,6 +119,8 @@ def delete_topic(workspace_id: str, topic_id: str, request: Request) -> None:
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="topic not found")
+        conn.execute("DELETE FROM messages WHERE topic_id = ?", (topic_id,))
+        conn.execute("DELETE FROM sessions WHERE topic_id = ?", (topic_id,))
         conn.execute("DELETE FROM topics WHERE id = ?", (topic_id,))
         conn.commit()
     finally:

@@ -98,6 +98,7 @@ def send_message(workspace_id: str, topic_id: str, body: MessageSend, request: R
 
     payload = json.dumps({
         "message_id": message_id,
+        "agent_name": routed_agent,
         "adapter": agent["adapter"],
         "subagent": agent["subagent"],
         "worktree": topic["worktree_path"],

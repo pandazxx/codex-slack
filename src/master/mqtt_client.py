@@ -41,18 +41,19 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
             text = payload.get("last_response", "")
             transcript = payload.get("transcript")
             llm_session_id = payload.get("session_id")
+            agent_name = payload.get("agent_name")
             message_id = payload.get("message_id") or str(uuid.uuid4())
             conn.execute(
                 "INSERT OR IGNORE INTO messages"
                 " (id, topic_id, sender, agent_name, text, transcript, attachments_json, created_at)"
-                " VALUES (?, ?, 'agent', NULL, ?, ?, NULL, ?)",
-                (message_id, topic_id, text, transcript, _now()),
+                " VALUES (?, ?, 'agent', ?, ?, ?, NULL, ?)",
+                (message_id, topic_id, agent_name, text, transcript, _now()),
             )
-            if llm_session_id:
+            if llm_session_id and agent_name:
                 conn.execute(
                     "UPDATE sessions SET llm_session_id = ?, updated_at = ?"
-                    " WHERE topic_id = ?",
-                    (llm_session_id, _now(), topic_id),
+                    " WHERE topic_id = ? AND agent_name = ?",
+                    (llm_session_id, _now(), topic_id, agent_name),
                 )
             conn.commit()
         finally:
