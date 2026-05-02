@@ -155,12 +155,16 @@ workspaces
   container_name TEXT
   created_at    TEXT NOT NULL
 
-workspace_agents  -- NOTE: detailed design TBD; further discussion needed
+workspace_agents
   id            TEXT PRIMARY KEY
   workspace_id  TEXT NOT NULL REFERENCES workspaces(id)
-  agent_name    TEXT NOT NULL   -- e.g. "engineer", "tester"
+  agent_name    TEXT NOT NULL   -- the @mention name, e.g. "claude", "engineer"
   adapter       TEXT NOT NULL   -- "claude-code" | "codex"
-  subagent      TEXT            -- claude-code subagent flag value
+  subagent      TEXT            -- --agent flag value for claude-code; null = no flag
+  active        INTEGER NOT NULL DEFAULT 1  -- 1 = active, 0 = soft-deleted
+  created_at    TEXT NOT NULL
+  deleted_at    TEXT            -- set on soft-delete; null when active
+  UNIQUE (workspace_id, agent_name)
 
 topics
   id            TEXT PRIMARY KEY
@@ -188,6 +192,46 @@ messages
   attachments_json TEXT        -- JSON array of attachment metadata
   created_at    TEXT NOT NULL
 ```
+
+### Staff Agent Configuration
+
+`workspace_agents` is a configuration table — it defines which named staff
+agents exist in a workspace and how master routes a prompt to each one.
+
+*Soft delete:* Removing a staff agent sets `active = 0` and `deleted_at` to
+the current timestamp rather than deleting the row. Existing `sessions` rows
+that reference `agent_name` are preserved (historical record). If the same
+`agent_name` is re-added later, master reactivates the existing row (sets
+`active = 1`, clears `deleted_at`) rather than inserting a duplicate. The
+UNIQUE constraint on `(workspace_id, agent_name)` always applies.
+
+*Default agents:* Two rows are inserted automatically when a workspace is
+created:
+
+| agent_name | adapter | subagent | purpose |
+|---|---|---|---|
+| `claude` | `claude-code` | null | default Claude Code agent, no subagent flag |
+| `codex` | `codex` | null | default Codex agent |
+
+These defaults let users start working immediately after workspace creation
+without any additional configuration.
+
+*Adapter routing:*
+
+| adapter | subagent column | CLI invocation |
+|---|---|---|
+| `claude-code` | null | `claude -p --resume <id>` |
+| `claude-code` | `"engineer"` | `claude -p --agent engineer --resume <id>` |
+| `codex` | null | Codex invocation without subagent flag |
+
+*Agent discovery:* Additional staff agents beyond the two defaults can be
+registered in two ways:
+1. Via the frontend UI — operator enters name, adapter, and optional subagent.
+2. Via agent container command — running `claude --agents` (or equivalent)
+   inside the container lists available subagents defined in the project
+   CLAUDE.md. Master can expose a management action that executes this command,
+   parses the output, and upserts rows into `workspace_agents`. This allows
+   operators to populate the full subagent list without manual entry.
 
 ### Session Persistence
 
