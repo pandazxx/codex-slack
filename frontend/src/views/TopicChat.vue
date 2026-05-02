@@ -27,7 +27,11 @@
             <template v-for="(evt, i) in parseTranscript(m.transcript)" :key="i">
               <template v-if="evt.type === 'assistant' && evt.message">
                 <div v-for="(blk, j) in (evt.message.content || [])" :key="j">
-                  <div v-if="blk.type === 'text' && blk.text" class="tr-text">{{ blk.text }}</div>
+                  <div v-if="blk.type === 'thinking' && blk.thinking" class="tr-thinking">
+                    <span class="tr-badge tr-badge-thinking">thinking</span>
+                    <pre class="tr-json tr-thinking-body">{{ blk.thinking }}</pre>
+                  </div>
+                  <div v-else-if="blk.type === 'text' && blk.text" class="tr-text">{{ blk.text }}</div>
                   <div v-else-if="blk.type === 'tool_use'" class="tr-tool-call">
                     <span class="tr-badge tr-badge-tool">{{ blk.name }}</span>
                     <pre class="tr-json">{{ JSON.stringify(blk.input, null, 2) }}</pre>
@@ -45,7 +49,7 @@
               <template v-else-if="evt.type === 'result'">
                 <div class="tr-meta">
                   <span :class="evt.is_error ? 'tr-badge tr-badge-error' : 'tr-badge tr-badge-done'">{{ evt.is_error ? 'error' : 'done' }}</span>
-                  <span v-if="evt.cost_usd != null" class="tr-stat">${{ evt.cost_usd.toFixed(4) }}</span>
+                  <span v-if="(evt.total_cost_usd ?? evt.cost_usd) != null" class="tr-stat">${{ (evt.total_cost_usd ?? evt.cost_usd).toFixed(4) }}</span>
                   <span v-if="evt.duration_ms != null" class="tr-stat">{{ (evt.duration_ms / 1000).toFixed(1) }}s</span>
                   <span v-if="evt.num_turns != null" class="tr-stat">{{ evt.num_turns }} turn{{ evt.num_turns !== 1 ? 's' : '' }}</span>
                 </div>
@@ -219,6 +223,9 @@ onUnmounted(() => {
 .tr-badge-result { background: #dcfce7; color: #15803d; }
 .tr-badge-done { background: #dcfce7; color: #15803d; }
 .tr-badge-error { background: #fee2e2; color: #dc2626; }
+.tr-badge-thinking { background: #f3e8ff; color: #7c3aed; }
+.tr-thinking { display: flex; flex-direction: column; gap: 2px; }
+.tr-thinking-body { background: #1a0a2e; color: #c4b5fd; }
 .send-form { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
 .send-form textarea { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; resize: none; font-family: inherit; font-size: 0.95rem; }
 .send-form button { padding: 0.5rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; align-self: flex-end; }
