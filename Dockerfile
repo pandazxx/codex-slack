@@ -30,8 +30,8 @@ RUN pip install --no-cache-dir podman-compose
 RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
 
 RUN useradd -m -u 1000 -s /bin/bash appuser \
-    && mkdir -p /workspace/home \
-    && chown -R appuser:appuser /workspace
+    && mkdir -p /workspace/home /home/appuser/.claude \
+    && chown -R appuser:appuser /workspace /home/appuser/.claude
 USER appuser
 WORKDIR /opt/codex-slack
 
