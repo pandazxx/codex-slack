@@ -10,18 +10,19 @@ from src.agent import worker
 from src.agent.worker import AgentInitError, WorkerSettings, run_worker, stage_preflight, stage_repo_sync, stage_workspace_prepare
 
 
-def _git(args: list[str], cwd: str | None = None) -> None:
+def _git(args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=False)
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr)
+    return completed
 
 
-def _create_local_repo(path) -> str:  # type: ignore[no-untyped-def]
+def _create_local_repo(path: Path, *, readme_text: str = "hello\n") -> str:
     path.mkdir(parents=True)
     _git(["init", "-b", "main"], cwd=str(path))
     _git(["config", "user.name", "tester"], cwd=str(path))
     _git(["config", "user.email", "tester@example.com"], cwd=str(path))
-    (path / "README.md").write_text("hello\n", encoding="utf-8")
+    (path / "README.md").write_text(readme_text, encoding="utf-8")
     _git(["add", "README.md"], cwd=str(path))
     _git(["commit", "-m", "init"], cwd=str(path))
     return str(path)
@@ -104,7 +105,51 @@ def test_stage_repo_sync_clones_repo(tmp_path, monkeypatch) -> None:  # type: ig
 
     repo_dir = stage_repo_sync(settings)
     assert (repo_dir / ".git").exists()
-    assert (repo_dir / "README.md").exists()
+    assert (repo_dir / "README.md").read_text(encoding="utf-8") == "hello\n"
+
+
+def test_stage_repo_sync_leaves_existing_valid_repo_unchanged(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    remote_repo = _create_local_repo(tmp_path / "remote", readme_text="remote\n")
+    workspace = tmp_path / "workspace"
+    existing_repo = Path(_create_local_repo(workspace / "repo", readme_text="existing\n"))
+    monkeypatch.setenv("GH_TOKEN", "token")
+
+    settings = WorkerSettings(
+        workspace_path=str(workspace),
+        repo_url=remote_repo,
+        repo_ref="main",
+        repo_dir_name="repo",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex"),
+        ready_poll_seconds=0.1,
+    )
+
+    repo_dir = stage_repo_sync(settings)
+
+    assert repo_dir == existing_repo
+    assert (repo_dir / "README.md").read_text(encoding="utf-8") == "existing\n"
+
+
+def test_stage_repo_sync_rejects_existing_non_git_repo_path(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    src_repo = _create_local_repo(tmp_path / "src")
+    workspace = tmp_path / "workspace"
+    bad_repo = workspace / "repo"
+    bad_repo.mkdir(parents=True)
+    (bad_repo / "README.md").write_text("not a git repo\n", encoding="utf-8")
+    monkeypatch.setenv("GH_TOKEN", "token")
+
+    settings = WorkerSettings(
+        workspace_path=str(workspace),
+        repo_url=src_repo,
+        repo_ref="main",
+        repo_dir_name="repo",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex"),
+        ready_poll_seconds=0.1,
+    )
+
+    with pytest.raises(AgentInitError, match="not a valid git repo"):
+        stage_repo_sync(settings)
 
 
 def test_run_worker_writes_error_status_when_repo_missing(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -188,99 +233,13 @@ def test_stage_workspace_prepare_sets_repo_local_git_identity(tmp_path, monkeypa
     assert email_result.stdout.strip() == "agent@example.com"
 
 
-def test_stage_workspace_prepare_applies_global_codex_config_as_user_scope(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Global (master) Codex config is installed into CODEX_HOME as user-scope."""
+def test_stage_workspace_prepare_leaves_repo_codex_as_project_scope(tmp_path) -> None:  # type: ignore[no-untyped-def]
     repo_path = Path(_create_local_repo(tmp_path / "src"))
-    global_codex = tmp_path / "global-codex"
-    global_codex.mkdir()
-    (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
-    (global_codex / "AGENTS.md").write_text("global instructions\n", encoding="utf-8")
-    (global_codex / "global-only.txt").write_text("global\n", encoding="utf-8")
-
-    monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
-
-    codex_home = tmp_path / "codex-home"
-    settings = WorkerSettings(
-        workspace_path=str(tmp_path),
-        repo_url=str(repo_path),
-        repo_ref="main",
-        repo_dir_name="src",
-        status_file=str(tmp_path / "status.json"),
-        codex_home=str(codex_home),
-        ready_poll_seconds=0.1,
-    )
-
-    stage_workspace_prepare(settings)
-
-    # Global config lands in CODEX_HOME (user scope).
-    assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'global'\n"
-    assert (codex_home / "AGENTS.md").read_text(encoding="utf-8") == "global instructions\n"
-    assert (codex_home / "global-only.txt").read_text(encoding="utf-8") == "global\n"
-
-
-def test_stage_workspace_prepare_logs_codex_copy_result(tmp_path, monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
-    repo_path = Path(_create_local_repo(tmp_path / "src"))
-    global_codex = tmp_path / "global-codex"
-    global_codex.mkdir()
-    (global_codex / "AGENTS.md").write_text("global instructions\n", encoding="utf-8")
-    (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
-    monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
-
-    settings = WorkerSettings(
-        workspace_path=str(tmp_path),
-        repo_url=str(repo_path),
-        repo_ref="main",
-        repo_dir_name="src",
-        status_file=str(tmp_path / "status.json"),
-        codex_home=str(tmp_path / "codex-home"),
-        ready_poll_seconds=0.1,
-    )
-
-    caplog.set_level("INFO")
-    stage_workspace_prepare(settings)
-
-    assert "agent.workspace_prepare_copied" in caplog.text
-    assert "target_agents_md=True" in caplog.text
-    assert "target_config_toml=True" in caplog.text
-
-
-def test_stage_workspace_prepare_logs_codex_copy_skip_state(tmp_path, monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
-    repo_path = Path(_create_local_repo(tmp_path / "src"))
-    monkeypatch.delenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", raising=False)
-
-    settings = WorkerSettings(
-        workspace_path=str(tmp_path),
-        repo_url=str(repo_path),
-        repo_ref="main",
-        repo_dir_name="src",
-        status_file=str(tmp_path / "status.json"),
-        codex_home=str(tmp_path / "codex-home"),
-        ready_poll_seconds=0.1,
-    )
-
-    caplog.set_level("INFO")
-    stage_workspace_prepare(settings)
-
-    assert "agent.workspace_prepare_copy_skipped" in caplog.text
-    assert "reason=missing_global_codex_config" in caplog.text
-
-
-def test_stage_workspace_prepare_leaves_repo_codex_as_project_scope(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Repo .codex/ is NOT copied into CODEX_HOME; it stays in the repo dir as project-scope
-    config, which Codex reads naturally from the working directory and which takes precedence
-    over user-scope settings in CODEX_HOME."""
-    repo_path = Path(_create_local_repo(tmp_path / "src"))
-    global_codex = tmp_path / "global-codex"
-    global_codex.mkdir()
-    (global_codex / "config.toml").write_text("source = 'global'\n", encoding="utf-8")
-
     repo_codex = repo_path / ".codex"
     repo_codex.mkdir()
     (repo_codex / "config.toml").write_text("source = 'repo'\n", encoding="utf-8")
     (repo_codex / "repo-only.txt").write_text("repo\n", encoding="utf-8")
 
-    monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
-
     codex_home = tmp_path / "codex-home"
     settings = WorkerSettings(
         workspace_path=str(tmp_path),
@@ -294,47 +253,11 @@ def test_stage_workspace_prepare_leaves_repo_codex_as_project_scope(tmp_path, mo
 
     stage_workspace_prepare(settings)
 
-    # Global config stays at user scope; repo config is NOT promoted into CODEX_HOME.
-    assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'global'\n"
     assert not (codex_home / "repo-only.txt").exists()
-    # Repo's .codex/ is untouched in place (Codex reads it as project scope from CWD).
     assert (repo_path / ".codex" / "config.toml").read_text(encoding="utf-8") == "source = 'repo'\n"
 
 
-def test_stage_workspace_prepare_overwrites_stale_global_codex_files(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    repo_path = Path(_create_local_repo(tmp_path / "src"))
-    global_codex = tmp_path / "global-codex"
-    global_codex.mkdir()
-    (global_codex / "AGENTS.md").write_text("new instructions\n", encoding="utf-8")
-    (global_codex / "config.toml").write_text("source = 'new'\n", encoding="utf-8")
-    monkeypatch.setenv("AGENT_GLOBAL_CODEX_CONFIG_DIR", str(global_codex))
-
-    codex_home = tmp_path / "codex-home"
-    codex_home.mkdir()
-    (codex_home / "AGENTS.md").write_text("old instructions\n", encoding="utf-8")
-    (codex_home / "config.toml").write_text("source = 'old'\n", encoding="utf-8")
-    (codex_home / "auth.json").write_text('{"token":"keep"}\n', encoding="utf-8")
-
-    settings = WorkerSettings(
-        workspace_path=str(tmp_path),
-        repo_url=str(repo_path),
-        repo_ref="main",
-        repo_dir_name="src",
-        status_file=str(tmp_path / "status.json"),
-        codex_home=str(codex_home),
-        ready_poll_seconds=0.1,
-    )
-
-    stage_workspace_prepare(settings)
-
-    assert (codex_home / "AGENTS.md").read_text(encoding="utf-8") == "new instructions\n"
-    assert (codex_home / "config.toml").read_text(encoding="utf-8") == "source = 'new'\n"
-    assert (codex_home / "auth.json").read_text(encoding="utf-8") == '{"token":"keep"}\n'
-
-
 def test_stage_workspace_prepare_leaves_repo_claude_as_project_scope(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Repo .claude/ is NOT copied to ~/.claude/; Claude Code reads it as project-scope config
-    from the working directory, which takes precedence over user-scope settings in ~/.claude/."""
     repo_path = Path(_create_local_repo(tmp_path / "src"))
     repo_claude = repo_path / ".claude"
     repo_claude.mkdir()
@@ -343,7 +266,6 @@ def test_stage_workspace_prepare_leaves_repo_claude_as_project_scope(tmp_path, m
 
     home_dir = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home_dir))
-    monkeypatch.delenv("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", raising=False)
 
     settings = WorkerSettings(
         workspace_path=str(tmp_path),
@@ -357,70 +279,9 @@ def test_stage_workspace_prepare_leaves_repo_claude_as_project_scope(tmp_path, m
 
     stage_workspace_prepare(settings)
 
-    # Repo .claude/ stays in the repo (project scope); nothing is copied into ~/.claude/.
     assert not (home_dir / ".claude" / "settings.json").exists()
     assert not (home_dir / ".claude" / "CLAUDE.md").exists()
-    # Repo files are untouched.
     assert (repo_path / ".claude" / "settings.json").read_text(encoding="utf-8") == '{"source":"repo"}\n'
-
-
-def test_stage_workspace_prepare_applies_global_claude_config_to_home(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    repo_path = Path(_create_local_repo(tmp_path / "src"))
-    global_claude = tmp_path / "global-claude"
-    global_claude.mkdir()
-    (global_claude / "settings.json").write_text('{"theme":"global"}\n', encoding="utf-8")
-
-    home_dir = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home_dir))
-    monkeypatch.setenv("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", str(global_claude))
-
-    settings = WorkerSettings(
-        workspace_path=str(tmp_path),
-        repo_url=str(repo_path),
-        repo_ref="main",
-        repo_dir_name="src",
-        status_file=str(tmp_path / "status.json"),
-        codex_home=str(tmp_path / "codex"),
-        ready_poll_seconds=0.1,
-    )
-
-    stage_workspace_prepare(settings)
-
-    assert (home_dir / ".claude" / "settings.json").read_text(encoding="utf-8") == '{"theme":"global"}\n'
-
-
-def test_stage_workspace_prepare_overwrites_stale_global_claude_files(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    repo_path = Path(_create_local_repo(tmp_path / "src"))
-    global_claude = tmp_path / "global-claude"
-    global_claude.mkdir()
-    (global_claude / "settings.json").write_text('{"theme":"new"}\n', encoding="utf-8")
-    (global_claude / "CLAUDE.md").write_text("# New global instructions\n", encoding="utf-8")
-
-    home_dir = tmp_path / "home"
-    home_claude = home_dir / ".claude"
-    home_claude.mkdir(parents=True)
-    (home_claude / "settings.json").write_text('{"theme":"old"}\n', encoding="utf-8")
-    (home_claude / "CLAUDE.md").write_text("# Old global instructions\n", encoding="utf-8")
-    (home_claude / "sessions.json").write_text('{"keep":true}\n', encoding="utf-8")
-
-    monkeypatch.setenv("HOME", str(home_dir))
-    monkeypatch.setenv("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", str(global_claude))
-
-    settings = WorkerSettings(
-        workspace_path=str(tmp_path),
-        repo_url=str(repo_path),
-        repo_ref="main",
-        repo_dir_name="src",
-        status_file=str(tmp_path / "status.json"),
-        codex_home=str(tmp_path / "codex"),
-        ready_poll_seconds=0.1,
-    )
-
-    stage_workspace_prepare(settings)
-
-    assert (home_claude / "settings.json").read_text(encoding="utf-8") == '{"theme":"new"}\n'
-    assert (home_claude / "CLAUDE.md").read_text(encoding="utf-8") == "# New global instructions\n"
-    assert (home_claude / "sessions.json").read_text(encoding="utf-8") == '{"keep":true}\n'
 
 
 def test_load_worker_settings_uses_writable_default_status_path(monkeypatch) -> None:  # type: ignore[no-untyped-def]
