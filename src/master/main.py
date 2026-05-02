@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from ..logging_utils import LocalTimeFormatter
 from .config import load_master_settings
 from .db import init_db, schema_info
+from .mqtt_client import build_client as build_mqtt_client
 from .topics import router as topics_router
 from .workspaces import router as workspaces_router
 
@@ -43,9 +44,15 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     db_path = _db_path(settings.data_dir)
     init_db(db_path)
     LOGGER.info("master.db_init path=%s", db_path)
+    mqtt = build_mqtt_client(settings)
+    mqtt.loop_start()
+    LOGGER.info("master.mqtt_loop_start host=%s port=%s", settings.mqtt_host, settings.mqtt_port)
     app.state.settings = settings
     app.state.db_path = db_path
+    app.state.mqtt = mqtt
     yield
+    mqtt.loop_stop()
+    mqtt.disconnect()
     LOGGER.info("master.shutdown")
 
 
