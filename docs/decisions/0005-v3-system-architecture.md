@@ -1,6 +1,6 @@
 # 0005 v3.0 System Architecture
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-05-02
 
 ## Context
@@ -90,12 +90,8 @@ planned for a later release when multi-master or read-replica requirements arise
 Sessions are topic-scoped. Creating a new topic creates a new session.
 Switching topics resumes the corresponding session.
 
-- **Claude Code:** `claude -p --resume <session-id>`. First turn in a topic
-  returns a session ID stored in the `sessions` table. Subsequent turns pass
-  `--resume`.
-- **Codex:** Session state persists under `CODEX_HOME/sessions/<id>/`. Master
-  stores the session directory name in the `sessions` table and passes it via
-  env var or flag on each dispatch.
+- **Claude Code:** `claude --print --verbose --output-format stream-json --dangerously-skip-permissions [--resume <session-id>]`. First turn in a topic returns a session ID (from the `result` event in stream-json output) stored in the `sessions` table. Subsequent turns pass `--resume`. If the session has expired the agent retries without `--resume`.
+- **Codex:** `codex --full-auto -q <prompt>`. Session state persists via the `CODEX_HOME` directory mounted in the agent container. The `sessions` table stores `llm_session_id` (null for Codex — Codex manages session state internally).
 
 ### 6. Run Mosquitto as a separate container
 

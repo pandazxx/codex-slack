@@ -1,6 +1,6 @@
 # v3.0 System Architecture
 
-*Status:* proposed
+*Status:* accepted (implemented through v3 slices 1–12)
 *ADR:* [0005 v3.0 System Architecture](../decisions/0005-v3-system-architecture.md)
 
 ## Context
@@ -55,12 +55,14 @@ Mosquitto container  [NEW]
   - separate container in compose stack
 
 Agent container  (one per workspace)
+  - Container name: codex-agent-{workspace_id}
+  - Named volume: codex-claude-{workspace_id} → /home/appuser/.claude
   - MQTT client
       - subscribes to prompt messages for its workspace
       - publishes response and status messages
   - LLM session manager
-      - one Claude Code session per topic (--resume <id>)
-      - one Codex session per topic (CODEX_HOME/sessions/<id>)
+      - claude-code adapter: claude --print --verbose --output-format stream-json --dangerously-skip-permissions [--resume <id>]
+      - codex adapter: codex --full-auto -q <prompt>
   - Mounts workspace volume (worktrees per topic)
 ```
 
@@ -145,15 +147,16 @@ Primary views:
 
 ### Data Model (SQLite)
 
-Database file: `/data/master/master_data.db` on master's durable volume.
+Database file: `/opt/codex-slack/data/master/master_data.db` on master's durable volume (mounted as `master_data` Docker volume at `/opt/codex-slack/data/master`).
 
 ```
 workspaces
   id            TEXT PRIMARY KEY
-  name          TEXT NOT NULL
+  name          TEXT NOT NULL UNIQUE
   repo_url      TEXT NOT NULL
   container_name TEXT
   created_at    TEXT NOT NULL
+  archived_at   TEXT            -- set on soft-delete; null when active
 
 workspace_agents
   id            TEXT PRIMARY KEY
@@ -173,6 +176,7 @@ topics
   branch_name   TEXT NOT NULL
   worktree_path TEXT NOT NULL
   created_at    TEXT NOT NULL
+  archived_at   TEXT            -- set on soft-delete; null when active
 
 sessions
   id            TEXT PRIMARY KEY
