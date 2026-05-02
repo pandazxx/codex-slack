@@ -22,8 +22,12 @@
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name || 'Agent') }}</span>
         <div class="bubble">{{ m.text }}</div>
         <details v-if="m.sender === 'agent' && m.transcript" class="detail-panel">
-          <summary class="detail-toggle">Details</summary>
-          <div class="transcript-view">
+          <summary class="detail-toggle">
+            Details
+            <button class="raw-btn" @click.prevent="toggleRaw(m.id)">{{ rawView[m.id] ? 'Parsed' : 'Raw' }}</button>
+          </summary>
+          <pre v-if="rawView[m.id]" class="tr-json tr-raw">{{ toJsonl(m.transcript) }}</pre>
+          <div v-else class="transcript-view">
             <template v-for="(evt, i) in parseTranscript(m.transcript)" :key="i">
               <template v-if="evt.type === 'assistant' && evt.message">
                 <div v-for="(blk, j) in (evt.message.content || [])" :key="j">
@@ -92,6 +96,7 @@ const sending = ref(false)
 const text = ref('')
 const agentStatus = ref('')
 const msgBox = ref(null)
+const rawView = ref({})
 
 let ws = null
 
@@ -169,6 +174,14 @@ async function sendMessage() {
   }
 }
 
+function toggleRaw(id) { rawView.value[id] = !rawView.value[id] }
+
+function toJsonl(raw) {
+  try {
+    return JSON.parse(raw).map(e => JSON.stringify(e)).join('\n')
+  } catch { return raw }
+}
+
 function parseTranscript(raw) {
   try {
     const parsed = JSON.parse(raw)
@@ -209,8 +222,11 @@ onUnmounted(() => {
 .message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; }
 .ts { font-size: 0.7em; color: #94a3b8; margin-top: 2px; }
 .detail-panel { margin-top: 4px; max-width: 100%; }
-.detail-toggle { font-size: 0.72em; color: #94a3b8; cursor: pointer; user-select: none; }
+.detail-toggle { font-size: 0.72em; color: #94a3b8; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.5rem; }
 .detail-toggle:hover { color: #64748b; }
+.raw-btn { font-size: 0.78em; padding: 1px 6px; background: #1e293b; color: #94a3b8; border: none; border-radius: 3px; cursor: pointer; }
+.raw-btn:hover { background: #334155; color: #e2e8f0; }
+.tr-raw { background: #0d1117; color: #e6edf3; padding: 0.6rem 0.75rem; border-radius: 6px; font-size: 0.72em; white-space: pre; overflow-x: auto; max-height: 400px; overflow-y: auto; margin-top: 6px; }
 .transcript-view { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; font-size: 0.78em; max-height: 400px; overflow-y: auto; }
 .tr-text { background: #f8fafc; border-left: 3px solid #cbd5e1; padding: 4px 8px; white-space: pre-wrap; color: #334155; border-radius: 0 4px 4px 0; }
 .tr-tool-call, .tr-tool-result { display: flex; flex-direction: column; gap: 2px; }
