@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     name           TEXT NOT NULL UNIQUE,
     repo_url       TEXT NOT NULL,
     container_name TEXT,
-    created_at     TEXT NOT NULL
+    created_at     TEXT NOT NULL,
+    archived_at    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS workspace_agents (
@@ -30,7 +31,8 @@ CREATE TABLE IF NOT EXISTS topics (
     subject       TEXT NOT NULL,
     branch_name   TEXT NOT NULL,
     worktree_path TEXT NOT NULL,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    archived_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -57,11 +59,22 @@ CREATE TABLE IF NOT EXISTS messages (
 TABLES = ["workspaces", "workspace_agents", "topics", "sessions", "messages"]
 
 
+_MIGRATIONS = [
+    "ALTER TABLE workspaces ADD COLUMN archived_at TEXT",
+    "ALTER TABLE topics ADD COLUMN archived_at TEXT",
+]
+
+
 def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(_SCHEMA)
+        for migration in _MIGRATIONS:
+            try:
+                conn.execute(migration)
+            except sqlite3.OperationalError:
+                pass  # column already exists
         conn.commit()
     finally:
         conn.close()

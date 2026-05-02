@@ -60,8 +60,8 @@ def test_get_connection_enables_foreign_keys(db_path):
 def test_workspace_agents_unique_constraint(db_path):
     conn = get_connection(db_path)
     conn.execute(
-        "INSERT INTO workspaces VALUES (?, ?, ?, ?, ?)",
-        ("w1", "test", "https://github.com/x/y", None, "2026-01-01T00:00:00Z"),
+        "INSERT INTO workspaces VALUES (?, ?, ?, ?, ?, ?)",
+        ("w1", "test", "https://github.com/x/y", None, "2026-01-01T00:00:00Z", None),
     )
     conn.execute(
         "INSERT INTO workspace_agents VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

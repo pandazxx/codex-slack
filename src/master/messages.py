@@ -59,6 +59,7 @@ class MessageOut(BaseModel):
     sender: str
     agent_name: str | None
     text: str
+    transcript: str | None
     created_at: str
 
 
@@ -98,6 +99,7 @@ def send_message(workspace_id: str, topic_id: str, body: MessageSend, request: R
 
     payload = json.dumps({
         "message_id": message_id,
+        "agent_name": routed_agent,
         "adapter": agent["adapter"],
         "subagent": agent["subagent"],
         "worktree": topic["worktree_path"],
@@ -123,7 +125,7 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
         ).fetchone() is None:
             raise HTTPException(404, "topic not found")
         rows = conn.execute(
-            "SELECT id, sender, agent_name, text, created_at FROM messages"
+            "SELECT id, sender, agent_name, text, transcript, created_at FROM messages"
             " WHERE topic_id = ? ORDER BY created_at",
             (topic_id,),
         ).fetchall()
@@ -132,7 +134,7 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
     return [
         MessageOut(
             id=r["id"], sender=r["sender"], agent_name=r["agent_name"],
-            text=r["text"], created_at=r["created_at"],
+            text=r["text"], transcript=r["transcript"], created_at=r["created_at"],
         )
         for r in rows
     ]

@@ -56,7 +56,12 @@ def spawn_agent(
         if val:
             env[key] = val
 
-    volumes: dict[str, dict] = {}
+    # Persist claude-code session state across container restarts.
+    # Named volume is created automatically by the Docker daemon on first run.
+    claude_volume = f"codex-claude-{workspace_id}"
+    volumes: dict[str, dict] = {
+        claude_volume: {"bind": "/home/appuser/.claude", "mode": "rw"},
+    }
     if ssh_auth_sock_path:
         env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
         # Disable strict host checking so the container doesn't need a pre-seeded known_hosts
@@ -83,7 +88,7 @@ def spawn_agent(
         name=name,
         network=network,
         environment=env,
-        volumes=volumes or None,
+        volumes=volumes,
         restart_policy={"Name": "unless-stopped"},
         detach=True,
     )

@@ -26,7 +26,7 @@ def _slugify(text: str) -> str:
 
 def _workspace_exists(conn, workspace_id: str) -> bool:
     return conn.execute(
-        "SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)
+        "SELECT 1 FROM workspaces WHERE id = ? AND archived_at IS NULL", (workspace_id,)
     ).fetchone() is not None
 
 
@@ -80,13 +80,14 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
 
 
 @router.get("", response_model=list[TopicOut])
-def list_topics(workspace_id: str, request: Request) -> list[TopicOut]:
+def list_topics(workspace_id: str, request: Request, archived: bool = False) -> list[TopicOut]:
     conn = get_connection(request.app.state.db_path)
     try:
         if not _workspace_exists(conn, workspace_id):
             raise HTTPException(status_code=404, detail="workspace not found")
+        where = "archived_at IS NOT NULL" if archived else "archived_at IS NULL"
         rows = conn.execute(
-            "SELECT * FROM topics WHERE workspace_id = ? ORDER BY created_at",
+            f"SELECT * FROM topics WHERE workspace_id = ? AND {where} ORDER BY created_at",
             (workspace_id,),
         ).fetchall()
     finally:
@@ -99,7 +100,7 @@ def get_topic(workspace_id: str, topic_id: str, request: Request) -> TopicOut:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM topics WHERE id = ? AND workspace_id = ?",
+            "SELECT * FROM topics WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
             (topic_id, workspace_id),
         ).fetchone()
     finally:
@@ -114,12 +115,14 @@ def delete_topic(workspace_id: str, topic_id: str, request: Request) -> None:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id FROM topics WHERE id = ? AND workspace_id = ?",
+            "SELECT id FROM topics WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
             (topic_id, workspace_id),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="topic not found")
-        conn.execute("DELETE FROM topics WHERE id = ?", (topic_id,))
+        conn.execute(
+            "UPDATE topics SET archived_at = ? WHERE id = ?", (_now(), topic_id)
+        )
         conn.commit()
     finally:
         conn.close()

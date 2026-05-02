@@ -48,9 +48,33 @@ class WorkspaceOut(BaseModel):
     agents: list[WorkspaceAgentOut]
 
 
-def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
+def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
     row = conn.execute(
         "SELECT id, name, repo_url, container_name, created_at FROM workspaces WHERE id = ?",
+        (workspace_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    agents = conn.execute(
+        "SELECT id, agent_name, adapter, subagent, active FROM workspace_agents"
+        " WHERE workspace_id = ? AND active = 1",
+        (workspace_id,),
+    ).fetchall()
+    return WorkspaceOut(
+        id=row["id"], name=row["name"], repo_url=row["repo_url"],
+        container_name=row["container_name"], created_at=row["created_at"],
+        agents=[
+            WorkspaceAgentOut(id=a["id"], agent_name=a["agent_name"], adapter=a["adapter"],
+                              subagent=a["subagent"], active=bool(a["active"]))
+            for a in agents
+        ],
+    )
+
+
+def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
+    row = conn.execute(
+        "SELECT id, name, repo_url, container_name, created_at FROM workspaces"
+        " WHERE id = ? AND archived_at IS NULL",
         (workspace_id,),
     ).fetchone()
     if row is None:
@@ -142,13 +166,14 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
 
 
 @router.get("", response_model=list[WorkspaceOut])
-def list_workspaces(request: Request) -> list[WorkspaceOut]:
+def list_workspaces(request: Request, archived: bool = False) -> list[WorkspaceOut]:
     conn = get_connection(request.app.state.db_path)
     try:
+        where = "archived_at IS NOT NULL" if archived else "archived_at IS NULL"
         rows = conn.execute(
-            "SELECT id FROM workspaces ORDER BY created_at"
+            f"SELECT id FROM workspaces WHERE {where} ORDER BY created_at"
         ).fetchall()
-        return [w for row in rows if (w := _fetch_workspace(conn, row["id"])) is not None]
+        return [w for row in rows if (w := _fetch_workspace_any(conn, row["id"])) is not None]
     finally:
         conn.close()
 
@@ -170,20 +195,20 @@ def delete_workspace(workspace_id: str, request: Request) -> None:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id, container_name FROM workspaces WHERE id = ?", (workspace_id,)
+            "SELECT id, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
+            (workspace_id,),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
         existing_container = row["container_name"] or container_name(workspace_id)
-        topic_ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM topics WHERE workspace_id = ?", (workspace_id,)
-        ).fetchall()]
-        for tid in topic_ids:
-            conn.execute("DELETE FROM messages WHERE topic_id = ?", (tid,))
-            conn.execute("DELETE FROM sessions WHERE topic_id = ?", (tid,))
-        conn.execute("DELETE FROM topics WHERE workspace_id = ?", (workspace_id,))
-        conn.execute("DELETE FROM workspace_agents WHERE workspace_id = ?", (workspace_id,))
-        conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
+        now = _now()
+        conn.execute(
+            "UPDATE workspaces SET archived_at = ? WHERE id = ?", (now, workspace_id)
+        )
+        conn.execute(
+            "UPDATE topics SET archived_at = ? WHERE workspace_id = ? AND archived_at IS NULL",
+            (now, workspace_id),
+        )
         conn.commit()
     finally:
         conn.close()

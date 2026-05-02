@@ -36,33 +36,77 @@ def test_parse_prompt_topic_rejects_malformed():
 # --- _run_claude ---
 
 def test_run_claude_returns_stdout(tmp_path):
+    import json as _json
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello from claude"}]}},
+        {"type": "result", "result": "Hello from claude", "session_id": None, "cost_usd": 0.0, "duration_ms": 100, "is_error": False},
+    ]
+    stream = "\n".join(_json.dumps(e) for e in events)
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="Hello from claude\n", stderr="", returncode=0)
-        text, session = _run_claude(str(tmp_path), "say hi", None, None)
+        mock_run.return_value = MagicMock(stdout=stream, stderr="", returncode=0)
+        text, session, transcript = _run_claude(str(tmp_path), "say hi", None, None)
     assert text == "Hello from claude"
     assert session is None
+    assert transcript is not None
+    assert isinstance(_json.loads(transcript), list)
 
 
 def test_run_claude_includes_resume_when_session_id(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="ok", stderr="", returncode=0)
+        mock_run.return_value = MagicMock(stdout='{"type":"result","result":"ok","session_id":"ses-123"}', stderr="", returncode=0)
         _run_claude(str(tmp_path), "continue", "ses-123", None)
     cmd = mock_run.call_args.args[0]
     assert "--resume" in cmd
     assert "ses-123" in cmd
 
 
+def test_run_claude_retries_fresh_on_session_not_found(tmp_path):
+    import json as _json
+    error_event = [{"type": "result", "is_error": True, "result": "No conversation found with session ID: old-sid", "session_id": "dead-sid"}]
+    ok_event = [{"type": "result", "is_error": False, "result": "Hello fresh", "session_id": "new-sid"}]
+    call_count = {"n": 0}
+
+    def side_effect(cmd, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return MagicMock(stdout="\n".join(_json.dumps(e) for e in error_event), stderr="", returncode=1)
+        return MagicMock(stdout="\n".join(_json.dumps(e) for e in ok_event), stderr="", returncode=0)
+
+    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
+        text, sid, transcript = _run_claude(str(tmp_path), "hi", "old-sid", None)
+
+    assert call_count["n"] == 2
+    assert text == "Hello fresh"
+    assert sid == "new-sid"
+    assert "--resume" not in json.loads(transcript)[0].get("result", "")
+
+
+def test_run_claude_does_not_retry_without_session(tmp_path):
+    import json as _json
+    error_event = [{"type": "result", "is_error": True, "result": "some other error", "session_id": None}]
+    call_count = {"n": 0}
+
+    def side_effect(cmd, **kwargs):
+        call_count["n"] += 1
+        return MagicMock(stdout=_json.dumps(error_event[0]), stderr="", returncode=1)
+
+    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
+        _run_claude(str(tmp_path), "hi", None, None)
+
+    assert call_count["n"] == 1
+
+
 def test_run_claude_not_found(tmp_path):
     import subprocess as sp
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=FileNotFoundError()):
-        text, _ = _run_claude(str(tmp_path), "hi", None, None)
+        text, _, _t = _run_claude(str(tmp_path), "hi", None, None)
     assert "not found" in text
 
 
 def test_run_claude_timeout(tmp_path):
     import subprocess as sp
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=sp.TimeoutExpired("claude", 300)):
-        text, _ = _run_claude(str(tmp_path), "hi", None, None)
+        text, _, _t = _run_claude(str(tmp_path), "hi", None, None)
     assert "timed out" in text
 
 
@@ -71,14 +115,15 @@ def test_run_claude_timeout(tmp_path):
 def test_run_codex_returns_stdout(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout="codex output\n", stderr="", returncode=0)
-        text, session = _run_codex(str(tmp_path), "do it")
+        text, session, transcript = _run_codex(str(tmp_path), "do it")
     assert text == "codex output"
     assert session is None
+    assert transcript is None
 
 
 def test_run_codex_not_found(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=FileNotFoundError()):
-        text, _ = _run_codex(str(tmp_path), "hi")
+        text, _, _t = _run_codex(str(tmp_path), "hi")
     assert "not found" in text
 
 
@@ -126,7 +171,7 @@ def test_ensure_worktree_falls_back_on_existing_branch(tmp_path):
 
 def test_process_prompt_publishes_thinking_then_response(tmp_path):
     client = MagicMock()
-    with patch("src.agent.mqtt_loop._run_claude", return_value=("response text", None)):
+    with patch("src.agent.mqtt_loop._run_claude", return_value=("response text", None, None)):
         with patch("src.agent.mqtt_loop._ensure_worktree"):
             _process_prompt(
                 client, "ws1", "t1",
@@ -141,7 +186,7 @@ def test_process_prompt_publishes_thinking_then_response(tmp_path):
 
 def test_process_prompt_uses_codex_adapter(tmp_path):
     client = MagicMock()
-    with patch("src.agent.mqtt_loop._run_codex", return_value=("codex out", None)) as mock_codex:
+    with patch("src.agent.mqtt_loop._run_codex", return_value=("codex out", None, None)) as mock_codex:
         with patch("src.agent.mqtt_loop._ensure_worktree"):
             _process_prompt(
                 client, "ws1", "t1",
@@ -165,7 +210,7 @@ def test_process_prompt_skips_empty_text(tmp_path):
 
 def test_process_prompt_response_payload_fields(tmp_path):
     client = MagicMock()
-    with patch("src.agent.mqtt_loop._run_claude", return_value=("the answer", None)):
+    with patch("src.agent.mqtt_loop._run_claude", return_value=("the answer", None, '[{"type":"result","result":"the answer"}]')):
         with patch("src.agent.mqtt_loop._ensure_worktree"):
             _process_prompt(
                 client, "ws1", "t1",
@@ -182,6 +227,7 @@ def test_process_prompt_response_payload_fields(tmp_path):
     assert payload["reply_to"] == "orig-id"
     assert payload["last_response"] == "the answer"
     assert "message_id" in payload
+    assert "transcript" in payload
 
 
 # --- _on_message dispatch ---
