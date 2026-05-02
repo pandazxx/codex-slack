@@ -27,6 +27,7 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     monkeypatch.setenv("MASTER_CLAUDE_COMMAND_TEMPLATE", "claude --print -")
     monkeypatch.setenv("MASTER_DEFAULT_AGENT_ADAPTER", "claude-code")
     monkeypatch.setenv("MASTER_AGENT_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS", "14")
     monkeypatch.setenv("MASTER_COMMAND_RATE_LIMIT_COUNT", "10")
     monkeypatch.setenv("MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS", "45")
 
@@ -52,6 +53,7 @@ def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-d
     assert settings.claude_command_template == "claude --print -"
     assert settings.default_agent_adapter == "claude-code"
     assert settings.dispatch_timeout_seconds == 30
+    assert settings.auth_refresh_max_age_days == 14
     assert settings.command_rate_limit_count == 10
     assert settings.command_rate_limit_window_seconds == 45
 
@@ -79,6 +81,7 @@ def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -
     assert settings.codex_command_template == "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
     assert settings.claude_command_template == "claude -p --output-format json --dangerously-skip-permissions"
     assert settings.default_agent_adapter == "codex"
+    assert settings.auth_refresh_max_age_days == 2
 
 
 def test_load_master_settings_rejects_unknown_default_agent_adapter(monkeypatch) -> None:  # type: ignore[no-untyped-def]

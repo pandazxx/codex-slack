@@ -1,6 +1,6 @@
 ---
 name: feature-workflow
-description: Use when a task is a significant feature or change that should follow the repository lifecycle: design, implementation, testing, review, documentation sync, commit, and push.
+description: "Use when a task is a significant feature or change that should follow the repository lifecycle: design, implementation, testing, review, documentation sync, commit, and push."
 ---
 
 # Feature Workflow

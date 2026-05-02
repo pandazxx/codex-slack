@@ -411,6 +411,35 @@ Expected:
 - Response includes the target workspace volume name.
 - Existing agent workspace `.codex` is re-seeded from the current host `auth.json` without removing the agent record.
 
+## UAT-005B: Routed Prompt Auto-Starts Agent
+Preconditions:
+- Agent is loaded and mapped to a non-admin channel.
+- Agent container is stopped or absent.
+
+Steps:
+1. Send a routed mention prompt in the mapped channel.
+2. Inspect master logs and `/master-agent-status payments-agent`.
+
+Expected:
+- Master runs the same startup flow as `/master-agent-start payments-agent`.
+- The agent container becomes running before prompt dispatch.
+- The routed prompt receives an agent response.
+
+## UAT-005C: Routed Prompt Refreshes Stale Codex Auth
+Preconditions:
+- Agent uses the `codex` adapter.
+- `MASTER_CODEX_AUTH_JSON_PATH` points to the host auth file.
+- `MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS` is set to a low value for testing, or the registry record has no `auth_refreshed_at`.
+
+Steps:
+1. Send a routed mention prompt in the mapped channel.
+2. Inspect the registry record and master logs.
+
+Expected:
+- Master refreshes agent auth before dispatching the prompt.
+- Registry record includes an updated `auth_refreshed_at` timestamp.
+- Existing Codex session state in the agent workspace is preserved.
+
 ## UAT-006: Admin Channel Enforcement
 Preconditions:
 - Master running.

@@ -34,6 +34,15 @@ def mask_token(token: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
+def build_agent_prepare_callback(service: MasterService):  # type: ignore[no-untyped-def]
+    def prepare(agent_name: str) -> None:
+        result = service.prepare_agent_for_message(name=agent_name)
+        if not result.ok:
+            raise RuntimeError(result.message)
+
+    return prepare
+
+
 def main() -> None:
     load_dotenv()
     configure_logging()
@@ -41,7 +50,7 @@ def main() -> None:
 
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup frontends=%s registry_path=%s thread_state_path=%s admin_channels=%s discord_admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s codex_config_dir_path=%s claude_config_dir_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s default_adapter=%s bot_token=%s app_token=%s discord_token=%s dispatch_timeout=%s rate_limit=%d/%ds",
+        "master.startup frontends=%s registry_path=%s thread_state_path=%s admin_channels=%s discord_admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s codex_config_dir_path=%s claude_config_dir_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s default_adapter=%s bot_token=%s app_token=%s discord_token=%s dispatch_timeout=%s auth_refresh_days=%s rate_limit=%d/%ds",
         ",".join(sorted(settings.frontends)),
         settings.registry_path,
         settings.thread_state_path,
@@ -61,6 +70,7 @@ def main() -> None:
         mask_token(settings.slack_app_token),
         mask_token(settings.discord_bot_token or ""),
         settings.dispatch_timeout_seconds,
+        settings.auth_refresh_max_age_days,
         settings.command_rate_limit_count,
         settings.command_rate_limit_window_seconds,
     )
@@ -81,16 +91,20 @@ def main() -> None:
         git_user_name=settings.git_user_name,
         git_user_email=settings.git_user_email,
         default_agent_adapter=settings.default_agent_adapter,
+        auth_refresh_max_age_days=settings.auth_refresh_max_age_days,
     )
+    agent_prepare_callback = build_agent_prepare_callback(service)
     codex_dispatcher = PodmanExecDispatcher(
         command_template=settings.codex_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
         slack_bot_token=settings.slack_bot_token,
+        agent_prepare_callback=agent_prepare_callback,
     )
     claude_dispatcher = ClaudeCodeDispatcher(
         command_template=settings.claude_command_template,
         timeout_seconds=settings.dispatch_timeout_seconds,
         slack_bot_token=settings.slack_bot_token,
+        agent_prepare_callback=agent_prepare_callback,
     )
     dispatcher = MultiAgentDispatcher(
         dispatchers={"codex": codex_dispatcher, "claude-code": claude_dispatcher},

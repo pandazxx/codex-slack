@@ -83,6 +83,8 @@ The master process composes these main subsystems:
   - persists logical agent records and routing metadata
 - `MasterService`
   - owns command-side lifecycle operations
+  - prepares agents for routed messages by starting absent/stopped containers
+    and refreshing stale Codex auth when needed
 - `PodmanRuntimeAdapter`
   - translates lifecycle operations into container runtime commands
 - `ChannelRouter`
@@ -126,6 +128,11 @@ The master is the only control plane for agents. It injects:
 - shared mounts such as workspace volume, auth seed, global config, SSH agent
   socket, and transient request storage
 - prompt dispatch via `podman exec`
+
+Before dispatching a routed prompt, the dispatcher calls back into
+`MasterService.prepare_agent_for_message()`. That prepare step uses the same
+agent startup path as `/master-agent-start` when the container is absent or not
+running, and refreshes Codex auth if the registry timestamp is stale.
 
 Detailed agent-side semantics belong in:
 
@@ -240,6 +247,8 @@ The master container must preserve these invariants:
 
 - it is the only control plane for agent containers
 - registry and thread state are durable across container restart
+- Codex auth refresh timestamps live in the registry and must remain durable
+  across master restart for age-based refresh decisions
 - agent work happens in agent containers, not inside the master process
 - request staging is transient and isolated from durable repo state
 - frontend adapters may differ, but they share the same service and router core

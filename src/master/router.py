@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from threading import Lock
 import time
-from typing import Protocol
+from typing import Callable, Protocol
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -58,6 +58,7 @@ class PodmanExecDispatcher:
     workdir: str = "/workspace/repo"
     codex_home: str = "/workspace/home/.codex"
     slack_bot_token: str | None = None
+    agent_prepare_callback: Callable[[str], None] | None = None
 
     @staticmethod
     def _clip(value: str, limit: int = 240) -> str:
@@ -98,6 +99,52 @@ class PodmanExecDispatcher:
             return stripped
         return f"{stripped} --dangerously-skip-permissions"
 
+    def _ensure_container_running(self, *, agent_name: str, container_name: str) -> None:
+        try:
+            inspected = subprocess.run(
+                ["podman", "inspect", "--type", "container", container_name],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RouteError(f"dispatch timed out after {self.timeout_seconds}s") from exc
+        except FileNotFoundError as exc:
+            LOGGER.warning(
+                "router.dispatch_failed agent_container=%s reason=missing_binary error=%s",
+                container_name,
+                exc,
+            )
+            raise RouteError("podman CLI is not available in the master runtime") from exc
+
+        if inspected.returncode != 0:
+            stderr_text = self._clip(inspected.stderr)
+            raise RouteError(f"agent container is not running and auto-start is not configured: {container_name}" + (f" ({stderr_text})" if stderr_text else ""))
+
+        try:
+            payload = json.loads(inspected.stdout)
+        except json.JSONDecodeError as exc:
+            raise RouteError(f"failed to inspect agent container {container_name}: invalid inspect output") from exc
+
+        if not payload:
+            raise RouteError(f"agent container is not available: {container_name}")
+
+        state = payload[0].get("State", {})
+        status = str(state.get("Status", "unknown"))
+        running = bool(state.get("Running", False))
+        if running:
+            return
+
+        raise RouteError(f"agent container is not running and auto-start is not configured: {container_name} (status={status})")
+
+    def _prepare_agent_for_dispatch(self, *, agent_name: str) -> None:
+        if self.agent_prepare_callback is None:
+            return
+        try:
+            self.agent_prepare_callback(agent_name)
+        except Exception as exc:  # noqa: BLE001
+            raise RouteError(f"failed to prepare {agent_name}: {exc}") from exc
+
     def send_prompt(
         self,
         *,
@@ -116,6 +163,8 @@ class PodmanExecDispatcher:
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
         image_urls = image_urls or []
+        self._prepare_agent_for_dispatch(agent_name=agent_name)
+        self._ensure_container_running(agent_name=agent_name, container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=session_id,
@@ -343,11 +392,44 @@ class MultiAgentDispatcher:
 @dataclass(frozen=True)
 class ClaudeCodeDispatcher(PodmanExecDispatcher):
     command_template: str = "claude -p --output-format json"
+    _channel_sessions: dict[str, str] = field(default_factory=dict, init=False, repr=False, compare=False)
+    _session_lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
 
-    def _render_command(self, *, action: str) -> str:
-        rendered = self.command_template.rstrip()
-        if action == "continue":
-            rendered = f"{rendered} --continue"
+    @staticmethod
+    def _conversation_key(*, agent_name: str, platform: str, channel_id: str) -> str:
+        return f"{agent_name}:{platform}:{channel_id}"
+
+    @staticmethod
+    def _session_name(*, agent_name: str, platform: str, channel_id: str) -> str:
+        raw = f"claude-{agent_name}-{platform}-{channel_id}"
+        normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", raw).strip("-")
+        return normalized or "claude-session"
+
+    @staticmethod
+    def _strip_session_flags(command: str) -> str:
+        stripped = command.rstrip()
+        patterns = [
+            r"\s+--continue\b",
+            r"\s+-n\b",
+            r"\s+-r\s+\S+",
+            r"\s+--resume\s+\S+",
+            r"\s+--session-id\s+\S+",
+        ]
+        for pattern in patterns:
+            stripped = re.sub(pattern, "", stripped)
+        return stripped.strip()
+
+    @staticmethod
+    def _inject_session_flags(*, command: str, action: str, session_id: str) -> str:
+        if action == "create":
+            return re.sub(r"\bclaude\b", f"claude -n {session_id}", command, count=1)
+        if action == "resume":
+            return re.sub(r"\bclaude\b", f"claude -r {session_id}", command, count=1)
+        raise ValueError(f"unsupported claude action: {action}")
+
+    def _render_command(self, *, action: str, session_id: str) -> str:
+        rendered = self._strip_session_flags(self.command_template)
+        rendered = self._inject_session_flags(command=rendered, action=action, session_id=session_id)
         return self._ensure_claude_permission_bypass(rendered)
 
     @staticmethod
@@ -474,6 +556,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
     ) -> str:
         LOGGER.info("router.claude_command_template template=%r", self.command_template)
         image_urls = image_urls or []
+        self._prepare_agent_for_dispatch(agent_name=agent_name)
+        self._ensure_container_running(agent_name=agent_name, container_name=container_name)
         staged_paths, passthrough_urls = self._stage_attachments(
             container_name=container_name,
             session_id=channel_id,
@@ -489,9 +573,22 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             prefix = f"{effective_prompt}\n\n" if effective_prompt else ""
             effective_prompt = f"{prefix}Attached files:\n" + "\n".join(lines)
 
-        initial_action = "continue"
+        conversation_key = self._conversation_key(
+            agent_name=agent_name,
+            platform=platform,
+            channel_id=channel_id,
+        )
+        with self._session_lock:
+            known_session_id = self._channel_sessions.get(conversation_key)
+        initial_action = "resume" if known_session_id else "create"
+        initial_session_id = known_session_id or self._session_name(
+            agent_name=agent_name,
+            platform=platform,
+            channel_id=channel_id,
+        )
         retry_action: str | None = None
-        rendered_command = self._render_command(action=initial_action)
+        effective_session_id = initial_session_id
+        rendered_command = self._render_command(action=initial_action, session_id=effective_session_id)
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
         try:
@@ -533,8 +630,15 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             stderr_text = self._clip(completed.stderr)
             if self._should_retry_with_create(stderr_text):
                 retry_action = "create"
+                with self._session_lock:
+                    self._channel_sessions.pop(conversation_key, None)
+                effective_session_id = self._session_name(
+                    agent_name=agent_name,
+                    platform=platform,
+                    channel_id=channel_id,
+                )
                 LOGGER.info(
-                    "router.dispatch_retry agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s claude_retry_action=%s retry_reason=%r",
+                    "router.dispatch_retry agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s claude_retry_action=%s session_id=%s retry_reason=%r",
                     agent_name,
                     container_name,
                     platform,
@@ -543,9 +647,10 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                     user_id or "-",
                     initial_action,
                     retry_action,
+                    effective_session_id,
                     stderr_text,
                 )
-                rendered_command = self._render_command(action=retry_action)
+                rendered_command = self._render_command(action=retry_action, session_id=effective_session_id)
                 if claude_model:
                     rendered_command = _inject_claude_model(rendered_command, claude_model)
                 try:
@@ -589,8 +694,10 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             raise RouteError(f"dispatch failed ({', '.join(details)})")
 
         response = self._parse_response(completed.stdout.strip())
+        with self._session_lock:
+            self._channel_sessions[conversation_key] = effective_session_id
         LOGGER.info(
-            "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s response_chars=%d",
+            "router.dispatch_done agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s claude_action=%s session_id=%s response_chars=%d",
             agent_name,
             container_name,
             platform,
@@ -598,6 +705,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
             thread_ts or "-",
             user_id or "-",
             retry_action or initial_action,
+            effective_session_id,
             len(response),
         )
         return response

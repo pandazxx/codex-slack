@@ -198,6 +198,12 @@ Rules:
 
 This is intended to refresh auth without destroying the rest of the Codex home.
 
+For Codex agents, master also runs the same refresh operation during routed
+message preparation when the registry record has no `auth_refreshed_at` value or
+the timestamp is older than `MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS` (default
+`2`). The refresh happens after any required container startup and before the
+prompt is executed inside the agent.
+
 ### Claude config refresh
 
 `/master-agent-refresh-config <name>` copies the current shared Claude config
