@@ -20,6 +20,7 @@ class MasterSettings:
     mqtt_host: str
     mqtt_port: int
     master_port: int
+    container_runtime: str
 
 
 def _parse_bool(raw_value: str) -> bool:
@@ -71,9 +72,14 @@ def load_master_settings() -> MasterSettings:
     _log_env("MASTER_PORT", os.getenv("MASTER_PORT"))
     master_port = int(raw_master_port) if raw_master_port else 8080
 
+    container_runtime = os.getenv("CONTAINER_RUNTIME", "podman").strip().lower() or "podman"
+    _log_env("CONTAINER_RUNTIME", os.getenv("CONTAINER_RUNTIME"))
+    if container_runtime not in {"podman", "docker"}:
+        raise ValueError(f"CONTAINER_RUNTIME must be 'podman' or 'docker', got: {container_runtime!r}")
+
     LOGGER.info(
-        "master.env_load done data_dir=%s dry_run=%s mqtt=%s:%s",
-        data_dir, dry_run, mqtt_host, mqtt_port,
+        "master.env_load done data_dir=%s dry_run=%s mqtt=%s:%s runtime=%s",
+        data_dir, dry_run, mqtt_host, mqtt_port, container_runtime,
     )
 
     return MasterSettings(
@@ -88,4 +94,5 @@ def load_master_settings() -> MasterSettings:
         mqtt_host=mqtt_host,
         mqtt_port=mqtt_port,
         master_port=master_port,
+        container_runtime=container_runtime,
     )

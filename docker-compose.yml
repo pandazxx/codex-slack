@@ -7,10 +7,6 @@ services:
     container_name: ${MASTER_CONTAINER_NAME:-codex-slack-master}
     working_dir: /opt/codex-slack
     command: ["uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
-    userns_mode: "keep-id"
-    user: "${UID:-1000}:${GID:-1000}"
-    security_opt:
-      - label=disable
     environment:
       MASTER_PORT: ${MASTER_PORT:-8080}
       MASTER_DATA_DIR: /opt/codex-slack/data/master
@@ -21,6 +17,9 @@ services:
       MASTER_SSH_KNOWN_HOSTS_PATH: ${MASTER_SSH_KNOWN_HOSTS_PATH:-}
       MASTER_GIT_USER_NAME: ${MASTER_GIT_USER_NAME:-}
       MASTER_GIT_USER_EMAIL: ${MASTER_GIT_USER_EMAIL:-}
+      CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-docker}
+      DOCKER_HOST: unix:///run/container.sock
+      CONTAINER_HOST: unix:///run/container.sock
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883
       GH_TOKEN: ${GH_TOKEN:-}
@@ -28,13 +27,12 @@ services:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       SSH_AUTH_SOCK: /run/ssh-agent.sock
-      CONTAINER_HOST: unix:///run/podman/podman.sock
     ports:
       - "${MASTER_PORT:-8080}:8080"
     volumes:
       - ${MASTER_DATA_DIR:-./data/master}:/opt/codex-slack/data/master
       - ${MASTER_SSH_AUTH_SOCK_PATH:-/dev/null}:/run/ssh-agent.sock
-      - ${PODMAN_SOCKET_PATH:-/run/user/1000/podman/podman.sock}:/run/podman/podman.sock
+      - ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}:/run/container.sock
     depends_on:
       - mosquitto
     networks:

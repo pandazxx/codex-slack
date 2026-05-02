@@ -22,12 +22,13 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     configure_logging()
     settings = load_master_settings()
     logging.getLogger(__name__).info(
-        "master.startup mqtt=%s:%s data_dir=%s dry_run=%s base_image=%s",
+        "master.startup mqtt=%s:%s data_dir=%s dry_run=%s base_image=%s runtime=%s",
         settings.mqtt_host,
         settings.mqtt_port,
         settings.data_dir,
         settings.dry_run,
         settings.agent_base_image,
+        settings.container_runtime,
     )
     yield
     logging.getLogger(__name__).info("master.shutdown")
