@@ -45,12 +45,13 @@ class WorkspaceOut(BaseModel):
     repo_url: str
     container_name: str | None
     created_at: str
+    archived_at: str | None
     agents: list[WorkspaceAgentOut]
 
 
 def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
     row = conn.execute(
-        "SELECT id, name, repo_url, container_name, created_at FROM workspaces WHERE id = ?",
+        "SELECT id, name, repo_url, container_name, created_at, archived_at FROM workspaces WHERE id = ?",
         (workspace_id,),
     ).fetchone()
     if row is None:
@@ -63,6 +64,7 @@ def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
     return WorkspaceOut(
         id=row["id"], name=row["name"], repo_url=row["repo_url"],
         container_name=row["container_name"], created_at=row["created_at"],
+        archived_at=row["archived_at"],
         agents=[
             WorkspaceAgentOut(id=a["id"], agent_name=a["agent_name"], adapter=a["adapter"],
                               subagent=a["subagent"], active=bool(a["active"]))
@@ -72,8 +74,9 @@ def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
 
 
 def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
+    """Fetch an active (non-archived) workspace."""
     row = conn.execute(
-        "SELECT id, name, repo_url, container_name, created_at FROM workspaces"
+        "SELECT id, name, repo_url, container_name, created_at, archived_at FROM workspaces"
         " WHERE id = ? AND archived_at IS NULL",
         (workspace_id,),
     ).fetchone()
@@ -90,6 +93,7 @@ def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
         repo_url=row["repo_url"],
         container_name=row["container_name"],
         created_at=row["created_at"],
+        archived_at=row["archived_at"],
         agents=[
             WorkspaceAgentOut(
                 id=a["id"],
@@ -182,7 +186,7 @@ def list_workspaces(request: Request, archived: bool = False) -> list[WorkspaceO
 def get_workspace(workspace_id: str, request: Request) -> WorkspaceOut:
     conn = get_connection(request.app.state.db_path)
     try:
-        result = _fetch_workspace(conn, workspace_id)
+        result = _fetch_workspace_any(conn, workspace_id)
     finally:
         conn.close()
     if result is None:

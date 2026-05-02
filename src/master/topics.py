@@ -30,6 +30,12 @@ def _workspace_exists(conn, workspace_id: str) -> bool:
     ).fetchone() is not None
 
 
+def _workspace_exists_any(conn, workspace_id: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)
+    ).fetchone() is not None
+
+
 class TopicCreate(BaseModel):
     subject: str
     branch_name: str | None = None
@@ -42,6 +48,7 @@ class TopicOut(BaseModel):
     branch_name: str
     worktree_path: str
     created_at: str
+    archived_at: str | None
 
 
 def _row_to_topic(row) -> TopicOut:
@@ -52,6 +59,7 @@ def _row_to_topic(row) -> TopicOut:
         branch_name=row["branch_name"],
         worktree_path=row["worktree_path"],
         created_at=row["created_at"],
+        archived_at=row["archived_at"],
     )
 
 
@@ -83,7 +91,8 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
 def list_topics(workspace_id: str, request: Request, archived: bool = False) -> list[TopicOut]:
     conn = get_connection(request.app.state.db_path)
     try:
-        if not _workspace_exists(conn, workspace_id):
+        ws_check = _workspace_exists_any if archived else _workspace_exists
+        if not ws_check(conn, workspace_id):
             raise HTTPException(status_code=404, detail="workspace not found")
         where = "archived_at IS NOT NULL" if archived else "archived_at IS NULL"
         rows = conn.execute(
@@ -100,7 +109,7 @@ def get_topic(workspace_id: str, topic_id: str, request: Request) -> TopicOut:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM topics WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
+            "SELECT * FROM topics WHERE id = ? AND workspace_id = ?",
             (topic_id, workspace_id),
         ).fetchone()
     finally:

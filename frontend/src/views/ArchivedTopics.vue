@@ -12,7 +12,7 @@
     <ul v-else class="list">
       <li v-for="t in topics" :key="t.id">
         <div class="list-row">
-          <span class="topic-name">{{ t.subject }}</span>
+          <RouterLink :to="`/workspaces/${id}/topics/${t.id}`" class="topic-name">{{ t.subject }}</RouterLink>
           <span class="muted small"> — branch: {{ t.branch_name }}</span>
         </div>
       </li>
@@ -57,7 +57,8 @@ h2 { margin-bottom: 1rem; }
 .list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
 .list li { background: #fff; padding: 0.75rem 1rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
 .list-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.topic-name { font-weight: 500; color: #334155; }
+.topic-name { font-weight: 500; text-decoration: none; color: #334155; }
+.topic-name:hover { text-decoration: underline; color: #2563eb; }
 .muted { color: #64748b; }
 .small { font-size: 0.85em; }
 </style>

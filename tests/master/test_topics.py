@@ -120,8 +120,14 @@ def test_delete_topic_returns_204(client, workspace_id):
 def test_delete_topic_removes_it(client, workspace_id):
     topic_id = create_topic(client, workspace_id).json()["id"]
     client.delete(f"/api/workspaces/{workspace_id}/topics/{topic_id}")
-    assert client.get(f"/api/workspaces/{workspace_id}/topics/{topic_id}").status_code == 404
+    # GET still returns the archived topic, but with archived_at set
+    r = client.get(f"/api/workspaces/{workspace_id}/topics/{topic_id}")
+    assert r.status_code == 200
+    assert r.json()["archived_at"] is not None
+    # Active list no longer includes it
     assert all(t["id"] != topic_id for t in client.get(f"/api/workspaces/{workspace_id}/topics").json())
+    # Archived list does include it
+    assert any(t["id"] == topic_id for t in client.get(f"/api/workspaces/{workspace_id}/topics?archived=true").json())
 
 
 def test_delete_topic_not_found(client, workspace_id):

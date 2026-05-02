@@ -2,12 +2,14 @@
   <div>
     <p class="breadcrumb"><RouterLink to="/">Workspaces</RouterLink> / {{ workspace?.name || id }}</p>
 
+    <div v-if="isArchived" class="archived-banner">This workspace is archived — read only</div>
+
     <section>
       <div class="header-row">
         <h2>Topics</h2>
-        <RouterLink :to="`/workspaces/${id}/archived-topics`" class="archived-link">View Archived</RouterLink>
+        <RouterLink v-if="!isArchived" :to="`/workspaces/${id}/archived-topics`" class="archived-link">View Archived</RouterLink>
       </div>
-      <form @submit.prevent="createTopic" class="create-form">
+      <form v-if="!isArchived" @submit.prevent="createTopic" class="create-form">
         <input v-model="subject" placeholder="Topic subject" required />
         <button type="submit" :disabled="creating">
           {{ creating ? 'Creating…' : 'New Topic' }}
@@ -23,14 +25,14 @@
             <RouterLink :to="`/workspaces/${id}/topics/${t.id}`">{{ t.subject }}</RouterLink>
             <span class="muted small"> — branch: {{ t.branch_name }}</span>
           </span>
-          <button class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Archive topic">Archive</button>
+          <button v-if="!isArchived" class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Archive topic">Archive</button>
         </li>
       </ul>
     </section>
 
     <section class="agents-section">
       <h2>Agents</h2>
-      <form @submit.prevent="addAgent" class="create-form">
+      <form v-if="!isArchived" @submit.prevent="addAgent" class="create-form">
         <input v-model="agentForm.agent_name" placeholder="Name (e.g. engineer)" required />
         <select v-model="agentForm.adapter">
           <option value="claude-code">claude-code</option>
@@ -54,7 +56,7 @@
             <td>{{ a.adapter }}</td>
             <td>{{ a.subagent || '—' }}</td>
             <td>
-              <button class="remove-btn" @click="removeAgent(a.id)" title="Remove">✕</button>
+              <button v-if="!isArchived" class="remove-btn" @click="removeAgent(a.id)" title="Remove">✕</button>
             </td>
           </tr>
         </tbody>
@@ -65,7 +67,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
@@ -82,15 +84,18 @@ const addingAgent = ref(false)
 const agentError = ref('')
 const agentForm = ref({ agent_name: '', adapter: 'claude-code', subagent: '' })
 
+const isArchived = computed(() => !!workspace.value?.archived_at)
+
 async function load() {
   loading.value = true
   try {
-    const [wsRes, topicsRes, agentsRes] = await Promise.all([
-      fetch(`/api/workspaces/${id}`),
-      fetch(`/api/workspaces/${id}/topics`),
+    const wsRes = await fetch(`/api/workspaces/${id}`)
+    workspace.value = await wsRes.json()
+    const topicsParam = workspace.value.archived_at ? '?archived=true' : ''
+    const [topicsRes, agentsRes] = await Promise.all([
+      fetch(`/api/workspaces/${id}/topics${topicsParam}`),
       fetch(`/api/workspaces/${id}/agents`),
     ])
-    workspace.value = await wsRes.json()
     topics.value = await topicsRes.json()
     agents.value = await agentsRes.json()
   } finally {
@@ -161,6 +166,7 @@ onMounted(load)
 
 <style scoped>
 .breadcrumb { font-size: 0.9em; color: #64748b; margin-bottom: 1rem; }
+.archived-banner { background: #fef9c3; border: 1px solid #fde047; border-radius: 6px; padding: 0.5rem 1rem; margin-bottom: 1rem; font-size: 0.9em; color: #713f12; }
 h2 { margin: 0; }
 .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .archived-link { font-size: 0.85em; color: #64748b; text-decoration: none; }
