@@ -8,9 +8,8 @@
     <ul v-else class="list">
       <li v-for="ws in workspaces" :key="ws.id">
         <div class="list-row">
-          <span class="ws-name">{{ ws.name }}</span>
+          <RouterLink :to="`/workspaces/${ws.id}`" class="ws-name">{{ ws.name }}</RouterLink>
           <span class="muted small"> — {{ ws.repo_url }}</span>
-          <RouterLink :to="`/workspaces/${ws.id}/archived-topics`" class="muted small link">Archived Topics</RouterLink>
         </div>
       </li>
     </ul>
@@ -42,9 +41,8 @@ h2 { margin-bottom: 1rem; }
 .list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
 .list li { background: #fff; padding: 0.75rem 1rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
 .list-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.ws-name { font-weight: 500; color: #334155; }
-.link { margin-left: auto; text-decoration: none; color: #2563eb; }
-.link:hover { text-decoration: underline; }
+.ws-name { font-weight: 500; text-decoration: none; color: #334155; }
+.ws-name:hover { text-decoration: underline; color: #2563eb; }
 .muted { color: #64748b; }
 .small { font-size: 0.85em; }
 </style>

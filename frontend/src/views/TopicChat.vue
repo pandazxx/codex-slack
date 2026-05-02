@@ -6,7 +6,8 @@
       {{ topic?.subject || topicId }}
     </p>
 
-    <div class="status-bar" v-if="agentStatus">
+    <div v-if="isArchived" class="archived-banner">This topic is archived — read only</div>
+    <div class="status-bar" v-if="agentStatus && !isArchived">
       Agent: <em>{{ agentStatus }}</em>
     </div>
 
@@ -65,24 +66,26 @@
       </div>
     </div>
 
-    <form @submit.prevent="sendMessage" class="send-form">
-      <textarea
-        v-model="text"
-        placeholder="Type a message…"
-        rows="3"
-        :disabled="sending"
-        @keydown.enter.exact.prevent="sendMessage"
-      />
-      <button type="submit" :disabled="sending || !text.trim()">
-        {{ sending ? 'Sending…' : 'Send' }}
-      </button>
-    </form>
-    <p class="hint muted">Enter to send · Shift+Enter for new line</p>
+    <template v-if="!isArchived">
+      <form @submit.prevent="sendMessage" class="send-form">
+        <textarea
+          v-model="text"
+          placeholder="Type a message…"
+          rows="3"
+          :disabled="sending"
+          @keydown.enter.exact.prevent="sendMessage"
+        />
+        <button type="submit" :disabled="sending || !text.trim()">
+          {{ sending ? 'Sending…' : 'Send' }}
+        </button>
+      </form>
+      <p class="hint muted">Enter to send · Shift+Enter for new line</p>
+    </template>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
@@ -97,6 +100,8 @@ const text = ref('')
 const agentStatus = ref('')
 const msgBox = ref(null)
 const rawView = ref({})
+
+const isArchived = computed(() => !!topic.value?.archived_at)
 
 let ws = null
 
@@ -198,9 +203,9 @@ function extractToolResult(content) {
   return JSON.stringify(content, null, 2)
 }
 
-onMounted(() => {
-  load()
-  connectWs()
+onMounted(async () => {
+  await load()
+  if (!isArchived.value) connectWs()
 })
 
 onUnmounted(() => {
@@ -211,6 +216,7 @@ onUnmounted(() => {
 <style scoped>
 .chat-layout { display: flex; flex-direction: column; height: calc(100vh - 110px); }
 .breadcrumb { font-size: 0.9em; color: #64748b; margin-bottom: 0.5rem; }
+.archived-banner { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; color: #713f12; }
 .status-bar { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; }
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding: 0.5rem 0; }
 .message { display: flex; flex-direction: column; max-width: 72%; }

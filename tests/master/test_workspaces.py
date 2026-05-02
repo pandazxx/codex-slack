@@ -102,8 +102,14 @@ def test_delete_workspace_returns_204(client):
 def test_delete_workspace_removes_it(client):
     ws_id = create_ws(client).json()["id"]
     client.delete(f"/api/workspaces/{ws_id}")
-    assert client.get(f"/api/workspaces/{ws_id}").status_code == 404
+    # GET still returns the archived workspace, but with archived_at set
+    r = client.get(f"/api/workspaces/{ws_id}")
+    assert r.status_code == 200
+    assert r.json()["archived_at"] is not None
+    # Active list no longer includes it
     assert all(w["id"] != ws_id for w in client.get("/api/workspaces").json())
+    # Archived list does include it
+    assert any(w["id"] == ws_id for w in client.get("/api/workspaces?archived=true").json())
 
 
 def test_delete_workspace_not_found(client):
