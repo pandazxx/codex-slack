@@ -175,6 +175,13 @@ def delete_workspace(workspace_id: str, request: Request) -> None:
         if row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
         existing_container = row["container_name"] or container_name(workspace_id)
+        topic_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM topics WHERE workspace_id = ?", (workspace_id,)
+        ).fetchall()]
+        for tid in topic_ids:
+            conn.execute("DELETE FROM messages WHERE topic_id = ?", (tid,))
+            conn.execute("DELETE FROM sessions WHERE topic_id = ?", (tid,))
+        conn.execute("DELETE FROM topics WHERE workspace_id = ?", (workspace_id,))
         conn.execute("DELETE FROM workspace_agents WHERE workspace_id = ?", (workspace_id,))
         conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
         conn.commit()
