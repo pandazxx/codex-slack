@@ -21,13 +21,14 @@
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name || 'Agent') }}</span>
         <div class="bubble">{{ m.text }}</div>
-        <details v-if="m.sender === 'agent' && hasDetails(m.transcript)" class="detail-panel">
+        <details v-if="m.sender === 'agent' && m.transcript" class="detail-panel">
           <summary class="detail-toggle">Details</summary>
           <div class="transcript-view">
             <template v-for="(evt, i) in parseTranscript(m.transcript)" :key="i">
               <template v-if="evt.type === 'assistant' && evt.message">
                 <div v-for="(blk, j) in (evt.message.content || [])" :key="j">
-                  <div v-if="blk.type === 'tool_use'" class="tr-tool-call">
+                  <div v-if="blk.type === 'text' && blk.text" class="tr-text">{{ blk.text }}</div>
+                  <div v-else-if="blk.type === 'tool_use'" class="tr-tool-call">
                     <span class="tr-badge tr-badge-tool">{{ blk.name }}</span>
                     <pre class="tr-json">{{ JSON.stringify(blk.input, null, 2) }}</pre>
                   </div>
@@ -162,15 +163,6 @@ async function sendMessage() {
   } finally {
     sending.value = false
   }
-}
-
-function hasDetails(raw) {
-  const evts = parseTranscript(raw)
-  return evts.some(e =>
-    (e.type === 'assistant' && (e.message?.content || []).some(b => b.type === 'tool_use')) ||
-    (e.type === 'user' && (e.message?.content || []).some(b => b.type === 'tool_result')) ||
-    (e.type === 'result' && (e.cost_usd != null || e.duration_ms != null))
-  )
 }
 
 function parseTranscript(raw) {
