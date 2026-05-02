@@ -30,7 +30,7 @@ services:
     ports:
       - "${MASTER_PORT:-8080}:8080"
     volumes:
-      - ${MASTER_DATA_DIR:-./data/master}:/opt/codex-slack/data/master
+      - master_data:/opt/codex-slack/data/master
       - ${MASTER_SSH_AUTH_SOCK_PATH:-/dev/null}:/run/ssh-agent.sock
       - ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}:/run/container.sock
     depends_on:
@@ -52,3 +52,6 @@ services:
 networks:
   internal:
     driver: bridge
+
+volumes:
+  master_data:
