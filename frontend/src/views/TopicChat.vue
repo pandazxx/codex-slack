@@ -178,7 +178,7 @@ function toggleRaw(id) { rawView.value[id] = !rawView.value[id] }
 
 function toJsonl(raw) {
   try {
-    return JSON.parse(raw).map(e => JSON.stringify(e)).join('\n')
+    return JSON.parse(raw).map(e => JSON.stringify(e, null, 2)).join('\n\n')
   } catch { return raw }
 }
 
