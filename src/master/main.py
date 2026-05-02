@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from ..logging_utils import LocalTimeFormatter
 from .config import load_master_settings
 from .db import init_db, schema_info
+from .topics import router as topics_router
 from .workspaces import router as workspaces_router
 
 LOGGER = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(workspaces_router)
+app.include_router(topics_router)
 
 
 @app.get("/health")
