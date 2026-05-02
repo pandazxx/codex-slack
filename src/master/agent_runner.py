@@ -34,6 +34,8 @@ def spawn_agent(
     anthropic_api_key: str | None = None,
     openai_api_key: str | None = None,
     gh_token: str | None = None,
+    ssh_auth_sock_path: str | None = None,
+    ssh_known_hosts_path: str | None = None,
     dry_run: bool = False,
 ) -> str:
     name = container_name(workspace_id)
@@ -54,6 +56,17 @@ def spawn_agent(
         if val:
             env[key] = val
 
+    volumes: dict[str, dict] = {}
+    if ssh_auth_sock_path:
+        env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
+        # Disable strict host checking so the container doesn't need a pre-seeded known_hosts
+        env.setdefault("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
+        volumes[ssh_auth_sock_path] = {"bind": "/run/secrets/ssh-auth.sock", "mode": "ro"}
+    if ssh_known_hosts_path:
+        # If an explicit known_hosts is provided, prefer it over the no-check fallback
+        env["GIT_SSH_COMMAND"] = f"ssh -o UserKnownHostsFile=/run/secrets/known_hosts"
+        volumes[ssh_known_hosts_path] = {"bind": "/run/secrets/known_hosts", "mode": "ro"}
+
     if dry_run:
         LOGGER.info("agent_runner.dry_run_spawn container=%s image=%s", name, image)
         return name
@@ -70,6 +83,7 @@ def spawn_agent(
         name=name,
         network=network,
         environment=env,
+        volumes=volumes or None,
         restart_policy={"Name": "unless-stopped"},
         detach=True,
     )

@@ -121,6 +121,8 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
             anthropic_api_key=settings.anthropic_api_key,
             openai_api_key=settings.openai_api_key,
             gh_token=settings.gh_token,
+            ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
+            ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
             dry_run=settings.dry_run,
         )
         conn2 = get_connection(request.app.state.db_path)
