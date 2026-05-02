@@ -6,6 +6,7 @@ from src.master.command_dispatch import (
     dispatch_command as dispatch_slash_command,
     parse_load_text,
     parse_set_model_text,
+    parse_set_subagent_text,
     parse_status_text,
 )
 from src.master.command_format import (
@@ -73,6 +74,14 @@ class FakeMasterService:
     def set_agent_model(self, *, name: str, model: str | None) -> CommandResult:
         return CommandResult(ok=True, code="OK", message="model updated", data={"name": name, "claude_model": model})
 
+    def set_agent_subagent(self, *, name: str, subagent: str | None) -> CommandResult:
+        return CommandResult(
+            ok=True,
+            code="OK",
+            message="subagent updated",
+            data={"name": name, "claude_subagent": subagent},
+        )
+
 
 def test_is_admin_channel() -> None:
     assert is_admin_channel("C1", {"C1", "C2"}) is True
@@ -127,6 +136,16 @@ def test_parse_set_model_text_accepts_optional_model() -> None:
 def test_parse_set_model_text_allows_model_clear() -> None:
     name, model = parse_set_model_text("payments")
     assert (name, model) == ("payments", None)
+
+
+def test_parse_set_subagent_text_accepts_optional_subagent() -> None:
+    name, subagent = parse_set_subagent_text("payments code-reviewer")
+    assert (name, subagent) == ("payments", "code-reviewer")
+
+
+def test_parse_set_subagent_text_allows_subagent_clear() -> None:
+    name, subagent = parse_set_subagent_text("payments")
+    assert (name, subagent) == ("payments", None)
 
 
 def test_dispatch_load_command() -> None:
@@ -227,6 +246,34 @@ def test_dispatch_set_model_command_can_clear_model() -> None:
     result = dispatch_slash_command(service, request)
     assert result.ok is True
     assert result.data["claude_model"] is None
+
+
+def test_dispatch_set_subagent_command_accepts_optional_subagent() -> None:
+    service = FakeMasterService()
+    request = SlackCommandRequest(
+        command_name="/master-agent-set-subagent",
+        text="payments code-reviewer",
+        channel_id="CADMIN",
+        user_id="U1",
+    )
+
+    result = dispatch_slash_command(service, request)
+    assert result.ok is True
+    assert result.data["claude_subagent"] == "code-reviewer"
+
+
+def test_dispatch_set_subagent_command_can_clear_subagent() -> None:
+    service = FakeMasterService()
+    request = SlackCommandRequest(
+        command_name="/master-agent-set-subagent",
+        text="payments",
+        channel_id="CADMIN",
+        user_id="U1",
+    )
+
+    result = dispatch_slash_command(service, request)
+    assert result.ok is True
+    assert result.data["claude_subagent"] is None
 
 
 def test_format_command_result_json_payload() -> None:

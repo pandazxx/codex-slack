@@ -485,6 +485,51 @@ def test_refresh_agent_auth_propagates_runtime_failure(tmp_path) -> None:
     assert refreshed.code == "ERR_RUNTIME_FAILED"
 
 
+def test_set_agent_subagent_persists_registry_value(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    loaded = service.load_agent(
+        name="payments-api",
+        repo_path=str(repo),
+        channel_id="C123",
+        agent_adapter="claude-code",
+    )
+    assert loaded.ok is True
+
+    result = service.set_agent_subagent(name="payments-api", subagent="code-reviewer")
+
+    assert result.ok is True
+    assert result.data["claude_subagent"] == "code-reviewer"
+    saved = registry.get("payments-api")
+    assert saved is not None
+    assert saved.claude_subagent == "code-reviewer"
+
+
+def test_set_agent_subagent_can_clear_registry_value(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    runtime = FakeRuntime()
+    service = MasterService(registry=registry, runtime=runtime)
+
+    loaded = service.load_agent(name="payments-api", repo_path=str(repo), channel_id="C123")
+    assert loaded.ok is True
+    service.set_agent_subagent(name="payments-api", subagent="code-reviewer")
+
+    result = service.set_agent_subagent(name="payments-api", subagent=None)
+
+    assert result.ok is True
+    saved = registry.get("payments-api")
+    assert saved is not None
+    assert saved.claude_subagent is None
+
+
 def test_refresh_agent_config_is_no_longer_supported(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

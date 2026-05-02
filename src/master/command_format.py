@@ -30,6 +30,7 @@ def _format_agent_list_table(result: CommandResult) -> str | None:
                 f"• *{_clip(item.get('name', '-'), 24)}*"
                 f" | state=`{_clip(item.get('status', '-'), 12)}`"
                 f" | adapter=`{_clip(item.get('agent_adapter', '-'), 14)}`"
+                f" | subagent=`{_clip(item.get('claude_subagent') or '-', 18)}`"
                 f" | channel=`{_clip(item.get('channel_id', '-'), 14)}`"
                 f" | ref=`{_clip(item.get('repo_ref', '-'), 12)}`"
                 f" | runtime=`{_clip(item.get('runtime', '-'), 10)}`"
@@ -132,6 +133,7 @@ def _format_status_summary(result: CommandResult) -> str | None:
             f"*State:* registry=`{record.get('status', '-')}` runtime=`{runtime_state}`",
             f"*Channel:* `{record.get('channel_id', '-')}`",
             f"*Branch:* `{record.get('repo_ref', '-')}`",
+            f"*Claude subagent:* `{record.get('claude_subagent') or '-'}`",
             f"*Container:* `{record.get('container_name', '-')}`",
             f"*Image:* `{record.get('resolved_image') or '-'}`",
             f"*Last error:* `{record.get('last_error') or '-'}`",

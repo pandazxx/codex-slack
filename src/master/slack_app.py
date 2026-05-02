@@ -342,6 +342,7 @@ def create_master_app(
         "/master-agent-refresh-auth",
         "/master-agent-refresh-config",
         "/master-agent-set-model",
+        "/master-agent-set-subagent",
     ):
         _register_command(
             app,

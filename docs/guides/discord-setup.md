@@ -199,7 +199,9 @@ Discord exposes command parity with Slack:
 - `/master-agent-usage`
 - `/master-agent-remove`
 - `/master-agent-refresh-auth`
+- `/master-agent-refresh-config`
 - `/master-agent-set-model`
+- `/master-agent-set-subagent`
 
 `/master-agent-load` supports:
 - `name`

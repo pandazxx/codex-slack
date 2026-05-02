@@ -24,6 +24,7 @@ Implemented command set:
 - `/master-agent-refresh-auth <name>`
 - `/master-agent-refresh-config <name>`
 - `/master-agent-set-model <name> [model]`
+- `/master-agent-set-subagent <name> [subagent]`
 
 ## Interaction Contracts
 

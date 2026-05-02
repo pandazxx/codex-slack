@@ -179,6 +179,7 @@ The frontend-to-master command contract includes:
 - `/master-agent-refresh-auth`
 - `/master-agent-refresh-config`
 - `/master-agent-set-model`
+- `/master-agent-set-subagent`
 
 Frontend adapters must:
 

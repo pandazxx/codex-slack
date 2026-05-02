@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import tempfile
 from threading import Lock
@@ -79,7 +80,12 @@ def _update_router_state(path: str | None, update: Callable[[dict[str, object]],
 
 def _inject_claude_model(command: str, model: str) -> str:
     """Insert --model <model> right after 'claude' in the command string."""
-    return re.sub(r"\bclaude\b", f"claude --model {model}", command, count=1)
+    return re.sub(r"\bclaude\b", f"claude --model {shlex.quote(model)}", command, count=1)
+
+
+def _inject_claude_subagent(command: str, subagent: str) -> str:
+    """Insert --agent <subagent> right after 'claude' in the command string."""
+    return re.sub(r"\bclaude\b", f"claude --agent {shlex.quote(subagent)}", command, count=1)
 
 
 class RouteError(RuntimeError):
@@ -104,6 +110,7 @@ class AgentDispatcher(Protocol):
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
+        claude_subagent: str | None = None,
     ) -> str:
         ...
 
@@ -215,6 +222,7 @@ class PodmanExecDispatcher:
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
+        claude_subagent: str | None = None,
     ) -> str:
         rendered_command, session_id = self._render_command(channel_id=channel_id, thread_ts=thread_ts)
         if claude_model:
@@ -427,6 +435,7 @@ class MultiAgentDispatcher:
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
+        claude_subagent: str | None = None,
     ) -> str:
         selected = (agent_adapter or self.default_adapter).strip().lower()
         dispatcher = self.dispatchers.get(selected) or self.dispatchers.get(self.default_adapter)
@@ -443,6 +452,7 @@ class MultiAgentDispatcher:
             user_id=user_id,
             image_urls=image_urls,
             claude_model=claude_model,
+            claude_subagent=claude_subagent,
         )
 
 
@@ -638,6 +648,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         user_id: str | None,
         image_urls: list[str] | None = None,
         claude_model: str | None = None,
+        claude_subagent: str | None = None,
     ) -> str:
         LOGGER.info("router.claude_command_template template=%r", self.command_template)
         image_urls = image_urls or []
@@ -676,6 +687,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         rendered_command = self._render_command(action=initial_action, session_id=effective_session_id)
         if claude_model:
             rendered_command = _inject_claude_model(rendered_command, claude_model)
+        if claude_subagent:
+            rendered_command = _inject_claude_subagent(rendered_command, claude_subagent)
         try:
             completed = self._execute_prompt(
                 rendered_command=rendered_command,
@@ -742,6 +755,8 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
                 rendered_command = self._render_command(action=retry_action, session_id=effective_session_id)
                 if claude_model:
                     rendered_command = _inject_claude_model(rendered_command, claude_model)
+                if claude_subagent:
+                    rendered_command = _inject_claude_subagent(rendered_command, claude_subagent)
                 try:
                     completed = self._execute_prompt(
                         rendered_command=rendered_command,
@@ -905,6 +920,7 @@ class ChannelRouter:
             user_id=user_id,
             image_urls=image_urls,
             claude_model=record.claude_model,
+            claude_subagent=record.claude_subagent,
         )
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         self._record_usage(

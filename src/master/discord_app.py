@@ -623,4 +623,9 @@ def run_discord_frontend(
         text = name if not model else f"{name} {model}"
         await _execute_and_send(interaction, command_name="/master-agent-set-model", text=text)
 
+    @tree.command(name="master-agent-set-subagent", description="Set or clear an agent Claude subagent override")
+    async def cmd_set_subagent(interaction, name: str, subagent: str | None = None) -> None:  # type: ignore[no-untyped-def]
+        text = name if not subagent else f"{name} {subagent}"
+        await _execute_and_send(interaction, command_name="/master-agent-set-subagent", text=text)
+
     client.run(bot_token)
