@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from src.master.main import app, _db_path
+from src.master.main import app, _db_path, _STATIC_DIR
 
 
 @pytest.fixture()
@@ -51,3 +53,24 @@ def test_db_file_created_on_startup(tmp_path, monkeypatch):
     with TestClient(app):
         db = tmp_path / "master_data.db"
         assert db.exists(), "master_data.db was not created on startup"
+
+
+def test_spa_returns_404_when_not_built(client):
+    r = client.get("/some/spa/route")
+    assert r.status_code == 404
+
+
+def test_spa_serves_index_when_built(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+    static = _STATIC_DIR
+    index = static / "index.html"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("<!doctype html><html></html>")
+    try:
+        with TestClient(app) as c:
+            r = c.get("/any/spa/path")
+            assert r.status_code == 200
+            assert "html" in r.text
+    finally:
+        index.unlink(missing_ok=True)

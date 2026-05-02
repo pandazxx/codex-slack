@@ -6,7 +6,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..logging_utils import LocalTimeFormatter
 from .config import load_master_settings
@@ -18,6 +20,8 @@ from .workspaces import router as workspaces_router
 from .ws_hub import ConnectionHub
 
 LOGGER = logging.getLogger(__name__)
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 def configure_logging() -> None:
@@ -67,6 +71,9 @@ app.include_router(workspaces_router)
 app.include_router(topics_router)
 app.include_router(messages_router)
 
+if (_STATIC_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="static-assets")
+
 
 @app.get("/health")
 async def health() -> dict:  # type: ignore[type-arg]
@@ -89,3 +96,11 @@ async def ws_endpoint(topic_id: str, websocket: WebSocket) -> None:
         pass
     finally:
         app.state.hub.disconnect(topic_id, websocket)
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_index(full_path: str) -> FileResponse:
+    index = _STATIC_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(404, "frontend not built")
+    return FileResponse(str(index))
