@@ -40,7 +40,13 @@ RUN mkdir -p data/master
 COPY --chown=appuser:appuser requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
+COPY --chown=appuser:appuser frontend/package.json frontend/package-lock.json* ./frontend/
+RUN cd frontend && npm ci --prefer-offline 2>/dev/null || npm install
+
 COPY --chown=appuser:appuser src ./src
+COPY --chown=appuser:appuser frontend ./frontend
+RUN cd frontend && npm run build && rm -rf node_modules
+
 COPY --chown=appuser:appuser config ./config
 COPY --chown=appuser:appuser docs ./docs
 COPY --chown=appuser:appuser README.md BUILD.md USAGE.md ./
