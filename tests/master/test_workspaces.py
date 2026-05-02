@@ -45,6 +45,12 @@ def test_create_workspace_inserts_default_agents(client):
     assert agents["claude"]["active"] is True
 
 
+def test_create_workspace_duplicate_name_returns_409(client):
+    create_ws(client, name="same")
+    r = client.post("/workspaces", json={"name": "same", "repo_url": "https://github.com/x/z"})
+    assert r.status_code == 409
+
+
 def test_create_workspace_strips_whitespace(client):
     r = client.post("/workspaces", json={"name": "  repo  ", "repo_url": "  https://github.com/x/y  "})
     body = r.json()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 
@@ -79,11 +80,14 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
     now = _now()
     conn = get_connection(request.app.state.db_path)
     try:
-        conn.execute(
-            "INSERT INTO workspaces (id, name, repo_url, container_name, created_at)"
-            " VALUES (?, ?, ?, NULL, ?)",
-            (workspace_id, body.name.strip(), body.repo_url.strip(), now),
-        )
+        try:
+            conn.execute(
+                "INSERT INTO workspaces (id, name, repo_url, container_name, created_at)"
+                " VALUES (?, ?, ?, NULL, ?)",
+                (workspace_id, body.name.strip(), body.repo_url.strip(), now),
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="workspace name already exists")
         for agent_name, adapter, subagent in _DEFAULT_AGENTS:
             conn.execute(
                 "INSERT INTO workspace_agents"
