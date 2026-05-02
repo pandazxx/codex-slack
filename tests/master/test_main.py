@@ -55,9 +55,20 @@ def test_db_file_created_on_startup(tmp_path, monkeypatch):
         assert db.exists(), "master_data.db was not created on startup"
 
 
-def test_spa_returns_404_when_not_built(client):
-    r = client.get("/some/spa/route")
-    assert r.status_code == 404
+def test_spa_returns_404_when_not_built(tmp_path, monkeypatch, tmp_path_factory):
+    monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+    index = _STATIC_DIR / "index.html"
+    existed = index.exists()
+    if existed:
+        index.rename(index.with_suffix(".html.bak"))
+    try:
+        with TestClient(app) as c:
+            r = c.get("/some/spa/route")
+            assert r.status_code == 404
+    finally:
+        if existed:
+            index.with_suffix(".html.bak").rename(index)
 
 
 def test_spa_serves_index_when_built(tmp_path, monkeypatch):

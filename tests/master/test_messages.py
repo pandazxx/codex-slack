@@ -127,3 +127,40 @@ def test_send_creates_session(client, workspace_topic):
     payload = json.loads(mock_mqtt.publish.call_args.args[1])
     # first turn: session_id is None (no LLM session yet)
     assert payload["session_id"] is None
+
+
+# --- @mention routing ---
+
+def test_mention_routes_to_named_agent(client, workspace_topic):
+    ws_id, topic_id = workspace_topic
+    c, mock_mqtt = client
+    send(client, ws_id, topic_id, text="@codex write tests")
+    import json
+    payload = json.loads(mock_mqtt.publish.call_args.args[1])
+    assert payload["adapter"] == "codex"
+    assert payload["text"] == "write tests"
+
+
+def test_mention_strips_prefix_from_prompt(client, workspace_topic):
+    ws_id, topic_id = workspace_topic
+    c, mock_mqtt = client
+    send(client, ws_id, topic_id, text="@claude explain this")
+    import json
+    payload = json.loads(mock_mqtt.publish.call_args.args[1])
+    assert payload["text"] == "explain this"
+
+
+def test_mention_unknown_agent_returns_404(client, workspace_topic):
+    ws_id, topic_id = workspace_topic
+    r = send(client, ws_id, topic_id, text="@nobody do something")
+    assert r.status_code == 404
+
+
+def test_no_mention_uses_default_agent(client, workspace_topic):
+    ws_id, topic_id = workspace_topic
+    c, mock_mqtt = client
+    send(client, ws_id, topic_id, text="plain text no mention")
+    import json
+    payload = json.loads(mock_mqtt.publish.call_args.args[1])
+    assert payload["adapter"] == "claude-code"
+    assert payload["text"] == "plain text no mention"
