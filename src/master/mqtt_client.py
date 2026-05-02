@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
+import uuid
+from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
@@ -17,12 +20,45 @@ _STATUS_TOPIC = "codex-slack/workspace/+/topic/+/status"
 _TOPIC_PARTS = 6
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _parse_mqtt_topic(raw: str) -> tuple[str, str] | None:
     """Return (topic_id, msg_type) from an MQTT topic string, or None if malformed."""
     parts = raw.split("/")
     if len(parts) != _TOPIC_PARTS:
         return None
     return parts[4], parts[5]
+
+
+def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  # type: ignore[type-arg]
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            text = payload.get("last_response", "")
+            transcript = payload.get("transcript")
+            llm_session_id = payload.get("session_id")
+            message_id = payload.get("message_id") or str(uuid.uuid4())
+            conn.execute(
+                "INSERT OR IGNORE INTO messages"
+                " (id, topic_id, sender, agent_name, text, transcript, attachments_json, created_at)"
+                " VALUES (?, ?, 'agent', NULL, ?, ?, NULL, ?)",
+                (message_id, topic_id, text, transcript, _now()),
+            )
+            if llm_session_id:
+                conn.execute(
+                    "UPDATE sessions SET llm_session_id = ?, updated_at = ?"
+                    " WHERE topic_id = ?",
+                    (llm_session_id, _now(), topic_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.exception("mqtt.save_agent_response_error topic_id=%s", topic_id)
 
 
 def _on_connect(client: mqtt.Client, userdata, flags, reason_code, properties) -> None:  # type: ignore[type-arg]
@@ -57,6 +93,9 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
         message = {"type": "status", "state": payload.get("state")}
     elif msg_type == "response":
         message = {"type": "message", "sender": "agent", **payload}
+        db_path = userdata.get("db_path")
+        if db_path:
+            _save_agent_response(db_path, topic_id, payload)
     else:
         return
 
@@ -66,8 +105,13 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
         hub.broadcast_threadsafe(topic_id, message, loop)
 
 
-def build_client(settings: MasterSettings, hub=None, loop: asyncio.AbstractEventLoop | None = None) -> mqtt.Client:
-    userdata = {"hub": hub, "loop": loop}
+def build_client(
+    settings: MasterSettings,
+    hub=None,
+    loop: asyncio.AbstractEventLoop | None = None,
+    db_path: str | None = None,
+) -> mqtt.Client:
+    userdata = {"hub": hub, "loop": loop, "db_path": db_path}
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, userdata=userdata)
     client.on_connect = _on_connect
     client.on_disconnect = _on_disconnect

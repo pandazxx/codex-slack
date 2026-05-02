@@ -11,6 +11,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from ..logging_utils import LocalTimeFormatter
 from .config import load_master_settings
 from .db import init_db, schema_info
+from .messages import router as messages_router
 from .mqtt_client import build_client as build_mqtt_client
 from .topics import router as topics_router
 from .workspaces import router as workspaces_router
@@ -48,7 +49,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     LOGGER.info("master.db_init path=%s", db_path)
     hub = ConnectionHub()
     loop = asyncio.get_event_loop()
-    mqtt = build_mqtt_client(settings, hub=hub, loop=loop)
+    mqtt = build_mqtt_client(settings, hub=hub, loop=loop, db_path=db_path)
     mqtt.loop_start()
     LOGGER.info("master.mqtt_loop_start host=%s port=%s", settings.mqtt_host, settings.mqtt_port)
     app.state.settings = settings
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
 app = FastAPI(lifespan=lifespan)
 app.include_router(workspaces_router)
 app.include_router(topics_router)
+app.include_router(messages_router)
 
 
 @app.get("/health")
