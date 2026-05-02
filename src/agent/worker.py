@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
 import time
+
+from .mqtt_loop import run_mqtt_loop
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +28,9 @@ class WorkerSettings:
     status_file: str
     codex_home: str
     ready_poll_seconds: float
+    workspace_id: str = ""
+    mqtt_host: str = "localhost"
+    mqtt_port: int = 1883
 
 
 def load_worker_settings() -> WorkerSettings:
@@ -37,6 +42,9 @@ def load_worker_settings() -> WorkerSettings:
         status_file=os.getenv("AGENT_STATUS_FILE", "/tmp/master-agent/status.json").strip(),
         codex_home=os.getenv("CODEX_HOME", "/home/appuser/.codex").strip(),
         ready_poll_seconds=float(os.getenv("AGENT_READY_POLL_SECONDS", "5")),
+        workspace_id=os.getenv("WORKSPACE_ID", "").strip(),
+        mqtt_host=os.getenv("MQTT_HOST", "localhost").strip(),
+        mqtt_port=int(os.getenv("MQTT_PORT", "1883")),
     )
 
 
@@ -174,9 +182,18 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
 
 
 
-def stage_ready(settings: WorkerSettings) -> None:
-    while True:
-        time.sleep(settings.ready_poll_seconds)
+def stage_mqtt_loop(settings: WorkerSettings, repo_dir: str) -> None:
+    if not settings.workspace_id:
+        LOGGER.warning("agent.no_workspace_id — falling back to idle poll loop")
+        while True:
+            time.sleep(settings.ready_poll_seconds)
+        return
+    run_mqtt_loop(
+        workspace_id=settings.workspace_id,
+        mqtt_host=settings.mqtt_host,
+        mqtt_port=settings.mqtt_port,
+        repo_dir=repo_dir,
+    )
 
 
 
@@ -214,7 +231,7 @@ def run_worker(settings: WorkerSettings) -> int:
             },
         )
         emit_stage_event("ready", "ok", "agent worker ready")
-        stage_ready(settings)
+        stage_mqtt_loop(settings, repo_dir=str(repo_dir))
         return 0
     except AgentInitError as exc:
         write_status(

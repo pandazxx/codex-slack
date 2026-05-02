@@ -7,7 +7,7 @@ import subprocess
 import pytest
 
 from src.agent import worker
-from src.agent.worker import AgentInitError, WorkerSettings, run_worker, stage_preflight, stage_repo_sync, stage_workspace_prepare
+from src.agent.worker import AgentInitError, WorkerSettings, run_worker, stage_preflight, stage_repo_sync, stage_workspace_prepare, stage_mqtt_loop
 
 
 def _git(args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -187,7 +187,7 @@ def test_run_worker_success_writes_ready_status(tmp_path, monkeypatch) -> None: 
         ready_poll_seconds=0.1,
     )
 
-    monkeypatch.setattr(worker, "stage_ready", lambda _settings: None)
+    monkeypatch.setattr(worker, "stage_mqtt_loop", lambda _settings, repo_dir: None)
 
     code = run_worker(settings)
     assert code == 0
