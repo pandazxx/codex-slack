@@ -12,11 +12,16 @@ class MasterSettings:
     data_dir: str
     dry_run: bool
     agent_base_image: str
+    agent_network: str
     agent_codex_auth_json_path: str | None
     agent_ssh_auth_sock_path: str | None
     agent_ssh_known_hosts_path: str | None
     git_user_name: str | None
     git_user_email: str | None
+    claude_code_oauth_token: str | None
+    anthropic_api_key: str | None
+    openai_api_key: str | None
+    gh_token: str | None
     mqtt_host: str
     mqtt_port: int
     master_port: int
@@ -46,6 +51,9 @@ def load_master_settings() -> MasterSettings:
     agent_base_image = os.getenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-master:latest").strip() or "codex-slack-master:latest"
     _log_env("MASTER_AGENT_BASE_IMAGE", os.getenv("MASTER_AGENT_BASE_IMAGE"))
 
+    agent_network = os.getenv("MASTER_AGENT_NETWORK", "codex-slack_internal").strip() or "codex-slack_internal"
+    _log_env("MASTER_AGENT_NETWORK", os.getenv("MASTER_AGENT_NETWORK"))
+
     agent_codex_auth_json_path = os.getenv("MASTER_CODEX_AUTH_JSON_PATH", "").strip() or None
     _log_env("MASTER_CODEX_AUTH_JSON_PATH", os.getenv("MASTER_CODEX_AUTH_JSON_PATH"))
 
@@ -60,6 +68,18 @@ def load_master_settings() -> MasterSettings:
 
     git_user_email = os.getenv("MASTER_GIT_USER_EMAIL", "").strip() or None
     _log_env("MASTER_GIT_USER_EMAIL", os.getenv("MASTER_GIT_USER_EMAIL"))
+
+    claude_code_oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "").strip() or None
+    _log_env("CLAUDE_CODE_OAUTH_TOKEN", "<redacted>" if os.getenv("CLAUDE_CODE_OAUTH_TOKEN") else None)
+
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip() or None
+    _log_env("ANTHROPIC_API_KEY", "<redacted>" if os.getenv("ANTHROPIC_API_KEY") else None)
+
+    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
+    _log_env("OPENAI_API_KEY", "<redacted>" if os.getenv("OPENAI_API_KEY") else None)
+
+    gh_token = os.getenv("GH_TOKEN", "").strip() or None
+    _log_env("GH_TOKEN", "<redacted>" if os.getenv("GH_TOKEN") else None)
 
     mqtt_host = os.getenv("MQTT_HOST", "mosquitto").strip() or "mosquitto"
     _log_env("MQTT_HOST", os.getenv("MQTT_HOST"))
@@ -86,11 +106,16 @@ def load_master_settings() -> MasterSettings:
         data_dir=data_dir,
         dry_run=dry_run,
         agent_base_image=agent_base_image,
+        agent_network=agent_network,
         agent_codex_auth_json_path=agent_codex_auth_json_path,
         agent_ssh_auth_sock_path=agent_ssh_auth_sock_path,
         agent_ssh_known_hosts_path=agent_ssh_known_hosts_path,
         git_user_name=git_user_name,
         git_user_email=git_user_email,
+        claude_code_oauth_token=claude_code_oauth_token,
+        anthropic_api_key=anthropic_api_key,
+        openai_api_key=openai_api_key,
+        gh_token=gh_token,
         mqtt_host=mqtt_host,
         mqtt_port=mqtt_port,
         master_port=master_port,

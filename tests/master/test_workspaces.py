@@ -1,4 +1,5 @@
 from __future__ import annotations
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from src.master.main import app
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+    monkeypatch.setenv("MASTER_DRY_RUN", "true")
     with TestClient(app) as c:
         yield c
 
@@ -30,7 +32,7 @@ def test_create_workspace_body(client):
     body = r.json()
     assert body["name"] == "myrepo"
     assert body["repo_url"] == "https://github.com/x/y"
-    assert body["container_name"] is None
+    assert body["container_name"] == f"codex-agent-{body['id']}"
     assert "id" in body
     assert "created_at" in body
 
