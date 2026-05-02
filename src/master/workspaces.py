@@ -28,6 +28,7 @@ def _now() -> str:
 class WorkspaceCreate(BaseModel):
     name: str
     repo_url: str
+    repo_ref: str = "master"
 
 
 class WorkspaceAgentOut(BaseModel):
@@ -111,6 +112,7 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
             runtime=settings.container_runtime,
             workspace_id=workspace_id,
             repo_url=body.repo_url.strip(),
+            repo_ref=body.repo_ref.strip(),
             image=settings.agent_base_image,
             mqtt_host=settings.mqtt_host,
             mqtt_port=settings.mqtt_port,

@@ -25,6 +25,7 @@ def spawn_agent(
     runtime: str,
     workspace_id: str,
     repo_url: str,
+    repo_ref: str = "master",
     image: str,
     mqtt_host: str,
     mqtt_port: int,
@@ -42,6 +43,7 @@ def spawn_agent(
         "MQTT_HOST": mqtt_host,
         "MQTT_PORT": str(mqtt_port),
         "AGENT_REPO_URL": repo_url,
+        "AGENT_REPO_REF": repo_ref,
         "GH_TOKEN": gh_token or _GH_TOKEN_FALLBACK,
     }
     for key, val in [
