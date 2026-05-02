@@ -329,6 +329,13 @@ def test_claude_dispatcher_persists_created_session_across_restarts(tmp_path, mo
     seen: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout=json.dumps([{"State": {"Running": True, "Status": "running"}}]),
+                stderr="",
+            )
         seen.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
@@ -378,6 +385,13 @@ def test_claude_dispatcher_session_persistence_preserves_tracked_threads(tmp_pat
     dispatcher = ClaudeCodeDispatcher(command_template="claude -p", state_path=str(state_path))
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout=json.dumps([{"State": {"Running": True, "Status": "running"}}]),
+                stderr="",
+            )
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
@@ -405,6 +419,13 @@ def test_podman_exec_dispatcher_includes_exit_and_output_details(monkeypatch) ->
     dispatcher = PodmanExecDispatcher()
 
     def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        if args[0][:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         return subprocess.CompletedProcess(
             args=args[0],
             returncode=17,
@@ -429,6 +450,13 @@ def test_podman_exec_dispatcher_reports_timeout(monkeypatch) -> None:  # type: i
     dispatcher = PodmanExecDispatcher(timeout_seconds=12)
 
     def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        if args[0][:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=12)
 
     monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
@@ -468,6 +496,13 @@ def test_podman_exec_dispatcher_runs_in_repo_workdir(monkeypatch) -> None:  # ty
     seen: dict[str, object] = {}
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
@@ -492,6 +527,13 @@ def test_podman_exec_dispatcher_injects_session_resume_for_legacy_template(monke
     seen: dict[str, object] = {}
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
@@ -517,6 +559,13 @@ def test_podman_exec_dispatcher_does_not_inject_resume_for_last_template(monkeyp
     seen: dict[str, object] = {}
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
@@ -553,11 +602,127 @@ def test_multi_agent_dispatcher_selects_adapter_by_name() -> None:
     assert len(claude.calls) == 1
 
 
+def test_podman_exec_dispatcher_uses_master_start_callback_when_container_is_not_running(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    started: list[str] = []
+    dispatcher = PodmanExecDispatcher(agent_prepare_callback=started.append)
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(cmd)
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    response = dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert response == "ok"
+    assert started == ["payments-agent"]
+    assert seen[0] == ["podman", "inspect", "--type", "container", "agent-payments"]
+    assert seen[1][0:3] == ["podman", "exec", "-i"]
+
+
+def test_podman_exec_dispatcher_reports_missing_container(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = PodmanExecDispatcher()
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(args=cmd, returncode=125, stdout="", stderr="no such container")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    with pytest.raises(RouteError, match=r"agent container is not running and auto-start is not configured: agent-payments"):
+        dispatcher.send_prompt(
+            agent_name="payments-agent",
+            container_name="agent-payments",
+            prompt="hello",
+            channel_id="CAGENT",
+            thread_ts="1730000000.1234",
+            user_id="U123",
+        )
+
+
+def test_podman_exec_dispatcher_reports_stopped_container_without_callback(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    dispatcher = PodmanExecDispatcher()
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":false,"Status":"exited"}}]',
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    with pytest.raises(RouteError, match=r"agent container is not running and auto-start is not configured: agent-payments"):
+        dispatcher.send_prompt(
+            agent_name="payments-agent",
+            container_name="agent-payments",
+            prompt="hello",
+            channel_id="CAGENT",
+            thread_ts="1730000000.1234",
+            user_id="U123",
+        )
+
+
+def test_podman_exec_dispatcher_uses_master_start_callback_when_container_is_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    started: list[str] = []
+    dispatcher = PodmanExecDispatcher(agent_prepare_callback=started.append)
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("src.master.router.subprocess.run", fake_run)
+
+    response = dispatcher.send_prompt(
+        agent_name="payments-agent",
+        container_name="agent-payments",
+        prompt="hello",
+        channel_id="CAGENT",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert response == "ok"
+    assert started == ["payments-agent"]
+
+
 def test_claude_dispatcher_creates_session_and_injects_permission_bypass(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     dispatcher = ClaudeCodeDispatcher(command_template="claude -p")
     seen: dict[str, object] = {}
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
@@ -585,6 +750,13 @@ def test_claude_dispatcher_resumes_with_same_session_for_same_channel(monkeypatc
     seen: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         seen.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
@@ -620,6 +792,13 @@ def test_claude_dispatcher_uses_distinct_sessions_for_distinct_channels(monkeypa
     seen: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         seen.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
@@ -654,6 +833,13 @@ def test_claude_dispatcher_retries_with_create_when_session_missing(monkeypatch)
     calls = {"count": 0}
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         seen.append(cmd)
         calls["count"] += 1
         if calls["count"] == 2:
@@ -698,6 +884,13 @@ def test_podman_exec_dispatcher_injects_claude_permission_bypass(monkeypatch) ->
     seen: dict[str, object] = {}
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
@@ -720,6 +913,13 @@ def test_podman_exec_dispatcher_preserves_existing_claude_permission_bypass(monk
     seen: dict[str, object] = {}
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["podman", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout='[{"State":{"Running":true,"Status":"running"}}]',
+                stderr="",
+            )
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 

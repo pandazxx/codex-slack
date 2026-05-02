@@ -73,8 +73,6 @@ Optional shared auth and config inputs may also be provided:
 - `OPENAI_API_KEY`
 - `CLAUDE_CODE_OAUTH_TOKEN`
 - `ANTHROPIC_API_KEY`
-- `AGENT_GLOBAL_CODEX_CONFIG_DIR=/run/secrets/master_codex_config`
-- `AGENT_GLOBAL_CLAUDE_CONFIG_DIR=/run/secrets/master_claude_config`
 
 Per-request dispatch may also inject:
 
@@ -112,10 +110,9 @@ This matches the headless container model used by the repository.
 
 ### Codex
 
-Shared Codex defaults are provided from a host directory:
+Shared Codex defaults are provided from baked-in image content:
 
-- source env: `MASTER_CODEX_CONFIG_DIR_PATH`
-- mounted in agent: `/run/secrets/master_codex_config:ro`
+- image path: `/opt/codex-slack/config/codex-global`
 - copied into user scope: `/workspace/home/.codex/`
 
 This directory may include files such as:
@@ -127,10 +124,9 @@ These are user-scope defaults for every agent.
 
 ### Claude Code
 
-Shared Claude defaults are provided from a host directory:
+Shared Claude defaults are provided from baked-in image content:
 
-- source env: `MASTER_CLAUDE_CONFIG_DIR_PATH`
-- mounted in agent: `/run/secrets/master_claude_config:ro`
+- image path: `/opt/codex-slack/config/claude-global`
 - copied into user scope: `/workspace/home/.claude/`
 
 These defaults typically include:
@@ -201,6 +197,12 @@ Rules:
 - `/workspace/home/.codex/auth.json`
 
 This is intended to refresh auth without destroying the rest of the Codex home.
+
+For Codex agents, master also runs the same refresh operation during routed
+message preparation when the registry record has no `auth_refreshed_at` value or
+the timestamp is older than `MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS` (default
+`2`). The refresh happens after any required container startup and before the
+prompt is executed inside the agent.
 
 ### Claude config refresh
 

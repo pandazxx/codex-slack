@@ -31,9 +31,9 @@ This page summarizes the main configuration keys loaded directly from the curren
 | `MASTER_DRY_RUN` | No | `false` | Disable side-effecting runtime actions |
 | `MASTER_AGENT_BASE_IMAGE` | No | `codex-slack-bot:latest` | Default image for new agents |
 | `MASTER_CODEX_AUTH_JSON_PATH` | No | unset | Host path to the shared Codex auth file mounted into agents |
-| `MASTER_CODEX_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/codex-global`, fallback `config/codex`) | Host path to the shared Codex config directory mounted into agents |
-| `MASTER_CLAUDE_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/claude-global`) | Host path to the shared Claude config directory mounted into agents |
-| `MASTER_PROJECT_DIR` | No | unset | Host project root used for global config auto-detection |
+| `MASTER_CODEX_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/codex-global`, fallback `config/codex`) | Deprecated legacy host path for historical Codex config passthrough; agent startup now uses baked-in image config |
+| `MASTER_CLAUDE_CONFIG_DIR_PATH` | No | unset or auto-detected from `MASTER_PROJECT_DIR` (`config/claude-global`) | Deprecated legacy host path for historical Claude config passthrough; agent startup now uses baked-in image config |
+| `MASTER_PROJECT_DIR` | No | unset | Host project root used for related path detection |
 | `MASTER_SSH_AUTH_SOCK_PATH` | No | unset | Host path to the SSH agent socket mounted into master/agents |
 | `MASTER_SSH_KNOWN_HOSTS_PATH` | No | unset | Host path to the SSH known-hosts file mounted into agents |
 | `MASTER_GIT_USER_NAME` | No | unset | Git author name for agent workspaces |
@@ -43,6 +43,7 @@ This page summarizes the main configuration keys loaded directly from the curren
 | `MASTER_CLAUDE_COMMAND_TEMPLATE` | No | `claude -p --output-format json --dangerously-skip-permissions` | Claude dispatch command |
 | `MASTER_DEFAULT_AGENT_ADAPTER` | No | `codex` | Default agent adapter |
 | `MASTER_AGENT_TIMEOUT_SECONDS` | No | unset | Dispatch timeout |
+| `MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS` | No | `2` | Maximum age, in days, for persisted Codex auth refresh state before routed Codex prompts refresh auth again |
 | `MASTER_COMMAND_RATE_LIMIT_COUNT` | No | `20` | Per-user command burst limit |
 | `MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS` | No | `60` | Rate-limit window size |
 
@@ -55,10 +56,8 @@ This page summarizes the main configuration keys loaded directly from the curren
 | `AGENT_REPO_REF` | No | `main` | Ref to check out |
 | `AGENT_REPO_DIR` | No | `repo` | Checkout directory name |
 | `AGENT_STATUS_FILE` | No | `/tmp/master-agent/status.json` | Container path inside the agent for the readiness status file |
-| `CODEX_HOME` | No | `/home/appuser/.codex` | Container path inside the agent for the writable Codex home |
+| `CODEX_HOME` | No | `/workspace/home/.codex` | Container path inside the agent for the writable Codex home |
 | `AGENT_READY_POLL_SECONDS` | No | `5` | Readiness polling interval |
-| `AGENT_GLOBAL_CODEX_CONFIG_DIR` | No | empty | Container path inside the agent pointing at the mounted shared Codex config source |
-| `AGENT_GLOBAL_CLAUDE_CONFIG_DIR` | No | empty | Container path inside the agent pointing at the mounted shared Claude config source |
 | `AGENT_GIT_USER_NAME` | No | empty | Per-agent Git author name |
 | `AGENT_GIT_USER_EMAIL` | No | empty | Per-agent Git author email |
 | `SSH_AUTH_SOCK` | No | empty | Container path inside the agent to the passed-through SSH agent socket |

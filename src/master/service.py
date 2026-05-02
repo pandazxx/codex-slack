@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 from pathlib import Path
@@ -8,15 +9,13 @@ import re
 import shutil
 import subprocess
 
-from .registry import AgentRecord, AgentRegistry
+from .registry import AgentRecord, AgentRegistry, utc_now_iso
 from .runtime_adapter import RuntimeAdapter
 
 DEFAULT_IMAGE = "codex-slack-bot:latest"
 DEFAULT_RUNTIME = "podman"
 DEFAULT_AGENT_ADAPTER = "codex"
 SUPPORTED_AGENT_ADAPTERS = {"codex", "claude-code"}
-GLOBAL_CODEX_CONFIG_MOUNT = "/run/secrets/master_codex_config"
-GLOBAL_CLAUDE_CONFIG_MOUNT = "/run/secrets/master_claude_config"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -42,6 +41,7 @@ class MasterService:
         git_user_name: str | None = None,
         git_user_email: str | None = None,
         default_agent_adapter: str = DEFAULT_AGENT_ADAPTER,
+        auth_refresh_max_age_days: int = 2,
     ) -> None:
         self._registry = registry
         self._runtime = runtime
@@ -54,6 +54,7 @@ class MasterService:
         self._git_user_name = git_user_name
         self._git_user_email = git_user_email
         self._default_agent_adapter = default_agent_adapter if default_agent_adapter in SUPPORTED_AGENT_ADAPTERS else DEFAULT_AGENT_ADAPTER
+        self._auth_refresh_max_age_days = max(auth_refresh_max_age_days, 0)
 
     def list_agents(self) -> CommandResult:
         agents = []
@@ -192,7 +193,7 @@ class MasterService:
             env = self._build_agent_env(record)
             mounts = self._build_agent_mounts()
             LOGGER.info(
-                "master.start_agent_config agent=%s container=%s repo_ref=%s adapter=%s image_plan=%s resolved_image=%s codex_home=%s global_codex_config_env=%s global_codex_config_mount=%s global_claude_config_env=%s global_claude_config_mount=%s",
+                "master.start_agent_config agent=%s container=%s repo_ref=%s adapter=%s image_plan=%s resolved_image=%s codex_home=%s",
                 record.name,
                 record.container_name,
                 record.repo_ref,
@@ -200,10 +201,6 @@ class MasterService:
                 record.image_plan.get("type", "-"),
                 image,
                 env.get("CODEX_HOME", "-"),
-                env.get("AGENT_GLOBAL_CODEX_CONFIG_DIR", "-"),
-                GLOBAL_CODEX_CONFIG_MOUNT if self._agent_codex_config_dir_path else "-",
-                env.get("AGENT_GLOBAL_CLAUDE_CONFIG_DIR", "-"),
-                GLOBAL_CLAUDE_CONFIG_MOUNT if self._agent_claude_config_dir_path else "-",
             )
             self._runtime.create_or_update_agent(
                 container_name=record.container_name,
@@ -343,6 +340,9 @@ class MasterService:
             self._audit(command="refresh-auth", agent=name, result=result)
             return result
 
+        record.auth_refreshed_at = utc_now_iso()
+        self._registry.upsert(record)
+
         result = CommandResult(
             ok=True,
             code="OK",
@@ -351,9 +351,50 @@ class MasterService:
                 "refreshed": True,
                 "volume_name": f"agent-workspace-{record.name}",
                 "auth_source": self._agent_codex_auth_json_path,
+                "auth_refreshed_at": record.auth_refreshed_at,
             },
         )
         self._audit(command="refresh-auth", agent=name, result=result)
+        return result
+
+    def prepare_agent_for_message(self, *, name: str) -> CommandResult:
+        record = self._registry.get(name)
+        if not record:
+            result = CommandResult(ok=False, code="ERR_AGENT_NOT_FOUND", message=f"unknown agent: {name}", data={})
+            self._audit(command="prepare-message", agent=name, result=result)
+            return result
+
+        inspect = self._runtime.inspect_agent(record.container_name)
+        started = False
+        refreshed_auth = False
+
+        if not self._is_runtime_running(inspect):
+            started_result = self.start_agent(name=name)
+            if not started_result.ok:
+                self._audit(command="prepare-message", agent=name, result=started_result)
+                return started_result
+            started = True
+            record = self._registry.get(name) or record
+
+        if self._should_refresh_agent_auth(record):
+            refresh_result = self.refresh_agent_auth(name=name)
+            if not refresh_result.ok:
+                self._audit(command="prepare-message", agent=name, result=refresh_result)
+                return refresh_result
+            refreshed_auth = True
+            record = self._registry.get(name) or record
+
+        result = CommandResult(
+            ok=True,
+            code="OK",
+            message=f"prepared {name} for message",
+            data={
+                "started": started,
+                "refreshed_auth": refreshed_auth,
+                "auth_refreshed_at": record.auth_refreshed_at,
+            },
+        )
+        self._audit(command="prepare-message", agent=name, result=result)
         return result
 
     def refresh_agent_config(self, *, name: str) -> CommandResult:
@@ -363,40 +404,11 @@ class MasterService:
             self._audit(command="refresh-config", agent=name, result=result)
             return result
 
-        if not self._agent_claude_config_dir_path:
-            result = CommandResult(
-                ok=False,
-                code="ERR_RUNTIME_FAILED",
-                message="agent claude config source is not configured",
-                data={},
-            )
-            self._audit(command="refresh-config", agent=name, result=result)
-            return result
-
-        try:
-            self._runtime.refresh_agent_config(
-                volume_name=f"agent-workspace-{record.name}",
-                host_config_dir=self._agent_claude_config_dir_path,
-            )
-        except Exception as exc:  # noqa: BLE001
-            result = CommandResult(
-                ok=False,
-                code="ERR_RUNTIME_FAILED",
-                message=f"failed to refresh config for {name}: {exc}",
-                data={},
-            )
-            self._audit(command="refresh-config", agent=name, result=result)
-            return result
-
         result = CommandResult(
-            ok=True,
-            code="OK",
-            message=f"refreshed config for {name}",
-            data={
-                "refreshed": True,
-                "volume_name": f"agent-workspace-{record.name}",
-                "config_source": self._agent_claude_config_dir_path,
-            },
+            ok=False,
+            code="ERR_RUNTIME_FAILED",
+            message="agent config passthrough is no longer supported; update the agent image and restart the agent",
+            data={"name": name},
         )
         self._audit(command="refresh-config", agent=name, result=result)
         return result
@@ -488,10 +500,6 @@ class MasterService:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = claude_code_oauth_token
         elif anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = anthropic_api_key
-        if self._agent_codex_config_dir_path:
-            env["AGENT_GLOBAL_CODEX_CONFIG_DIR"] = GLOBAL_CODEX_CONFIG_MOUNT
-        if self._agent_claude_config_dir_path:
-            env["AGENT_GLOBAL_CLAUDE_CONFIG_DIR"] = GLOBAL_CLAUDE_CONFIG_MOUNT
         if self._git_user_name:
             env["AGENT_GIT_USER_NAME"] = self._git_user_name
         if self._git_user_email:
@@ -499,21 +507,45 @@ class MasterService:
         if self._agent_ssh_auth_sock_path:
             env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
             env["GIT_SSH_COMMAND"] = self._agent_git_ssh_command()
-        # CLAUDE_CONFIG_DIR is intentionally NOT set here. The entrypoint copies
-        # /run/secrets/master_claude_config into ~/.claude/ so claude can write
-        # session data there. Pointing CLAUDE_CONFIG_DIR at the read-only mount
-        # causes claude to hang on its first write attempt.
+        # CLAUDE_CONFIG_DIR is intentionally NOT set here. The entrypoint seeds
+        # baked-in Claude config into a writable ~/.claude/ inside the workspace
+        # volume, and Claude must not be pointed at a read-only path.
 
         return env
+
+    @staticmethod
+    def _is_runtime_running(inspect: object) -> bool:
+        if not isinstance(inspect, dict):
+            return False
+        state = inspect.get("State")
+        if isinstance(state, dict):
+            return bool(state.get("Running", False))
+        if isinstance(state, str):
+            return state == "running"
+        return False
+
+    def _should_refresh_agent_auth(self, record: AgentRecord) -> bool:
+        if record.agent_adapter != "codex":
+            return False
+        if not self._agent_codex_auth_json_path:
+            return False
+        if self._auth_refresh_max_age_days <= 0:
+            return False
+        if not record.auth_refreshed_at:
+            return True
+        try:
+            refreshed_at = datetime.fromisoformat(record.auth_refreshed_at)
+        except ValueError:
+            return True
+        if refreshed_at.tzinfo is None:
+            refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - refreshed_at.astimezone(timezone.utc)
+        return age >= timedelta(days=self._auth_refresh_max_age_days)
 
     def _build_agent_mounts(self) -> list[str]:
         mounts: list[str] = []
         if self._agent_codex_auth_json_path:
             mounts.append(f"{self._agent_codex_auth_json_path}:/run/secrets/codex_auth.json:ro")
-        if self._agent_codex_config_dir_path:
-            mounts.append(f"{self._agent_codex_config_dir_path}:{GLOBAL_CODEX_CONFIG_MOUNT}:ro")
-        if self._agent_claude_config_dir_path:
-            mounts.append(f"{self._agent_claude_config_dir_path}:{GLOBAL_CLAUDE_CONFIG_MOUNT}:ro")
         if self._agent_ssh_auth_sock_path:
             mounts.append(f"{self._agent_ssh_auth_sock_path}:/run/secrets/ssh-auth.sock")
         if self._agent_ssh_known_hosts_path:
