@@ -48,6 +48,29 @@ class WorkspaceOut(BaseModel):
     agents: list[WorkspaceAgentOut]
 
 
+def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
+    row = conn.execute(
+        "SELECT id, name, repo_url, container_name, created_at FROM workspaces WHERE id = ?",
+        (workspace_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    agents = conn.execute(
+        "SELECT id, agent_name, adapter, subagent, active FROM workspace_agents"
+        " WHERE workspace_id = ? AND active = 1",
+        (workspace_id,),
+    ).fetchall()
+    return WorkspaceOut(
+        id=row["id"], name=row["name"], repo_url=row["repo_url"],
+        container_name=row["container_name"], created_at=row["created_at"],
+        agents=[
+            WorkspaceAgentOut(id=a["id"], agent_name=a["agent_name"], adapter=a["adapter"],
+                              subagent=a["subagent"], active=bool(a["active"]))
+            for a in agents
+        ],
+    )
+
+
 def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
     row = conn.execute(
         "SELECT id, name, repo_url, container_name, created_at FROM workspaces"
@@ -143,13 +166,14 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
 
 
 @router.get("", response_model=list[WorkspaceOut])
-def list_workspaces(request: Request) -> list[WorkspaceOut]:
+def list_workspaces(request: Request, archived: bool = False) -> list[WorkspaceOut]:
     conn = get_connection(request.app.state.db_path)
     try:
+        where = "archived_at IS NOT NULL" if archived else "archived_at IS NULL"
         rows = conn.execute(
-            "SELECT id FROM workspaces WHERE archived_at IS NULL ORDER BY created_at"
+            f"SELECT id FROM workspaces WHERE {where} ORDER BY created_at"
         ).fetchall()
-        return [w for row in rows if (w := _fetch_workspace(conn, row["id"])) is not None]
+        return [w for row in rows if (w := _fetch_workspace_any(conn, row["id"])) is not None]
     finally:
         conn.close()
 

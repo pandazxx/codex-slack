@@ -3,7 +3,10 @@
     <p class="breadcrumb"><RouterLink to="/">Workspaces</RouterLink> / {{ workspace?.name || id }}</p>
 
     <section>
-      <h2>Topics</h2>
+      <div class="header-row">
+        <h2>Topics</h2>
+        <RouterLink :to="`/workspaces/${id}/archived-topics`" class="archived-link">View Archived</RouterLink>
+      </div>
       <form @submit.prevent="createTopic" class="create-form">
         <input v-model="subject" placeholder="Topic subject" required />
         <button type="submit" :disabled="creating">
@@ -158,7 +161,10 @@ onMounted(load)
 
 <style scoped>
 .breadcrumb { font-size: 0.9em; color: #64748b; margin-bottom: 1rem; }
-h2 { margin-bottom: 1rem; }
+h2 { margin: 0; }
+.header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.archived-link { font-size: 0.85em; color: #64748b; text-decoration: none; }
+.archived-link:hover { text-decoration: underline; color: #2563eb; }
 section { margin-bottom: 2rem; }
 .agents-section { border-top: 1px solid #e2e8f0; padding-top: 1.5rem; }
 .create-form { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; }

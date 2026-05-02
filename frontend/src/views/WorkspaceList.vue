@@ -1,6 +1,9 @@
 <template>
   <div>
-    <h2>Workspaces</h2>
+    <div class="header-row">
+      <h2>Workspaces</h2>
+      <RouterLink to="/archived" class="archived-link">View Archived</RouterLink>
+    </div>
 
     <form @submit.prevent="createWorkspace" class="create-form">
       <input v-model="form.name" placeholder="Name" required />
@@ -78,7 +81,10 @@ onMounted(load)
 </script>
 
 <style scoped>
-h2 { margin-bottom: 1rem; }
+h2 { margin: 0; }
+.header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.archived-link { font-size: 0.85em; color: #64748b; text-decoration: none; }
+.archived-link:hover { text-decoration: underline; color: #2563eb; }
 .create-form { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; }
 .create-form input { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; flex: 1; min-width: 160px; }
 .create-form button { padding: 0.4rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }

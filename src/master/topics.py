@@ -80,13 +80,14 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
 
 
 @router.get("", response_model=list[TopicOut])
-def list_topics(workspace_id: str, request: Request) -> list[TopicOut]:
+def list_topics(workspace_id: str, request: Request, archived: bool = False) -> list[TopicOut]:
     conn = get_connection(request.app.state.db_path)
     try:
         if not _workspace_exists(conn, workspace_id):
             raise HTTPException(status_code=404, detail="workspace not found")
+        where = "archived_at IS NOT NULL" if archived else "archived_at IS NULL"
         rows = conn.execute(
-            "SELECT * FROM topics WHERE workspace_id = ? AND archived_at IS NULL ORDER BY created_at",
+            f"SELECT * FROM topics WHERE workspace_id = ? AND {where} ORDER BY created_at",
             (workspace_id,),
         ).fetchall()
     finally:
