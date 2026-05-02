@@ -45,5 +45,5 @@ COPY --chown=appuser:appuser README.md BUILD.md USAGE.md ./
 COPY --chown=appuser:appuser docker/entrypoint.sh /usr/local/bin/bot-entrypoint
 RUN chmod +x /usr/local/bin/bot-entrypoint
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/bot-entrypoint"]
-CMD ["python", "-m", "src.bot.main"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]

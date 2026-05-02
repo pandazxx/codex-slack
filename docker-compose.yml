@@ -1,29 +1,55 @@
 services:
-  codex-slack-bot:
+  master:
     build:
       context: .
       dockerfile: Dockerfile
-    image: codex-slack-bot:latest
+    image: ${MASTER_RUNTIME_IMAGE:-codex-slack-master:latest}
+    container_name: ${MASTER_CONTAINER_NAME:-codex-slack-master}
     working_dir: /opt/codex-slack
-    command: ["python", "-m", "src.bot.main"]
+    command: ["uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    userns_mode: "keep-id"
+    user: "${UID:-1000}:${GID:-1000}"
+    security_opt:
+      - label=disable
     environment:
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
-      SLACK_ALLOWED_CHANNELS: ${SLACK_ALLOWED_CHANNELS}
-      CODEX_WORKSPACE_PATH: /workspace
-      BOT_LOG_FILE: /workspace/logs/bot.log
-      CODEX_SESSION_ID: ${CODEX_SESSION_ID}
-      CODEX_TIMEOUT_SECONDS: ${CODEX_TIMEOUT_SECONDS}
-      GH_TOKEN: ${GH_TOKEN}
-      GITHUB_TOKEN: ${GH_TOKEN}
-      GIT_USER_NAME: ${GIT_USER_NAME}
-      GIT_USER_EMAIL: ${GIT_USER_EMAIL}
-      CODEX_COMMAND_TEMPLATE: codex exec --dangerously-bypass-approvals-and-sandbox resume {session_id} -
-      CODEX_COMMAND_TEMPLATE_NO_SESSION: codex exec --dangerously-bypass-approvals-and-sandbox -
+      MASTER_PORT: ${MASTER_PORT:-8080}
+      MASTER_DATA_DIR: /opt/codex-slack/data/master
+      MASTER_DRY_RUN: ${MASTER_DRY_RUN:-false}
+      MASTER_AGENT_BASE_IMAGE: ${MASTER_AGENT_BASE_IMAGE:-codex-slack-master:latest}
+      MASTER_CODEX_AUTH_JSON_PATH: ${MASTER_CODEX_AUTH_JSON_PATH:-}
+      MASTER_SSH_AUTH_SOCK_PATH: ${MASTER_SSH_AUTH_SOCK_PATH:-}
+      MASTER_SSH_KNOWN_HOSTS_PATH: ${MASTER_SSH_KNOWN_HOSTS_PATH:-}
+      MASTER_GIT_USER_NAME: ${MASTER_GIT_USER_NAME:-}
+      MASTER_GIT_USER_EMAIL: ${MASTER_GIT_USER_EMAIL:-}
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      GH_TOKEN: ${GH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SSH_AUTH_SOCK: /run/ssh-agent.sock
+      CONTAINER_HOST: unix:///run/podman/podman.sock
+    ports:
+      - "${MASTER_PORT:-8080}:8080"
     volumes:
-      - ./:/workspace
-      - ./logs:/workspace/logs
-      - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro
-      - ${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro
-    stdin_open: true
-    tty: true
+      - ${MASTER_DATA_DIR:-./data/master}:/opt/codex-slack/data/master
+      - ${MASTER_SSH_AUTH_SOCK_PATH:-/dev/null}:/run/ssh-agent.sock
+      - ${PODMAN_SOCKET_PATH:-/run/user/1000/podman/podman.sock}:/run/podman/podman.sock
+    depends_on:
+      - mosquitto
+    networks:
+      - internal
+    restart: unless-stopped
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: ${MOSQUITTO_CONTAINER_NAME:-codex-slack-mosquitto}
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      - internal
+    restart: unless-stopped
+
+networks:
+  internal:
+    driver: bridge
