@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -8,6 +9,16 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .db import get_connection
+
+_MENTION_RE = re.compile(r"^@(\S+)\s*(.*)", re.DOTALL)
+
+
+def _parse_mention(text: str, default_agent: str) -> tuple[str, str]:
+    """Return (agent_name, cleaned_text). @mention prefix overrides default_agent."""
+    m = _MENTION_RE.match(text.strip())
+    if m:
+        return m.group(1).lower(), m.group(2).strip()
+    return default_agent, text.strip()
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/topics/{topic_id}/messages",
@@ -63,15 +74,16 @@ def send_message(workspace_id: str, topic_id: str, body: MessageSend, request: R
         ).fetchone()
         if topic is None:
             raise HTTPException(404, "topic not found")
+        routed_agent, prompt_text = _parse_mention(body.text, body.agent_name)
         agent = conn.execute(
-            "SELECT adapter, subagent FROM workspace_agents"
+            "SELECT agent_name, adapter, subagent FROM workspace_agents"
             " WHERE workspace_id = ? AND agent_name = ? AND active = 1",
-            (workspace_id, body.agent_name),
+            (workspace_id, routed_agent),
         ).fetchone()
         if agent is None:
-            raise HTTPException(404, f"agent '{body.agent_name}' not found in workspace")
+            raise HTTPException(404, f"agent '{routed_agent}' not found in workspace")
         _session_id, llm_session_id = _get_or_create_session(
-            conn, topic_id, body.agent_name, agent["adapter"]
+            conn, topic_id, routed_agent, agent["adapter"]
         )
         message_id = str(uuid.uuid4())
         conn.execute(
@@ -91,7 +103,7 @@ def send_message(workspace_id: str, topic_id: str, body: MessageSend, request: R
         "worktree": topic["worktree_path"],
         "branch": topic["branch_name"],
         "session_id": llm_session_id,
-        "text": body.text.strip(),
+        "text": prompt_text,
         "attachments": [],
     })
     mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
