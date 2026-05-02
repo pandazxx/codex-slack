@@ -6,7 +6,7 @@ services:
     image: ${MASTER_RUNTIME_IMAGE:-codex-slack-master:latest}
     container_name: ${MASTER_CONTAINER_NAME:-codex-slack-master}
     working_dir: /opt/codex-slack
-    command: ["uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
       MASTER_PORT: ${MASTER_PORT:-8080}
       MASTER_DATA_DIR: /opt/codex-slack/data/master
@@ -42,6 +42,7 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: ${MOSQUITTO_CONTAINER_NAME:-codex-slack-mosquitto}
+    entrypoint: ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
     volumes:
       - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     networks:
