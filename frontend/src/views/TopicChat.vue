@@ -21,7 +21,10 @@
         :class="m.sender === 'user' ? 'user' : 'agent'"
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name || 'Agent') }}</span>
-        <div class="bubble">{{ m.text }}</div>
+        <div class="bubble">
+          <MarkdownMessage v-if="m.sender !== 'user'" :text="m.text" />
+          <template v-else>{{ m.text }}</template>
+        </div>
         <div v-if="m.attachments && m.attachments.length" class="attachment-list">
           <template v-for="a in m.attachments" :key="a.id">
             <div v-if="a.mime_type && a.mime_type.startsWith('image/')" class="attachment-img-wrap">
@@ -105,6 +108,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
+import MarkdownMessage from '../components/MarkdownMessage.vue'
 
 const route = useRoute()
 const wsId = route.params.wsId
@@ -265,12 +269,13 @@ onUnmounted(() => {
 .status-bar { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; }
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding: 0.5rem 0; }
 .message { display: flex; flex-direction: column; max-width: 72%; }
+.message.agent { max-width: 88%; }
 .message.user { align-self: flex-end; align-items: flex-end; }
 .message.agent { align-self: flex-start; align-items: flex-start; }
 .label { font-size: 0.75em; color: #64748b; margin-bottom: 2px; }
-.bubble { padding: 0.6rem 0.9rem; border-radius: 12px; white-space: pre-wrap; line-height: 1.45; }
-.message.user .bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 3px; }
-.message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; }
+.bubble { padding: 0.6rem 0.9rem; border-radius: 12px; line-height: 1.45; }
+.message.user .bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 3px; white-space: pre-wrap; }
+.message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; max-width: 100%; overflow: hidden; }
 .ts { font-size: 0.7em; color: #94a3b8; margin-top: 2px; }
 .detail-panel { margin-top: 4px; max-width: 100%; }
 .detail-toggle { font-size: 0.72em; color: #94a3b8; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.5rem; }

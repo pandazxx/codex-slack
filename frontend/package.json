@@ -8,6 +8,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.3",
+    "mermaid": "^11.14.0",
     "vue": "^3.4.0",
     "vue-router": "^4.3.0"
   },
