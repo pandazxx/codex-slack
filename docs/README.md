@@ -9,19 +9,22 @@ This directory is the canonical home for repository documentation.
 
 ## Guides
 
-- [`docs/guides/onboarding.md`](guides/onboarding.md) — contributor onboarding (v3)
-- [`docs/guides/runbooks/master-agent.md`](guides/runbooks/master-agent.md) — master-agent operational runbook (v3)
-- [`docs/guides/runbooks/cd-daemon.md`](guides/runbooks/cd-daemon.md) — CD daemon operational runbook
-- [`docs/guides/container-runtime.md`](guides/container-runtime.md) — container runtime behavior and mounts (pre-v3 reference)
-- [`docs/guides/project-agent-image.md`](guides/project-agent-image.md) — project-specific agent images
+- [`docs/guides/onboarding.md`](guides/onboarding.md) — contributor onboarding
+- [`docs/guides/container-runtime.md`](guides/container-runtime.md) — container runtime behavior and mounts
+- [`docs/guides/slack-setup.md`](guides/slack-setup.md) — Slack application setup
+- [`docs/guides/discord-setup.md`](guides/discord-setup.md) — Discord application setup
+- [`docs/guides/project-agent-image.md`](guides/project-agent-image.md) — standalone guide for project-specific agent images
+- [`docs/guides/multi-agent-setup.md`](guides/multi-agent-setup.md) — historical pre-master multi-agent setup
 - [`docs/guides/tutorials.md`](guides/tutorials.md) — tutorials and guided examples
+- [`docs/guides/runbooks/master-agent.md`](guides/runbooks/master-agent.md) — master-agent operational runbook
+- [`docs/guides/runbooks/cd-daemon.md`](guides/runbooks/cd-daemon.md) — CD daemon operational runbook
 
 ## References
 
-- [`docs/references/api.md`](references/api.md) — REST API, WebSocket, and MQTT topic reference
+- [`docs/references/api.md`](references/api.md) — implemented command surfaces and interaction contracts
 - [`docs/references/config.md`](references/config.md) — configuration keys and defaults
 - [`docs/references/logging.md`](references/logging.md) — logging behavior and verbosity controls
-- [`docs/references/schemas/README.md`](references/schemas/README.md) — SQLite database schema (all five tables)
+- [`docs/references/schemas/README.md`](references/schemas/README.md) — placeholder for future schema docs
 
 ## Knowledge Base
 
@@ -46,7 +49,6 @@ This directory is the canonical home for repository documentation.
 ## Decisions
 
 - [`docs/decisions/README.md`](decisions/README.md) — ADR directory conventions
-- [`docs/decisions/0005-v3-system-architecture.md`](decisions/0005-v3-system-architecture.md) — v3 system architecture (accepted; implemented)
 - [`docs/decisions/0004-agent-runtime-cleanup.md`](decisions/0004-agent-runtime-cleanup.md) — proposed simplification of agent startup config, session, and repo-refresh behavior
 
 ## Archive
