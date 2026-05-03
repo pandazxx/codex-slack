@@ -122,7 +122,7 @@ All automated cases executed on testbed `10.10.10.123` on 2026-05-03 against com
 | UAT-02 (schema) | PASS — all 3 new columns present |
 | UAT-03 (token usage) | PASS — usage_json stored with input/output/cache tokens |
 | UAT-04 (refresh-auth API) | PASS — 200 on valid, 404 on nonexistent, 404 on archived |
-| UAT-05 (Refresh Auth UI) | Manual — pending user verification |
+| UAT-05 (Refresh Auth UI) | DEFERRED — to be verified via Codex implementation |
 | UAT-06 (auto-start) | PASS — stopped container restarted within 3s of message send |
 | UAT-07 (health respawn) | PASS — SIGKILL'd container (exit 137) respawned in ~25s |
 | UAT-08 (idle auto-stop) | PASS — container paused after 120s idle; auto-start on next message confirmed |
