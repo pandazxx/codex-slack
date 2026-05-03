@@ -16,6 +16,7 @@ from ..logging_utils import LocalTimeFormatter
 from .agent_runner import container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
 from .db import get_connection, init_db, schema_info
+from .runtime_config import load_agent_env, load_global_env
 from .attachments import router as attachments_router
 from .messages import router as messages_router
 from .mqtt_client import build_client as build_mqtt_client
@@ -65,9 +66,11 @@ def _background_tasks(settings, db_path: str, stop_event: threading.Event) -> No
         now = time.time()
         try:
             workspaces = _active_workspaces(db_path)
+            global_cfg = load_global_env(db_path)
         except Exception:
             LOGGER.exception("master.bg_task_list_failed")
             continue
+        gh_token_effective = settings.gh_token or global_cfg.get("GH_TOKEN")
 
         for ws in workspaces:
             cname = ws["container_name"]
@@ -114,7 +117,7 @@ def _background_tasks(settings, db_path: str, stop_event: threading.Event) -> No
                 if needs_refresh:
                     try:
                         LOGGER.info("master.auto_refresh_auth container=%s", cname)
-                        refresh_auth(name=cname, gh_token=settings.gh_token, dry_run=settings.dry_run)
+                        refresh_auth(name=cname, gh_token=gh_token_effective, dry_run=settings.dry_run)
                         from datetime import datetime, timezone
                         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                         conn = get_connection(db_path)
@@ -175,6 +178,7 @@ def _respawn_agents(settings, db_path: str) -> None:
                 ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
                 dry_run=settings.dry_run,
                 master_url=settings.master_url,
+                extra_env=load_agent_env(db_path, ws_id),
             )
             LOGGER.info("master.respawned container=%s workspace_id=%s", cname, ws_id)
         except Exception:

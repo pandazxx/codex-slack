@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from .agent_runner import get_container_status, refresh_auth, spawn_agent, stop_agent, container_name
 from .db import get_connection
+from .runtime_config import load_agent_env
 from .staffs import StaffOut, _SELECT_COLS as _STAFF_COLS, _row_to_out as _staff_row_to_out
 
 LOGGER = logging.getLogger(__name__)
@@ -133,6 +134,7 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
             ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
             ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
             dry_run=settings.dry_run,
+            extra_env=load_agent_env(request.app.state.db_path, workspace_id),
         )
         conn2 = get_connection(request.app.state.db_path)
         try:
@@ -229,8 +231,10 @@ def refresh_workspace_auth(workspace_id: str, request: Request) -> dict:  # type
         conn.close()
 
     settings = request.app.state.settings
+    db_cfg = load_agent_env(request.app.state.db_path, workspace_id)
+    gh_token = settings.gh_token or db_cfg.get("GH_TOKEN")
     try:
-        refresh_auth(name=cname, gh_token=settings.gh_token, dry_run=settings.dry_run)
+        refresh_auth(name=cname, gh_token=gh_token, dry_run=settings.dry_run)
     except Exception:
         LOGGER.exception("workspace.refresh_auth_failed container=%s", cname)
 
