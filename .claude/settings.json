@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch*)",
+      "Bash(git stash list*)",
+      "Bash(git tag*)",
+      "Bash(git remote*)",
+      "Bash(git rev-parse*)",
+      "Bash(git shortlog*)",
+      "Bash(pytest*)",
+      "Bash(python -m pytest*)",
+      "Bash(python -c *)",
+      "Bash(python -m *)",
+      "Bash(pip list*)",
+      "Bash(pip show*)",
+      "Bash(ls*)",
+      "Bash(find . *)",
+      "Bash(find src *)",
+      "Bash(find tests *)",
+      "Bash(find docs *)",
+      "Bash(podman ps*)",
+      "Bash(podman images*)",
+      "Bash(podman logs*)",
+      "Bash(podman inspect*)",
+      "Bash(docker ps*)",
+      "Bash(docker images*)",
+      "Bash(docker logs*)",
+      "Bash(docker inspect*)"
+    ],
+    "deny": []
+  }
+}

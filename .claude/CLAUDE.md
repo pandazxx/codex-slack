@@ -4,7 +4,7 @@
 
 - Never commit directly to `master` or `main`. Create a feature branch first.
 - Name branches after the work: `feat/`, `fix/`, `refactor/`, `docs/`, etc.
-- Use the `commit` skill to stage, write, and push. Use the `pr` skill to open a PR against `master`.
+- Use the `/commit` command to stage, write, and push. Use the `/pr` command to open a PR against `master`.
 - Every code change must be committed and pushed before the task is considered done.
 
 ## Knowledge Persistence
@@ -80,10 +80,12 @@ docs/
 
 1. *User opens a feature branch* — `git checkout -b feat/<name>`. This is the trigger to begin work.
 
+1a. *Scoping (optional)* — if the scope is unclear, spawn the `explore` agent to locate relevant files, trace call paths, or map interfaces before design begins.
+
 2. *Design phase* — spawn the `architect` agent. Hold the discussion with the user until the design is complete: requirements are clear, tradeoffs are resolved, and an ADR and/or design doc are committed to `docs/decisions/` or `docs/design/`. Do not write implementation code before design is signed off.
 
 3. *Build and test authoring (parallel)* — once design is signed off, two tracks run concurrently:
-   - `engineer` agent implements the feature on the branch, committing incrementally with the `commit` skill.
+   - `engineer` agent implements the feature on the branch, committing incrementally with the `/commit` command.
    - `tester` agent authors test cases and test code in `tests/` and a test plan in `docs/test-plans/`, based on the design doc.
 
 4. *Test execution loop* — `tester` agent runs the full test suite. If any tests fail, `engineer` fixes them. Repeat until all tests are green.
@@ -99,6 +101,6 @@ docs/
 
 8. *Documentation* — spawn the `doc-writer` agent to update README, guides, references, and knowledge-base to reflect the completed feature.
 
-9. *Release candidate* — use the `tag` skill to create an RC tag (e.g. `v1.2.0-rc1`). Use the `pr` skill to open a PR against `master`.
+9. *Release candidate* — use the `/tag` command to create an RC tag (e.g. `v1.2.0-rc1`). Use the `/pr` command to open a PR against `master`.
 
 10. *Merge* — user reviews the PR and merges. No squashing without explicit instruction — preserve the commit history.

@@ -5,6 +5,7 @@ tools:
   - Grep
   - Glob
   - Write
+  - Edit
 model: claude-sonnet-4-6
 ---
 
