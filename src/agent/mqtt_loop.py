@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -58,6 +59,14 @@ def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str) -> None:
 
 
 _SESSION_NOT_FOUND = "No conversation found with session ID"
+
+
+def _fetch_attachment(master_url: str, attachment_id: str, filename: str, worktree: str) -> None:
+    url = f"{master_url}/api/attachments/{attachment_id}/download"
+    dest = Path(worktree) / filename
+    with urllib.request.urlopen(url) as resp:
+        dest.write_bytes(resp.read())
+    LOGGER.info("agent.attachment_fetched id=%s filename=%s", attachment_id, filename)
 
 
 def _run_claude_once(
@@ -136,6 +145,8 @@ def _process_prompt(
     session_id = payload.get("session_id")
     adapter = payload.get("adapter", "claude-code")
     subagent = payload.get("subagent")
+    attachments = payload.get("attachments", [])
+    master_url = payload.get("master_url", "http://master:8080")
 
     if not text:
         LOGGER.warning("agent.empty_prompt topic_id=%s", topic_id)
@@ -151,6 +162,21 @@ def _process_prompt(
         LOGGER.exception("agent.worktree_create_failed worktree=%s branch=%s", worktree, branch)
 
     cwd = worktree if (worktree and Path(worktree).exists()) else repo_dir or "/"
+
+    # Fetch attachments into the working directory
+    for att in attachments:
+        try:
+            _fetch_attachment(master_url, att["id"], att["filename"], cwd)
+        except Exception:
+            LOGGER.exception("agent.attachment_fetch_failed id=%s", att.get("id"))
+
+    # Prepend attachment note to prompt text
+    if attachments:
+        note_lines = "\n".join(
+            f'[Attached file: {a["filename"]} — available in the current directory]'
+            for a in attachments
+        )
+        text = f"{note_lines}\n{text}"
 
     if adapter == "codex":
         response_text, new_session_id, transcript = _run_codex(cwd, text)
@@ -200,11 +226,20 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
         LOGGER.warning("agent.mqtt_parse_error topic=%s", msg.topic)
         return
     repo_dir = userdata.get("repo_dir", "")
+    master_url = userdata.get("master_url", "http://master:8080")
+    # inject master_url into payload so _process_prompt can use it
+    payload.setdefault("master_url", master_url)
     _executor.submit(_process_prompt, client, workspace_id, topic_id, payload, repo_dir)
 
 
-def run_mqtt_loop(workspace_id: str, mqtt_host: str, mqtt_port: int, repo_dir: str = "") -> None:
-    userdata = {"workspace_id": workspace_id, "repo_dir": repo_dir}
+def run_mqtt_loop(
+    workspace_id: str,
+    mqtt_host: str,
+    mqtt_port: int,
+    repo_dir: str = "",
+    master_url: str = "http://master:8080",
+) -> None:
+    userdata = {"workspace_id": workspace_id, "repo_dir": repo_dir, "master_url": master_url}
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, userdata=userdata)
     client.on_connect = _on_connect
     client.on_disconnect = _on_disconnect

@@ -37,6 +37,7 @@ def spawn_agent(
     ssh_auth_sock_path: str | None = None,
     ssh_known_hosts_path: str | None = None,
     dry_run: bool = False,
+    master_url: str = "http://master:8080",
 ) -> str:
     name = container_name(workspace_id)
 
@@ -47,6 +48,7 @@ def spawn_agent(
         "AGENT_REPO_URL": repo_url,
         "AGENT_REPO_REF": repo_ref,
         "GH_TOKEN": gh_token or _GH_TOKEN_FALLBACK,
+        "MASTER_URL": master_url,
     }
     for key, val in [
         ("CLAUDE_CODE_OAUTH_TOKEN", claude_code_oauth_token),
@@ -112,3 +114,23 @@ def stop_agent(
         LOGGER.info("agent_runner.stopped container=%s", name)
     except docker.errors.NotFound:
         pass
+
+
+def get_container_status(*, name: str, dry_run: bool = False) -> dict:  # type: ignore[type-arg]
+    if dry_run:
+        return {"status": "dry_run", "exit_code": None, "restart_count": None, "error": None}
+    try:
+        c = _client()
+        container = c.containers.get(name)
+        state = container.attrs.get("State", {})
+        return {
+            "status": container.status,
+            "exit_code": state.get("ExitCode"),
+            "restart_count": container.attrs.get("RestartCount", 0),
+            "error": state.get("Error") or None,
+        }
+    except docker.errors.NotFound:
+        return {"status": "not_found", "exit_code": None, "restart_count": None, "error": None}
+    except Exception as exc:
+        LOGGER.warning("agent_runner.inspect_failed name=%s error=%s", name, exc)
+        return {"status": "unknown", "exit_code": None, "restart_count": None, "error": str(exc)}

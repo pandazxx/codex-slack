@@ -115,3 +115,25 @@ def test_delete_workspace_removes_it(client):
 def test_delete_workspace_not_found(client):
     r = client.delete("/api/workspaces/does-not-exist")
     assert r.status_code == 404
+
+
+def test_workspace_name_reuse_after_archive(client):
+    ws_id = create_ws(client, name="recyclable").json()["id"]
+    client.delete(f"/api/workspaces/{ws_id}")
+    r = create_ws(client, name="recyclable")
+    assert r.status_code == 201
+    assert r.json()["name"] == "recyclable"
+
+
+# --- agent-status ---
+
+def test_agent_status_dry_run(client):
+    ws_id = create_ws(client).json()["id"]
+    r = client.get(f"/api/workspaces/{ws_id}/agent-status")
+    assert r.status_code == 200
+    assert r.json()["status"] == "dry_run"
+
+
+def test_agent_status_not_found(client):
+    r = client.get("/api/workspaces/does-not-exist/agent-status")
+    assert r.status_code == 404

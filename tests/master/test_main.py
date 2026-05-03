@@ -28,7 +28,7 @@ def test_schema_lists_all_tables(client):
     r = client.get("/schema")
     assert r.status_code == 200
     tables = r.json()
-    assert set(tables.keys()) == {"workspaces", "workspace_agents", "topics", "sessions", "messages"}
+    assert set(tables.keys()) == {"workspaces", "workspace_agents", "topics", "sessions", "messages", "attachments"}
 
 
 def test_schema_workspaces_columns(client):

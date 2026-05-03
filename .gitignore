@@ -23,3 +23,6 @@ build/
 # Frontend dependencies and lock file (installed on demand, not committed)
 frontend/node_modules/
 frontend/package-lock.json
+
+# Agent worktree runtime state (created by Claude Code agent infrastructure)
+.claude/worktrees/

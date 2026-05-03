@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
+
+LOGGER = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS workspaces (
     id             TEXT PRIMARY KEY,
-    name           TEXT NOT NULL UNIQUE,
+    name           TEXT NOT NULL,
     repo_url       TEXT NOT NULL,
     container_name TEXT,
     created_at     TEXT NOT NULL,
@@ -54,15 +57,68 @@ CREATE TABLE IF NOT EXISTS messages (
     attachments_json TEXT,
     created_at       TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS attachments (
+    id          TEXT PRIMARY KEY,
+    message_id  TEXT NOT NULL REFERENCES messages(id),
+    topic_id    TEXT NOT NULL REFERENCES topics(id),
+    filename    TEXT NOT NULL,
+    mime_type   TEXT NOT NULL,
+    size_bytes  INTEGER NOT NULL,
+    storage_uri TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    direction   TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound'))
+);
 """
 
-TABLES = ["workspaces", "workspace_agents", "topics", "sessions", "messages"]
+TABLES = ["workspaces", "workspace_agents", "topics", "sessions", "messages", "attachments"]
 
 
 _MIGRATIONS = [
     "ALTER TABLE workspaces ADD COLUMN archived_at TEXT",
     "ALTER TABLE topics ADD COLUMN archived_at TEXT",
 ]
+
+
+def _migrate_workspace_name_uniqueness(conn: sqlite3.Connection) -> None:
+    """Replace the table-level UNIQUE on workspaces.name with a partial index
+    so that archived workspaces do not block reuse of their name."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='workspaces'"
+    ).fetchone()
+    if row is None:
+        return
+    table_sql: str = row[0] or ""
+    if "UNIQUE" not in table_sql:
+        # Constraint already removed — just ensure the partial index exists.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_active_name"
+            " ON workspaces(name) WHERE archived_at IS NULL"
+        )
+        conn.commit()
+        return
+    # SQLite cannot drop column constraints; recreate the table without it.
+    LOGGER.info("db.migration_start relax_workspace_name_unique")
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS workspaces_new (
+            id             TEXT PRIMARY KEY,
+            name           TEXT NOT NULL,
+            repo_url       TEXT NOT NULL,
+            container_name TEXT,
+            created_at     TEXT NOT NULL,
+            archived_at    TEXT
+        );
+        INSERT OR IGNORE INTO workspaces_new
+            SELECT id, name, repo_url, container_name, created_at, archived_at
+            FROM workspaces;
+        DROP TABLE workspaces;
+        ALTER TABLE workspaces_new RENAME TO workspaces;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_active_name
+            ON workspaces(name) WHERE archived_at IS NULL;
+    """)
+    conn.execute("PRAGMA foreign_keys = ON")
+    LOGGER.info("db.migration_done relax_workspace_name_unique")
 
 
 def init_db(db_path: str) -> None:
@@ -75,6 +131,7 @@ def init_db(db_path: str) -> None:
                 conn.execute(migration)
             except sqlite3.OperationalError:
                 pass  # column already exists
+        _migrate_workspace_name_uniqueness(conn)
         conn.commit()
     finally:
         conn.close()

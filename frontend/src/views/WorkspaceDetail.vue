@@ -4,6 +4,13 @@
 
     <div v-if="isArchived" class="archived-banner">This workspace is archived — read only</div>
 
+    <div v-if="!isArchived" class="agent-status-bar">
+      <span class="agent-status-label">Agent container:</span>
+      <span v-if="agentStatus" :class="['status-badge', statusClass]">{{ statusLabel }}</span>
+      <span v-else class="status-badge status-unknown">checking…</span>
+      <span v-if="agentStatus?.error" class="status-error">{{ agentStatus.error }}</span>
+    </div>
+
     <section>
       <div class="header-row">
         <h2>Topics</h2>
@@ -67,7 +74,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
@@ -83,8 +90,40 @@ const subject = ref('')
 const addingAgent = ref(false)
 const agentError = ref('')
 const agentForm = ref({ agent_name: '', adapter: 'claude-code', subagent: '' })
+const agentStatus = ref(null)
+let statusTimer = null
 
 const isArchived = computed(() => !!workspace.value?.archived_at)
+
+const statusClass = computed(() => {
+  const s = agentStatus.value?.status
+  if (s === 'running') return 'status-running'
+  if (s === 'restarting') return 'status-restarting'
+  if (s === 'exited') return agentStatus.value?.exit_code === 0 ? 'status-stopped' : 'status-crashed'
+  if (s === 'not_found') return 'status-unknown'
+  return 'status-unknown'
+})
+
+const statusLabel = computed(() => {
+  const s = agentStatus.value
+  if (!s) return ''
+  if (s.status === 'running') return 'Running'
+  if (s.status === 'restarting') return `Restarting (restarts: ${s.restart_count ?? '?'})`
+  if (s.status === 'exited') {
+    const code = s.exit_code ?? '?'
+    return code === 0 ? 'Stopped (exit 0)' : `Crashed (exit ${code}, restarts: ${s.restart_count ?? '?'})`
+  }
+  if (s.status === 'not_found') return 'Not found'
+  if (s.status === 'dry_run') return 'Dry run'
+  return s.status
+})
+
+async function fetchAgentStatus() {
+  try {
+    const r = await fetch(`/api/workspaces/${id}/agent-status`)
+    if (r.ok) agentStatus.value = await r.json()
+  } catch { /* ignore */ }
+}
 
 async function load() {
   loading.value = true
@@ -161,12 +200,31 @@ async function removeAgent(agentId) {
   await load()
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  if (!isArchived.value) {
+    await fetchAgentStatus()
+    statusTimer = setInterval(fetchAgentStatus, 10000)
+  }
+})
+
+onUnmounted(() => {
+  if (statusTimer) clearInterval(statusTimer)
+})
 </script>
 
 <style scoped>
 .breadcrumb { font-size: 0.9em; color: #64748b; margin-bottom: 1rem; }
 .archived-banner { background: #fef9c3; border: 1px solid #fde047; border-radius: 6px; padding: 0.5rem 1rem; margin-bottom: 1rem; font-size: 0.9em; color: #713f12; }
+.agent-status-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; font-size: 0.85em; }
+.agent-status-label { color: #64748b; }
+.status-badge { padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.85em; }
+.status-running { background: #dcfce7; color: #15803d; }
+.status-restarting { background: #fef9c3; color: #92400e; }
+.status-crashed { background: #fee2e2; color: #dc2626; }
+.status-stopped { background: #f1f5f9; color: #475569; }
+.status-unknown { background: #f1f5f9; color: #94a3b8; }
+.status-error { color: #dc2626; font-size: 0.9em; }
 h2 { margin: 0; }
 .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .archived-link { font-size: 0.85em; color: #64748b; text-decoration: none; }

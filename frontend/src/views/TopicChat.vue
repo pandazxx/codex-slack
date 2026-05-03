@@ -22,6 +22,16 @@
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name || 'Agent') }}</span>
         <div class="bubble">{{ m.text }}</div>
+        <div v-if="m.attachments && m.attachments.length" class="attachment-list">
+          <template v-for="a in m.attachments" :key="a.id">
+            <div v-if="a.mime_type && a.mime_type.startsWith('image/')" class="attachment-img-wrap">
+              <img :src="`/api/attachments/${a.id}/download`" :alt="a.filename" class="attachment-img" />
+            </div>
+            <div v-else class="attachment-file">
+              <a :href="`/api/attachments/${a.id}/download`" :download="a.filename">{{ a.filename }} ({{ formatSize(a.size_bytes) }})</a>
+            </div>
+          </template>
+        </div>
         <details v-if="m.sender === 'agent' && m.transcript" class="detail-panel">
           <summary class="detail-toggle">
             Details
@@ -67,7 +77,15 @@
     </div>
 
     <template v-if="!isArchived">
+      <div v-if="selectedFiles.length" class="file-chips">
+        <span v-for="(f, i) in selectedFiles" :key="i" class="file-chip">
+          {{ f.name }}
+          <button class="chip-remove" @click="removeFile(i)">×</button>
+        </span>
+      </div>
       <form @submit.prevent="sendMessage" class="send-form">
+        <input type="file" multiple ref="fileInput" class="file-input-hidden" @change="onFilesSelected" />
+        <button type="button" class="attach-btn" @click="fileInput.click()" :disabled="sending" title="Attach files">📎</button>
         <textarea
           v-model="text"
           placeholder="Type a message…"
@@ -100,6 +118,8 @@ const text = ref('')
 const agentStatus = ref('')
 const msgBox = ref(null)
 const rawView = ref({})
+const fileInput = ref(null)
+const selectedFiles = ref([])
 
 const isArchived = computed(() => !!topic.value?.archived_at)
 
@@ -152,23 +172,48 @@ function connectWs() {
   }
 }
 
+function onFilesSelected(evt) {
+  const files = Array.from(evt.target.files || [])
+  selectedFiles.value = [...selectedFiles.value, ...files]
+  evt.target.value = ''
+}
+
+function removeFile(index) {
+  selectedFiles.value = selectedFiles.value.filter((_, i) => i !== index)
+}
+
+function formatSize(bytes) {
+  if (bytes == null) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 async function sendMessage() {
   const msg = text.value.trim()
   if (!msg || sending.value) return
   sending.value = true
+  const filesToSend = [...selectedFiles.value]
   try {
+    const fd = new FormData()
+    fd.append('text', msg)
+    for (const f of filesToSend) {
+      fd.append('files', f)
+    }
     const r = await fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: msg }),
+      body: fd,
     })
     if (r.ok) {
       text.value = ''
+      selectedFiles.value = []
+      const data = await r.json()
       const saved = {
-        id: (await r.json()).message_id,
+        id: data.message_id,
         sender: 'user',
         agent_name: null,
         text: msg,
+        attachments: data.attachments || [],
         created_at: new Date().toISOString(),
       }
       messages.value.push(saved)
@@ -248,10 +293,21 @@ onUnmounted(() => {
 .tr-badge-thinking { background: #f3e8ff; color: #7c3aed; }
 .tr-thinking { display: flex; flex-direction: column; gap: 2px; }
 .tr-thinking-body { background: #1a0a2e; color: #c4b5fd; }
-.send-form { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+.send-form { display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: flex-end; }
 .send-form textarea { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; resize: none; font-family: inherit; font-size: 0.95rem; }
 .send-form button { padding: 0.5rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; align-self: flex-end; }
 .send-form button:disabled { opacity: 0.6; cursor: default; }
+.attach-btn { background: #f1f5f9; color: #475569; padding: 0.5rem 0.6rem; font-size: 1.1rem; border: 1px solid #cbd5e1; }
+.attach-btn:hover:not(:disabled) { background: #e2e8f0; }
+.file-input-hidden { display: none; }
+.file-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+.file-chip { display: flex; align-items: center; gap: 4px; background: #e0f2fe; color: #0369a1; border-radius: 12px; padding: 2px 10px; font-size: 0.8em; }
+.chip-remove { background: none; border: none; cursor: pointer; color: #0369a1; font-size: 0.9em; padding: 0; line-height: 1; }
+.attachment-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.attachment-img-wrap { max-width: 280px; }
+.attachment-img { max-width: 100%; border-radius: 6px; border: 1px solid #e2e8f0; }
+.attachment-file { font-size: 0.82em; }
+.attachment-file a { color: #2563eb; text-decoration: underline; }
 .hint { font-size: 0.8em; text-align: right; margin-top: 0.25rem; }
 .muted { color: #64748b; }
 .center { text-align: center; }

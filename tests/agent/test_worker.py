@@ -292,6 +292,25 @@ def test_load_worker_settings_uses_writable_default_status_path(monkeypatch) -> 
     assert settings.status_file == "/tmp/master-agent/status.json"
 
 
+def test_stage_repo_sync_falls_back_to_default_branch_when_specified_branch_not_found(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    src_repo = _create_local_repo(tmp_path / "src")  # creates 'main' branch
+    monkeypatch.setenv("GH_TOKEN", "token")
+
+    settings = WorkerSettings(
+        workspace_path=str(tmp_path / "workspace"),
+        repo_url=src_repo,
+        repo_ref="nonexistent-branch",
+        repo_dir_name="repo",
+        status_file=str(tmp_path / "status.json"),
+        codex_home=str(tmp_path / "codex"),
+        ready_poll_seconds=0.1,
+    )
+
+    repo_dir = stage_repo_sync(settings)
+    assert (repo_dir / ".git").exists()
+    assert (repo_dir / "README.md").read_text(encoding="utf-8") == "hello\n"
+
+
 def test_run_worker_returns_preflight_error_even_if_status_path_is_unwritable(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)

@@ -15,8 +15,10 @@ from .agent_runner import container_name, spawn_agent, stop_agent
 from .config import load_master_settings
 from .db import get_connection, init_db, schema_info
 from .agents import router as agents_router
+from .attachments import router as attachments_router
 from .messages import router as messages_router
 from .mqtt_client import build_client as build_mqtt_client
+from .storage import LocalAttachmentStore
 from .topics import router as topics_router
 from .workspaces import router as workspaces_router
 from .ws_hub import ConnectionHub
@@ -80,6 +82,7 @@ def _respawn_agents(settings, db_path: str) -> None:
                 ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
                 ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
                 dry_run=settings.dry_run,
+                master_url=settings.master_url,
             )
             LOGGER.info("master.respawned container=%s workspace_id=%s", cname, ws_id)
         except Exception:
@@ -108,10 +111,14 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     mqtt = build_mqtt_client(settings, hub=hub, loop=loop, db_path=db_path)
     mqtt.loop_start()
     LOGGER.info("master.mqtt_loop_start host=%s port=%s", settings.mqtt_host, settings.mqtt_port)
+    attachment_dir = settings.effective_attachment_data_dir()
+    attachment_store = LocalAttachmentStore(attachment_dir)
+    LOGGER.info("master.attachment_store dir=%s", attachment_dir)
     app.state.settings = settings
     app.state.db_path = db_path
     app.state.hub = hub
     app.state.mqtt = mqtt
+    app.state.attachment_store = attachment_store
     _respawn_agents(settings, db_path)
     yield
     mqtt.loop_stop()
@@ -124,6 +131,7 @@ app.include_router(workspaces_router, prefix="/api")
 app.include_router(topics_router, prefix="/api")
 app.include_router(messages_router, prefix="/api")
 app.include_router(agents_router, prefix="/api")
+app.include_router(attachments_router, prefix="/api")
 
 if (_STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="static-assets")

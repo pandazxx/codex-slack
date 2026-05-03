@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from .agent_runner import spawn_agent, stop_agent, container_name
+from .agent_runner import get_container_status, spawn_agent, stop_agent, container_name
 from .db import get_connection
 
 LOGGER = logging.getLogger(__name__)
@@ -226,3 +226,19 @@ def delete_workspace(workspace_id: str, request: Request) -> None:
         )
     except Exception:
         LOGGER.exception("workspace.agent_stop_failed container=%s", existing_container)
+
+
+@router.get("/{workspace_id}/agent-status")
+def get_agent_status(workspace_id: str, request: Request) -> dict:  # type: ignore[type-arg]
+    conn = get_connection(request.app.state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT container_name FROM workspaces WHERE id = ?", (workspace_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="workspace not found")
+    name = row["container_name"] or container_name(workspace_id)
+    settings = request.app.state.settings
+    return get_container_status(name=name, dry_run=settings.dry_run)
