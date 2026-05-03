@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from .agent_runner import container_name as _agent_container_name, start_agent_if_stopped
@@ -86,15 +85,11 @@ class MessageOut(BaseModel):
     attachments: list[AttachmentMeta] = []
 
 
-_AGENT_BOOT_GRACE_SECONDS = 8
-
-
 @router.post("", status_code=202)
 async def send_message(
     workspace_id: str,
     topic_id: str,
     request: Request,
-    background_tasks: BackgroundTasks,
     text: str = Form(...),
     agent_name: str = Form(default="claude"),
     files: list[UploadFile] = File(default=[]),
@@ -191,24 +186,16 @@ async def send_message(
     mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
     mqtt = request.app.state.mqtt
 
-    # Auto-start agent container if it was stopped (e.g. idle timeout or crash)
+    # Auto-start agent container if it was stopped (e.g. idle timeout or crash).
+    # The agent uses a persistent MQTT session (fixed client_id, clean_session=False)
+    # so Mosquitto queues this QoS-1 message and delivers it once the agent subscribes.
     cname = ws_row["container_name"] or _agent_container_name(workspace_id)
-    container_just_started = False
     try:
-        container_just_started = start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
+        start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
     except Exception:
         pass  # don't block the message if Docker is unavailable
 
-    if container_just_started:
-        # Container was sleeping — delay publish so the agent has time to boot and subscribe.
-        # Publishing immediately loses the message because the agent isn't subscribed yet.
-        async def _deferred_publish() -> None:
-            await asyncio.sleep(_AGENT_BOOT_GRACE_SECONDS)
-            mqtt.publish(mqtt_topic, payload, qos=1)
-
-        background_tasks.add_task(_deferred_publish)
-    else:
-        mqtt.publish(mqtt_topic, payload, qos=1)
+    mqtt.publish(mqtt_topic, payload, qos=1)
 
     return {"message_id": message_id, "status": "queued", "attachments": attachment_metas}
 
