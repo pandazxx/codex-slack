@@ -70,6 +70,12 @@
                   <span v-if="(evt.total_cost_usd ?? evt.cost_usd) != null" class="tr-stat">${{ (evt.total_cost_usd ?? evt.cost_usd).toFixed(4) }}</span>
                   <span v-if="evt.duration_ms != null" class="tr-stat">{{ (evt.duration_ms / 1000).toFixed(1) }}s</span>
                   <span v-if="evt.num_turns != null" class="tr-stat">{{ evt.num_turns }} turn{{ evt.num_turns !== 1 ? 's' : '' }}</span>
+                  <template v-if="evt.usage">
+                    <span class="tr-stat tr-tokens">{{ (evt.usage.input_tokens ?? 0).toLocaleString() }}↑</span>
+                    <span class="tr-stat tr-tokens">{{ (evt.usage.output_tokens ?? 0).toLocaleString() }}↓</span>
+                    <span v-if="evt.usage.cache_read_input_tokens" class="tr-stat tr-cache">{{ evt.usage.cache_read_input_tokens.toLocaleString() }} cached</span>
+                    <span v-if="evt.usage.cache_creation_input_tokens" class="tr-stat tr-cache">{{ evt.usage.cache_creation_input_tokens.toLocaleString() }} cache_write</span>
+                  </template>
                 </div>
               </template>
             </template>
@@ -298,6 +304,8 @@ onUnmounted(() => {
 .tr-result-body { background: #0f2027; color: #86efac; }
 .tr-meta { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
 .tr-stat { color: #64748b; }
+.tr-tokens { color: #6366f1; font-variant-numeric: tabular-nums; }
+.tr-cache { color: #0891b2; }
 .tr-badge { font-size: 0.78em; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
 .tr-badge-tool { background: #dbeafe; color: #1d4ed8; }
 .tr-badge-result { background: #dcfce7; color: #15803d; }

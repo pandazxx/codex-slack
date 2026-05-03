@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from .agent_runner import get_container_status, spawn_agent, stop_agent, container_name
+from .agent_runner import get_container_status, refresh_auth, spawn_agent, stop_agent, container_name
 from .db import get_connection
 from .staffs import StaffOut, _SELECT_COLS as _STAFF_COLS, _row_to_out as _staff_row_to_out
 
@@ -40,12 +40,14 @@ class WorkspaceOut(BaseModel):
     container_name: str | None
     created_at: str
     archived_at: str | None
+    last_refreshed_at: str | None = None
     staffs: list[StaffOut]
 
 
 def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
     row = conn.execute(
-        "SELECT id, name, repo_url, container_name, created_at, archived_at FROM workspaces WHERE id = ?",
+        "SELECT id, name, repo_url, container_name, created_at, archived_at, last_refreshed_at"
+        " FROM workspaces WHERE id = ?",
         (workspace_id,),
     ).fetchone()
     if row is None:
@@ -58,7 +60,7 @@ def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
     return WorkspaceOut(
         id=row["id"], name=row["name"], repo_url=row["repo_url"],
         container_name=row["container_name"], created_at=row["created_at"],
-        archived_at=row["archived_at"],
+        archived_at=row["archived_at"], last_refreshed_at=row["last_refreshed_at"],
         staffs=[_staff_row_to_out(s) for s in staff_rows],
     )
 
@@ -66,8 +68,8 @@ def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
 def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
     """Fetch an active (non-archived) workspace."""
     row = conn.execute(
-        "SELECT id, name, repo_url, container_name, created_at, archived_at FROM workspaces"
-        " WHERE id = ? AND archived_at IS NULL",
+        "SELECT id, name, repo_url, container_name, created_at, archived_at, last_refreshed_at"
+        " FROM workspaces WHERE id = ? AND archived_at IS NULL",
         (workspace_id,),
     ).fetchone()
     if row is None:
@@ -80,7 +82,7 @@ def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
     return WorkspaceOut(
         id=row["id"], name=row["name"], repo_url=row["repo_url"],
         container_name=row["container_name"], created_at=row["created_at"],
-        archived_at=row["archived_at"],
+        archived_at=row["archived_at"], last_refreshed_at=row["last_refreshed_at"],
         staffs=[_staff_row_to_out(s) for s in staff_rows],
     )
 
@@ -205,6 +207,34 @@ def delete_workspace(workspace_id: str, request: Request) -> None:
         )
     except Exception:
         LOGGER.exception("workspace.agent_stop_failed container=%s", existing_container)
+
+
+@router.post("/{workspace_id}/refresh-auth", status_code=200)
+def refresh_workspace_auth(workspace_id: str, request: Request) -> dict:  # type: ignore[type-arg]
+    conn = get_connection(request.app.state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
+            (workspace_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        cname = row["container_name"] or container_name(workspace_id)
+        now = _now()
+        conn.execute(
+            "UPDATE workspaces SET last_refreshed_at = ? WHERE id = ?", (now, workspace_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    settings = request.app.state.settings
+    try:
+        refresh_auth(name=cname, gh_token=settings.gh_token, dry_run=settings.dry_run)
+    except Exception:
+        LOGGER.exception("workspace.refresh_auth_failed container=%s", cname)
+
+    return {"refreshed_at": now}
 
 
 @router.get("/{workspace_id}/agent-status")
