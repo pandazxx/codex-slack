@@ -33,7 +33,7 @@ marked.use({
   renderer: {
     code({ text, lang }) {
       if (lang === 'mermaid') {
-        return `<div class="mermaid-src">${escHtml(text)}</div>`
+        return `<pre class="mermaid-block">${escHtml(text)}</pre>`
       }
       const language = lang && hljs.getLanguage(lang) ? lang : null
       const highlighted = language
@@ -52,18 +52,24 @@ marked.use({
 const rendered = computed(() => marked.parse(props.text || ''))
 
 async function renderMermaid() {
-  const blocks = container.value?.querySelectorAll('.mermaid-src:not([data-rendered])')
-  if (!blocks?.length) return
+  const blocks = Array.from(
+    container.value?.querySelectorAll('pre.mermaid-block:not([data-processed])') ?? []
+  )
+  if (!blocks.length) return
   const m = await getMermaid()
+  // mermaid.run() renders in-place; wrap each block in a div it can replace
   for (const block of blocks) {
-    const id = `mermaid-${++mermaidSeq}`
+    block.dataset.processed = 'pending'
+    const source = block.textContent ?? ''
+    const wrapper = document.createElement('div')
+    wrapper.className = 'mermaid-wrap'
+    block.replaceWith(wrapper)
     try {
-      const { svg } = await m.render(id, block.textContent)
-      block.innerHTML = svg
-      block.dataset.rendered = '1'
+      const { svg } = await m.render(`mermaid-${++mermaidSeq}`, source)
+      wrapper.innerHTML = svg
     } catch (e) {
-      block.textContent = `[diagram error: ${e?.message ?? e}]`
-      block.dataset.rendered = 'error'
+      wrapper.textContent = `[diagram error: ${e?.message ?? e}]`
+      wrapper.className = 'mermaid-wrap mermaid-error'
     }
   }
 }
@@ -94,8 +100,9 @@ watch(rendered, () => nextTick(renderMermaid))
 .md-body :deep(a) { color: #2563eb; text-decoration: underline; }
 .md-body :deep(img) { max-width: 100%; border-radius: 6px; }
 .md-body :deep(hr) { border: none; border-top: 1px solid #e2e8f0; margin: 0.75em 0; }
-.md-body :deep(.mermaid-src) { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 1rem; text-align: center; overflow-x: auto; margin: 0.5em 0; }
-.md-body :deep(.mermaid-src svg) { max-width: 100%; }
+.md-body :deep(.mermaid-wrap) { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 0.5rem; text-align: center; overflow-x: auto; margin: 0.5em 0; }
+.md-body :deep(.mermaid-wrap svg) { max-width: 100%; height: auto; }
+.md-body :deep(.mermaid-error) { color: #dc2626; font-size: 0.85em; padding: 0.75rem; }
 /* highlight.js base colours */
 .md-body :deep(.hljs-keyword),
 .md-body :deep(.hljs-selector-tag) { color: #c792ea; }
