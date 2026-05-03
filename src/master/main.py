@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..logging_utils import LocalTimeFormatter
-from .agent_runner import container_name, get_container_status, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
+from .agent_runner import container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
 from .db import get_connection, init_db, schema_info
 from .attachments import router as attachments_router
@@ -93,7 +93,7 @@ def _background_tasks(settings, db_path: str, stop_event: threading.Event) -> No
                             st = get_container_status(name=cname, dry_run=settings.dry_run)
                             if st["status"] == "running":
                                 LOGGER.info("master.idle_stop container=%s idle_s=%d", cname, int(now - last_ts))
-                                stop_agent(runtime=settings.container_runtime, name=cname, dry_run=settings.dry_run)
+                                pause_agent(name=cname, dry_run=settings.dry_run)
                     except Exception:
                         LOGGER.exception("master.idle_stop_failed container=%s", cname)
 

@@ -116,6 +116,24 @@ def stop_agent(
         pass
 
 
+def pause_agent(*, name: str, dry_run: bool = False) -> None:
+    """Stop (but do not remove) a container so it can be restarted later."""
+    if dry_run:
+        LOGGER.info("agent_runner.dry_run_pause container=%s", name)
+        return
+    c = _client()
+    try:
+        container = c.containers.get(name)
+        if container.status != "running":
+            return
+        container.stop()
+        LOGGER.info("agent_runner.paused container=%s", name)
+    except docker.errors.NotFound:
+        pass
+    except Exception as exc:
+        LOGGER.warning("agent_runner.pause_failed name=%s error=%s", name, exc)
+
+
 def start_agent_if_stopped(*, name: str, dry_run: bool = False) -> bool:
     """Start a stopped/exited container without recreating it. Returns True if started."""
     if dry_run:

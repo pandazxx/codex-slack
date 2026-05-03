@@ -101,19 +101,23 @@ curl -s http://10.10.10.123:8080/schema | python3 -m json.tool
 
 ---
 
-## Bug found during UAT
+## Bugs found during UAT
 
 **UAT-01 discovered**: `poppler-utils` was added to `Dockerfile.agent-minimal` only. Agent containers on this testbed use `codex-slack-master:latest` (built from `Dockerfile`). Added `poppler-utils` to `Dockerfile` as well. Fix committed as `27d5185`.
 
+**UAT-08 discovered**: `stop_agent()` calls `container.remove(force=True)`, which deletes the container. After idle-stop, `start_agent_if_stopped()` then gets `NotFound` and silently does nothing — auto-start after idle-stop never worked. Fixed by adding `pause_agent()` (calls `container.stop()`) used exclusively by the idle-stop path; `stop_agent()` (remove) is retained for workspace archive/delete. Fix committed as `46f3534`+.
+
+**docker-compose discovered**: `AGENT_IDLE_TIMEOUT_SECONDS` and `AGENT_AUTH_REFRESH_INTERVAL_SECONDS` were not listed in the `environment:` block of `docker-compose.yml`, so values in `.env` were always ignored. Fixed in same commit.
+
 ## Testbed execution log
 
-All automated cases executed on testbed `10.10.10.123` on 2026-05-03 against commit `27d5185` (feat/enhancements-v3-slice-14).
+All automated cases executed on testbed `10.10.10.123` on 2026-05-03 against commit `27d5185` (feat/enhancements-v3-slice-14), with UAT-08 re-run after fix.
 
 | Field | Value |
 |-------|-------|
 | Date | 2026-05-03 |
 | Testbed | 10.10.10.123 |
-| Commit under test | 27d5185 |
+| Commit under test | 27d5185 + fix commits |
 | UAT-01 (pdftoppm) | PASS — pdftoppm 25.03.0, pdfinfo at /usr/bin/pdfinfo |
 | UAT-02 (schema) | PASS — all 3 new columns present |
 | UAT-03 (token usage) | PASS — usage_json stored with input/output/cache tokens |
@@ -121,7 +125,7 @@ All automated cases executed on testbed `10.10.10.123` on 2026-05-03 against com
 | UAT-05 (Refresh Auth UI) | Manual — pending user verification |
 | UAT-06 (auto-start) | PASS — stopped container restarted within 3s of message send |
 | UAT-07 (health respawn) | PASS — SIGKILL'd container (exit 137) respawned in ~25s |
-| UAT-08 (idle auto-stop) | Manual — requires AGENT_IDLE_TIMEOUT_SECONDS=120 restart |
+| UAT-08 (idle auto-stop) | PASS — container paused after 120s idle; auto-start on next message confirmed |
 | UAT-09 (last_message_at) | PASS — DB confirms timestamp updated on every send |
 | Sign-off | |
 
