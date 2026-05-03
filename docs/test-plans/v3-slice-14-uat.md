@@ -101,22 +101,35 @@ curl -s http://10.10.10.123:8080/schema | python3 -m json.tool
 
 ---
 
+## Bug found during UAT
+
+**UAT-01 discovered**: `poppler-utils` was added to `Dockerfile.agent-minimal` only. Agent containers on this testbed use `codex-slack-master:latest` (built from `Dockerfile`). Added `poppler-utils` to `Dockerfile` as well. Fix committed as `27d5185`.
+
 ## Testbed execution log
 
-*To be filled in after execution.*
+All automated cases executed on testbed `10.10.10.123` on 2026-05-03 against commit `27d5185` (feat/enhancements-v3-slice-14).
 
 | Field | Value |
 |-------|-------|
-| Date | |
+| Date | 2026-05-03 |
 | Testbed | 10.10.10.123 |
-| Commit under test | 9057ff280eaa7946a0f1bc4f6b34e7945855771f |
-| UAT-01 | |
-| UAT-02 | |
-| UAT-03 | |
-| UAT-04 | |
-| UAT-05 (manual) | |
-| UAT-06 | |
-| UAT-07 | |
-| UAT-08 | |
-| UAT-09 | |
+| Commit under test | 27d5185 |
+| UAT-01 (pdftoppm) | PASS — pdftoppm 25.03.0, pdfinfo at /usr/bin/pdfinfo |
+| UAT-02 (schema) | PASS — all 3 new columns present |
+| UAT-03 (token usage) | PASS — usage_json stored with input/output/cache tokens |
+| UAT-04 (refresh-auth API) | PASS — 200 on valid, 404 on nonexistent, 404 on archived |
+| UAT-05 (Refresh Auth UI) | Manual — pending user verification |
+| UAT-06 (auto-start) | PASS — stopped container restarted within 3s of message send |
+| UAT-07 (health respawn) | PASS — SIGKILL'd container (exit 137) respawned in ~25s |
+| UAT-08 (idle auto-stop) | Manual — requires AGENT_IDLE_TIMEOUT_SECONDS=120 restart |
+| UAT-09 (last_message_at) | PASS — DB confirms timestamp updated on every send |
 | Sign-off | |
+
+### Known ops note
+
+Agent containers use the `codex-slack-master:latest` image (same as master). After a master image rebuild, agent containers must be removed and master restarted so `_respawn_agents` spawns fresh containers from the new image:
+
+```bash
+docker ps --format '{{.Names}}' | grep codex-agent | xargs -r docker rm -f
+docker compose up -d --force-recreate master
+```
