@@ -14,10 +14,14 @@ from ..logging_utils import LocalTimeFormatter
 from .agent_runner import container_name, spawn_agent, stop_agent
 from .config import load_master_settings
 from .db import get_connection, init_db, schema_info
-from .agents import router as agents_router
 from .attachments import router as attachments_router
 from .messages import router as messages_router
 from .mqtt_client import build_client as build_mqtt_client
+from .runtime_config import global_router as global_config_router
+from .runtime_config import workspace_router as workspace_config_router
+from .staffs import global_router as global_staffs_router
+from .staffs import topic_router as topic_staffs_router
+from .staffs import workspace_router as workspace_staffs_router
 from .storage import LocalAttachmentStore
 from .topics import router as topics_router
 from .workspaces import router as workspaces_router
@@ -130,7 +134,11 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(workspaces_router, prefix="/api")
 app.include_router(topics_router, prefix="/api")
 app.include_router(messages_router, prefix="/api")
-app.include_router(agents_router, prefix="/api")
+app.include_router(global_staffs_router, prefix="/api")
+app.include_router(workspace_staffs_router, prefix="/api")
+app.include_router(topic_staffs_router, prefix="/api")
+app.include_router(global_config_router, prefix="/api")
+app.include_router(workspace_config_router, prefix="/api")
 app.include_router(attachments_router, prefix="/api")
 
 if (_STATIC_DIR / "assets").exists():

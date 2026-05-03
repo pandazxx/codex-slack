@@ -70,12 +70,27 @@ def _fetch_attachment(master_url: str, attachment_id: str, filename: str, worktr
 
 
 def _run_claude_once(
-    worktree: str, text: str, session_id: str | None, subagent: str | None
+    worktree: str,
+    text: str,
+    session_id: str | None,
+    is_new_session: bool,
+    subagent: str | None,
+    model: str | None,
+    system_prompt: str | None,
 ) -> tuple[str, str | None, str | None, bool]:
     """Returns (output, new_session_id, transcript, is_error)."""
     cmd = ["claude", "--print", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions"]
     if session_id:
-        cmd += ["--resume", session_id]
+        if is_new_session:
+            cmd += ["--session-id", session_id]
+        else:
+            cmd += ["--resume", session_id]
+    if model:
+        cmd += ["--model", model]
+    if system_prompt:
+        cmd += ["--append-system-prompt", system_prompt]
+    if subagent:
+        cmd += ["--agent", subagent]
     cmd.append(text)
     try:
         result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True, timeout=_LLM_TIMEOUT)
@@ -108,11 +123,23 @@ def _run_claude_once(
         return f"(claude error: {exc})", None, None, True
 
 
-def _run_claude(worktree: str, text: str, session_id: str | None, subagent: str | None) -> tuple[str, str | None, str | None]:
-    output, new_session_id, transcript, is_error = _run_claude_once(worktree, text, session_id, subagent)
-    if session_id and is_error and _SESSION_NOT_FOUND in (output or ""):
-        LOGGER.warning("agent.session_expired sid=%s retrying_fresh", session_id)
-        output, new_session_id, transcript, _ = _run_claude_once(worktree, text, None, subagent)
+def _run_claude(
+    worktree: str,
+    text: str,
+    session_id: str | None,
+    is_new_session: bool,
+    subagent: str | None,
+    model: str | None,
+    system_prompt: str | None,
+) -> tuple[str, str | None, str | None]:
+    output, new_session_id, transcript, is_error = _run_claude_once(
+        worktree, text, session_id, is_new_session, subagent, model, system_prompt
+    )
+    if not is_new_session and session_id and is_error and _SESSION_NOT_FOUND in (output or ""):
+        LOGGER.warning("agent.session_expired sid=%s retrying_as_new", session_id)
+        output, new_session_id, transcript, _ = _run_claude_once(
+            worktree, text, session_id, True, subagent, model, system_prompt
+        )
     return output, new_session_id, transcript
 
 
@@ -143,8 +170,11 @@ def _process_prompt(
     branch = payload.get("branch", "")
     text = payload.get("text", "")
     session_id = payload.get("session_id")
+    is_new_session = bool(payload.get("is_new_session", False))
     adapter = payload.get("adapter", "claude-code")
     subagent = payload.get("subagent")
+    model = payload.get("model")
+    system_prompt = payload.get("system_prompt")
     attachments = payload.get("attachments", [])
     master_url = payload.get("master_url", "http://master:8080")
 
@@ -181,7 +211,9 @@ def _process_prompt(
     if adapter == "codex":
         response_text, new_session_id, transcript = _run_codex(cwd, text)
     else:
-        response_text, new_session_id, transcript = _run_claude(cwd, text, session_id, subagent)
+        response_text, new_session_id, transcript = _run_claude(
+            cwd, text, session_id, is_new_session, subagent, model, system_prompt
+        )
 
     LOGGER.info("agent.llm_done topic_id=%s chars=%d", topic_id, len(response_text))
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 LOGGER = logging.getLogger(__name__)
@@ -16,16 +17,38 @@ CREATE TABLE IF NOT EXISTS workspaces (
     archived_at    TEXT
 );
 
-CREATE TABLE IF NOT EXISTS workspace_agents (
-    id           TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-    agent_name   TEXT NOT NULL,
-    adapter      TEXT NOT NULL,
-    subagent     TEXT,
-    active       INTEGER NOT NULL DEFAULT 1,
-    created_at   TEXT NOT NULL,
-    deleted_at   TEXT,
-    UNIQUE (workspace_id, agent_name)
+CREATE TABLE IF NOT EXISTS staffs (
+    id            TEXT PRIMARY KEY,
+    scope_type    TEXT NOT NULL CHECK (scope_type IN ('global', 'workspace', 'topic')),
+    scope_id      TEXT,
+    name          TEXT NOT NULL,
+    adapter       TEXT NOT NULL DEFAULT 'claude-code',
+    model         TEXT,
+    system_prompt TEXT,
+    agent         TEXT,
+    session_scope TEXT NOT NULL DEFAULT 'topic' CHECK (session_scope IN ('topic', 'workspace', 'global')),
+    is_default    INTEGER NOT NULL DEFAULT 0,
+    extra_flags   TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS staff_sessions (
+    scope_type  TEXT NOT NULL,
+    scope_id    TEXT NOT NULL DEFAULT '',
+    staff_name  TEXT NOT NULL,
+    session_id  TEXT NOT NULL,
+    started_at  TEXT NOT NULL,
+    PRIMARY KEY (scope_type, scope_id, staff_name)
+);
+
+CREATE TABLE IF NOT EXISTS config (
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('global', 'workspace')),
+    scope_id   TEXT NOT NULL DEFAULT '',
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope_type, scope_id, key)
 );
 
 CREATE TABLE IF NOT EXISTS topics (
@@ -71,7 +94,7 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 """
 
-TABLES = ["workspaces", "workspace_agents", "topics", "sessions", "messages", "attachments"]
+TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments"]
 
 
 _MIGRATIONS = [
@@ -121,17 +144,52 @@ def _migrate_workspace_name_uniqueness(conn: sqlite3.Connection) -> None:
     LOGGER.info("db.migration_done relax_workspace_name_unique")
 
 
+def _migrate_agents_to_staffs(conn: sqlite3.Connection) -> None:
+    """Migrate workspace_agents rows into the staffs table (one-time, idempotent)."""
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspace_agents'"
+    ).fetchone() is None:
+        return
+    if conn.execute("SELECT 1 FROM staffs LIMIT 1").fetchone() is not None:
+        return
+    rows = conn.execute(
+        "SELECT id, workspace_id, agent_name, adapter, subagent, created_at"
+        " FROM workspace_agents WHERE active = 1"
+    ).fetchall()
+    if not rows:
+        return
+    LOGGER.info("db.migration_start agents_to_staffs count=%d", len(rows))
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for r in rows:
+        is_default = 1 if r[2] == "claude" else 0
+        conn.execute(
+            "INSERT OR IGNORE INTO staffs"
+            " (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
+            "  session_scope, is_default, extra_flags, created_at, updated_at)"
+            " VALUES (?, 'workspace', ?, ?, ?, NULL, NULL, ?, 'topic', ?, NULL, ?, ?)",
+            (r[0], r[1], r[2], r[3], r[4], is_default, r[5], now),
+        )
+    conn.commit()
+    LOGGER.info("db.migration_done agents_to_staffs")
+
+
 def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(_SCHEMA)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_staffs_scope_name"
+            " ON staffs(scope_type, COALESCE(scope_id, ''), name)"
+        )
+        conn.commit()
         for migration in _MIGRATIONS:
             try:
                 conn.execute(migration)
             except sqlite3.OperationalError:
                 pass  # column already exists
         _migrate_workspace_name_uniqueness(conn)
+        _migrate_agents_to_staffs(conn)
         conn.commit()
     finally:
         conn.close()
