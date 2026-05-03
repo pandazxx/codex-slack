@@ -20,7 +20,7 @@
         class="message"
         :class="m.sender === 'user' ? 'user' : 'agent'"
       >
-        <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name || 'Agent') }}</span>
+        <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
         <div class="bubble">
           <MarkdownMessage v-if="m.sender !== 'user'" :text="m.text" />
           <template v-else>{{ m.text }}</template>
@@ -100,7 +100,8 @@
           {{ sending ? 'Sending…' : 'Send' }}
         </button>
       </form>
-      <p class="hint muted">Enter to send · Shift+Enter for new line</p>
+      <p v-if="sendError" class="send-error">{{ sendError }}</p>
+      <p class="hint muted">Enter to send · Shift+Enter for new line · Use <code>@name</code> to address a specific staff</p>
     </template>
   </div>
 </template>
@@ -126,6 +127,7 @@ const fileInput = ref(null)
 const selectedFiles = ref([])
 
 const isArchived = computed(() => !!topic.value?.archived_at)
+const sendError = ref('')
 
 let ws = null
 
@@ -197,6 +199,7 @@ async function sendMessage() {
   const msg = text.value.trim()
   if (!msg || sending.value) return
   sending.value = true
+  sendError.value = ''
   const filesToSend = [...selectedFiles.value]
   try {
     const fd = new FormData()
@@ -212,16 +215,21 @@ async function sendMessage() {
       text.value = ''
       selectedFiles.value = []
       const data = await r.json()
-      const saved = {
+      messages.value.push({
         id: data.message_id,
         sender: 'user',
         agent_name: null,
         text: msg,
         attachments: data.attachments || [],
         created_at: new Date().toISOString(),
-      }
-      messages.value.push(saved)
+      })
       scrollToBottom()
+    } else {
+      const err = await r.json().catch(() => ({}))
+      const detail = err.detail
+      sendError.value = Array.isArray(detail)
+        ? detail.map(d => d.msg).join(', ')
+        : (typeof detail === 'string' ? detail : `Server error ${r.status}`)
     }
   } finally {
     sending.value = false
@@ -313,6 +321,7 @@ onUnmounted(() => {
 .attachment-img { max-width: 100%; border-radius: 6px; border: 1px solid #e2e8f0; }
 .attachment-file { font-size: 0.82em; }
 .attachment-file a { color: #2563eb; text-decoration: underline; }
+.send-error { color: #dc2626; font-size: 0.85em; margin-top: 0.25rem; }
 .hint { font-size: 0.8em; text-align: right; margin-top: 0.25rem; }
 .muted { color: #64748b; }
 .center { text-align: center; }

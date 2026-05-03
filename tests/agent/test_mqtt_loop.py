@@ -45,7 +45,7 @@ def test_run_claude_returns_stdout(tmp_path):
     stream = "\n".join(_json.dumps(e) for e in events)
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout=stream, stderr="", returncode=0)
-        text, session, transcript = _run_claude(str(tmp_path), "say hi", None, None)
+        text, session, transcript = _run_claude(str(tmp_path), "say hi", None, False, None, None, None)
     assert text == "Hello from claude"
     assert session is None
     assert transcript is not None
@@ -55,10 +55,28 @@ def test_run_claude_returns_stdout(tmp_path):
 def test_run_claude_includes_resume_when_session_id(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout='{"type":"result","result":"ok","session_id":"ses-123"}', stderr="", returncode=0)
-        _run_claude(str(tmp_path), "continue", "ses-123", None)
+        _run_claude(str(tmp_path), "continue", "ses-123", False, None, None, None)
     cmd = mock_run.call_args.args[0]
     assert "--resume" in cmd
     assert "ses-123" in cmd
+
+
+def test_run_claude_uses_session_id_flag_when_new(tmp_path):
+    with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout='{"type":"result","result":"ok","session_id":"ses-new"}', stderr="", returncode=0)
+        _run_claude(str(tmp_path), "start", "ses-new", True, None, None, None)
+    cmd = mock_run.call_args.args[0]
+    assert "--session-id" in cmd
+    assert "--resume" not in cmd
+
+
+def test_run_claude_passes_model_and_system_prompt(tmp_path):
+    with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout='{"type":"result","result":"ok","session_id":null}', stderr="", returncode=0)
+        _run_claude(str(tmp_path), "hi", None, True, None, "claude-opus-4-7", "You are a reviewer")
+    cmd = mock_run.call_args.args[0]
+    assert "--model" in cmd and "claude-opus-4-7" in cmd
+    assert "--append-system-prompt" in cmd and "You are a reviewer" in cmd
 
 
 def test_run_claude_retries_fresh_on_session_not_found(tmp_path):
@@ -66,20 +84,23 @@ def test_run_claude_retries_fresh_on_session_not_found(tmp_path):
     error_event = [{"type": "result", "is_error": True, "result": "No conversation found with session ID: old-sid", "session_id": "dead-sid"}]
     ok_event = [{"type": "result", "is_error": False, "result": "Hello fresh", "session_id": "new-sid"}]
     call_count = {"n": 0}
+    cmds = []
 
     def side_effect(cmd, **kwargs):
         call_count["n"] += 1
+        cmds.append(cmd)
         if call_count["n"] == 1:
             return MagicMock(stdout="\n".join(_json.dumps(e) for e in error_event), stderr="", returncode=1)
         return MagicMock(stdout="\n".join(_json.dumps(e) for e in ok_event), stderr="", returncode=0)
 
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
-        text, sid, transcript = _run_claude(str(tmp_path), "hi", "old-sid", None)
+        text, sid, transcript = _run_claude(str(tmp_path), "hi", "old-sid", False, None, None, None)
 
     assert call_count["n"] == 2
     assert text == "Hello fresh"
     assert sid == "new-sid"
-    assert "--resume" not in json.loads(transcript)[0].get("result", "")
+    # Retry uses --session-id (starts fresh under same UUID)
+    assert "--session-id" in cmds[1]
 
 
 def test_run_claude_does_not_retry_without_session(tmp_path):
@@ -92,7 +113,7 @@ def test_run_claude_does_not_retry_without_session(tmp_path):
         return MagicMock(stdout=_json.dumps(error_event[0]), stderr="", returncode=1)
 
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
-        _run_claude(str(tmp_path), "hi", None, None)
+        _run_claude(str(tmp_path), "hi", None, False, None, None, None)
 
     assert call_count["n"] == 1
 
@@ -100,14 +121,14 @@ def test_run_claude_does_not_retry_without_session(tmp_path):
 def test_run_claude_not_found(tmp_path):
     import subprocess as sp
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=FileNotFoundError()):
-        text, _, _t = _run_claude(str(tmp_path), "hi", None, None)
+        text, _, _t = _run_claude(str(tmp_path), "hi", None, False, None, None, None)
     assert "not found" in text
 
 
 def test_run_claude_timeout(tmp_path):
     import subprocess as sp
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=sp.TimeoutExpired("claude", 300)):
-        text, _, _t = _run_claude(str(tmp_path), "hi", None, None)
+        text, _, _t = _run_claude(str(tmp_path), "hi", None, False, None, None, None)
     assert "timed out" in text
 
 
@@ -338,7 +359,7 @@ def test_process_prompt_with_attachments_prepends_note(tmp_path):
     client = MagicMock()
     captured_text = {}
 
-    def capture_run_claude(worktree, text, session_id, subagent):
+    def capture_run_claude(worktree, text, session_id, is_new_session, subagent, model, system_prompt):
         captured_text["text"] = text
         return ("response", None, None)
 
@@ -369,7 +390,7 @@ def test_process_prompt_no_attachments_no_note(tmp_path):
     client = MagicMock()
     captured_text = {}
 
-    def capture_run_claude(worktree, text, session_id, subagent):
+    def capture_run_claude(worktree, text, session_id, is_new_session, subagent, model, system_prompt):
         captured_text["text"] = text
         return ("response", None, None)
 

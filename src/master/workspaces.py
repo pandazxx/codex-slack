@@ -10,14 +10,16 @@ from pydantic import BaseModel
 
 from .agent_runner import get_container_status, spawn_agent, stop_agent, container_name
 from .db import get_connection
+from .staffs import StaffOut, _SELECT_COLS as _STAFF_COLS, _row_to_out as _staff_row_to_out
 
 LOGGER = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
-_DEFAULT_AGENTS = [
-    ("claude", "claude-code", None),
-    ("codex", "codex", None),
+_DEFAULT_STAFFS = [
+    # (name, adapter, is_default)
+    ("claude", "claude-code", True),
+    ("codex", "codex", False),
 ]
 
 
@@ -31,14 +33,6 @@ class WorkspaceCreate(BaseModel):
     repo_ref: str = "master"
 
 
-class WorkspaceAgentOut(BaseModel):
-    id: str
-    agent_name: str
-    adapter: str
-    subagent: str | None
-    active: bool
-
-
 class WorkspaceOut(BaseModel):
     id: str
     name: str
@@ -46,7 +40,7 @@ class WorkspaceOut(BaseModel):
     container_name: str | None
     created_at: str
     archived_at: str | None
-    agents: list[WorkspaceAgentOut]
+    staffs: list[StaffOut]
 
 
 def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
@@ -56,20 +50,16 @@ def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
     ).fetchone()
     if row is None:
         return None
-    agents = conn.execute(
-        "SELECT id, agent_name, adapter, subagent, active FROM workspace_agents"
-        " WHERE workspace_id = ? AND active = 1",
+    staff_rows = conn.execute(
+        f"SELECT {_STAFF_COLS} FROM staffs"
+        " WHERE scope_type='workspace' AND scope_id=? ORDER BY name",
         (workspace_id,),
     ).fetchall()
     return WorkspaceOut(
         id=row["id"], name=row["name"], repo_url=row["repo_url"],
         container_name=row["container_name"], created_at=row["created_at"],
         archived_at=row["archived_at"],
-        agents=[
-            WorkspaceAgentOut(id=a["id"], agent_name=a["agent_name"], adapter=a["adapter"],
-                              subagent=a["subagent"], active=bool(a["active"]))
-            for a in agents
-        ],
+        staffs=[_staff_row_to_out(s) for s in staff_rows],
     )
 
 
@@ -82,28 +72,16 @@ def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
     ).fetchone()
     if row is None:
         return None
-    agents = conn.execute(
-        "SELECT id, agent_name, adapter, subagent, active FROM workspace_agents"
-        " WHERE workspace_id = ? AND active = 1",
+    staff_rows = conn.execute(
+        f"SELECT {_STAFF_COLS} FROM staffs"
+        " WHERE scope_type='workspace' AND scope_id=? ORDER BY name",
         (workspace_id,),
     ).fetchall()
     return WorkspaceOut(
-        id=row["id"],
-        name=row["name"],
-        repo_url=row["repo_url"],
-        container_name=row["container_name"],
-        created_at=row["created_at"],
+        id=row["id"], name=row["name"], repo_url=row["repo_url"],
+        container_name=row["container_name"], created_at=row["created_at"],
         archived_at=row["archived_at"],
-        agents=[
-            WorkspaceAgentOut(
-                id=a["id"],
-                agent_name=a["agent_name"],
-                adapter=a["adapter"],
-                subagent=a["subagent"],
-                active=bool(a["active"]),
-            )
-            for a in agents
-        ],
+        staffs=[_staff_row_to_out(s) for s in staff_rows],
     )
 
 
@@ -121,12 +99,13 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
             )
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail="workspace name already exists")
-        for agent_name, adapter, subagent in _DEFAULT_AGENTS:
+        for name, adapter, is_default in _DEFAULT_STAFFS:
             conn.execute(
-                "INSERT INTO workspace_agents"
-                " (id, workspace_id, agent_name, adapter, subagent, active, created_at, deleted_at)"
-                " VALUES (?, ?, ?, ?, ?, 1, ?, NULL)",
-                (str(uuid.uuid4()), workspace_id, agent_name, adapter, subagent, now),
+                "INSERT INTO staffs"
+                " (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
+                "  session_scope, is_default, extra_flags, created_at, updated_at)"
+                " VALUES (?, 'workspace', ?, ?, ?, NULL, NULL, NULL, 'topic', ?, NULL, ?, ?)",
+                (str(uuid.uuid4()), workspace_id, name, adapter, 1 if is_default else 0, now, now),
             )
         conn.commit()
         result = _fetch_workspace(conn, workspace_id)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -58,10 +59,10 @@ def test_send_publishes_mqtt(client, workspace_topic):
     topic = call_args.args[0]
     assert topic_id in topic
     assert "prompt" in topic
-    import json
     payload = json.loads(call_args.args[1])
     assert payload["text"] == "Do it"
     assert payload["worktree"].startswith("/workspace/worktrees/")
+    assert payload["session_scope"] == "topic"
 
 
 def test_send_saves_user_message(client, workspace_topic):
@@ -86,9 +87,9 @@ def test_send_unknown_topic(client, workspace_topic):
     assert r.status_code == 404
 
 
-def test_send_unknown_agent(client, workspace_topic):
+def test_send_unknown_staff_via_mention(client, workspace_topic):
     ws_id, topic_id = workspace_topic
-    r = send(client, ws_id, topic_id, agent="no-such-agent")
+    r = send(client, ws_id, topic_id, text="@no-such-staff do something")
     assert r.status_code == 404
 
 
@@ -123,10 +124,22 @@ def test_send_creates_session(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     c, mock_mqtt = client
     send(client, ws_id, topic_id, text="first turn")
-    import json
     payload = json.loads(mock_mqtt.publish.call_args.args[1])
-    # first turn: session_id is None (no LLM session yet)
-    assert payload["session_id"] is None
+    # first turn: session_id is a deterministic UUID v5, is_new_session=True
+    assert payload["session_id"] is not None
+    assert payload["is_new_session"] is True
+
+
+def test_send_resumes_session_on_second_send(client, workspace_topic):
+    ws_id, topic_id = workspace_topic
+    c, mock_mqtt = client
+    send(client, ws_id, topic_id, text="first turn")
+    first_payload = json.loads(mock_mqtt.publish.call_args.args[1])
+    send(client, ws_id, topic_id, text="second turn")
+    second_payload = json.loads(mock_mqtt.publish.call_args.args[1])
+    # same session UUID, is_new_session=False on second send
+    assert second_payload["session_id"] == first_payload["session_id"]
+    assert second_payload["is_new_session"] is False
 
 
 # --- @mention routing ---
@@ -135,7 +148,6 @@ def test_mention_routes_to_named_agent(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     c, mock_mqtt = client
     send(client, ws_id, topic_id, text="@codex write tests")
-    import json
     payload = json.loads(mock_mqtt.publish.call_args.args[1])
     assert payload["adapter"] == "codex"
     assert payload["text"] == "write tests"
@@ -145,22 +157,20 @@ def test_mention_strips_prefix_from_prompt(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     c, mock_mqtt = client
     send(client, ws_id, topic_id, text="@claude explain this")
-    import json
     payload = json.loads(mock_mqtt.publish.call_args.args[1])
     assert payload["text"] == "explain this"
 
 
-def test_mention_unknown_agent_returns_404(client, workspace_topic):
+def test_mention_unknown_staff_returns_404(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     r = send(client, ws_id, topic_id, text="@nobody do something")
     assert r.status_code == 404
 
 
-def test_no_mention_uses_default_agent(client, workspace_topic):
+def test_no_mention_uses_default_staff(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     c, mock_mqtt = client
     send(client, ws_id, topic_id, text="plain text no mention")
-    import json
     payload = json.loads(mock_mqtt.publish.call_args.args[1])
     assert payload["adapter"] == "claude-code"
     assert payload["text"] == "plain text no mention"

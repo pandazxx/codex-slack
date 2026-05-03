@@ -37,14 +37,15 @@ def test_create_workspace_body(client):
     assert "created_at" in body
 
 
-def test_create_workspace_inserts_default_agents(client):
+def test_create_workspace_inserts_default_staffs(client):
     r = create_ws(client)
-    agents = {a["agent_name"]: a for a in r.json()["agents"]}
-    assert "claude" in agents
-    assert "codex" in agents
-    assert agents["claude"]["adapter"] == "claude-code"
-    assert agents["codex"]["adapter"] == "codex"
-    assert agents["claude"]["active"] is True
+    staffs = {s["name"]: s for s in r.json()["staffs"]}
+    assert "claude" in staffs
+    assert "codex" in staffs
+    assert staffs["claude"]["adapter"] == "claude-code"
+    assert staffs["codex"]["adapter"] == "codex"
+    assert staffs["claude"]["is_default"] is True
+    assert staffs["codex"]["is_default"] is False
 
 
 def test_create_workspace_duplicate_name_returns_409(client):

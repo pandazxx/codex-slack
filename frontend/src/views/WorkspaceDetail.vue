@@ -37,38 +37,81 @@
       </ul>
     </section>
 
-    <section class="agents-section">
-      <h2>Agents</h2>
-      <form v-if="!isArchived" @submit.prevent="addAgent" class="create-form">
-        <input v-model="agentForm.agent_name" placeholder="Name (e.g. engineer)" required />
-        <select v-model="agentForm.adapter">
-          <option value="claude-code">claude-code</option>
-          <option value="codex">codex</option>
-        </select>
-        <input v-model="agentForm.subagent" placeholder="Subagent (optional)" />
-        <button type="submit" :disabled="addingAgent">
-          {{ addingAgent ? 'Adding…' : 'Add Agent' }}
-        </button>
-        <span v-if="agentError" class="error">{{ agentError }}</span>
-      </form>
+    <!-- ── Staff section ─────────────────────────────────────────────── -->
+    <section class="staffs-section">
+      <div class="header-row">
+        <h2>Staff</h2>
+        <button v-if="!isArchived && !showStaffForm" class="btn-add" @click="startCreateStaff">+ Add Staff</button>
+      </div>
+      <p class="muted hint">Use <code>@name</code> in a message to address a specific staff. Staff shown with a <span class="badge-global">global</span> badge are inherited from global settings.</p>
 
-      <p v-if="!agents.length" class="muted">No agents configured.</p>
-      <table v-else class="agent-table">
+      <div v-if="showStaffForm && !isArchived" class="staff-form card">
+        <h3>{{ editingStaff ? `Edit @${editingStaff}` : 'New Workspace Staff' }}</h3>
+        <div class="form-grid">
+          <label>Name <span class="req">*</span></label>
+          <input v-model="staffForm.name" placeholder="e.g. engineer" :disabled="!!editingStaff" required />
+
+          <label>Adapter <span class="req">*</span></label>
+          <select v-model="staffForm.adapter">
+            <option value="claude-code">claude-code</option>
+            <option value="codex">codex</option>
+          </select>
+
+          <label>Model</label>
+          <input v-model="staffForm.model" placeholder="e.g. claude-opus-4-7 (blank = adapter default)" />
+
+          <label>System Prompt</label>
+          <textarea v-model="staffForm.system_prompt" placeholder="--append-system-prompt value (optional)" rows="3" />
+
+          <label>Sub-agent</label>
+          <input v-model="staffForm.agent" placeholder="--agent flag value (optional)" />
+
+          <label>Session Scope</label>
+          <select v-model="staffForm.session_scope">
+            <option value="topic">topic — fresh session per topic</option>
+            <option value="workspace">workspace — shared across all topics</option>
+            <option value="global">global — single shared session</option>
+          </select>
+
+          <label>Default</label>
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="staffForm.is_default" />
+            Route messages here when no @mention is used
+          </label>
+        </div>
+        <div class="form-actions">
+          <button class="btn-primary" @click="saveStaff" :disabled="savingStaff">{{ savingStaff ? 'Saving…' : 'Save' }}</button>
+          <button class="btn-secondary" @click="cancelStaffForm">Cancel</button>
+          <span v-if="staffError" class="error">{{ staffError }}</span>
+        </div>
+      </div>
+
+      <p v-if="!staffs.length" class="muted">No staff configured.</p>
+      <table v-else class="staff-table">
         <thead>
-          <tr><th>Name</th><th>Adapter</th><th>Subagent</th><th></th></tr>
+          <tr><th>@Name</th><th>Adapter</th><th>Model</th><th>Session</th><th>Default</th><th>Source</th><th v-if="!isArchived"></th></tr>
         </thead>
         <tbody>
-          <tr v-for="a in agents" :key="a.id">
-            <td><code>@{{ a.agent_name }}</code></td>
-            <td>{{ a.adapter }}</td>
-            <td>{{ a.subagent || '—' }}</td>
+          <tr v-for="s in staffs" :key="s.name" :class="{ inherited: s.inherited_from }">
+            <td><code>@{{ s.name }}</code></td>
+            <td>{{ s.adapter }}</td>
+            <td>{{ s.model || '—' }}</td>
+            <td>{{ s.session_scope }}</td>
+            <td>{{ s.is_default ? '✓' : '' }}</td>
             <td>
-              <button v-if="!isArchived" class="remove-btn" @click="removeAgent(a.id)" title="Remove">✕</button>
+              <span v-if="s.inherited_from" class="badge-global">{{ s.inherited_from }}</span>
+              <span v-else class="badge-local">workspace</span>
+            </td>
+            <td v-if="!isArchived" class="actions">
+              <template v-if="!s.inherited_from">
+                <button class="action-btn" @click="startEditStaff(s)">Edit</button>
+                <button class="action-btn remove-btn" @click="deleteStaff(s.name)">✕</button>
+              </template>
+              <span v-else class="muted small">manage in <RouterLink to="/settings">Settings</RouterLink></span>
             </td>
           </tr>
         </tbody>
       </table>
-      <p class="hint muted">Use <code>@agent-name</code> in a topic to address a specific agent.</p>
     </section>
   </div>
 </template>
@@ -82,16 +125,19 @@ const id = route.params.id
 
 const workspace = ref(null)
 const topics = ref([])
-const agents = ref([])
+const staffs = ref([])
 const loading = ref(true)
 const creating = ref(false)
 const createError = ref('')
 const subject = ref('')
-const addingAgent = ref(false)
-const agentError = ref('')
-const agentForm = ref({ agent_name: '', adapter: 'claude-code', subagent: '' })
 const agentStatus = ref(null)
 let statusTimer = null
+
+const showStaffForm = ref(false)
+const editingStaff = ref(null)
+const savingStaff = ref(false)
+const staffError = ref('')
+const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false })
 
 const isArchived = computed(() => !!workspace.value?.archived_at)
 
@@ -131,12 +177,12 @@ async function load() {
     const wsRes = await fetch(`/api/workspaces/${id}`)
     workspace.value = await wsRes.json()
     const topicsParam = workspace.value.archived_at ? '?archived=true' : ''
-    const [topicsRes, agentsRes] = await Promise.all([
+    const [topicsRes, staffsRes] = await Promise.all([
       fetch(`/api/workspaces/${id}/topics${topicsParam}`),
-      fetch(`/api/workspaces/${id}/agents`),
+      fetch(`/api/workspaces/${id}/staffs`),
     ])
     topics.value = await topicsRes.json()
-    agents.value = await agentsRes.json()
+    staffs.value = await staffsRes.json()
   } finally {
     loading.value = false
   }
@@ -163,40 +209,73 @@ async function createTopic() {
   }
 }
 
-async function addAgent() {
-  addingAgent.value = true
-  agentError.value = ''
-  try {
-    const payload = {
-      agent_name: agentForm.value.agent_name,
-      adapter: agentForm.value.adapter,
-      subagent: agentForm.value.subagent || null,
-    }
-    const r = await fetch(`/api/workspaces/${id}/agents`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (!r.ok) {
-      const err = await r.json()
-      agentError.value = err.detail || 'Error adding agent'
-      return
-    }
-    agentForm.value = { agent_name: '', adapter: 'claude-code', subagent: '' }
-    await load()
-  } finally {
-    addingAgent.value = false
-  }
-}
-
 async function deleteTopic(topicId, subject) {
   if (!confirm(`Archive topic "${subject}"?`)) return
   await fetch(`/api/workspaces/${id}/topics/${topicId}`, { method: 'DELETE' })
   await load()
 }
 
-async function removeAgent(agentId) {
-  await fetch(`/api/workspaces/${id}/agents/${agentId}`, { method: 'DELETE' })
+function startCreateStaff() {
+  editingStaff.value = null
+  staffForm.value = { name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false }
+  showStaffForm.value = true
+  staffError.value = ''
+}
+
+function startEditStaff(s) {
+  editingStaff.value = s.name
+  staffForm.value = {
+    name: s.name,
+    adapter: s.adapter,
+    model: s.model || '',
+    system_prompt: s.system_prompt || '',
+    agent: s.agent || '',
+    session_scope: s.session_scope,
+    is_default: s.is_default,
+  }
+  showStaffForm.value = true
+  staffError.value = ''
+}
+
+function cancelStaffForm() {
+  showStaffForm.value = false
+  editingStaff.value = null
+  staffError.value = ''
+}
+
+async function saveStaff() {
+  savingStaff.value = true
+  staffError.value = ''
+  try {
+    const body = {
+      name: staffForm.value.name.trim().toLowerCase(),
+      adapter: staffForm.value.adapter,
+      model: staffForm.value.model.trim() || null,
+      system_prompt: staffForm.value.system_prompt.trim() || null,
+      agent: staffForm.value.agent.trim() || null,
+      session_scope: staffForm.value.session_scope,
+      is_default: staffForm.value.is_default,
+    }
+    const name = editingStaff.value
+    const url = name ? `/api/workspaces/${id}/staffs/${name}` : `/api/workspaces/${id}/staffs`
+    const method = name ? 'PUT' : 'POST'
+    const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    if (!r.ok) {
+      const err = await r.json()
+      staffError.value = err.detail || 'Error saving staff'
+      return
+    }
+    showStaffForm.value = false
+    editingStaff.value = null
+    await load()
+  } finally {
+    savingStaff.value = false
+  }
+}
+
+async function deleteStaff(name) {
+  if (!confirm(`Delete staff @${name} from this workspace?`)) return
+  await fetch(`/api/workspaces/${id}/staffs/${name}`, { method: 'DELETE' })
   await load()
 }
 
@@ -230,21 +309,45 @@ h2 { margin: 0; }
 .archived-link { font-size: 0.85em; color: #64748b; text-decoration: none; }
 .archived-link:hover { text-decoration: underline; color: #2563eb; }
 section { margin-bottom: 2rem; }
-.agents-section { border-top: 1px solid #e2e8f0; padding-top: 1.5rem; }
+.staffs-section { border-top: 1px solid #e2e8f0; padding-top: 1.5rem; }
 .create-form { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; }
-.create-form input, .create-form select { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; flex: 1; min-width: 120px; }
+.create-form input { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; flex: 1; min-width: 120px; }
 .create-form button { padding: 0.4rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
 .create-form button:disabled { opacity: 0.6; cursor: default; }
 .list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
 .list li { background: #fff; padding: 0.75rem 1rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); display: flex; align-items: center; justify-content: space-between; }
 .topic-row { display: flex; align-items: center; gap: 0.5rem; flex: 1; }
-.agent-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
-.agent-table th { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 2px solid #e2e8f0; color: #64748b; font-weight: 600; }
-.agent-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; }
+
+.card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.25rem; }
+.card h3 { margin: 0 0 1rem; font-size: 1rem; color: #334155; }
+.form-grid { display: grid; grid-template-columns: 150px 1fr; gap: 0.5rem 1rem; align-items: start; margin-bottom: 1rem; }
+.form-grid label { font-size: 0.9em; color: #475569; padding-top: 0.4rem; }
+.form-grid input, .form-grid select, .form-grid textarea { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.9em; font-family: inherit; width: 100%; box-sizing: border-box; }
+.form-grid textarea { resize: vertical; }
+.checkbox-label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9em; padding-top: 0.2rem; }
+.form-actions { display: flex; gap: 0.75rem; align-items: center; }
+.req { color: #dc2626; }
+.error { color: #dc2626; font-size: 0.9em; }
+
+.staff-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+.staff-table th { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 2px solid #e2e8f0; color: #64748b; font-weight: 600; }
+.staff-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; }
+.staff-table tr.inherited td { color: #94a3b8; }
+.badge-global { background: #ede9fe; color: #6d28d9; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 600; }
+.badge-local { background: #dcfce7; color: #15803d; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 600; }
+.actions { white-space: nowrap; }
+.action-btn { background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.85em; padding: 0.15rem 0.4rem; border-radius: 3px; text-decoration: underline; }
+.action-btn:hover { background: #eff6ff; }
+.remove-btn { color: #94a3b8; text-decoration: none; }
+.remove-btn:hover { background: #fee2e2; color: #dc2626; }
+
+.btn-add { padding: 0.35rem 0.85rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+.btn-primary { padding: 0.4rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+.btn-primary:disabled { opacity: 0.6; cursor: default; }
+.btn-secondary { padding: 0.4rem 1rem; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+.hint { font-size: 0.85em; margin-bottom: 0.75rem; }
+.muted { color: #64748b; }
+.small { font-size: 0.82em; }
 .remove-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.9em; padding: 0.15rem 0.4rem; border-radius: 3px; }
 .remove-btn:hover { background: #fee2e2; color: #dc2626; }
-.muted { color: #64748b; }
-.small { font-size: 0.85em; }
-.error { color: #dc2626; font-size: 0.9em; }
-.hint { font-size: 0.82em; margin-top: 0.75rem; }
 </style>
