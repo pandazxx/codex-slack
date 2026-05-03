@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm \
     openssh-client \
     podman \
+    poppler-utils \
     tini \
     && rm -rf /var/lib/apt/lists/*
 
