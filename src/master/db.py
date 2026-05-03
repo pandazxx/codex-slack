@@ -54,9 +54,21 @@ CREATE TABLE IF NOT EXISTS messages (
     attachments_json TEXT,
     created_at       TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS attachments (
+    id          TEXT PRIMARY KEY,
+    message_id  TEXT NOT NULL REFERENCES messages(id),
+    topic_id    TEXT NOT NULL REFERENCES topics(id),
+    filename    TEXT NOT NULL,
+    mime_type   TEXT NOT NULL,
+    size_bytes  INTEGER NOT NULL,
+    storage_uri TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    direction   TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound'))
+);
 """
 
-TABLES = ["workspaces", "workspace_agents", "topics", "sessions", "messages"]
+TABLES = ["workspaces", "workspace_agents", "topics", "sessions", "messages", "attachments"]
 
 
 _MIGRATIONS = [

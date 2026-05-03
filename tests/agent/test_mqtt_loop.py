@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from src.agent.mqtt_loop import (
+    _fetch_attachment,
     _parse_prompt_topic,
     _process_prompt,
     _run_claude,
@@ -265,3 +266,127 @@ def test_on_connect_subscribes_to_workspace_topic():
     topic = client.subscribe.call_args.args[0]
     assert "ws42" in topic
     assert topic.endswith("/prompt")
+
+
+# --- _fetch_attachment ---
+
+def test_fetch_attachment_writes_file(tmp_path):
+    att_id = "att-abc"
+    filename = "report.txt"
+    content = b"attachment bytes"
+
+    class FakeResp:
+        def read(self):
+            return content
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    with patch("src.agent.mqtt_loop.urllib.request.urlopen", return_value=FakeResp()):
+        _fetch_attachment("http://master:8080", att_id, filename, str(tmp_path))
+
+    dest = tmp_path / filename
+    assert dest.exists()
+    assert dest.read_bytes() == content
+
+
+def test_fetch_attachment_constructs_correct_url(tmp_path):
+    att_id = "att-xyz"
+    filename = "image.png"
+
+    class FakeResp:
+        def read(self):
+            return b"img"
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    with patch("src.agent.mqtt_loop.urllib.request.urlopen", return_value=FakeResp()) as mock_urlopen:
+        _fetch_attachment("http://master:8080", att_id, filename, str(tmp_path))
+
+    called_url = mock_urlopen.call_args.args[0]
+    assert called_url == f"http://master:8080/api/attachments/{att_id}/download"
+
+
+# --- _process_prompt with attachments ---
+
+def test_process_prompt_with_attachments_fetches_files(tmp_path):
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop._run_claude", return_value=("response", None, None)):
+        with patch("src.agent.mqtt_loop._ensure_worktree"):
+            with patch("src.agent.mqtt_loop._fetch_attachment") as mock_fetch:
+                _process_prompt(
+                    client, "ws1", "t1",
+                    {
+                        "message_id": "m1",
+                        "text": "analyze the file",
+                        "adapter": "claude-code",
+                        "worktree": str(tmp_path),
+                        "branch": "feat/t",
+                        "session_id": None,
+                        "attachments": [{"id": "att-1", "filename": "data.csv", "mime_type": "text/csv"}],
+                        "master_url": "http://master:8080",
+                    },
+                    repo_dir=str(tmp_path),
+                )
+    mock_fetch.assert_called_once_with("http://master:8080", "att-1", "data.csv", str(tmp_path))
+
+
+def test_process_prompt_with_attachments_prepends_note(tmp_path):
+    client = MagicMock()
+    captured_text = {}
+
+    def capture_run_claude(worktree, text, session_id, subagent):
+        captured_text["text"] = text
+        return ("response", None, None)
+
+    with patch("src.agent.mqtt_loop._run_claude", side_effect=capture_run_claude):
+        with patch("src.agent.mqtt_loop._ensure_worktree"):
+            with patch("src.agent.mqtt_loop._fetch_attachment"):
+                _process_prompt(
+                    client, "ws1", "t1",
+                    {
+                        "message_id": "m1",
+                        "text": "check it out",
+                        "adapter": "claude-code",
+                        "worktree": str(tmp_path),
+                        "branch": "feat/t",
+                        "session_id": None,
+                        "attachments": [{"id": "att-1", "filename": "notes.txt", "mime_type": "text/plain"}],
+                        "master_url": "http://master:8080",
+                    },
+                    repo_dir=str(tmp_path),
+                )
+
+    assert "Attached file: notes.txt" in captured_text["text"]
+    assert "available in the current directory" in captured_text["text"]
+    assert "check it out" in captured_text["text"]
+
+
+def test_process_prompt_no_attachments_no_note(tmp_path):
+    client = MagicMock()
+    captured_text = {}
+
+    def capture_run_claude(worktree, text, session_id, subagent):
+        captured_text["text"] = text
+        return ("response", None, None)
+
+    with patch("src.agent.mqtt_loop._run_claude", side_effect=capture_run_claude):
+        with patch("src.agent.mqtt_loop._ensure_worktree"):
+            _process_prompt(
+                client, "ws1", "t1",
+                {
+                    "message_id": "m1",
+                    "text": "plain prompt",
+                    "adapter": "claude-code",
+                    "worktree": str(tmp_path),
+                    "branch": "feat/t",
+                    "session_id": None,
+                    "attachments": [],
+                },
+                repo_dir=str(tmp_path),
+            )
+
+    assert captured_text["text"] == "plain prompt"

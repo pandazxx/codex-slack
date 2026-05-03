@@ -26,6 +26,16 @@ class MasterSettings:
     mqtt_port: int
     master_port: int
     container_runtime: str
+    attachment_max_size_mb: int = 20
+    attachment_data_dir: str = ""
+    master_url: str = "http://master:8080"
+
+    @property
+    def attachment_max_size_bytes(self) -> int:
+        return self.attachment_max_size_mb * 1024 * 1024
+
+    def effective_attachment_data_dir(self) -> str:
+        return self.attachment_data_dir or f"{self.data_dir}/attachments"
 
 
 def _parse_bool(raw_value: str) -> bool:
@@ -97,9 +107,19 @@ def load_master_settings() -> MasterSettings:
     if container_runtime not in {"podman", "docker"}:
         raise ValueError(f"CONTAINER_RUNTIME must be 'podman' or 'docker', got: {container_runtime!r}")
 
+    raw_attachment_max_size_mb = os.getenv("ATTACHMENT_MAX_SIZE_MB", "20").strip()
+    _log_env("ATTACHMENT_MAX_SIZE_MB", os.getenv("ATTACHMENT_MAX_SIZE_MB"))
+    attachment_max_size_mb = int(raw_attachment_max_size_mb) if raw_attachment_max_size_mb else 20
+
+    attachment_data_dir = os.getenv("ATTACHMENT_DATA_DIR", "").strip()
+    _log_env("ATTACHMENT_DATA_DIR", os.getenv("ATTACHMENT_DATA_DIR"))
+
+    master_url = os.getenv("MASTER_URL", "http://master:8080").strip() or "http://master:8080"
+    _log_env("MASTER_URL", os.getenv("MASTER_URL"))
+
     LOGGER.info(
-        "master.env_load done data_dir=%s dry_run=%s mqtt=%s:%s runtime=%s",
-        data_dir, dry_run, mqtt_host, mqtt_port, container_runtime,
+        "master.env_load done data_dir=%s dry_run=%s mqtt=%s:%s runtime=%s master_url=%s",
+        data_dir, dry_run, mqtt_host, mqtt_port, container_runtime, master_url,
     )
 
     return MasterSettings(
@@ -120,4 +140,7 @@ def load_master_settings() -> MasterSettings:
         mqtt_port=mqtt_port,
         master_port=master_port,
         container_runtime=container_runtime,
+        attachment_max_size_mb=attachment_max_size_mb,
+        attachment_data_dir=attachment_data_dir,
+        master_url=master_url,
     )

@@ -31,6 +31,7 @@ class WorkerSettings:
     workspace_id: str = ""
     mqtt_host: str = "localhost"
     mqtt_port: int = 1883
+    master_url: str = "http://master:8080"
 
 
 def load_worker_settings() -> WorkerSettings:
@@ -45,6 +46,7 @@ def load_worker_settings() -> WorkerSettings:
         workspace_id=os.getenv("WORKSPACE_ID", "").strip(),
         mqtt_host=os.getenv("MQTT_HOST", "localhost").strip(),
         mqtt_port=int(os.getenv("MQTT_PORT", "1883")),
+        master_url=os.getenv("MASTER_URL", "http://master:8080").strip() or "http://master:8080",
     )
 
 
@@ -193,6 +195,7 @@ def stage_mqtt_loop(settings: WorkerSettings, repo_dir: str) -> None:
         mqtt_host=settings.mqtt_host,
         mqtt_port=settings.mqtt_port,
         repo_dir=repo_dir,
+        master_url=settings.master_url,
     )
 
 

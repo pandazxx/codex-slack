@@ -37,6 +37,7 @@ def spawn_agent(
     ssh_auth_sock_path: str | None = None,
     ssh_known_hosts_path: str | None = None,
     dry_run: bool = False,
+    master_url: str = "http://master:8080",
 ) -> str:
     name = container_name(workspace_id)
 
@@ -47,6 +48,7 @@ def spawn_agent(
         "AGENT_REPO_URL": repo_url,
         "AGENT_REPO_REF": repo_ref,
         "GH_TOKEN": gh_token or _GH_TOKEN_FALLBACK,
+        "MASTER_URL": master_url,
     }
     for key, val in [
         ("CLAUDE_CODE_OAUTH_TOKEN", claude_code_oauth_token),

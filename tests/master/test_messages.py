@@ -30,7 +30,7 @@ def send(client, ws_id, topic_id, text="Hello", agent="claude"):
     c, _ = client
     return c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/messages",
-        json={"text": text, "agent_name": agent},
+        data={"text": text, "agent_name": agent},
     )
 
 
@@ -75,14 +75,14 @@ def test_send_saves_user_message(client, workspace_topic):
 def test_send_unknown_workspace(client, workspace_topic):
     _, topic_id = workspace_topic
     c, _ = client
-    r = c.post(f"/api/workspaces/no-such/topics/{topic_id}/messages", json={"text": "hi"})
+    r = c.post(f"/api/workspaces/no-such/topics/{topic_id}/messages", data={"text": "hi"})
     assert r.status_code == 404
 
 
 def test_send_unknown_topic(client, workspace_topic):
     ws_id, _ = workspace_topic
     c, _ = client
-    r = c.post(f"/api/workspaces/{ws_id}/topics/no-such/messages", json={"text": "hi"})
+    r = c.post(f"/api/workspaces/{ws_id}/topics/no-such/messages", data={"text": "hi"})
     assert r.status_code == 404
 
 
