@@ -2,138 +2,142 @@
 
 ## Context
 
-v3 needs a native file attachment system that is not tied to any chat platform. Both inbound uploads (user → agent) and outbound downloads (agent → user) must be supported. Storage must be abstracted so the system can migrate from local filesystem to S3-compatible object storage without breaking the API or DB schema.
-
-This design covers: API, DB schema, storage abstraction, text extraction, UI, and agent integration.
+v3 needs a native file attachment system not tied to any chat platform. This document covers the agreed design after a four-decision discussion session (2026-05-03). See ADR 0007 for the decision record.
 
 ## Goals
 
-- Users can upload files (PDF, DOCX, images, code, plain text) via UI or REST API
-- Uploaded files are parsed/extracted for agent context where applicable
-- Files are persistently stored and retrievable by ID
-- Agent containers can reference uploaded files in prompts
-- Agent-produced output files are downloadable from the UI
+- Users upload files alongside a message (inbound) via UI or REST API
+- Files are stored persistently and retrievable by ID
+- Agent containers fetch the raw file and pass it to claude via worktree placement
 - Storage backend is swappable (local filesystem → S3) without schema or API changes
 
-## Non-goals
+## Non-goals (this slice)
 
-- Real-time streaming of large files
-- Video or audio processing
-- Platform-specific file handling (Slack CDN, Discord CDN)
+- Text extraction or parsing in master
+- Outbound agent-produced files (no `.codex-output/` scanning yet)
+- File reuse across messages
+- S3 storage backend (schema-compatible, deferred)
+- Video or audio handling
 
-## Design
+## Decisions summary
 
-### DB Schema — `attachments` table
+| # | Decision |
+|---|----------|
+| Scope | Message-scoped, upload-on-send (multipart POST) |
+| Agent delivery | Agent fetches via HTTP, places in worktree; claude reads natively |
+| Extraction | Master stores only; no extraction anywhere |
+| Outbound | None this slice; code output via git |
+
+## DB Schema
 
 ```sql
 CREATE TABLE IF NOT EXISTS attachments (
-    id           TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-    topic_id     TEXT REFERENCES topics(id),      -- NULL for workspace-scoped attachments
-    message_id   TEXT REFERENCES messages(id),    -- NULL if not yet associated with a message
-    filename     TEXT NOT NULL,
-    mime_type    TEXT NOT NULL,
-    size_bytes   INTEGER NOT NULL,
-    storage_uri  TEXT NOT NULL,                   -- file:///… or s3://bucket/key
-    extracted_text TEXT,                          -- NULL if not text-extractable
-    created_at   TEXT NOT NULL,
-    direction    TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound'))
+    id          TEXT PRIMARY KEY,
+    message_id  TEXT NOT NULL REFERENCES messages(id),
+    topic_id    TEXT NOT NULL REFERENCES topics(id),
+    filename    TEXT NOT NULL,
+    mime_type   TEXT NOT NULL,
+    size_bytes  INTEGER NOT NULL,
+    storage_uri TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    direction   TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound'))
 );
 ```
 
-### Storage Abstraction — `src/master/storage.py`
+`topic_id` is denormalized for efficient topic-level listing without joining through messages.
+
+## Storage Abstraction
 
 ```python
+# src/master/storage.py
+from typing import Protocol
+
 class AttachmentStore(Protocol):
-    def put(self, attachment_id: str, data: bytes, filename: str) -> str: ...  # returns storage_uri
-    def get(self, storage_uri: str) -> bytes: ...
-    def delete(self, storage_uri: str) -> None: ...
+    def put(self, attachment_id: str, filename: str, data: bytes) -> str:
+        """Store data and return a storage_uri."""
+
+    def get(self, storage_uri: str) -> bytes:
+        """Retrieve raw bytes for the given URI."""
+
+    def delete(self, storage_uri: str) -> None:
+        """Remove the stored object."""
+
 
 class LocalAttachmentStore:
-    # Stores under /opt/codex-slack/data/attachments/{attachment_id}/{filename}
-    # Returns file:///opt/codex-slack/data/attachments/{attachment_id}/{filename}
-    ...
-
-class S3AttachmentStore:
-    # Future: stores in s3://{bucket}/attachments/{attachment_id}/{filename}
-    ...
+    """Stores files under {base_dir}/{attachment_id}/{filename}.
+    Returns URI: file://{base_dir}/{attachment_id}/{filename}
+    """
+    def __init__(self, base_dir: str) -> None:
+        self.base_dir = base_dir
 ```
 
-### Text Extraction
+The `storage_uri` stored in the DB is the only coupling between the metadata layer and the storage backend. Switching to S3 means deploying `S3AttachmentStore` and configuring it — no schema change, no API change.
 
-On upload, the master service attempts text extraction based on MIME type:
+## API
 
-| MIME type | Extractor |
-|-----------|-----------|
-| `application/pdf` | `pypdf` |
-| `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | `python-docx` |
-| `text/*` | read directly |
-| `image/*` | no extraction (pass raw to agent via vision if supported) |
-| Other | store raw only |
+### POST /api/workspaces/{id}/topics/{tid}/messages
 
-Extracted text is stored in `attachments.extracted_text`. If extraction fails, the column is NULL and the raw file is still stored.
+Extended to accept `multipart/form-data` in addition to the existing `application/json` body:
 
-### API Endpoints
+- `text` (string, required) — message text
+- `file` (file, optional, repeatable) — one or more attachments
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/workspaces/{id}/attachments` | Upload a file (multipart/form-data). Returns `AttachmentOut`. |
-| `GET` | `/api/workspaces/{id}/attachments` | List attachments for a workspace. |
-| `GET` | `/api/workspaces/{id}/attachments/{aid}` | Get attachment metadata. |
-| `GET` | `/api/workspaces/{id}/attachments/{aid}/download` | Download raw file. |
-| `DELETE` | `/api/workspaces/{id}/attachments/{aid}` | Delete attachment (soft or hard, TBD). |
+When files are present:
+1. Master writes each file to storage, inserts into `attachments` with `message_id` set atomically
+2. Returns the message object with an `attachments` array in the response
 
-Topic-scoped upload: include `topic_id` in the multipart form body.
+JSON-only callers (no files) are unaffected.
 
-### Agent Integration
+### GET /api/attachments/{aid}/download
 
-When a message is sent to a topic that has attachments, the master service includes attachment references in the MQTT prompt payload:
+Returns the raw file bytes with correct `Content-Type` and `Content-Disposition: attachment; filename=…` headers. Used by both the agent (HTTP fetch) and the browser (user download).
+
+### GET /api/workspaces/{id}/topics/{tid}/attachments
+
+Lists attachment metadata for a topic. Used by the UI to render the attachment list for the current topic.
+
+## Agent Integration
+
+MQTT prompt payload gains an `attachments` array:
 
 ```json
 {
   "text": "Summarise the attached document",
   "attachments": [
-    {
-      "id": "abc123",
-      "filename": "report.pdf",
-      "mime_type": "application/pdf",
-      "extracted_text": "…full extracted text…"
-    }
+    { "id": "abc123", "filename": "report.pdf", "mime_type": "application/pdf" }
   ]
 }
 ```
 
-The agent MQTT loop prepends extracted text to the prompt before passing to the LLM:
+Agent processing in `mqtt_loop.py`:
+
+1. For each attachment in the payload, `GET /api/attachments/{id}/download` from master
+2. Write the file to `{worktree}/{filename}`
+3. Prepend a note to the prompt:
 
 ```
-[Attachment: report.pdf]
-…extracted text…
+[Attached file: report.pdf — available in the current directory]
 
----
-User: Summarise the attached document
+Summarise the attached document
 ```
 
-For image attachments with no extracted text, the file path inside the agent container is passed (requires volume mount or file transfer — TBD in implementation slice).
+4. Invoke claude as usual. Claude uses its Read tool (or vision for images) to access the file.
+5. After the run, no output directory scanning (outbound deferred).
 
-### Outbound Attachments
+Master URL for agent HTTP calls is passed via environment variable `MASTER_URL` (e.g., `http://master:8080`).
 
-Agents can produce output files by writing them to a designated output directory in the worktree. After the LLM run completes, the agent MQTT loop scans for new files in `{worktree}/.codex-output/`, uploads them via the master attachment API, and includes their IDs in the response payload. The UI then renders download links.
+## UI Changes
 
-### UI Changes
+### TopicChat.vue
 
-- **Upload widget** in TopicChat: drag-and-drop zone or file picker button, shows filename and status while uploading
-- **Attachment list** in TopicChat: displays uploaded files associated with the current topic
-- **Inline image preview**: images displayed inline in the chat bubble
-- **Download links**: non-image attachments shown as a download button with filename and size
-
-## Alternatives Considered
-
-- **Base64-encode files in MQTT payload** — rejected; MQTT has message size limits and base64 bloats payloads significantly.
-- **Mount a shared volume between master and agent** — feasible for local deployment but breaks for multi-host; storage URI abstraction handles both.
-- **Store files in SQLite BLOBs** — rejected; SQLite BLOBs degrade performance for large files and make S3 migration harder.
+- Send form changes from plain `<textarea>` + button to a form that also accepts file input
+- File picker or drag-and-drop zone below the textarea
+- Selected files shown as chips with filename before sending
+- On send: build `FormData`, append `text` and each `file`, POST as `multipart/form-data`
+- Message bubbles for inbound messages show an attachment list below the text: image files previewed inline, others as a download link with filename and size
 
 ## Open Questions
 
-- Image attachments: pass raw file to agent via vision API or just as a file path? Depends on whether the LLM adapter supports multimodal input.
-- Outbound file detection: polling `{worktree}/.codex-output/` vs. agent explicitly publishing file paths in the response payload. Explicit publishing is cleaner.
-- Soft-delete vs. hard-delete for attachments: align with workspace/topic soft-delete pattern (add `archived_at`)?
+- Should `direction = 'outbound'` rows ever be created in this slice? No — reserved for the future `.codex-output/` feature.
+- Image vision: claude's Read tool handles text files. For images, claude's vision capability activates if the file is passed correctly. The worktree placement approach works as long as claude can see the file — worth verifying in the implementation spike.
+- File size cap: recommend 20 MB server-side to keep the synchronous store fast. Configurable via `ATTACHMENT_MAX_SIZE_MB` env var.
