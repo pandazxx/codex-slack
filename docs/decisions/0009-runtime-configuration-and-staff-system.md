@@ -80,21 +80,51 @@ predictable: you always know exactly which record is in effect.
 `is_default=TRUE`. At least one default Staff must exist in the effective scope
 chain, or messages with no @mention will receive an error reply.
 
-### 3. Session ID derived from Staff and session_scope
+### 3. Session management via `staff_sessions` table
 
-Rather than storing session IDs in a separate table, they are computed
-deterministically from the Staff's scope key:
+`claude-code` exposes two relevant flags:
 
-| `session_scope` | Session ID source |
-|-----------------|-------------------|
+- `--session-id <uuid>` — start a new conversation with a caller-supplied UUID
+  (must be a valid RFC-4122 UUID; arbitrary strings are rejected).
+- `--resume <uuid>` — resume an existing conversation by its session UUID.
+
+These are distinct operations. To give a Staff persistent memory across
+invocations, the system must:
+
+1. On **first use** of a Staff within a given scope: call `claude-code` with
+   `--session-id <uuid>` so the new session is created under a known ID.
+2. On **subsequent uses**: call `claude-code` with `--resume <uuid>` to
+   continue the same session.
+
+To tell the two cases apart, a lightweight `staff_sessions` table is required:
+
+```
+staff_sessions
+  scope_type   TEXT  -- 'topic' | 'workspace' | 'global'
+  scope_id     TEXT  -- topic_id, workspace_id, or NULL
+  staff_name   TEXT  -- matches staffs.name
+  session_id   TEXT  -- UUID used with --session-id / --resume
+  started_at   TEXT
+  PRIMARY KEY (scope_type, scope_id, staff_name)
+```
+
+The `session_id` stored here is a UUID v5 generated deterministically from the
+scope key, so it is stable across restarts and reproducible without a lookup:
+
+| `session_scope` | UUID v5 name input |
+|-----------------|--------------------|
 | `topic` | `{workspace_id}:{topic_id}:{staff_name}` |
 | `workspace` | `{workspace_id}:{staff_name}` |
 | `global` | `{staff_name}` |
 
-The source string is hashed (SHA-1, hex) and used as the `--resume` argument
-to `claude-code`. A Staff with `session_scope=workspace` therefore accumulates
-context across all topics in that workspace, giving it persistent memory of
-prior conversations — appropriate for long-running reviewer or research roles.
+UUID v5 (RFC 4122, SHA-1 name-based) produces a valid UUID from any string,
+satisfying `--session-id`'s format requirement. The determinism means the UUID
+can be re-derived if the `staff_sessions` row is missing (e.g. after a DB
+wipe), and `--session-id` will simply start a fresh session under the same ID.
+
+A Staff with `session_scope=workspace` accumulates context across all topics in
+that workspace, giving it persistent memory of prior conversations — appropriate
+for long-running reviewer or research roles.
 
 ### 4. Introduce a `config` table for operational settings
 
@@ -212,14 +242,18 @@ Rejected. Staffs subsume agents entirely — a Staff record contains the adapter
 field. Keeping both tables creates a redundant concept, two code paths to
 maintain, and a confusing mental model. A migration is cleaner.
 
-### C. Store session IDs in a dedicated `staff_sessions` table
+### C. Derive session ID deterministically without a sessions table
 
-A sessions table would allow the UI to list active sessions, clear a session
-explicitly, and store session metadata.
+A SHA-1 hex digest of the scope key could be passed directly to `--resume`,
+avoiding any sessions table.
 
-Deferred. Deterministic session ID generation covers the immediate need without
-schema overhead. A sessions table can be added when explicit session management
-(listing, clearing, inspecting) is required.
+Rejected. `claude-code --session-id` requires a valid RFC-4122 UUID; arbitrary
+hex strings are not accepted. Additionally, `--resume` and `--session-id` are
+distinct flags: the former continues an existing session, the latter starts a
+new one under a given ID. Without tracking first-use per scope, the system
+cannot know which flag to pass. UUID v5 (name-based UUID derived from the scope
+key) satisfies the format requirement, but the `staff_sessions` row is still
+needed to distinguish first-use from resumption.
 
 ### D. Topic-level config (env vars)
 
@@ -273,8 +307,10 @@ This work should be split into three parallel tracks after the ADR is accepted:
 - Implement Staff CRUD endpoints with cascade resolution logic
 - Implement config CRUD endpoints with merge logic
 - Update `agent_runner.py` to read config env vars from DB at container start
+- Add `staff_sessions` table; on first Staff use pass `--session-id <uuid_v5>`,
+  on subsequent uses pass `--resume <uuid_v5>`
 - Update `messages.py` to parse @mentions, resolve Staff, and invoke the adapter
-  with `--model`, `--append-system-prompt`, `--agent`, `--resume` (session ID)
+  with `--model`, `--append-system-prompt`, `--agent`, and the session flag
 - Remove dead `agents` code paths
 
 **Track 2 — Frontend (engineer):**
