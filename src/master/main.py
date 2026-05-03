@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..logging_utils import LocalTimeFormatter
-from .agent_runner import container_name, spawn_agent, stop_agent
+from .agent_runner import container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
 from .db import get_connection, init_db, schema_info
 from .attachments import router as attachments_router
@@ -40,6 +42,92 @@ def configure_logging() -> None:
 
 def _db_path(data_dir: str) -> str:
     return str(Path(data_dir) / "master_data.db")
+
+
+def _active_workspaces(db_path: str) -> list[dict]:  # type: ignore[type-arg]
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, container_name, last_message_at, last_refreshed_at"
+            " FROM workspaces WHERE archived_at IS NULL AND container_name IS NOT NULL"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _background_tasks(settings, db_path: str, stop_event: threading.Event) -> None:
+    """Background loop: idle auto-stop, health-check respawn, and auth auto-refresh."""
+    idle_timeout = settings.agent_idle_timeout_seconds
+    auth_interval = settings.agent_auth_refresh_interval_seconds
+
+    while not stop_event.wait(60):
+        now = time.time()
+        try:
+            workspaces = _active_workspaces(db_path)
+        except Exception:
+            LOGGER.exception("master.bg_task_list_failed")
+            continue
+
+        for ws in workspaces:
+            cname = ws["container_name"]
+            ws_id = ws["id"]
+
+            # Health check: restart containers that exited unexpectedly
+            try:
+                status = get_container_status(name=cname, dry_run=settings.dry_run)
+                exit_code = status.get("exit_code") or 0
+                # 143 = SIGTERM: container was gracefully stopped by pause_agent (idle-stop).
+                # Do not restart — let auto-start on next message handle it.
+                if status["status"] == "exited" and exit_code not in (0, 143):
+                    LOGGER.warning("master.health_restart container=%s exit_code=%s", cname, exit_code)
+                    start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
+            except Exception:
+                LOGGER.exception("master.health_check_failed container=%s", cname)
+
+            # Idle auto-stop
+            if idle_timeout > 0:
+                last_msg = ws.get("last_message_at")
+                if last_msg:
+                    try:
+                        import datetime
+                        last_ts = datetime.datetime.strptime(last_msg, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+                        if now - last_ts > idle_timeout:
+                            st = get_container_status(name=cname, dry_run=settings.dry_run)
+                            if st["status"] == "running":
+                                LOGGER.info("master.idle_stop container=%s idle_s=%d", cname, int(now - last_ts))
+                                pause_agent(name=cname, dry_run=settings.dry_run)
+                    except Exception:
+                        LOGGER.exception("master.idle_stop_failed container=%s", cname)
+
+            # Auto auth-refresh
+            if auth_interval > 0:
+                last_ref = ws.get("last_refreshed_at")
+                needs_refresh = last_ref is None
+                if not needs_refresh and last_ref:
+                    try:
+                        import datetime
+                        ref_ts = datetime.datetime.strptime(last_ref, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+                        needs_refresh = now - ref_ts > auth_interval
+                    except Exception:
+                        pass
+                if needs_refresh:
+                    try:
+                        LOGGER.info("master.auto_refresh_auth container=%s", cname)
+                        refresh_auth(name=cname, gh_token=settings.gh_token, dry_run=settings.dry_run)
+                        from datetime import datetime, timezone
+                        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        conn = get_connection(db_path)
+                        try:
+                            conn.execute(
+                                "UPDATE workspaces SET last_refreshed_at = ? WHERE id = ?",
+                                (now_str, ws_id),
+                            )
+                            conn.commit()
+                        finally:
+                            conn.close()
+                    except Exception:
+                        LOGGER.exception("master.auto_refresh_auth_failed container=%s", cname)
 
 
 def _respawn_agents(settings, db_path: str) -> None:
@@ -124,7 +212,19 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     app.state.mqtt = mqtt
     app.state.attachment_store = attachment_store
     _respawn_agents(settings, db_path)
+
+    stop_event = threading.Event()
+    bg_thread = threading.Thread(
+        target=_background_tasks, args=(settings, db_path, stop_event), daemon=True, name="master-bg"
+    )
+    bg_thread.start()
+    LOGGER.info("master.bg_task_start idle_timeout=%ds auth_refresh=%ds",
+                settings.agent_idle_timeout_seconds, settings.agent_auth_refresh_interval_seconds)
+
     yield
+
+    stop_event.set()
+    bg_thread.join(timeout=5)
     mqtt.loop_stop()
     mqtt.disconnect()
     LOGGER.info("master.shutdown")

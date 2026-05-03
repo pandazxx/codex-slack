@@ -9,12 +9,14 @@ LOGGER = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS workspaces (
-    id             TEXT PRIMARY KEY,
-    name           TEXT NOT NULL,
-    repo_url       TEXT NOT NULL,
-    container_name TEXT,
-    created_at     TEXT NOT NULL,
-    archived_at    TEXT
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL,
+    repo_url          TEXT NOT NULL,
+    container_name    TEXT,
+    created_at        TEXT NOT NULL,
+    archived_at       TEXT,
+    last_refreshed_at TEXT,
+    last_message_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS staffs (
@@ -77,6 +79,7 @@ CREATE TABLE IF NOT EXISTS messages (
     agent_name       TEXT,
     text             TEXT NOT NULL,
     transcript       TEXT,
+    usage_json       TEXT,
     attachments_json TEXT,
     created_at       TEXT NOT NULL
 );
@@ -100,6 +103,9 @@ TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "session
 _MIGRATIONS = [
     "ALTER TABLE workspaces ADD COLUMN archived_at TEXT",
     "ALTER TABLE topics ADD COLUMN archived_at TEXT",
+    "ALTER TABLE workspaces ADD COLUMN last_refreshed_at TEXT",
+    "ALTER TABLE workspaces ADD COLUMN last_message_at TEXT",
+    "ALTER TABLE messages ADD COLUMN usage_json TEXT",
 ]
 
 

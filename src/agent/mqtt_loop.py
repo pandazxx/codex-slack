@@ -283,7 +283,14 @@ def run_mqtt_loop(
     master_url: str = "http://master:8080",
 ) -> None:
     userdata = {"workspace_id": workspace_id, "repo_dir": repo_dir, "master_url": master_url}
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, userdata=userdata)
+    # Fixed client_id + clean_session=False: Mosquitto queues QoS-1 messages while
+    # the agent is stopped and delivers them on reconnect, no matter how long boot takes.
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"agent-{workspace_id}",
+        clean_session=False,
+        userdata=userdata,
+    )
     client.on_connect = _on_connect
     client.on_disconnect = _on_disconnect
     client.on_message = _on_message

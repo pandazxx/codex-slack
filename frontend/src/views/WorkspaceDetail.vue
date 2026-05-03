@@ -9,6 +9,10 @@
       <span v-if="agentStatus" :class="['status-badge', statusClass]">{{ statusLabel }}</span>
       <span v-else class="status-badge status-unknown">checking…</span>
       <span v-if="agentStatus?.error" class="status-error">{{ agentStatus.error }}</span>
+      <button class="btn-refresh-auth" @click="refreshAuth" :disabled="refreshing">
+        {{ refreshing ? 'Refreshing…' : 'Refresh Auth' }}
+      </button>
+      <span v-if="workspace?.last_refreshed_at" class="muted small">refreshed {{ workspace.last_refreshed_at }}</span>
     </div>
 
     <section>
@@ -133,6 +137,8 @@ const subject = ref('')
 const agentStatus = ref(null)
 let statusTimer = null
 
+const refreshing = ref(false)
+
 const showStaffForm = ref(false)
 const editingStaff = ref(null)
 const savingStaff = ref(false)
@@ -145,7 +151,7 @@ const statusClass = computed(() => {
   const s = agentStatus.value?.status
   if (s === 'running') return 'status-running'
   if (s === 'restarting') return 'status-restarting'
-  if (s === 'exited') return agentStatus.value?.exit_code === 0 ? 'status-stopped' : 'status-crashed'
+  if (s === 'exited') return (agentStatus.value?.exit_code === 0 || agentStatus.value?.exit_code === 143) ? 'status-stopped' : 'status-crashed'
   if (s === 'not_found') return 'status-unknown'
   return 'status-unknown'
 })
@@ -157,12 +163,23 @@ const statusLabel = computed(() => {
   if (s.status === 'restarting') return `Restarting (restarts: ${s.restart_count ?? '?'})`
   if (s.status === 'exited') {
     const code = s.exit_code ?? '?'
-    return code === 0 ? 'Stopped (exit 0)' : `Crashed (exit ${code}, restarts: ${s.restart_count ?? '?'})`
+    if (code === 0 || code === 143) return 'Stopped'
+    return `Crashed (exit ${code}, restarts: ${s.restart_count ?? '?'})`
   }
   if (s.status === 'not_found') return 'Not found'
   if (s.status === 'dry_run') return 'Dry run'
   return s.status
 })
+
+async function refreshAuth() {
+  refreshing.value = true
+  try {
+    await fetch(`/api/workspaces/${id}/refresh-auth`, { method: 'POST' })
+    await load()
+  } finally {
+    refreshing.value = false
+  }
+}
 
 async function fetchAgentStatus() {
   try {
@@ -304,6 +321,9 @@ onUnmounted(() => {
 .status-stopped { background: #f1f5f9; color: #475569; }
 .status-unknown { background: #f1f5f9; color: #94a3b8; }
 .status-error { color: #dc2626; font-size: 0.9em; }
+.btn-refresh-auth { margin-left: 0.75rem; padding: 2px 10px; font-size: 0.8em; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; }
+.btn-refresh-auth:hover:not(:disabled) { background: #e2e8f0; }
+.btn-refresh-auth:disabled { opacity: 0.6; cursor: default; }
 h2 { margin: 0; }
 .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .archived-link { font-size: 0.85em; color: #64748b; text-decoration: none; }
