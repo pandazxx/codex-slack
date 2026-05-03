@@ -62,6 +62,7 @@ def test_send_publishes_mqtt(client, workspace_topic):
     payload = json.loads(call_args.args[1])
     assert payload["text"] == "Do it"
     assert payload["worktree"].startswith("/workspace/worktrees/")
+    assert payload["session_scope"] == "topic"
 
 
 def test_send_saves_user_message(client, workspace_topic):

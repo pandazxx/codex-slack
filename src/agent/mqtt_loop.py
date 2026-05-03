@@ -171,6 +171,7 @@ def _process_prompt(
     text = payload.get("text", "")
     session_id = payload.get("session_id")
     is_new_session = bool(payload.get("is_new_session", False))
+    session_scope = payload.get("session_scope", "topic")
     adapter = payload.get("adapter", "claude-code")
     subagent = payload.get("subagent")
     model = payload.get("model")
@@ -211,8 +212,18 @@ def _process_prompt(
     if adapter == "codex":
         response_text, new_session_id, transcript = _run_codex(cwd, text)
     else:
+        # Claude sessions are scoped to the CWD (project directory).
+        # For workspace/global scope we use a stable shared directory so
+        # --resume works across different topic worktrees.
+        session_cwd = cwd
+        if session_scope == "workspace":
+            session_cwd = f"/workspace/sessions/{workspace_id}"
+            Path(session_cwd).mkdir(parents=True, exist_ok=True)
+        elif session_scope == "global":
+            session_cwd = "/workspace/sessions/global"
+            Path(session_cwd).mkdir(parents=True, exist_ok=True)
         response_text, new_session_id, transcript = _run_claude(
-            cwd, text, session_id, is_new_session, subagent, model, system_prompt
+            session_cwd, text, session_id, is_new_session, subagent, model, system_prompt
         )
 
     LOGGER.info("agent.llm_done topic_id=%s chars=%d", topic_id, len(response_text))

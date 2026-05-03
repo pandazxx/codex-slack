@@ -169,6 +169,7 @@ async def send_message(
         "branch": topic["branch_name"],
         "session_id": session_uuid,
         "is_new_session": is_new_session,
+        "session_scope": staff["session_scope"] or "topic",
         "model": staff["model"],
         "system_prompt": staff["system_prompt"],
         "text": prompt_text,
