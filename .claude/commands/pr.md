@@ -1,7 +1,7 @@
 ---
 description: Open a pull request against master with an auto-generated title and checklist body
 argumentHint: "[title or description hints]"
-model: claude-sonnet-4-6
+model: claude-haiku-4-5-20251001
 ---
 
 Create a pull request from the current branch targeting `master` (or `main` if `master` does not exist).
