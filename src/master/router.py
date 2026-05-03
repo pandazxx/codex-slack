@@ -923,6 +923,7 @@ class ChannelRouter:
             claude_subagent=record.claude_subagent,
         )
         elapsed_ms = (time.perf_counter() - started_at) * 1000
+        self.registry.touch_last_message_at(record.name)
         self._record_usage(
             agent_name=record.name,
             prompt_chars=len(prompt),

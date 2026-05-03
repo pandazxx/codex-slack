@@ -76,6 +76,60 @@ def test_registry_creates_lock_file(tmp_path) -> None:
     assert lock_path.exists()
 
 
+def _make_record(name: str = "payments-api", channel_id: str = "C123") -> AgentRecord:
+    return AgentRecord(
+        name=name,
+        repo_path="/tmp/repo",
+        channel_id=channel_id,
+        container_name=f"agent-{name}",
+        runtime="podman",
+        image_plan={"type": "default", "image": "codex-slack-bot:latest"},
+        status="loaded",
+    )
+
+
+def test_touch_last_message_at_sets_timestamp(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    registry.upsert(_make_record())
+
+    assert registry.get("payments-api").last_message_at is None
+
+    result = registry.touch_last_message_at("payments-api")
+    assert result is True
+
+    record = registry.get("payments-api")
+    assert record.last_message_at is not None
+    assert "T" in record.last_message_at  # ISO 8601
+
+
+def test_touch_last_message_at_updates_on_each_call(tmp_path) -> None:
+    import time
+
+    registry = AgentRegistry(tmp_path / "agents.json")
+    registry.upsert(_make_record())
+
+    registry.touch_last_message_at("payments-api")
+    first = registry.get("payments-api").last_message_at
+
+    time.sleep(0.01)
+    registry.touch_last_message_at("payments-api")
+    second = registry.get("payments-api").last_message_at
+
+    assert second >= first  # monotonically non-decreasing
+
+
+def test_touch_last_message_at_returns_false_for_missing_agent(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    assert registry.touch_last_message_at("nonexistent") is False
+
+
+def test_last_message_at_defaults_none_on_load(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    registry.upsert(_make_record())
+    record = registry.get("payments-api")
+    assert record.last_message_at is None
+
+
 def test_registry_migrate_schema_adds_platform_and_adapter_defaults(tmp_path) -> None:
     registry_path = tmp_path / "agents.json"
     registry_path.write_text(

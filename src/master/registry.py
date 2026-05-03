@@ -32,6 +32,7 @@ class AgentRecord:
     claude_model: str | None = None
     claude_subagent: str | None = None
     auth_refreshed_at: str | None = None
+    last_message_at: str | None = None
     created_at: str = ""
     updated_at: str = ""
 
@@ -81,6 +82,7 @@ class AgentRegistry:
         normalized.setdefault("agent_adapter", "codex")
         normalized.setdefault("claude_subagent", None)
         normalized.setdefault("auth_refreshed_at", None)
+        normalized.setdefault("last_message_at", None)
         return normalized
 
     def migrate_schema(self) -> bool:
@@ -124,6 +126,15 @@ class AgentRegistry:
             data["agents"][record.name] = record.to_dict()
             self._write_data_unlocked(data)
         return record
+
+    def touch_last_message_at(self, name: str) -> bool:
+        with self._file_lock():
+            data = self._read_data_unlocked()
+            if name not in data["agents"]:
+                return False
+            data["agents"][name]["last_message_at"] = utc_now_iso()
+            self._write_data_unlocked(data)
+        return True
 
     def remove(self, name: str) -> bool:
         with self._file_lock():

@@ -991,3 +991,41 @@ def test_podman_exec_dispatcher_preserves_existing_claude_permission_bypass(monk
     )
 
     assert seen["cmd"][-1].count("--dangerously-skip-permissions") == 1
+
+
+def test_route_prompt_sets_last_message_at_on_success(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FakeDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    assert registry.get("payments-agent").last_message_at is None
+
+    router.route_prompt(
+        channel_id="CAGENT",
+        text="<@U123> hello",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    record = registry.get("payments-agent")
+    assert record is not None
+    assert record.last_message_at is not None
+    assert "T" in record.last_message_at
+
+
+def test_route_prompt_does_not_set_last_message_at_on_dispatch_failure(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FailingDispatcher()
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    with pytest.raises(RouteError):
+        router.route_prompt(
+            channel_id="CAGENT",
+            text="<@U123> hello",
+            thread_ts="1730000000.1234",
+            user_id="U123",
+        )
+
+    assert registry.get("payments-agent").last_message_at is None
