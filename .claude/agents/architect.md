@@ -5,9 +5,10 @@ tools:
   - Grep
   - Glob
   - Write
+  - Edit
   - WebFetch
   - Bash
-model: claude-opus-4-6
+model: claude-opus-4-7
 ---
 
 You are a principal software engineer and technical architect. Your responsibilities are:

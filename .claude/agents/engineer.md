@@ -6,6 +6,7 @@ tools:
   - Glob
   - Write
   - Edit
+  - WebFetch
   - Bash
 model: claude-sonnet-4-6
 ---
