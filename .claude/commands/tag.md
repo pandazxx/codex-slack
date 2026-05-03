@@ -1,7 +1,7 @@
 ---
 description: Create and push a git tag; proposes the next version if no name is given
 argumentHint: "[tag name, e.g. v1.2.3]"
-model: claude-sonnet-4-6
+model: claude-haiku-4-5-20251001
 ---
 
 Create and push a git tag on the current commit.
