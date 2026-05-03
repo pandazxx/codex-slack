@@ -49,7 +49,8 @@ def _respawn_agents(settings, db_path: str) -> None:
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            "SELECT id, repo_url, container_name FROM workspaces WHERE container_name IS NOT NULL"
+            "SELECT id, repo_url, container_name FROM workspaces"
+            " WHERE container_name IS NOT NULL AND archived_at IS NULL"
         ).fetchall()
     finally:
         conn.close()

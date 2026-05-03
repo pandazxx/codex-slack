@@ -67,10 +67,13 @@ class MessageOut(BaseModel):
 def send_message(workspace_id: str, topic_id: str, body: MessageSend, request: Request) -> dict:  # type: ignore[type-arg]
     conn = get_connection(request.app.state.db_path)
     try:
-        if conn.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone() is None:
+        if conn.execute(
+            "SELECT 1 FROM workspaces WHERE id = ? AND archived_at IS NULL", (workspace_id,)
+        ).fetchone() is None:
             raise HTTPException(404, "workspace not found")
         topic = conn.execute(
-            "SELECT id, worktree_path, branch_name FROM topics WHERE id = ? AND workspace_id = ?",
+            "SELECT id, worktree_path, branch_name FROM topics"
+            " WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
             (topic_id, workspace_id),
         ).fetchone()
         if topic is None:

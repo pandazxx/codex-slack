@@ -1,6 +1,6 @@
 # v3.0 System Architecture
 
-*Status:* proposed
+*Status:* accepted (implemented through v3 slices 1–12)
 *ADR:* [0005 v3.0 System Architecture](../decisions/0005-v3-system-architecture.md)
 
 ## Context
@@ -55,12 +55,14 @@ Mosquitto container  [NEW]
   - separate container in compose stack
 
 Agent container  (one per workspace)
+  - Container name: codex-agent-{workspace_id}
+  - Named volume: codex-claude-{workspace_id} → /home/appuser/.claude
   - MQTT client
       - subscribes to prompt messages for its workspace
       - publishes response and status messages
   - LLM session manager
-      - one Claude Code session per topic (--resume <id>)
-      - one Codex session per topic (CODEX_HOME/sessions/<id>)
+      - claude-code adapter: claude --print --verbose --output-format stream-json --dangerously-skip-permissions [--resume <id>]
+      - codex adapter: codex --full-auto -q <prompt>
   - Mounts workspace volume (worktrees per topic)
 ```
 
@@ -145,15 +147,16 @@ Primary views:
 
 ### Data Model (SQLite)
 
-Database file: `/data/master/master_data.db` on master's durable volume.
+Database file: `/opt/codex-slack/data/master/master_data.db` on master's durable volume (mounted as `master_data` Docker volume at `/opt/codex-slack/data/master`).
 
 ```
 workspaces
   id            TEXT PRIMARY KEY
-  name          TEXT NOT NULL
+  name          TEXT NOT NULL UNIQUE
   repo_url      TEXT NOT NULL
   container_name TEXT
   created_at    TEXT NOT NULL
+  archived_at   TEXT            -- set on soft-delete; null when active
 
 workspace_agents
   id            TEXT PRIMARY KEY
@@ -173,6 +176,7 @@ topics
   branch_name   TEXT NOT NULL
   worktree_path TEXT NOT NULL
   created_at    TEXT NOT NULL
+  archived_at   TEXT            -- set on soft-delete; null when active
 
 sessions
   id            TEXT PRIMARY KEY
@@ -235,17 +239,9 @@ registered in two ways:
 
 ### Session Persistence
 
-*Claude Code:* First turn in a topic runs `claude -p --subagent <name> ...`
-without `--resume`. The returned session ID is written to the `sessions` table.
-Subsequent turns in the same topic pass `--resume <session-id>`. The response
-payload from the agent includes the current session ID so master can update the
-table if it changes.
+*Claude Code:* First turn in a topic runs `claude --print --verbose --output-format stream-json --dangerously-skip-permissions <prompt>` without `--resume`. The `result` event in the stream-json output carries `session_id`, which master writes to the `sessions` table. Subsequent turns pass `--resume <session_id>`. If the session has expired (`No conversation found with session ID` in the output), the agent automatically retries without `--resume` and stores the new session ID. The `--verbose` flag is required — without it, `stream-json` format does not emit the `result` event.
 
-*Codex:* Session state lives under `CODEX_HOME/sessions/<name>/`. Master stores
-the session directory name (or an equivalent Codex session key) in the
-`sessions` table. The agent receives it via env var `AGENT_SESSION_ID` and
-passes it to the Codex invocation. Codex session creation behavior should be
-verified against the Codex CLI docs during implementation.
+*Codex:* Runs `codex --full-auto -q <prompt>`. Session state is managed internally by the Codex CLI via the `CODEX_HOME` directory. The `sessions` table records `llm_session_id = NULL` for Codex entries (Codex does not expose a resumable session ID via its CLI flags).
 
 ### Topic Lifecycle
 
