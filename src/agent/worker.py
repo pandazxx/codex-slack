@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
 import time
+
+from .mqtt_loop import run_mqtt_loop
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +28,10 @@ class WorkerSettings:
     status_file: str
     codex_home: str
     ready_poll_seconds: float
+    workspace_id: str = ""
+    mqtt_host: str = "localhost"
+    mqtt_port: int = 1883
+    master_url: str = "http://master:8080"
 
 
 def load_worker_settings() -> WorkerSettings:
@@ -37,6 +43,10 @@ def load_worker_settings() -> WorkerSettings:
         status_file=os.getenv("AGENT_STATUS_FILE", "/tmp/master-agent/status.json").strip(),
         codex_home=os.getenv("CODEX_HOME", "/home/appuser/.codex").strip(),
         ready_poll_seconds=float(os.getenv("AGENT_READY_POLL_SECONDS", "5")),
+        workspace_id=os.getenv("WORKSPACE_ID", "").strip(),
+        mqtt_host=os.getenv("MQTT_HOST", "localhost").strip(),
+        mqtt_port=int(os.getenv("MQTT_PORT", "1883")),
+        master_url=os.getenv("MASTER_URL", "http://master:8080").strip() or "http://master:8080",
     )
 
 
@@ -98,6 +108,12 @@ def stage_preflight(settings: WorkerSettings) -> None:
     if not auth_ok:
         raise AgentInitError("preflight", "missing auth source: SSH_AUTH_SOCK or GH token")
 
+    if gh_token:
+        result = subprocess.run(["gh", "auth", "setup-git"], capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            LOGGER.info("agent.gh_auth_setup_git ok")
+        else:
+            LOGGER.warning("agent.gh_auth_setup_git failed stderr=%s", result.stderr.strip())
 
 
 def stage_repo_sync(settings: WorkerSettings) -> Path:
@@ -107,7 +123,27 @@ def stage_repo_sync(settings: WorkerSettings) -> Path:
     repo_dir = Path(settings.workspace_path) / settings.repo_dir_name
     if not repo_dir.exists():
         repo_dir.parent.mkdir(parents=True, exist_ok=True)
-        _run_git(["git", "clone", "--branch", settings.repo_ref, settings.repo_url, str(repo_dir)])
+        try:
+            _run_git(["git", "clone", "--branch", settings.repo_ref, settings.repo_url, str(repo_dir)])
+        except RuntimeError as exc:
+            err = str(exc)
+            if "not found" in err.lower() or "invalid branch" in err.lower():
+                LOGGER.warning(
+                    "agent.branch_not_found branch=%s url=%s — cloning default branch instead",
+                    settings.repo_ref,
+                    settings.repo_url,
+                )
+                emit_stage_event(
+                    "repo_sync", "warn",
+                    f"branch '{settings.repo_ref}' not found; using remote default branch",
+                    requested_branch=settings.repo_ref,
+                )
+                try:
+                    _run_git(["git", "clone", settings.repo_url, str(repo_dir)])
+                except RuntimeError as exc2:
+                    raise AgentInitError("repo_sync", str(exc2)) from exc2
+            else:
+                raise AgentInitError("repo_sync", err) from exc
         return repo_dir
 
     try:
@@ -174,9 +210,19 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
 
 
 
-def stage_ready(settings: WorkerSettings) -> None:
-    while True:
-        time.sleep(settings.ready_poll_seconds)
+def stage_mqtt_loop(settings: WorkerSettings, repo_dir: str) -> None:
+    if not settings.workspace_id:
+        LOGGER.warning("agent.no_workspace_id — falling back to idle poll loop")
+        while True:
+            time.sleep(settings.ready_poll_seconds)
+        return
+    run_mqtt_loop(
+        workspace_id=settings.workspace_id,
+        mqtt_host=settings.mqtt_host,
+        mqtt_port=settings.mqtt_port,
+        repo_dir=repo_dir,
+        master_url=settings.master_url,
+    )
 
 
 
@@ -214,7 +260,7 @@ def run_worker(settings: WorkerSettings) -> int:
             },
         )
         emit_stage_event("ready", "ok", "agent worker ready")
-        stage_ready(settings)
+        stage_mqtt_loop(settings, repo_dir=str(repo_dir))
         return 0
     except AgentInitError as exc:
         write_status(
