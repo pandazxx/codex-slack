@@ -20,7 +20,7 @@
         class="message"
         :class="m.sender === 'user' ? 'user' : 'agent'"
       >
-        <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name || 'Agent') }}</span>
+        <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
         <div class="bubble">
           <MarkdownMessage v-if="m.sender !== 'user'" :text="m.text" />
           <template v-else>{{ m.text }}</template>
@@ -100,7 +100,7 @@
           {{ sending ? 'Sending…' : 'Send' }}
         </button>
       </form>
-      <p class="hint muted">Enter to send · Shift+Enter for new line</p>
+      <p class="hint muted">Enter to send · Shift+Enter for new line · Use <code>@name</code> to address a specific staff</p>
     </template>
   </div>
 </template>
