@@ -26,10 +26,22 @@
       "Bash(podman images*)",
       "Bash(podman logs*)",
       "Bash(podman inspect*)",
+      "Bash(podman compose*)",
+      "Bash(podman info*)",
       "Bash(docker ps*)",
       "Bash(docker images*)",
       "Bash(docker logs*)",
-      "Bash(docker inspect*)"
+      "Bash(docker inspect*)",
+      "Bash(docker compose*)",
+      "Bash(docker-compose*)",
+      "Bash(docker info*)",
+      "Bash(curl -sf*)",
+      "Bash(curl -s*)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr list*)",
+      "Bash(gh pr checks*)",
+      "Bash(gh run view*)",
+      "Bash(gh run list*)"
     ],
     "deny": []
   }
