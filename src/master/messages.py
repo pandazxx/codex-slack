@@ -139,7 +139,7 @@ async def send_message(
         finally:
             att_conn.close()
 
-        attachment_metas.append({"id": attachment_id, "filename": fname, "mime_type": mime})
+        attachment_metas.append({"id": attachment_id, "filename": fname, "mime_type": mime, "size_bytes": len(data)})
 
     payload = json.dumps({
         "message_id": message_id,
@@ -155,7 +155,7 @@ async def send_message(
     mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
     request.app.state.mqtt.publish(mqtt_topic, payload, qos=1)
 
-    return {"message_id": message_id, "status": "queued"}
+    return {"message_id": message_id, "status": "queued", "attachments": attachment_metas}
 
 
 @router.get("", response_model=list[MessageOut])

@@ -213,7 +213,7 @@ async function sendMessage() {
         sender: 'user',
         agent_name: null,
         text: msg,
-        attachments: [],
+        attachments: data.attachments || [],
         created_at: new Date().toISOString(),
       }
       messages.value.push(saved)
