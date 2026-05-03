@@ -116,6 +116,51 @@ def stop_agent(
         pass
 
 
+def start_agent_if_stopped(*, name: str, dry_run: bool = False) -> bool:
+    """Start a stopped/exited container without recreating it. Returns True if started."""
+    if dry_run:
+        LOGGER.info("agent_runner.dry_run_start container=%s", name)
+        return False
+    c = _client()
+    try:
+        container = c.containers.get(name)
+        if container.status == "running":
+            return False
+        container.start()
+        LOGGER.info("agent_runner.restarted container=%s", name)
+        return True
+    except docker.errors.NotFound:
+        return False
+    except Exception as exc:
+        LOGGER.warning("agent_runner.start_failed name=%s error=%s", name, exc)
+        return False
+
+
+def refresh_auth(*, name: str, gh_token: str | None, dry_run: bool = False) -> None:
+    """Re-run auth setup inside a running agent container."""
+    if dry_run:
+        LOGGER.info("agent_runner.dry_run_refresh_auth container=%s", name)
+        return
+    c = _client()
+    try:
+        container = c.containers.get(name)
+    except docker.errors.NotFound:
+        LOGGER.warning("agent_runner.refresh_auth_skip container=%s reason=not_found", name)
+        return
+    if container.status != "running":
+        LOGGER.warning("agent_runner.refresh_auth_skip container=%s reason=status=%s", name, container.status)
+        return
+    if gh_token:
+        try:
+            exit_code, _ = container.exec_run(
+                ["gh", "auth", "setup-git"],
+                environment={"GH_TOKEN": gh_token},
+            )
+            LOGGER.info("agent_runner.refresh_auth container=%s gh_exit=%d", name, exit_code)
+        except Exception:
+            LOGGER.exception("agent_runner.refresh_auth_failed container=%s", name)
+
+
 def get_container_status(*, name: str, dry_run: bool = False) -> dict:  # type: ignore[type-arg]
     if dry_run:
         return {"status": "dry_run", "exit_code": None, "restart_count": None, "error": None}

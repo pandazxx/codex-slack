@@ -29,6 +29,8 @@ class MasterSettings:
     attachment_max_size_mb: int = 20
     attachment_data_dir: str = ""
     master_url: str = "http://master:8080"
+    agent_idle_timeout_seconds: int = 3600
+    agent_auth_refresh_interval_seconds: int = 43200
 
     @property
     def attachment_max_size_bytes(self) -> int:
@@ -117,6 +119,12 @@ def load_master_settings() -> MasterSettings:
     master_url = os.getenv("MASTER_URL", "http://master:8080").strip() or "http://master:8080"
     _log_env("MASTER_URL", os.getenv("MASTER_URL"))
 
+    agent_idle_timeout_seconds = int(os.getenv("AGENT_IDLE_TIMEOUT_SECONDS", "3600") or "3600")
+    _log_env("AGENT_IDLE_TIMEOUT_SECONDS", os.getenv("AGENT_IDLE_TIMEOUT_SECONDS"))
+
+    agent_auth_refresh_interval_seconds = int(os.getenv("AGENT_AUTH_REFRESH_INTERVAL_SECONDS", "43200") or "43200")
+    _log_env("AGENT_AUTH_REFRESH_INTERVAL_SECONDS", os.getenv("AGENT_AUTH_REFRESH_INTERVAL_SECONDS"))
+
     LOGGER.info(
         "master.env_load done data_dir=%s dry_run=%s mqtt=%s:%s runtime=%s master_url=%s",
         data_dir, dry_run, mqtt_host, mqtt_port, container_runtime, master_url,
@@ -143,4 +151,6 @@ def load_master_settings() -> MasterSettings:
         attachment_max_size_mb=attachment_max_size_mb,
         attachment_data_dir=attachment_data_dir,
         master_url=master_url,
+        agent_idle_timeout_seconds=agent_idle_timeout_seconds,
+        agent_auth_refresh_interval_seconds=agent_auth_refresh_interval_seconds,
     )

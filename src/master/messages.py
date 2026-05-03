@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from .agent_runner import container_name as _agent_container_name, start_agent_if_stopped
 from .db import get_connection
 from .staffs import resolve_staff, resolve_default_staff
 
@@ -79,6 +80,7 @@ class MessageOut(BaseModel):
     agent_name: str | None
     text: str
     transcript: str | None
+    usage_json: str | None = None
     created_at: str
     attachments: list[AttachmentMeta] = []
 
@@ -94,9 +96,11 @@ async def send_message(
 ) -> dict:  # type: ignore[type-arg]
     conn = get_connection(request.app.state.db_path)
     try:
-        if conn.execute(
-            "SELECT 1 FROM workspaces WHERE id = ? AND archived_at IS NULL", (workspace_id,)
-        ).fetchone() is None:
+        ws_row = conn.execute(
+            "SELECT id, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
+            (workspace_id,),
+        ).fetchone()
+        if ws_row is None:
             raise HTTPException(404, "workspace not found")
         topic = conn.execute(
             "SELECT id, worktree_path, branch_name FROM topics"
@@ -121,11 +125,15 @@ async def send_message(
         session_uuid, is_new_session = _get_staff_session(conn, ss_scope_type, ss_scope_id, staff["name"])
 
         message_id = str(uuid.uuid4())
+        now = _now()
         conn.execute(
             "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, attachments_json, created_at)"
-            " VALUES (?, ?, 'user', NULL, ?, NULL, NULL, ?)",
-            (message_id, topic_id, text.strip(), _now()),
+            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, created_at)"
+            " VALUES (?, ?, 'user', NULL, ?, NULL, NULL, NULL, ?)",
+            (message_id, topic_id, text.strip(), now),
+        )
+        conn.execute(
+            "UPDATE workspaces SET last_message_at = ? WHERE id = ?", (now, workspace_id)
         )
         conn.commit()
     finally:
@@ -160,6 +168,13 @@ async def send_message(
 
         attachment_metas.append({"id": attachment_id, "filename": fname, "mime_type": mime, "size_bytes": len(data)})
 
+    # Auto-start agent container if it was stopped (e.g. idle timeout or crash)
+    cname = ws_row["container_name"] or _agent_container_name(workspace_id)
+    try:
+        start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
+    except Exception:
+        pass  # don't block the message if Docker is unavailable
+
     payload = json.dumps({
         "message_id": message_id,
         "agent_name": staff["name"],
@@ -192,7 +207,7 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
         ).fetchone() is None:
             raise HTTPException(404, "topic not found")
         rows = conn.execute(
-            "SELECT id, sender, agent_name, text, transcript, created_at FROM messages"
+            "SELECT id, sender, agent_name, text, transcript, usage_json, created_at FROM messages"
             " WHERE topic_id = ? ORDER BY created_at",
             (topic_id,),
         ).fetchall()
@@ -212,8 +227,8 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
             result.append(
                 MessageOut(
                     id=r["id"], sender=r["sender"], agent_name=r["agent_name"],
-                    text=r["text"], transcript=r["transcript"], created_at=r["created_at"],
-                    attachments=attachments,
+                    text=r["text"], transcript=r["transcript"], usage_json=r["usage_json"],
+                    created_at=r["created_at"], attachments=attachments,
                 )
             )
     finally:

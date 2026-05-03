@@ -63,7 +63,7 @@ def test_staffs_unique_constraint(db_path):
     conn = get_connection(db_path)
     now = "2026-01-01T00:00:00Z"
     conn.execute(
-        "INSERT INTO workspaces VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO workspaces (id, name, repo_url, container_name, created_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)",
         ("w1", "test", "https://github.com/x/y", None, now, None),
     )
     conn.execute(
