@@ -108,6 +108,12 @@ def stage_preflight(settings: WorkerSettings) -> None:
     if not auth_ok:
         raise AgentInitError("preflight", "missing auth source: SSH_AUTH_SOCK or GH token")
 
+    if gh_token:
+        result = subprocess.run(["gh", "auth", "setup-git"], capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            LOGGER.info("agent.gh_auth_setup_git ok")
+        else:
+            LOGGER.warning("agent.gh_auth_setup_git failed stderr=%s", result.stderr.strip())
 
 
 def stage_repo_sync(settings: WorkerSettings) -> Path:
