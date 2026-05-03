@@ -151,7 +151,7 @@ const statusClass = computed(() => {
   const s = agentStatus.value?.status
   if (s === 'running') return 'status-running'
   if (s === 'restarting') return 'status-restarting'
-  if (s === 'exited') return agentStatus.value?.exit_code === 0 ? 'status-stopped' : 'status-crashed'
+  if (s === 'exited') return (agentStatus.value?.exit_code === 0 || agentStatus.value?.exit_code === 143) ? 'status-stopped' : 'status-crashed'
   if (s === 'not_found') return 'status-unknown'
   return 'status-unknown'
 })
@@ -163,7 +163,8 @@ const statusLabel = computed(() => {
   if (s.status === 'restarting') return `Restarting (restarts: ${s.restart_count ?? '?'})`
   if (s.status === 'exited') {
     const code = s.exit_code ?? '?'
-    return code === 0 ? 'Stopped (exit 0)' : `Crashed (exit ${code}, restarts: ${s.restart_count ?? '?'})`
+    if (code === 0 || code === 143) return 'Stopped'
+    return `Crashed (exit ${code}, restarts: ${s.restart_count ?? '?'})`
   }
   if (s.status === 'not_found') return 'Not found'
   if (s.status === 'dry_run') return 'Dry run'

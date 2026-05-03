@@ -76,8 +76,11 @@ def _background_tasks(settings, db_path: str, stop_event: threading.Event) -> No
             # Health check: restart containers that exited unexpectedly
             try:
                 status = get_container_status(name=cname, dry_run=settings.dry_run)
-                if status["status"] == "exited" and (status.get("exit_code") or 0) != 0:
-                    LOGGER.warning("master.health_restart container=%s exit_code=%s", cname, status.get("exit_code"))
+                exit_code = status.get("exit_code") or 0
+                # 143 = SIGTERM: container was gracefully stopped by pause_agent (idle-stop).
+                # Do not restart — let auto-start on next message handle it.
+                if status["status"] == "exited" and exit_code not in (0, 143):
+                    LOGGER.warning("master.health_restart container=%s exit_code=%s", cname, exit_code)
                     start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
             except Exception:
                 LOGGER.exception("master.health_check_failed container=%s", cname)
