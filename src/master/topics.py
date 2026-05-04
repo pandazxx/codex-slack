@@ -119,7 +119,7 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
         if ws_row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
         topic_id = str(uuid.uuid4())
-        branch_name = (body.branch_name or _slugify(body.subject)).strip()
+        branch_name = (body.branch_name or f"topic/{_slugify(body.subject)}-{topic_id[:7]}").strip()
         repo_ref = body.repo_ref.strip()
         worktree_path = f"/workspace/worktrees/{topic_id}"
         now = _now()
