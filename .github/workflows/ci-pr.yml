@@ -1,0 +1,83 @@
+name: CI — PR Tests
+
+# Runs on every pull-request commit targeting master.
+# Purpose: gate merges on a passing test suite and valid Docker builds.
+# No images are pushed here; publishing only happens from publish-*.yml on master/tags.
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - "Dockerfile.agent-minimal"
+      - "docker/entrypoint.sh"
+      - ".github/workflows/ci-pr.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  # ── 1. Unit / integration tests ──────────────────────────────────────────────
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        run: pytest --tb=short -q
+
+  # ── 2. Docker build validation (no push) ────────────────────────────────────
+  docker-build:
+    name: Docker build check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build master image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build agent-minimal image + smoke test
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.agent-minimal
+          load: true
+          tags: codex-slack-agent-minimal:pr-smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test agent-minimal runtime contract
+        run: |
+          docker run --rm codex-slack-agent-minimal:pr-smoke sh -lc '
+            codex --version &&
+            claude --version &&
+            gh --version &&
+            python -m src.agent.main --help >/dev/null
+          '
