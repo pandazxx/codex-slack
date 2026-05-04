@@ -187,7 +187,7 @@ def test_run_worker_success_writes_ready_status(tmp_path, monkeypatch) -> None: 
         ready_poll_seconds=0.1,
     )
 
-    monkeypatch.setattr(worker, "stage_ready", lambda _settings: None)
+    monkeypatch.setattr(worker, "stage_mqtt_loop", lambda _settings, **_kw: None)
 
     code = run_worker(settings)
     assert code == 0
