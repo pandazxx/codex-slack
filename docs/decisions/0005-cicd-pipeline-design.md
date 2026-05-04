@@ -11,14 +11,13 @@ Actions publish workflows (push-triggered, master/tag only) and a custom CD daem
 (`src/cd/`) that polls GHCR for digest changes and redeploys via docker compose. There was
 no PR-time test gate and no written policy for how code flows between environments.
 
-Five design questions needed resolution:
+Four design questions needed resolution:
 
 1. Should Jenkins be adopted alongside or instead of GitHub Actions?
 2. Is the CD daemon (pull-based CD) the right deployment model for all environments?
 3. What are the formal trigger points and promotion rules for the three environments?
-4. How should the test bed be managed given that its primary operator is an LLM agent?
-5. How do we ensure master only receives UAT-approved code, and that the image deployed
-   to production is bit-identical to the image that was tested on staging?
+4. How should the test bed be managed given that its primary operator is an LLM agent, not
+   a human release engineer?
 
 ## Decision
 
@@ -28,6 +27,9 @@ Jenkins is not adopted. The existing GitHub Actions workflows already handle ima
 and publishing. Jenkins would add an additional server to operate, a separate secret store,
 plugin lifecycle management, and network access requirements between Jenkins and GHCR — with
 no capability gain over what GitHub Actions provides for this project.
+
+If the team later requires on-premises build agents that cannot reach GitHub, self-hosted
+GitHub Actions runners satisfy that requirement without Jenkins.
 
 The master orchestrator's `gh` CLI is the bridge between the LLM agent and GitHub Actions
 workflows — no separate CI server is needed for agent-triggered builds.
@@ -39,179 +41,168 @@ The CD daemon is retained for staging and production but is **not used on the te
 **Why pull-based fits staging and production:**
 
 - The deployment host may be behind NAT or a firewall. Pull-based requires only outbound
-  connections to GHCR; no inbound SSH port or GitHub runner IP allowlist is needed.
+  connections from the host to GHCR; no inbound SSH port or GitHub runner IP allowlist is
+  needed.
 - The daemon provides rollback-on-failure: if a health check fails after deploy it
   re-pulls and redeploys the previous digest automatically.
 - The daemon is already implemented, tested, and in use.
 
-**Why the test bed is agent-managed:**
+**Why the test bed is agent-managed instead:**
 
-The test bed's purpose is pre-UAT development testing by LLM agents. Agents need to deploy
-arbitrary builds on demand, iterate rapidly, and control the exact deploy lifecycle. A
-passive polling daemon cannot do this. The agent already controls container lifecycle via
-the Podman socket the master orchestrator holds.
+The test bed's purpose is pre-UAT development testing and troubleshooting by LLM agents.
+Agents need to:
+- Deploy arbitrary builds (feature branches, specific SHAs) on demand
+- Iterate rapidly between broken and working states
+- Control the exact deploy lifecycle without waiting for a polling cycle
 
-### 3. No merge to master before UAT sign-off
+A passive polling daemon is the wrong model for this. The agent already controls container
+lifecycle via the Podman socket that the master orchestrator holds. Agent-direct deployment
+is simpler, faster, and more aligned with how agents work.
 
-Code is built and tested from the feature branch. `master` only receives commits after UAT
-is complete. This is enforced by:
+**Known limitations and mitigations for the CD daemon (staging/production):**
 
-- Building release candidate images from RC tags on the feature branch (not from master)
-- Requiring the PR to be approved (UAT sign-off) before it can be merged
-- Enforcing linear history on master (rebase-only merges, no merge commits)
-- Requiring branches to be up to date before merging
+- *Polling lag* — up to 5 min on staging, up to 10 min on production. Acceptable given that
+  both environments have explicit human promotion gates; nobody is watching a clock.
+- *Silent daemon failure* — if the daemon process dies, deployments stop without alerting.
+  Compose files must set `restart: unless-stopped` on the daemon service.
 
-Master is a stable, always-releasable pointer. It receives new commits through fast-forward-
-equivalent rebase merges only after the code has been UAT-approved on staging.
+**Rejected alternative — push-based SSH deploy from GHA:**
 
-### 4. Three-environment promotion path
+After image push a GHA job would SSH into the deployment host and run
+`docker compose pull && docker compose up -d`. Requires an SSH key stored in GHA secrets
+and an inbound firewall rule for GitHub runner IP ranges. Not adopted; firewall constraint
+is real.
+
+### 3. Three-environment promotion path
 
 ```
-feat/x branch
+feature branch
       │
-      │  agent: build-on-demand.yml → :sha-<hash> → test bed
-      │  agent: creates PR, runs ci-pr.yml gate
+      │  agent triggers build-on-demand.yml (workflow_dispatch)
+      │  waits on run ID via: gh run watch <run-id>
+      ▼
+  GHA builds both images from branch ref
+  pushes :sha-<hash> only (dead-end tag, cannot enter staging)
       │
-      ▼  git tag v1.2.3-rc1 (on branch)
-         build-rc.yml: builds both images
-         pushes :v1.2.3-rc1 (immutable) + :rc (mutable)
+      ▼
+  TEST BED  ← agent-managed, no daemon
+  agent deploys, tests, iterates
       │
-      ▼  STAGING ← CD daemon, CD_IMAGE_TAG=rc
-         auto-deploys on new :rc digest
-         user + agent perform UAT
-
-  ┌─ UAT issues → fix on feat/x, git tag v1.2.3-rc2, repeat ─┐
-  └───────────────────────────────────────────────────────────┘
-
-      │  UAT sign-off
-      ▼  PR approved, merged to master (rebase, linear history)
+      │  PR merged to master
+      ▼
+  GHA publish-master.yml builds from master, pushes :sha-<hash>
       │
-      ▼  git tag v1.2.3 (on master)
-         promote-release.yml: retags :rc → :v1.2.3 (no rebuild)
+      │  agent or human triggers promote-staging.yml (workflow_dispatch)
+      │  retags :sha-<hash> → :staging in GHCR (no rebuild)
+      ▼
+  STAGING  ← CD daemon, CD_IMAGE_TAG=staging
+  user + agent UAT
       │
-      ▼  PRODUCTION ← CD daemon, CD_IMAGE_TAG=v1.2.3
-         operator updates .env, daemon deploys
+      │  human: git tag v1.2.3 && git push --tags
+      ▼
+  GHA publish-master.yml (tag trigger) builds, pushes :v1.2.3
+      │
+      ▼
+  PRODUCTION  ← CD daemon, CD_IMAGE_TAG=v1.2.3
 ```
 
-**Test bed** — persistent, agent-managed. Agent triggers `build-on-demand.yml` via
-`gh workflow run`, waits on the run ID, deploys `:sha-<hash>` directly. No daemon.
+**Test bed** — persistent host, agent-managed. The agent triggers `build-on-demand.yml`
+via `gh workflow run`, waits synchronously on the run ID, then deploys the resulting
+`:sha-<hash>` image directly. Used for testing feature branches before they merge to master.
+No CD daemon runs here.
 
-**Staging** — persistent, CD daemon, `CD_IMAGE_TAG=rc`. Receives RC builds automatically
-when a `v*-rc*` tag is pushed to the feature branch. Used for user and agent UAT.
+**Staging** — persistent host, CD daemon, `CD_IMAGE_TAG=staging`. Receives builds that
+agents have validated on the test bed. Promotion from test bed to staging is an explicit
+action: running `promote-staging.yml` which retags an approved SHA as `:staging`. Used for
+user and agent UAT, and issue reproduction in a stable-enough environment.
 
-**Production** — persistent, CD daemon, `CD_IMAGE_TAG=v1.2.3`. Receives releases only
-after UAT sign-off. `CD_IMAGE_TAG` is updated manually by the operator per release.
+**Production** — persistent host, CD daemon, `CD_IMAGE_TAG=v1.2.3`. Promotion is a
+two-step human action: (1) push a `v*` git tag; (2) update `CD_IMAGE_TAG` in the production
+environment's config. Receives only human-approved release builds.
 
-### 5. RC-based promotion with bit-identical production image
+### 4. On-demand branch builds via workflow_dispatch
 
-**Trigger for staging deploy:** a `v*-rc*` tag pushed to the feature branch (not a merge to
-master). This is the key structural change from the original design.
+The agent triggers builds of arbitrary branches using `gh workflow run` against a new
+`build-on-demand.yml` workflow. The agent waits on the run ID synchronously rather than
+relying on webhook notifications.
 
-**Staging tracks `:rc` (mutable).** Every new RC tag updates `:rc` in GHCR. The staging
-daemon auto-deploys on digest change. Multiple RC iterations are expected during UAT; each
-one advances `:rc` to the latest tested build.
+This pattern keeps unverified branch code isolated from the promotion chain. A branch image
+can only enter staging via an explicit `promote-staging.yml` run — there is no automatic
+path from a branch build into staging or production.
 
-**Release promotion without rebuild (`promote-release.yml`):** when a `v*` (non-rc) tag is
-pushed on master after merge, the workflow pulls `:rc` by digest and pushes that same digest
-under `:v1.2.3`. It does not invoke `docker build`. This guarantees that production receives
-the exact image bits that were UAT-approved on staging.
+### 5. Image tagging strategy (`:latest` removed)
 
-**Why retag instead of rebuild:** rebuilding from the same source could theoretically produce
-a different image (base layer updates, pip dependency resolution). Retagging the `:rc` digest
-eliminates this risk entirely.
+| Tag | When pushed | Used by |
+|---|---|---|
+| `:sha-<hash>` | Every build (branch, master push, tag push) | Agent deploys to test bed explicitly |
+| `:staging` | When `promote-staging.yml` runs | Staging CD daemon |
+| `:v1.2.3` | When `v1.2.3` git tag is pushed | Production CD daemon |
 
-**Note on commit SHAs and fast-forward:** GitHub's rebase merge creates new commit SHAs even
-for identical code. The image identity guarantee is not provided by commit SHA matching — it
-is provided by operating on GHCR image digests in `promote-release.yml`.
-
-### 6. Image tagging strategy (`:latest` removed)
-
-| Tag | When pushed | Mutable | Tracked by |
-|---|---|---|---|
-| `:sha-<hash>` | Every `build-on-demand.yml` run | No | Agent (test bed) |
-| `:v1.2.3-rc1` | RC tag push on any branch | No | Audit trail |
-| `:rc` | RC tag push (always latest RC) | Yes | Staging CD daemon |
-| `:v1.2.3` | Release retag on master tag | No | Production CD daemon |
-
-`:latest` is not used. All promotion tags have unambiguous semantics and a clear owner.
+`:latest` is not used. It was ambiguous — "latest what?" — and created risk of accidental
+promotion. Every tag now has unambiguous semantics and a clear owner.
 
 ## Alternatives Considered
 
 ### Jenkins
 
-Rejected. No capability gap justifies the operational overhead.
+Rejected. See decision 1 above. No capability gap justifies the operational overhead.
 
 ### CD daemon on test bed
 
-Rejected. The test bed is for iterative agent testing. A polling daemon cannot deploy on
-demand or handle the rapid broken/fixed cycle that pre-UAT development involves.
-
-### Merge to master before UAT (original design)
-
-Rejected. In the original design, every master merge triggered an image build and auto-
-deployed to staging. This meant unverified code could reach staging and potentially
-production before any human had validated the behaviour. The RC-based flow inverts this:
-staging only receives explicitly tagged, deliberately promoted builds.
-
-### Staging tracks `:staging` (explicit promote step)
-
-Considered as an alternative to staging tracking `:rc`. With `:staging`, a human or agent
-would run `promote-staging.yml` to move a specific SHA to staging. Rejected because:
-- RC tagging already serves as the explicit promotion action
-- An additional promote step between test bed and staging adds friction without benefit
-- Agents will iterate through multiple RCs; automating the staging deploy on RC tag is
-  the right default
-
-### Rebuild at release time instead of retag
-
-Rejected. Rebuilding from the same source could produce a different image (base layer
-updates, non-deterministic pip resolution). Retagging the `:rc` digest guarantees
-production receives exactly what was tested.
+Rejected. The test bed is designed for agent-driven iterative testing. A polling daemon
+cannot deploy on demand, cannot choose which SHA to deploy, and cannot handle the rapid
+broken/fixed cycle that pre-UAT development involves. Agent-direct deployment is the right
+model for this environment.
 
 ### Watchtower (third-party pull-based daemon)
 
-Considered as a replacement for `src/cd/`. Loses the built-in rollback-on-failure logic,
-the Slack/Discord notification integration, and per-environment configurability. Not adopted.
+Considered as a replacement for `src/cd/`. Watchtower is a mature open-source container
+that monitors registries and redeploys. It would eliminate the custom daemon code but
+remove the built-in rollback-on-failure logic, the Slack/Discord notification integration,
+and the per-environment configurability. Not adopted; the existing daemon is retained.
 
 ### Push-based SSH deploy from GitHub Actions
 
-Rejected. Requires inbound SSH access from GitHub runner IPs. Firewall constraint is real.
+Rejected. See decision 2 above. Requires inbound SSH access from GitHub runner IPs.
+
+### Webhook notification from build-on-demand to agent
+
+Considered for `build-on-demand.yml`: post a Slack/Discord message when the build
+completes so the agent knows without polling. Rejected in favour of `gh run watch <run-id>`:
+synchronous polling on the run ID is simpler, doesn't require webhook URL configuration,
+and is already available via the `gh` CLI the agent holds.
 
 ### Kubernetes with image-update automation (Flux/ArgoCD)
 
-Not applicable. Single-host docker compose deployment.
+Not applicable. The project runs on a single host with docker compose. Kubernetes
+infrastructure would be disproportionate overhead.
 
 ## Consequences
 
 Positive:
 
-- `master` is always clean — it only receives UAT-approved code.
-- The production image is bit-identical to the image that ran on staging during UAT.
-- Staging gets RC builds automatically on tag push — no extra promotion step needed.
+- PRs are gated on tests; broken code cannot reach master.
 - Test bed is fast and flexible — agent deploys any SHA in seconds, no polling lag.
-- Multiple RC iterations are first-class — each new tag advances staging automatically.
-- Linear history on master makes git log clean and bisectable.
+- Staging only receives builds the agent has explicitly approved.
+- Production only receives human-tagged releases.
+- No new infrastructure to operate (no Jenkins server, no Kubernetes cluster).
+- `:latest` removal eliminates the ambiguity of what "latest" means across environments.
 
 Tradeoffs:
 
-- Operators must push two tags per release: the RC tag (on branch) and the release tag
-  (on master after merge). This is intentional — each is a deliberate human action.
-- GitHub's rebase merge does not guarantee commit SHA identity. Image identity is
-  guaranteed instead via digest-based retagging.
-- Staging always reflects the latest RC. If rc2 is pushed before rc1 UAT is complete,
-  staging moves to rc2. Document this as expected behaviour; avoid pushing new RCs while
-  UAT is actively in progress on the previous RC.
-- The CD daemon has polling lag (≤5 min staging, ≤10 min production). Acceptable because
-  both have explicit human promotion gates.
+- Staging and production deploys have polling lag (up to 5 and 10 min respectively).
+  This is acceptable because both have explicit promotion gates — speed is not the concern.
+- Agent must wait on `gh run watch` during on-demand builds (~minutes). The agent is
+  blocked during this time.
+- Two new GHA workflows are required (`build-on-demand.yml`, `promote-staging.yml`).
+  `publish-master.yml` needs a minor update to stop pushing `:latest`.
 
 ## Implementation Notes
 
-- `build-rc.yml` triggers on `v*-rc*` tags on any branch — not just master.
-- `promote-release.yml` triggers on `v*` non-rc tags on `master` only — prevents accidental
-  release promotion from feature branches.
-- `publish-master.yml` master-push trigger should be removed; master pushes no longer build
-  images. Only tag-triggered builds remain.
-- `promote-staging.yml` is not needed — staging promotion is automatic via `:rc` tag.
-- Branch protection on master: rebase-only, require up-to-date, require CI checks.
-- Production `CD_IMAGE_TAG` must always be a semver string, never `:rc`.
-- Implement `build-rc.yml` and `promote-release.yml` after this ADR is signed off.
+- Add branch protection rule on `master`: require `CI — PR Tests / pytest` and
+  `CI — PR Tests / Docker build check` status checks before merge.
+- Staging and production compose stacks must set `restart: unless-stopped` on the daemon.
+- Production `CD_IMAGE_TAG` must always be a semver string, never `:staging` or `:latest`.
+- `build-on-demand.yml` must push `:sha-<hash>` only — no promotion tags.
+- `promote-staging.yml` retags an existing image in GHCR — it does not rebuild.
+- Implement `build-on-demand.yml` and `promote-staging.yml` after this ADR is signed off.
