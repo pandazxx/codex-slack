@@ -102,13 +102,14 @@ def patch_global_config(body: ConfigPatch, request: Request) -> dict[str, str]:
 
 @workspace_router.get("", response_model=dict[str, str])
 def get_workspace_config(workspace_id: str, request: Request) -> dict[str, str]:
+    """Return workspace-specific overrides only (not merged with global config)."""
     conn = get_connection(request.app.state.db_path)
     try:
         if conn.execute(
             "SELECT 1 FROM workspaces WHERE id=?", (workspace_id,)
         ).fetchone() is None:
             raise HTTPException(404, "workspace not found")
-        return _merged_config(conn, workspace_id)
+        return _get_workspace_config_raw(conn, workspace_id)
     finally:
         conn.close()
 

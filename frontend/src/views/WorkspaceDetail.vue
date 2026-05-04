@@ -44,6 +44,37 @@
       </ul>
     </section>
 
+    <!-- ── Env Vars section ──────────────────────────────────────────── -->
+    <section v-if="!isArchived" class="envvars-section">
+      <div class="header-row">
+        <h2>Environment Variables</h2>
+      </div>
+      <p class="muted hint">Workspace-specific env var overrides injected into the agent container. These take precedence over global config. Changes trigger an automatic agent restart.</p>
+      <p class="warn hint">⚠ Values are stored as plain text. Treat this database file as a sensitive asset.</p>
+
+      <div class="config-add-form">
+        <input v-model="newEnvKey" placeholder="KEY" class="config-key-input" @keyup.enter="saveEnvVar" />
+        <input v-model="newEnvValue" placeholder="value" class="config-val-input" @keyup.enter="saveEnvVar" />
+        <button class="btn-primary" @click="saveEnvVar" :disabled="!newEnvKey.trim() || savingEnv">
+          {{ savingEnv ? 'Saving…' : 'Add / Update' }}
+        </button>
+      </div>
+
+      <p v-if="!Object.keys(workspaceEnv).length" class="muted">No workspace env vars set. Global config values are used.</p>
+      <table v-else class="config-table">
+        <thead>
+          <tr><th>Key</th><th>Value</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="(val, key) in workspaceEnv" :key="key">
+            <td><code>{{ key }}</code></td>
+            <td class="config-val">{{ isSensitiveKey(key) ? '••••••••' : val }}</td>
+            <td><button class="action-btn remove-btn" @click="deleteEnvVar(key)" :disabled="savingEnv">✕</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
     <!-- ── Staff section ─────────────────────────────────────────────── -->
     <section class="staffs-section">
       <div class="header-row">
@@ -148,6 +179,66 @@ const editingStaff = ref(null)
 const savingStaff = ref(false)
 const staffError = ref('')
 const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false })
+
+const workspaceEnv = ref({})
+const newEnvKey = ref('')
+const newEnvValue = ref('')
+const savingEnv = ref(false)
+
+const _SENSITIVE = ['API_KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'OAUTH']
+function isSensitiveKey(key) {
+  return _SENSITIVE.some(s => key.toUpperCase().includes(s))
+}
+
+async function loadWorkspaceEnv() {
+  const r = await fetch(`/api/workspaces/${id}/config`)
+  if (r.ok) workspaceEnv.value = await r.json()
+}
+
+async function saveEnvVar() {
+  const key = newEnvKey.value.trim()
+  if (!key) return
+  savingEnv.value = true
+  try {
+    await fetch(`/api/workspaces/${id}/config`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ set: { [key]: newEnvValue.value }, delete: [] }),
+    })
+    newEnvKey.value = ''
+    newEnvValue.value = ''
+    await loadWorkspaceEnv()
+    await triggerRestart()
+  } finally {
+    savingEnv.value = false
+  }
+}
+
+async function deleteEnvVar(key) {
+  if (!confirm(`Delete workspace env var "${key}"?`)) return
+  savingEnv.value = true
+  try {
+    await fetch(`/api/workspaces/${id}/config`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ set: {}, delete: [key] }),
+    })
+    await loadWorkspaceEnv()
+    await triggerRestart()
+  } finally {
+    savingEnv.value = false
+  }
+}
+
+async function triggerRestart() {
+  restarting.value = true
+  try {
+    await fetch(`/api/workspaces/${id}/restart-agent`, { method: 'POST' })
+    await fetchAgentStatus()
+  } finally {
+    restarting.value = false
+  }
+}
 
 const isArchived = computed(() => !!workspace.value?.archived_at)
 
@@ -314,7 +405,7 @@ async function deleteStaff(name) {
 onMounted(async () => {
   await load()
   if (!isArchived.value) {
-    await fetchAgentStatus()
+    await Promise.all([fetchAgentStatus(), loadWorkspaceEnv()])
     statusTimer = setInterval(fetchAgentStatus, 10000)
   }
 })
@@ -347,7 +438,16 @@ h2 { margin: 0; }
 .archived-link { font-size: 0.85em; color: #64748b; text-decoration: none; }
 .archived-link:hover { text-decoration: underline; color: #2563eb; }
 section { margin-bottom: 2rem; }
+.envvars-section { border-top: 1px solid #e2e8f0; padding-top: 1.5rem; }
 .staffs-section { border-top: 1px solid #e2e8f0; padding-top: 1.5rem; }
+.config-add-form { display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
+.config-key-input { width: 200px; padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
+.config-val-input { flex: 1; padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.9em; }
+.config-table { width: 100%; border-collapse: collapse; font-size: 0.9em; margin-top: 0.5rem; }
+.config-table th { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 2px solid #e2e8f0; color: #64748b; font-weight: 600; }
+.config-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; }
+.config-val { font-family: monospace; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warn { color: #92400e; background: #fef9c3; padding: 0.4rem 0.75rem; border-radius: 4px; }
 .create-form { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; }
 .create-form input { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; flex: 1; min-width: 120px; }
 .create-form button { padding: 0.4rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
