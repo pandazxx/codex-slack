@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from src.master.discord_app import _extract_attachment_urls
+from src.master.discord_app import _format_agent_command_detail
 from src.master.discord_app import build_discord_reply_plan
 from src.master.discord_app import parse_admin_message_command
 from src.master.discord_app import split_discord_message
@@ -109,6 +110,16 @@ def test_extract_attachment_urls_falls_back_to_primary_url_without_proxy() -> No
     urls = _extract_attachment_urls([Attachment("https://cdn.discordapp.com/attachments/original.png")])
 
     assert urls == ["https://cdn.discordapp.com/attachments/original.png"]
+
+
+def test_format_agent_command_detail_uses_discord_code_block() -> None:
+    text = _format_agent_command_detail("claude -n session -p --output-format json")
+
+    assert text == "**Agent command**\n```sh\nclaude -n session -p --output-format json\n```"
+
+
+def test_format_agent_command_detail_handles_missing_command() -> None:
+    assert _format_agent_command_detail(None) == "No agent command has been recorded for this message yet."
 
 
 def test_sync_registered_commands_copies_global_commands_to_admin_guild() -> None:

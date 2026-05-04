@@ -159,11 +159,15 @@ Discord:
 
 - Discord markdown constraints
 - interaction responses and message replies
+- routed prompt acknowledgements may include platform-native controls such as
+  the `Detail` button that shows the recorded agent command
 
 Invariant:
 
 - master returns logical result text
 - frontend adapter is responsible for final platform-safe emission
+- debug controls must read normalized master/router metadata and avoid changing
+  prompt routing semantics
 
 ## Command Interface Contract
 
@@ -207,6 +211,7 @@ For mapped non-admin channels:
 | Follow-up continuity | `thread_ts` | thread/reply IDs | Same tracked-thread semantics |
 | Attachment source | Slack file objects and private URLs | Discord attachment objects and CDN URLs | Same normalized attachment classes |
 | Reply transport | thread reply / command response | interaction response / reply | Same logical response payload |
+| Dispatch detail control | Not currently exposed | `Detail` button on routed-message acknowledgement | Reads the recorded command for the routed prompt |
 | Admin allowlist | `MASTER_ADMIN_CHANNELS` | `DISCORD_ADMIN_CHANNELS` | Same policy boundary |
 
 ## Implemented Difference Boundaries

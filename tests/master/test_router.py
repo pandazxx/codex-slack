@@ -19,6 +19,10 @@ from src.master.router import (
 class FakeDispatcher:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.command: str | None = "fake-agent-command"
+
+    def last_agent_command(self) -> str | None:
+        return self.command
 
     def send_prompt(
         self,
@@ -104,6 +108,30 @@ def test_route_prompt_includes_image_urls_and_tracks_usage(tmp_path) -> None:
     usage = router.usage_summary("payments-agent")
     assert usage[0]["prompt_count"] == 1
     assert usage[0]["image_count"] == 1
+
+
+def test_route_prompt_records_last_agent_command_for_detail_lookup(tmp_path) -> None:
+    registry = AgentRegistry(tmp_path / "agents.json")
+    _seed_registry(registry)
+    dispatcher = FakeDispatcher()
+    dispatcher.command = "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
+    router = ChannelRouter(registry=registry, dispatcher=dispatcher, admin_channels={"CADMIN"})
+
+    router.route_prompt(
+        channel_id="CAGENT",
+        text="<@U123> hello details",
+        thread_ts="1730000000.1234",
+        user_id="U123",
+    )
+
+    assert (
+        router.get_last_agent_command(
+            platform="slack",
+            channel_id="CAGENT",
+            thread_ts="1730000000.1234",
+        )
+        == "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
+    )
 
 
 def test_route_prompt_uses_recorded_claude_adapter(tmp_path) -> None:

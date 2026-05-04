@@ -123,6 +123,10 @@ class PodmanExecDispatcher:
     codex_home: str = "/workspace/home/.codex"
     slack_bot_token: str | None = None
     agent_prepare_callback: Callable[[str], None] | None = None
+    _last_agent_command: str | None = field(default=None, init=False, repr=False, compare=False)
+
+    def last_agent_command(self) -> str | None:
+        return self._last_agent_command
 
     @staticmethod
     def _clip(value: str, limit: int = 240) -> str:
@@ -268,6 +272,7 @@ class PodmanExecDispatcher:
         cmd.extend(["-e", f"AGENT_CHANNEL_ID={channel_id}"])
         cmd.extend(["-e", f"AGENT_ADAPTER={agent_adapter}"])
         cmd.extend([container_name, "sh", "-lc", rendered_command])
+        object.__setattr__(self, "_last_agent_command", rendered_command)
         LOGGER.info(
             "router.dispatch_start agent=%s container=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s codex_home=%s session_id=%s agent_command=%r",
             agent_name,
@@ -421,6 +426,10 @@ class PodmanExecDispatcher:
 class MultiAgentDispatcher:
     dispatchers: dict[str, AgentDispatcher]
     default_adapter: str = "codex"
+    _last_agent_command: str | None = field(default=None, init=False, repr=False, compare=False)
+
+    def last_agent_command(self) -> str | None:
+        return self._last_agent_command
 
     def send_prompt(
         self,
@@ -441,19 +450,23 @@ class MultiAgentDispatcher:
         dispatcher = self.dispatchers.get(selected) or self.dispatchers.get(self.default_adapter)
         if dispatcher is None:
             raise RouteError(f"unsupported agent adapter: {agent_adapter}")
-        return dispatcher.send_prompt(
-            agent_adapter=selected,
-            agent_name=agent_name,
-            container_name=container_name,
-            prompt=prompt,
-            platform=platform,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            user_id=user_id,
-            image_urls=image_urls,
-            claude_model=claude_model,
-            claude_subagent=claude_subagent,
-        )
+        try:
+            return dispatcher.send_prompt(
+                agent_adapter=selected,
+                agent_name=agent_name,
+                container_name=container_name,
+                prompt=prompt,
+                platform=platform,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                user_id=user_id,
+                image_urls=image_urls,
+                claude_model=claude_model,
+                claude_subagent=claude_subagent,
+            )
+        finally:
+            last_command = getattr(dispatcher, "last_agent_command", lambda: None)()
+            object.__setattr__(self, "_last_agent_command", last_command)
 
 
 @dataclass(frozen=True)
@@ -562,6 +575,7 @@ class ClaudeCodeDispatcher(PodmanExecDispatcher):
         cmd.extend(["-e", f"AGENT_CHANNEL_ID={channel_id}"])
         cmd.extend(["-e", f"AGENT_ADAPTER={agent_adapter}"])
         cmd.extend([container_name, "sh", "-lc", rendered_command])
+        object.__setattr__(self, "_last_agent_command", rendered_command)
         LOGGER.info(
             "router.dispatch_start agent=%s container=%s platform=%s channel=%s thread_ts=%s user=%s prompt_chars=%d workdir=%s claude_action=%s agent_command=%r",
             agent_name,
@@ -828,6 +842,7 @@ class ChannelRouter:
     _tracked_threads: set[str] = field(default_factory=set, init=False, repr=False)
     _recent_mention_events: set[str] = field(default_factory=set, init=False, repr=False)
     _usage_by_agent: dict[str, dict[str, float]] = field(default_factory=dict, init=False, repr=False)
+    _last_agent_commands: dict[str, str] = field(default_factory=dict, init=False, repr=False)
     _state_lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -847,6 +862,20 @@ class ChannelRouter:
 
     def _legacy_event_key(self, channel_id: str, ts: str) -> str:
         return f"{channel_id}:{ts}"
+
+    def _command_key(self, platform: str, channel_id: str, thread_ts: str | None) -> str:
+        return f"{platform}:{channel_id}:{thread_ts or '-'}"
+
+    def get_last_agent_command(self, *, platform: str = "slack", channel_id: str, thread_ts: str | None) -> str | None:
+        with self._state_lock:
+            return self._last_agent_commands.get(self._command_key(platform, channel_id, thread_ts))
+
+    def _remember_last_agent_command(self, *, platform: str, channel_id: str, thread_ts: str | None) -> None:
+        last_command = getattr(self.dispatcher, "last_agent_command", lambda: None)()
+        if not last_command:
+            return
+        with self._state_lock:
+            self._last_agent_commands[self._command_key(platform, channel_id, thread_ts)] = str(last_command)
 
     def track_thread(self, channel_id: str, thread_ts: str | None, platform: str = "slack") -> None:
         if not thread_ts:
@@ -909,19 +938,22 @@ class ChannelRouter:
             raise RouteSkip("prompt is empty after removing mention")
 
         started_at = time.perf_counter()
-        response = self.dispatcher.send_prompt(
-            agent_adapter=record.agent_adapter,
-            agent_name=record.name,
-            container_name=record.container_name,
-            prompt=prompt,
-            platform=platform,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            user_id=user_id,
-            image_urls=image_urls,
-            claude_model=record.claude_model,
-            claude_subagent=record.claude_subagent,
-        )
+        try:
+            response = self.dispatcher.send_prompt(
+                agent_adapter=record.agent_adapter,
+                agent_name=record.name,
+                container_name=record.container_name,
+                prompt=prompt,
+                platform=platform,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                user_id=user_id,
+                image_urls=image_urls,
+                claude_model=record.claude_model,
+                claude_subagent=record.claude_subagent,
+            )
+        finally:
+            self._remember_last_agent_command(platform=platform, channel_id=channel_id, thread_ts=thread_ts)
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         self._record_usage(
             agent_name=record.name,

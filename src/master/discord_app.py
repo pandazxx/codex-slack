@@ -213,6 +213,13 @@ def _make_file(text: str, filename: str = "response.md"):  # type: ignore[no-unt
     return io.BytesIO(text.encode("utf-8")), filename
 
 
+def _format_agent_command_detail(command: str | None) -> str:
+    if not command:
+        return "No agent command has been recorded for this message yet."
+    escaped = command.replace("```", "`\\`\\`")
+    return f"**Agent command**\n```sh\n{escaped}\n```"
+
+
 
 async def sync_registered_commands(*, tree, client, admin_channels: set[str], discord_module) -> None:  # type: ignore[no-untyped-def]
     guild_ids: set[int] = set()
@@ -329,6 +336,22 @@ def run_discord_frontend(
                 await thread.send(chunk)
         for idx, buf in enumerate(mermaid_buffers, start=1):
             await thread.send(file=discord.File(buf, filename=f"diagram-{idx}.png"))
+
+    def _agent_detail_view(*, channel_id: str, thread_ts: str | None):  # type: ignore[no-untyped-def]
+        class AgentCommandDetailView(discord.ui.View):  # type: ignore[misc]
+            def __init__(self) -> None:
+                super().__init__(timeout=3600)
+
+            @discord.ui.button(label="Detail", style=discord.ButtonStyle.secondary)
+            async def detail(self, interaction, button) -> None:  # type: ignore[no-untyped-def]
+                command = router.get_last_agent_command(
+                    platform="discord",
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                )
+                await interaction.response.send_message(_format_agent_command_detail(command), ephemeral=True)
+
+        return AgentCommandDetailView()
 
     def _run_command(
         *,
@@ -461,6 +484,7 @@ def run_discord_frontend(
                     auto_archive_duration=1440,
                 )
                 thread_ts = str(thread.id)
+                await ack_msg.edit(view=_agent_detail_view(channel_id=channel_id, thread_ts=thread_ts))
                 async with thread.typing():
                     with in_flight_dispatch():
                         response = await asyncio.to_thread(
@@ -479,7 +503,11 @@ def run_discord_frontend(
             if is_mention and is_thread:
                 # Mention inside an existing thread — re-track and respond in thread.
                 say_text = format_forward_ack(text=text, image_count=len(image_urls))
-                await message.reply(say_text, mention_author=False)
+                await message.reply(
+                    say_text,
+                    mention_author=False,
+                    view=_agent_detail_view(channel_id=channel_id, thread_ts=thread_ts),
+                )
                 async with message.channel.typing():
                     with in_flight_dispatch():
                         response = await asyncio.to_thread(
@@ -510,7 +538,11 @@ def run_discord_frontend(
             )
             if not accepted:
                 return
-            await _reply_message_chunks(message, format_forward_ack(text=text, image_count=len(image_urls)))
+            await message.reply(
+                format_forward_ack(text=text, image_count=len(image_urls)),
+                mention_author=False,
+                view=_agent_detail_view(channel_id=channel_id, thread_ts=thread_ts),
+            )
             async with message.channel.typing():
                 with in_flight_dispatch():
                     routed = await asyncio.to_thread(
