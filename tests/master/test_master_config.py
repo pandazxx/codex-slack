@@ -5,119 +5,100 @@ import pytest
 from src.master.config import load_master_settings
 
 
-def test_load_master_settings(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("MASTER_FRONTENDS", "slack,discord")
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
-    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "discord-token")
-    monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123,C999")
-    monkeypatch.setenv("DISCORD_ADMIN_CHANNELS", "123456789012345678")
-    monkeypatch.setenv("MASTER_REGISTRY_PATH", "data/master/test.json")
-    monkeypatch.setenv("MASTER_THREAD_STATE_PATH", "data/master/thread-state.json")
+def test_load_master_settings_defaults(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+
+    settings = load_master_settings()
+
+    assert settings.data_dir == str(tmp_path)
+    assert settings.dry_run is False
+    assert settings.container_runtime == "docker"
+    assert settings.mqtt_host == "mosquitto"
+    assert settings.mqtt_port == 1883
+    assert settings.master_port == 8080
+    assert settings.master_url == "http://master:8080"
+    assert settings.agent_idle_timeout_seconds == 3600
+    assert settings.agent_auth_refresh_interval_seconds == 43200
+    assert settings.attachment_max_size_mb == 20
+    assert settings.attachment_max_size_bytes == 20 * 1024 * 1024
+
+
+def test_load_master_settings_explicit_values(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
     monkeypatch.setenv("MASTER_DRY_RUN", "true")
-    monkeypatch.setenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-v1-uat")
-    monkeypatch.setenv("MASTER_CODEX_AUTH_JSON_PATH", "/host/secrets/codex-auth.json")
-    monkeypatch.setenv("MASTER_CODEX_CONFIG_DIR_PATH", "/host/config/codex")
-    monkeypatch.setenv("MASTER_CLAUDE_CONFIG_DIR_PATH", "/host/config/claude")
-    monkeypatch.setenv("MASTER_SSH_AUTH_SOCK_PATH", "/run/user/1000/keyring/ssh")
-    monkeypatch.setenv("MASTER_SSH_KNOWN_HOSTS_PATH", "/home/tester/.ssh/known_hosts")
-    monkeypatch.setenv("MASTER_GIT_USER_NAME", "Test User")
-    monkeypatch.setenv("MASTER_GIT_USER_EMAIL", "test@example.com")
-    monkeypatch.setenv("MASTER_AGENT_COMMAND_TEMPLATE", "codex exec resume abc -")
-    monkeypatch.setenv("MASTER_CLAUDE_COMMAND_TEMPLATE", "claude --print -")
-    monkeypatch.setenv("MASTER_DEFAULT_AGENT_ADAPTER", "claude-code")
-    monkeypatch.setenv("MASTER_AGENT_TIMEOUT_SECONDS", "30")
-    monkeypatch.setenv("MASTER_AGENT_AUTH_REFRESH_MAX_AGE_DAYS", "14")
-    monkeypatch.setenv("MASTER_COMMAND_RATE_LIMIT_COUNT", "10")
-    monkeypatch.setenv("MASTER_COMMAND_RATE_LIMIT_WINDOW_SECONDS", "45")
+    monkeypatch.setenv("MASTER_AGENT_BASE_IMAGE", "my-image:latest")
+    monkeypatch.setenv("MASTER_AGENT_NETWORK", "mynet")
+    monkeypatch.setenv("MQTT_HOST", "broker.local")
+    monkeypatch.setenv("MQTT_PORT", "1884")
+    monkeypatch.setenv("MASTER_PORT", "9090")
+    monkeypatch.setenv("MASTER_URL", "http://mymaster:9090")
+    monkeypatch.setenv("MASTER_SSH_AUTH_SOCK_PATH", "/run/ssh.sock")
+    monkeypatch.setenv("MASTER_SSH_KNOWN_HOSTS_PATH", "/etc/ssh/known_hosts")
+    monkeypatch.setenv("GH_TOKEN", "ghp_token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-key")
+    monkeypatch.setenv("AGENT_IDLE_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("AGENT_AUTH_REFRESH_INTERVAL_SECONDS", "7200")
+    monkeypatch.setenv("ATTACHMENT_MAX_SIZE_MB", "50")
 
     settings = load_master_settings()
-    assert settings.frontends == {"slack", "discord"}
-    assert settings.slack_bot_token == "xoxb-token"
-    assert settings.slack_app_token == "xapp-token"
-    assert settings.discord_bot_token == "discord-token"
-    assert settings.admin_channels == {"C123", "C999"}
-    assert settings.discord_admin_channels == {"123456789012345678"}
-    assert settings.registry_path == "data/master/test.json"
-    assert settings.thread_state_path == "data/master/thread-state.json"
+
     assert settings.dry_run is True
-    assert settings.agent_base_image == "codex-slack-v1-uat"
-    assert settings.agent_codex_auth_json_path == "/host/secrets/codex-auth.json"
-    assert settings.agent_codex_config_dir_path == "/host/config/codex"
-    assert settings.agent_claude_config_dir_path == "/host/config/claude"
-    assert settings.agent_ssh_auth_sock_path == "/run/user/1000/keyring/ssh"
-    assert settings.agent_ssh_known_hosts_path == "/home/tester/.ssh/known_hosts"
-    assert settings.git_user_name == "Test User"
-    assert settings.git_user_email == "test@example.com"
-    assert settings.codex_command_template == "codex exec resume abc -"
-    assert settings.claude_command_template == "claude --print -"
-    assert settings.default_agent_adapter == "claude-code"
-    assert settings.dispatch_timeout_seconds == 30
-    assert settings.auth_refresh_max_age_days == 14
-    assert settings.command_rate_limit_count == 10
-    assert settings.command_rate_limit_window_seconds == 45
+    assert settings.agent_base_image == "my-image:latest"
+    assert settings.agent_network == "mynet"
+    assert settings.mqtt_host == "broker.local"
+    assert settings.mqtt_port == 1884
+    assert settings.master_port == 9090
+    assert settings.master_url == "http://mymaster:9090"
+    assert settings.agent_ssh_auth_sock_path == "/run/ssh.sock"
+    assert settings.agent_ssh_known_hosts_path == "/etc/ssh/known_hosts"
+    assert settings.gh_token == "ghp_token"
+    assert settings.anthropic_api_key == "sk-ant-key"
+    assert settings.agent_idle_timeout_seconds == 1800
+    assert settings.agent_auth_refresh_interval_seconds == 7200
+    assert settings.attachment_max_size_mb == 50
 
 
-def test_load_master_settings_requires_admin_channels(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("MASTER_FRONTENDS", "slack")
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
-    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
-    monkeypatch.delenv("MASTER_ADMIN_CHANNELS", raising=False)
+def test_load_master_settings_rejects_unknown_runtime(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTAINER_RUNTIME", "kubernetes")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="CONTAINER_RUNTIME"):
         load_master_settings()
 
 
-def test_load_master_settings_uses_session_aware_default_template(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("MASTER_FRONTENDS", "slack")
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
-    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
-    monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123")
-    monkeypatch.delenv("MASTER_AGENT_COMMAND_TEMPLATE", raising=False)
+def test_load_master_settings_empty_optionals_become_none(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+    monkeypatch.delenv("MASTER_SSH_AUTH_SOCK_PATH", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
 
     settings = load_master_settings()
 
-    assert settings.thread_state_path == "data/master/thread_state.json"
-    assert settings.codex_command_template == "codex exec --dangerously-bypass-approvals-and-sandbox resume --last -"
-    assert settings.claude_command_template == "claude -p --output-format json --dangerously-skip-permissions"
-    assert settings.default_agent_adapter == "codex"
-    assert settings.auth_refresh_max_age_days == 2
+    assert settings.agent_ssh_auth_sock_path is None
+    assert settings.gh_token is None
+    assert settings.anthropic_api_key is None
+    assert settings.claude_code_oauth_token is None
 
 
-def test_load_master_settings_rejects_unknown_default_agent_adapter(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("MASTER_FRONTENDS", "slack")
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
-    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
-    monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123")
-    monkeypatch.setenv("MASTER_DEFAULT_AGENT_ADAPTER", "unknown")
-
-    with pytest.raises(ValueError, match="MASTER_DEFAULT_AGENT_ADAPTER"):
-        load_master_settings()
-
-
-def test_load_master_settings_auto_detects_project_config_dirs(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    project_dir = tmp_path / "project"
-    (project_dir / "config" / "codex-global").mkdir(parents=True)
-    (project_dir / "config" / "claude-global").mkdir(parents=True)
-
-    monkeypatch.setenv("MASTER_FRONTENDS", "slack")
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
-    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-token")
-    monkeypatch.setenv("MASTER_ADMIN_CHANNELS", "C123")
-    monkeypatch.setenv("MASTER_PROJECT_DIR", str(project_dir))
-    monkeypatch.delenv("MASTER_CODEX_CONFIG_DIR_PATH", raising=False)
-    monkeypatch.delenv("MASTER_CLAUDE_CONFIG_DIR_PATH", raising=False)
+def test_effective_attachment_data_dir_default(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+    monkeypatch.delenv("ATTACHMENT_DATA_DIR", raising=False)
 
     settings = load_master_settings()
 
-    assert settings.agent_codex_config_dir_path == str(project_dir / "config" / "codex-global")
-    assert settings.agent_claude_config_dir_path == str(project_dir / "config" / "claude-global")
+    assert settings.effective_attachment_data_dir() == f"{tmp_path}/attachments"
 
 
-def test_load_master_settings_discord_frontend_requires_discord_fields(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("MASTER_FRONTENDS", "discord")
-    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("DISCORD_ADMIN_CHANNELS", raising=False)
+def test_effective_attachment_data_dir_override(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+    monkeypatch.setenv("ATTACHMENT_DATA_DIR", "/mnt/uploads")
 
-    with pytest.raises(ValueError, match="DISCORD_BOT_TOKEN"):
-        load_master_settings()
+    settings = load_master_settings()
+
+    assert settings.effective_attachment_data_dir() == "/mnt/uploads"
