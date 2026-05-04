@@ -1,6 +1,6 @@
 # 0010 Workspace-level environment variable overrides
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-05-04
 - Supersedes: none
 - Builds on: [0009 Runtime Configuration and Staff System](0009-runtime-configuration-and-staff-system.md)
