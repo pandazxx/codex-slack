@@ -57,7 +57,7 @@ if [[ -d "/opt/codex-slack/config/claude-global" ]]; then
   mkdir -p "${CLAUDE_HOME}"
   CLAUDE_CONFIG_SOURCE="/opt/codex-slack/config/claude-global"
   entrypoint_log "claude_config source=baked_in path=${CLAUDE_CONFIG_SOURCE} entries=$(count_entries "${CLAUDE_CONFIG_SOURCE}") claude_md=$([[ -f "${CLAUDE_CONFIG_SOURCE}/CLAUDE.md" ]] && echo true || echo false) settings_json=$([[ -f "${CLAUDE_CONFIG_SOURCE}/settings.json" ]] && echo true || echo false)"
-  cp -af /opt/codex-slack/config/claude-global/. "${CLAUDE_HOME}/"
+  cp -af /opt/codex-slack/config/claude-global/. "${CLAUDE_HOME}/" || entrypoint_log "claude_config_copy_failed path=${CLAUDE_HOME} reason=permission_denied"
 else
   entrypoint_log "claude_config source=none baked_in_exists=$([[ -d "/opt/codex-slack/config/claude-global" ]] && echo true || echo false)"
 fi
