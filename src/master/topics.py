@@ -39,6 +39,7 @@ def _workspace_exists_any(conn, workspace_id: str) -> bool:
 class TopicCreate(BaseModel):
     subject: str
     branch_name: str | None = None
+    repo_ref: str | None = None
 
 
 class TopicOut(BaseModel):
@@ -46,6 +47,7 @@ class TopicOut(BaseModel):
     workspace_id: str
     subject: str
     branch_name: str
+    repo_ref: str | None
     worktree_path: str
     created_at: str
     archived_at: str | None
@@ -57,6 +59,7 @@ def _row_to_topic(row) -> TopicOut:
         workspace_id=row["workspace_id"],
         subject=row["subject"],
         branch_name=row["branch_name"],
+        repo_ref=row["repo_ref"],
         worktree_path=row["worktree_path"],
         created_at=row["created_at"],
         archived_at=row["archived_at"],
@@ -71,12 +74,13 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
             raise HTTPException(status_code=404, detail="workspace not found")
         topic_id = str(uuid.uuid4())
         branch_name = (body.branch_name or _slugify(body.subject)).strip()
+        repo_ref = body.repo_ref.strip() if body.repo_ref else None
         worktree_path = f"/workspace/worktrees/{topic_id}"
         now = _now()
         conn.execute(
-            "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (topic_id, workspace_id, body.subject.strip(), branch_name, worktree_path, now),
+            "INSERT INTO topics (id, workspace_id, subject, branch_name, repo_ref, worktree_path, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (topic_id, workspace_id, body.subject.strip(), branch_name, repo_ref, worktree_path, now),
         )
         conn.commit()
         row = conn.execute(

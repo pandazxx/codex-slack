@@ -25,6 +25,36 @@
       </div>
       <form v-if="!isArchived" @submit.prevent="createTopic" class="create-form">
         <input v-model="subject" placeholder="Topic subject" required />
+
+        <div class="branch-picker" ref="branchPickerEl">
+          <div class="branch-input-wrap">
+            <input
+              v-model="branchFilter"
+              @input="onBranchInput"
+              @focus="branchDropdownOpen = true"
+              @blur="scheduleBranchClose"
+              placeholder="Branch (optional)"
+              autocomplete="off"
+              class="branch-input"
+              :title="selectedBranch ? `Base branch: ${selectedBranch}` : 'Select a base branch'"
+            />
+            <button v-if="selectedBranch" type="button" class="branch-clear" @mousedown.prevent="clearBranch" title="Clear branch">×</button>
+            <span class="branch-caret" @mousedown.prevent="toggleBranchDropdown">▾</span>
+          </div>
+          <ul v-if="branchDropdownOpen" class="branch-dropdown">
+            <li v-if="branchesLoading" class="branch-hint">Loading…</li>
+            <li v-else-if="!filteredBranches.length" class="branch-hint">No branches found</li>
+            <template v-else>
+              <li
+                v-for="b in filteredBranches"
+                :key="b"
+                @mousedown.prevent="selectBranch(b)"
+                :class="{ 'branch-selected': b === selectedBranch }"
+              >{{ b }}</li>
+            </template>
+          </ul>
+        </div>
+
         <button type="submit" :disabled="creating">
           {{ creating ? 'Creating…' : 'New Topic' }}
         </button>
@@ -38,6 +68,7 @@
           <span class="topic-row">
             <RouterLink :to="`/workspaces/${id}/topics/${t.id}`">{{ t.subject }}</RouterLink>
             <span class="muted small"> — branch: {{ t.branch_name }}</span>
+            <span v-if="t.repo_ref" class="repo-ref-badge">{{ t.repo_ref }}</span>
           </span>
           <button v-if="!isArchived" class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Archive topic">Archive</button>
         </li>
@@ -149,6 +180,19 @@ const subject = ref('')
 const agentStatus = ref(null)
 let statusTimer = null
 
+const branches = ref([])
+const branchesLoading = ref(false)
+const branchFilter = ref('')
+const selectedBranch = ref('')
+const branchDropdownOpen = ref(false)
+let branchCloseTimer = null
+
+const filteredBranches = computed(() => {
+  const q = branchFilter.value.toLowerCase()
+  if (!q || q === selectedBranch.value.toLowerCase()) return branches.value
+  return branches.value.filter(b => b.toLowerCase().includes(q))
+})
+
 const refreshing = ref(false)
 const restarting = ref(false)
 const envPanel = ref(null)
@@ -216,6 +260,40 @@ async function fetchAgentStatus() {
   } catch { /* ignore */ }
 }
 
+async function fetchBranches() {
+  branchesLoading.value = true
+  try {
+    const r = await fetch(`/api/workspaces/${id}/branches`)
+    if (r.ok) branches.value = await r.json()
+  } catch { /* ignore */ } finally {
+    branchesLoading.value = false
+  }
+}
+
+function onBranchInput() {
+  if (branchFilter.value !== selectedBranch.value) selectedBranch.value = ''
+  branchDropdownOpen.value = true
+}
+
+function selectBranch(b) {
+  selectedBranch.value = b
+  branchFilter.value = b
+  branchDropdownOpen.value = false
+}
+
+function clearBranch() {
+  selectedBranch.value = ''
+  branchFilter.value = ''
+}
+
+function toggleBranchDropdown() {
+  branchDropdownOpen.value = !branchDropdownOpen.value
+}
+
+function scheduleBranchClose() {
+  branchCloseTimer = setTimeout(() => { branchDropdownOpen.value = false }, 150)
+}
+
 async function load() {
   loading.value = true
   try {
@@ -240,7 +318,10 @@ async function createTopic() {
     const r = await fetch(`/api/workspaces/${id}/topics`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subject: subject.value }),
+      body: JSON.stringify({
+        subject: subject.value,
+        repo_ref: selectedBranch.value || null,
+      }),
     })
     if (!r.ok) {
       const err = await r.json()
@@ -248,6 +329,7 @@ async function createTopic() {
       return
     }
     subject.value = ''
+    clearBranch()
     await load()
   } finally {
     creating.value = false
@@ -327,6 +409,7 @@ async function deleteStaff(name) {
 onMounted(async () => {
   await load()
   if (!isArchived.value) {
+    fetchBranches()
     await fetchAgentStatus()
     statusTimer = setInterval(fetchAgentStatus, 10000)
   }
@@ -334,6 +417,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer)
+  if (branchCloseTimer) clearTimeout(branchCloseTimer)
 })
 </script>
 
@@ -401,4 +485,19 @@ section { margin-bottom: 2rem; }
 .small { font-size: 0.82em; }
 .remove-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.9em; padding: 0.15rem 0.4rem; border-radius: 3px; }
 .remove-btn:hover { background: #fee2e2; color: #dc2626; }
+
+.branch-picker { position: relative; min-width: 180px; flex: 1; max-width: 260px; }
+.branch-input-wrap { display: flex; align-items: center; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; overflow: visible; }
+.branch-input { flex: 1; padding: 0.4rem 0.5rem; border: none; outline: none; font-size: 0.9em; background: transparent; min-width: 0; }
+.branch-clear { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 1em; padding: 0 0.3rem; line-height: 1; }
+.branch-clear:hover { color: #dc2626; }
+.branch-caret { padding: 0 0.4rem; color: #64748b; cursor: pointer; font-size: 0.75em; user-select: none; }
+.branch-caret:hover { color: #1e293b; }
+.branch-dropdown { position: absolute; top: calc(100% + 2px); left: 0; right: 0; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,.1); max-height: 220px; overflow-y: auto; z-index: 100; list-style: none; padding: 0.25rem 0; margin: 0; }
+.branch-dropdown li { padding: 0.35rem 0.75rem; cursor: pointer; font-size: 0.88em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.branch-dropdown li:hover { background: #f1f5f9; }
+.branch-dropdown li.branch-selected { background: #eff6ff; color: #2563eb; font-weight: 500; }
+.branch-hint { color: #94a3b8; cursor: default !important; font-size: 0.85em; }
+.branch-hint:hover { background: none !important; }
+.repo-ref-badge { background: #dbeafe; color: #1d4ed8; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 500; margin-left: 0.25rem; }
 </style>
