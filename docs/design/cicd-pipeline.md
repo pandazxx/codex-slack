@@ -8,8 +8,8 @@
 ## Context
 
 This document describes the end-to-end CI/CD pipeline for the codex-slack project: what
-triggers it, what it builds, how images are promoted across environments, and why the CD
-daemon pattern was chosen over alternatives.
+triggers it, what it builds, how images are promoted across environments, and the rationale
+for each design choice.
 
 The project produces two Docker images:
 
@@ -18,8 +18,19 @@ The project produces two Docker images:
 | `ghcr.io/<org>/codex-slack-master` | Master orchestrator + single-session bot |
 | `ghcr.io/<org>/codex-slack-agent-minimal` | Lean agent worker spawned by master |
 
-Both images are deployed to three environments: test bed (ephemeral, CI), staging
-(persistent, `latest`), and production (persistent, pinned semver).
+Both images are deployed to three persistent environments with distinct purposes and
+different deployment models:
+
+| Environment | Purpose | Managed by |
+|---|---|---|
+| **Test bed** | Agent development testing and pre-UAT troubleshooting | LLM agent (direct) |
+| **Staging** | User and agent UAT; issue reproduction | CD daemon (tracks `:rc`) |
+| **Production** | Stable working environment for real users | CD daemon (tracks `:v1.2.3`) |
+
+**Core invariant:** code is never merged to `master` before UAT sign-off. The feature
+branch is built, tested on staging, and UAT-approved before the PR is merged. The image
+deployed to production is the exact same image (same bits) that ran on staging during UAT
+— guaranteed by retagging rather than rebuilding.
 
 ---
 
@@ -45,226 +56,241 @@ sufficient.
 ## Pipeline overview
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  Developer pushes commits to a PR branch                         │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │  ci-pr.yml          │  ← GitHub Actions (GHA runner)
-                    │  1. pytest          │
-                    │  2. docker build    │
-                    │     (no push)       │
-                    └──────────┬──────────┘
-                               │ all jobs green?
-                    ┌──────────▼──────────┐
-                    │  PR can be merged   │  ← branch protection gate
-                    └──────────┬──────────┘
-                               │ human merges to master
-          ┌────────────────────▼────────────────────┐
-          │  publish-master.yml                      │  ← GHA runner
-          │  publish-agent-minimal.yml               │
-          │  Build both images                       │
-          │  Push :latest + :sha-<hash> to GHCR      │
-          └────────────────────┬────────────────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │  STAGING            │  ← persistent host
-                    │  CD daemon polls    │
-                    │  GHCR every 5 min   │
-                    │  Detects new digest │
-                    │  docker compose up  │
-                    └──────────┬──────────┘
-                               │ human smoke-tests staging
-                               │ decides it's ready
-                    ┌──────────▼──────────┐
-                    │  git tag v1.2.3     │  ← human action
-                    │  git push --tags    │
-                    └──────────┬──────────┘
-                               │
-          ┌────────────────────▼────────────────────┐
-          │  publish-master.yml (tag trigger)        │  ← GHA runner
-          │  publish-agent-minimal.yml               │
-          │  Build both images                       │
-          │  Push :v1.2.3 + :sha-<hash> to GHCR      │
-          └────────────────────┬────────────────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │  PRODUCTION         │  ← persistent host
-                    │  CD daemon config:  │
-                    │  CD_IMAGE_TAG=v1.2.3│
-                    │  Detects new digest │
-                    │  docker compose up  │
-                    └─────────────────────┘
+feat/x branch (never merged until UAT sign-off)
+      │
+      │  1. Agent develops on feature branch
+      │
+      ▼  2. Agent: gh workflow run build-on-demand.yml --ref feat/x
+         GHA builds both images from feat/x, pushes :sha-<hash>
+         Agent waits on run ID, deploys to test bed, iterates
+      │
+      ▼  3. Agent creates PR: feat/x → master
+         GHA ci-pr.yml: pytest + docker build gate
+      │
+      ▼  4. Agent or human: git tag v1.2.3-rc1 && git push --tags
+         (tag is on the BRANCH, not master)
+      │
+      ▼  5. GHA build-rc.yml triggers on v*-rc* tag
+         builds both images from v1.2.3-rc1 commit
+         pushes :v1.2.3-rc1 (immutable) + :rc (mutable, latest RC)
+      │
+      ▼  6. STAGING  ← CD daemon, CD_IMAGE_TAG=rc
+         detects new :rc digest, deploys automatically
+         notifies: "RC v1.2.3-rc1 deployed to staging"
+      │
+      ▼  7. User performs UAT on staging
+
+  ┌── issues found ──────────────────────────────────────────────────┐
+  │   back to step 1                                                 │
+  │   agent fixes on feat/x, commits                                │
+  │   git tag v1.2.3-rc2 && git push --tags                        │
+  │   repeat from step 5 (new :rc deployed to staging)              │
+  └──────────────────────────────────────────────────────────────────┘
+
+      │  8. UAT sign-off
+      │
+      ▼  9. PR approved, merged to master
+         Linear history only (rebase merge, branch must be up to date)
+         master receives the exact tested commits
+      │
+      ▼  10. Human: git tag v1.2.3 && git push --tags (on master)
+          GHA promote-release.yml triggers on v* (non-rc) tags on master
+          retags :rc → :v1.2.3 in GHCR  ← no rebuild
+          same image bits that ran on staging during UAT
+      │
+      ▼  11. Operator updates production .env: CD_IMAGE_TAG=v1.2.3
+          PRODUCTION  ← CD daemon, CD_IMAGE_TAG=v1.2.3
+          detects new :v1.2.3 digest, deploys
 ```
 
 ---
 
 ## Trigger rules
 
-| Git event | Workflow triggered | Effect |
+| Trigger | Workflow | What it does |
 |---|---|---|
-| Commit pushed to a PR branch | `ci-pr.yml` | Run pytest + docker build (no push) |
-| Merge to `master` | `publish-master.yml`, `publish-agent-minimal.yml` | Build + push `:latest` + `:sha-<hash>` |
-| Push `v*` tag | `publish-master.yml`, `publish-agent-minimal.yml` | Build + push `:v1.2.3` + `:sha-<hash>` |
-| Manual trigger | Any of the above via workflow_dispatch | On-demand build/publish |
+| Commit pushed to any PR branch | `ci-pr.yml` | Run pytest + docker build (no push) — merge gate |
+| Agent/human triggers manually | `build-on-demand.yml` | Build from any ref, push `:sha-<hash>` only |
+| `v*-rc*` tag pushed (any branch) | `build-rc.yml` | Build RC images, push `:v1.2.3-rc1` + `:rc` |
+| `v*` non-rc tag pushed on `master` | `promote-release.yml` | Retag `:rc` → `:v1.2.3` in GHCR (no rebuild) |
 
-Path filters ensure workflows only run when relevant files change (src/, requirements.txt,
-Dockerfiles, etc.) — unrelated file changes (docs, config) do not trigger image builds.
+**What no longer triggers a build:** pushing to `master`. Master is a stable pointer;
+images are built from feature branch RC tags, not from master merges.
 
 ---
 
 ## Environments
 
-### Test bed (ephemeral, CI)
+### Test bed (persistent, agent-managed)
 
-- **Where:** inside the GitHub Actions runner VM — no persistent host
-- **Lifetime:** exists only for the duration of one workflow job
-- **Trigger:** every commit pushed to a PR branch
-- **What runs:**
-  - `pytest --tb=short -q` against the full test suite
-  - `docker build` for both images (master and agent-minimal), no push
-  - smoke test of the agent-minimal runtime contract (`codex`, `claude`, `gh`, `--help`)
-- **Gate:** PR cannot be merged to master until these jobs pass (GitHub branch protection)
+- **Where:** persistent host — co-located with the master orchestrator is sufficient
+- **Purpose:** agent development testing and pre-UAT troubleshooting. May run broken or
+  experimental builds; never exposed to end users
+- **Managed by:** LLM agent directly via the Podman socket the master orchestrator holds
+- **What deploys:** any `:sha-<hash>` from a feature branch build (`build-on-demand.yml`)
+- **No CD daemon** — the agent controls deploy lifecycle directly and handles rollback
+  by redeploying a previous SHA explicitly
 
-### Staging (persistent, tracks `:latest`)
+**Agent deploy workflow:**
 
-- **Where:** a persistent host (VM or bare metal)
-- **CD config:** `CD_IMAGE_TAG=latest`
-- **Promotion trigger:** automatic — every merge to master produces a new `:latest` image;
-  the CD daemon detects the digest change within one poll cycle (≤5 min) and redeploys
-- **Purpose:** always reflects the latest merged state; used for human verification before
-  a release is tagged
+```bash
+# 1. Trigger build of the feature branch
+gh workflow run build-on-demand.yml \
+  --ref feat/new-auth \
+  --field label=feat-new-auth
 
-### Production (persistent, tracks semver)
+# 2. Wait synchronously on the run ID
+gh run watch <run-id>
 
-- **Where:** a persistent host (VM or bare metal), separate from staging
-- **CD config:** `CD_IMAGE_TAG=v1.2.3` (pinned to a specific release)
-- **Promotion trigger:** human pushes a `v*` tag to git; the GHA publish workflow builds and
-  pushes the semver-tagged image; the operator then updates `CD_IMAGE_TAG` in the
-  production host's environment and restarts the daemon (or the daemon is already configured
-  for the new tag)
-- **Purpose:** stable, intentionally promoted releases only
+# 3. Deploy the SHA to test bed
+# (agent uses compose + the sha-tagged image)
+
+# 4. Test, iterate. When solid: create the PR and push an RC tag.
+```
+
+### Staging (persistent, CD daemon, `:rc`)
+
+- **Where:** persistent host, separate from test bed and production
+- **Purpose:** UAT by users and agents. Staging uses real (or staging-specific) Slack/
+  Discord credentials so users can exercise real flows without risk to production
+- **CD config:** `CD_IMAGE_TAG=rc`
+- **Promotion trigger:** pushing a `v*-rc*` tag on the feature branch. GHA `build-rc.yml`
+  builds the image and updates `:rc` in GHCR. The daemon detects the digest change and
+  redeploys automatically, then notifies via Slack/Discord
+- **Multiple RC iterations:** each new RC tag (rc1, rc2, …) moves `:rc` to the new image.
+  Staging always reflects the latest RC. This is intentional — if rc2 is pushed while rc1
+  UAT is ongoing, staging updates to rc2
+- **Rollback:** re-push a previous RC tag (e.g., push a new `v1.2.3-rc3` pointing to the
+  rc1 commit) to move `:rc` back
+
+### Production (persistent, CD daemon, `:v1.2.3`)
+
+- **Where:** persistent host, separate from staging
+- **Purpose:** stable working environment for real users. Receives only human-approved,
+  UAT-signed-off release builds
+- **CD config:** `CD_IMAGE_TAG=v1.2.3` (pinned, updated per release)
+- **Promotion trigger:** two manual steps by a human operator
+  1. Push release tag on master: `git tag v1.2.3 && git push --tags`
+  2. Update `CD_IMAGE_TAG` in production `.env` to `v1.2.3` and restart the daemon
+- **Image guarantee:** `promote-release.yml` retags `:rc` → `:v1.2.3` without rebuilding.
+  The production image is bit-identical to the image that ran on staging during UAT
+- **Invariant:** `CD_IMAGE_TAG` must always be a semver string — never `:rc`, never
+  `:latest`, never a raw SHA
 
 ---
 
 ## The CD daemon — design and trade-offs
 
-### What it does
-
-`src/cd/` is a Python process running on the deployment host. Every N seconds (default 300)
-it:
+`src/cd/` is a Python process running on the deployment host. Every N seconds it:
 
 1. Pulls `<image>:<tag>` from GHCR and reads the repo-digest
-2. Compares the digest to the last deployed digest stored in a JSON state file
+2. Compares to the last deployed digest in a JSON state file
 3. If changed: runs `docker compose up --force-recreate` with the new image
 4. Waits `health_check_delay_seconds`, then checks the container is still running
-5. If the health check fails and `CD_ROLLBACK_ON_FAILURE=true`: re-deploys the previous
-   digest and re-checks health
+5. If unhealthy and `CD_ROLLBACK_ON_FAILURE=true`: re-deploys the previous digest
 6. Sends deploy/rollback/failure notifications to a Slack or Discord webhook
 
-### Why pull-based is appropriate here
+The daemon runs on **staging and production only**. The test bed is agent-managed with no
+daemon.
 
-The pull pattern (daemon on the host, no inbound connections required) suits this project
-because:
+### Why pull-based (no inbound connections needed)
 
-- **Firewall / NAT friendliness.** The deployment host makes only outbound HTTPS requests
-  to GHCR. No inbound SSH port needs to be opened, and no GitHub runner IP allowlist is
-  needed.
-- **Rollback is built-in.** If a new image is unhealthy the daemon automatically re-deploys
-  the previous known-good digest without human intervention.
-- **Notification is built-in.** Deploy, rollback, and failure events are sent to the same
-  Slack/Discord channels the team already monitors.
+The deployment host makes only outbound HTTPS requests to GHCR. No inbound SSH port and
+no GitHub runner IP allowlist are required. Works behind NAT or strict firewalls.
 
-### Limitations and planned improvements
+### CD daemon config per environment
 
-| Limitation | Current state | Planned mitigation |
+| Setting | Staging | Production |
 |---|---|---|
-| Polling lag | ≤5 min between image push and deploy | Add a webhook receiver endpoint to the daemon; GHA POSTs to it after push to trigger an immediate check |
-| Silent daemon failure | If the daemon exits, deployments stop | Set `restart: unless-stopped` on the daemon compose service; monitor webhook silence as an alert signal |
-| No deploy history in GitHub | Deploys are invisible to GitHub UI | Webhook notifications to Slack/Discord provide the audit trail |
+| `CD_IMAGE_TAG` | `rc` | `v1.2.3` |
+| `CD_POLL_INTERVAL_SECONDS` | `300` | `600` |
+| `CD_ROLLBACK_ON_FAILURE` | `true` | `true` |
+| `CD_HEALTH_CHECK_DELAY_SECONDS` | `30` | `60` |
+| Notification channel | `#staging-deploys` | `#prod-alerts` |
 
-### What if you removed the CD daemon?
+### Limitations and mitigations
 
-Two alternatives, in order of simplicity:
-
-**Option A — Push-based SSH deploy from GitHub Actions (simpler)**
-
-Add a `deploy` job to each publish workflow. After the image is pushed, the job SSHes into
-the deployment host and runs:
-
-```bash
-docker compose pull && docker compose up -d
-```
-
-Pros: instant deploy (no polling), deploy history visible in GitHub workflow runs, no extra
-process to operate.  
-Cons: requires storing an SSH private key in GitHub Secrets and opening an inbound SSH rule
-for GitHub runner IPs. If the host is behind NAT or a strict firewall, this is not viable.
-
-**Option B — Watchtower (drop-in open-source daemon)**
-
-Replace `src/cd/` with the `containrrr/watchtower` container. It does the same poll-detect-
-redeploy loop and is battle-tested. You lose the built-in rollback-on-failure logic and the
-Slack/Discord notification integration, but you also stop maintaining custom daemon code.
-
-For this project the current daemon is retained because the firewall constraint is real,
-the rollback logic is valuable, and the daemon is already implemented.
-
----
-
-## Should we add Jenkins?
-
-No. Jenkins is not adopted.
-
-GitHub Actions covers 100% of this project's CI/CD needs:
-- Hosted runners are free for public repos and cheap for private ones
-- Secrets, caches, and artifact storage are built in
-- The existing publish workflows already use GHA and work correctly
-
-Jenkins would require:
-- A Jenkins server to provision, maintain, patch, and back up
-- A separate secret store to manage
-- Plugin version management (plugins regularly break across Jenkins upgrades)
-- Network configuration so Jenkins can reach GHCR and deployment hosts
-
-The only scenario where Jenkins makes sense is if builds require on-premises agents with
-access to internal resources that GitHub-hosted runners cannot reach. In that case,
-**self-hosted GitHub Actions runners** (not Jenkins) are the preferred solution — they run
-your code on your hardware while keeping the same workflow YAML and GitHub secrets
-integration.
-
----
-
-## Branch protection setup (required)
-
-To enforce the PR test gate, configure the following in GitHub → Settings → Branches → `master`:
-
-- **Require status checks to pass before merging**: enabled
-  - Required checks: `pytest`, `Docker build check`
-- **Require branches to be up to date before merging**: enabled
-- **Do not allow bypassing the above settings**: enabled (for all users including admins)
+| Limitation | Mitigation |
+|---|---|
+| Polling lag (≤5 min staging, ≤10 min production) | Acceptable — both envs have explicit promotion gates |
+| Silent daemon failure stops deployments | `restart: unless-stopped` on daemon compose service |
+| No deploy history in GitHub UI | Slack/Discord webhook notifications are the audit trail |
 
 ---
 
 ## Image tagging strategy
 
-| Tag | When pushed | Who tracks it |
-|---|---|---|
-| `:latest` | Every merge to `master` | Staging CD daemon |
-| `:sha-<7-char-hash>` | Every build (master push or tag push) | Nobody automatically — used for pinned rollback references |
-| `:v1.2.3` | When `v1.2.3` tag is pushed | Production CD daemon |
+| Tag | When pushed | Mutable | Tracked by |
+|---|---|---|---|
+| `:sha-<7-char-hash>` | Every `build-on-demand.yml` run | No | Agent (explicit deploy to test bed) |
+| `:v1.2.3-rc1` | RC tag push on any branch | No | Audit trail only |
+| `:rc` | RC tag push (always latest RC) | Yes | Staging CD daemon |
+| `:v1.2.3` | Release `promote-release.yml` (retag, no rebuild) | No | Production CD daemon |
 
-Production should **never** be configured with `CD_IMAGE_TAG=latest`. Always pin to a
-semver tag. This ensures production only changes when a human pushes a release tag.
+**No `:latest` tag.** Every tag has unambiguous semantics and a clear owner.
+
+**Bit-identical guarantee:** `:v1.2.3` in GHCR is always the same image digest as the
+`:rc` image that was deployed to staging and UAT-approved. `promote-release.yml` pulls `:rc`
+by digest and pushes that digest under the release tag — it does not invoke `docker build`.
 
 ---
 
-## Rollback procedure
+## Linear history enforcement on master
 
-**Staging:** push a revert commit to master → CI passes → new `:latest` is built → daemon
-deploys it automatically.
+The goal: code on `master` is always code that has been UAT-approved. No unreviewed merge
+commits.
 
-**Production:** push the previous working `v*` tag (or a new patch tag pointing to the last
-known-good commit) → new image is built → update `CD_IMAGE_TAG` in production config and
-restart daemon. Alternatively, if the daemon's rollback-on-failure triggered automatically,
-no action is needed.
+**GitHub repository settings (Settings → General → Pull Requests):**
+- Disable **Allow merge commits**
+- Disable **Allow squash merging**
+- Enable **Allow rebase merging** only
+
+**Branch protection on `master` (Settings → Branches):**
+- Require status checks: `pytest`, `Docker build check`
+- **Require branches to be up to date before merging**
+- Require linear history
+- Do not allow bypassing (including admins)
+
+With rebase-only merging and "up to date" enforcement, the feature branch must include all
+of master's commits before it can merge. The PR commits land on master as a linear sequence
+with no merge commit.
+
+**Note on commit SHAs:** GitHub's rebase merge replays commits, producing new SHAs even
+when code is identical. The image guarantee is not provided by commit SHA matching — it is
+provided by the `:rc` → `:v1.2.3` retag in `promote-release.yml`, which operates on image
+digests, not commit SHAs.
+
+---
+
+## GHA workflows summary
+
+| Workflow | Trigger | Builds? | Pushes tags |
+|---|---|---|---|
+| `ci-pr.yml` | PR commit to `master` | Yes (no push) | None |
+| `build-on-demand.yml` | `workflow_dispatch` (agent/human) | Yes | `:sha-<hash>` |
+| `build-rc.yml` | `v*-rc*` tag push (any branch) | Yes | `:v1.2.3-rc1`, `:rc` |
+| `promote-release.yml` | `v*` non-rc tag push on `master` | No (retag only) | `:v1.2.3` |
+
+---
+
+## Should we add Jenkins?
+
+No. See ADR 0005. GitHub Actions covers all CI/CD needs. The master orchestrator's `gh`
+CLI is the bridge between the LLM agent and GHA workflows — no separate CI server is
+required.
+
+---
+
+## Rollback procedures
+
+**Test bed:** agent redeploys a previous `:sha-<hash>` explicitly.
+
+**Staging:** push a new RC tag pointing to the last known-good commit
+(e.g., `v1.2.3-rc3` pointing to the rc1 commit). GHA rebuilds and updates `:rc`; daemon
+redeploys. Daemon's built-in rollback also handles transient deploy failures automatically.
+
+**Production:** push a new patch release tag pointing to the previous known-good commit
+(e.g., `v1.2.4` → same commit as `v1.2.2`). `promote-release.yml` retags `:rc`
+(which should be the last RC for that commit) → `:v1.2.4`. Operator updates
+`CD_IMAGE_TAG=v1.2.4` and restarts the daemon. Daemon's built-in rollback handles
+transient failures automatically.
