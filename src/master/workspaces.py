@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from .agent_runner import get_container_status, refresh_auth, spawn_agent, stop_agent, container_name
 from .db import get_connection
+from .runtime_config import load_agent_env
 from .staffs import StaffOut, _SELECT_COLS as _STAFF_COLS, _row_to_out as _staff_row_to_out
 
 LOGGER = logging.getLogger(__name__)
@@ -133,6 +134,7 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
             ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
             ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
             dry_run=settings.dry_run,
+            extra_env=load_agent_env(request.app.state.db_path, workspace_id),
         )
         conn2 = get_connection(request.app.state.db_path)
         try:
@@ -229,12 +231,62 @@ def refresh_workspace_auth(workspace_id: str, request: Request) -> dict:  # type
         conn.close()
 
     settings = request.app.state.settings
+    db_cfg = load_agent_env(request.app.state.db_path, workspace_id)
+    gh_token = settings.gh_token or db_cfg.get("GH_TOKEN")
     try:
-        refresh_auth(name=cname, gh_token=settings.gh_token, dry_run=settings.dry_run)
+        refresh_auth(name=cname, gh_token=gh_token, dry_run=settings.dry_run)
     except Exception:
         LOGGER.exception("workspace.refresh_auth_failed container=%s", cname)
 
     return {"refreshed_at": now}
+
+
+@router.post("/{workspace_id}/restart-agent", status_code=200)
+def restart_workspace_agent(workspace_id: str, request: Request) -> dict:  # type: ignore[type-arg]
+    conn = get_connection(request.app.state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, repo_url, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
+            (workspace_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        cname = row["container_name"] or container_name(workspace_id)
+        repo_url = row["repo_url"]
+    finally:
+        conn.close()
+
+    settings = request.app.state.settings
+    try:
+        stop_agent(runtime=settings.container_runtime, name=cname, dry_run=settings.dry_run)
+    except Exception:
+        LOGGER.exception("workspace.restart_stop_failed container=%s", cname)
+
+    try:
+        spawn_agent(
+            runtime=settings.container_runtime,
+            workspace_id=workspace_id,
+            repo_url=repo_url,
+            image=settings.agent_base_image,
+            mqtt_host=settings.mqtt_host,
+            mqtt_port=settings.mqtt_port,
+            network=settings.agent_network,
+            claude_code_oauth_token=settings.claude_code_oauth_token,
+            anthropic_api_key=settings.anthropic_api_key,
+            openai_api_key=settings.openai_api_key,
+            gh_token=settings.gh_token,
+            ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
+            ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
+            dry_run=settings.dry_run,
+            master_url=settings.master_url,
+            extra_env=load_agent_env(request.app.state.db_path, workspace_id),
+        )
+    except Exception:
+        LOGGER.exception("workspace.restart_spawn_failed workspace_id=%s", workspace_id)
+        raise HTTPException(status_code=500, detail="failed to restart agent")
+
+    LOGGER.info("workspace.restarted workspace_id=%s container=%s", workspace_id, cname)
+    return {"restarted": True}
 
 
 @router.get("/{workspace_id}/agent-status")

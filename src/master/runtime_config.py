@@ -8,6 +8,24 @@ from pydantic import BaseModel
 
 from .db import get_connection
 
+
+def load_agent_env(db_path: str, workspace_id: str) -> dict[str, str]:
+    """Return merged global+workspace config for use as agent container env vars."""
+    conn = get_connection(db_path)
+    try:
+        return _merged_config(conn, workspace_id)
+    finally:
+        conn.close()
+
+
+def load_global_env(db_path: str) -> dict[str, str]:
+    """Return global config only (used when workspace_id is not yet known)."""
+    conn = get_connection(db_path)
+    try:
+        return _get_global_config(conn)
+    finally:
+        conn.close()
+
 global_router = APIRouter(prefix="/config", tags=["config"])
 workspace_router = APIRouter(prefix="/workspaces/{workspace_id}/config", tags=["config"])
 

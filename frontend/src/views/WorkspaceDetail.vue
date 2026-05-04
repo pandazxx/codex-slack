@@ -9,8 +9,11 @@
       <span v-if="agentStatus" :class="['status-badge', statusClass]">{{ statusLabel }}</span>
       <span v-else class="status-badge status-unknown">checking…</span>
       <span v-if="agentStatus?.error" class="status-error">{{ agentStatus.error }}</span>
-      <button class="btn-refresh-auth" @click="refreshAuth" :disabled="refreshing">
+      <button class="btn-refresh-auth" @click="refreshAuth" :disabled="refreshing || restarting">
         {{ refreshing ? 'Refreshing…' : 'Refresh Auth' }}
+      </button>
+      <button class="btn-restart-agent" @click="restartAgent" :disabled="restarting || refreshing">
+        {{ restarting ? 'Restarting…' : 'Restart Agent' }}
       </button>
       <span v-if="workspace?.last_refreshed_at" class="muted small">refreshed {{ workspace.last_refreshed_at }}</span>
     </div>
@@ -138,6 +141,7 @@ const agentStatus = ref(null)
 let statusTimer = null
 
 const refreshing = ref(false)
+const restarting = ref(false)
 
 const showStaffForm = ref(false)
 const editingStaff = ref(null)
@@ -178,6 +182,17 @@ async function refreshAuth() {
     await load()
   } finally {
     refreshing.value = false
+  }
+}
+
+async function restartAgent() {
+  if (!confirm('Restart the agent container? It will pick up the latest config/credentials.')) return
+  restarting.value = true
+  try {
+    await fetch(`/api/workspaces/${id}/restart-agent`, { method: 'POST' })
+    await fetchAgentStatus()
+  } finally {
+    restarting.value = false
   }
 }
 
@@ -324,6 +339,9 @@ onUnmounted(() => {
 .btn-refresh-auth { margin-left: 0.75rem; padding: 2px 10px; font-size: 0.8em; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; }
 .btn-refresh-auth:hover:not(:disabled) { background: #e2e8f0; }
 .btn-refresh-auth:disabled { opacity: 0.6; cursor: default; }
+.btn-restart-agent { padding: 2px 10px; font-size: 0.8em; background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; border-radius: 4px; cursor: pointer; }
+.btn-restart-agent:hover:not(:disabled) { background: #ffedd5; }
+.btn-restart-agent:disabled { opacity: 0.6; cursor: default; }
 h2 { margin: 0; }
 .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .archived-link { font-size: 0.85em; color: #64748b; text-decoration: none; }
