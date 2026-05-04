@@ -15,7 +15,7 @@ import paho.mqtt.client as mqtt
 LOGGER = logging.getLogger(__name__)
 
 _TOPIC_PARTS = 6  # codex-slack/workspace/{wid}/topic/{tid}/prompt
-_LLM_TIMEOUT = 300
+_LLM_TIMEOUT = None  # no timeout — claude/codex can run as long as needed
 
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent-llm")
 
