@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
+import re
 import sqlite3
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 
@@ -303,3 +306,63 @@ def get_agent_status(workspace_id: str, request: Request) -> dict:  # type: igno
     name = row["container_name"] or container_name(workspace_id)
     settings = request.app.state.settings
     return get_container_status(name=name, dry_run=settings.dry_run)
+
+
+def _parse_github_repo(repo_url: str) -> tuple[str, str] | None:
+    url = repo_url.strip().rstrip("/")
+    m = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if m:
+        return m.group(1), m.group(2)
+    m = re.match(r"git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if m:
+        return m.group(1), m.group(2)
+    return None
+
+
+def _fetch_github_branches(owner: str, repo: str, token: str | None) -> list[str]:
+    branches: list[str] = []
+    page = 1
+    while page <= 5:
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/branches?per_page=100&page={page}"
+        req = urllib.request.Request(
+            api_url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "codex-slack-master",
+            },
+        )
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data: list[dict] = json.loads(resp.read().decode())
+        except Exception:
+            LOGGER.exception("workspaces.fetch_branches_failed owner=%s repo=%s page=%d", owner, repo, page)
+            break
+        if not data:
+            break
+        branches.extend(b["name"] for b in data)
+        if len(data) < 100:
+            break
+        page += 1
+    return sorted(branches)
+
+
+@router.get("/{workspace_id}/branches", response_model=list[str])
+def list_workspace_branches(workspace_id: str, request: Request) -> list[str]:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT repo_url FROM workspaces WHERE id = ?", (workspace_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="workspace not found")
+    parsed = _parse_github_repo(row["repo_url"])
+    if parsed is None:
+        return []
+    owner, repo = parsed
+    settings = request.app.state.settings
+    return _fetch_github_branches(owner, repo, settings.gh_token)
