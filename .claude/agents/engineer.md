@@ -1,4 +1,5 @@
 ---
+name: engineer
 description: Implements features and fixes on the current branch — writes clean, self-documenting code and manages containers via Podman
 tools:
   - Read

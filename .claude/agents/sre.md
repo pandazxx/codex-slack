@@ -1,4 +1,5 @@
 ---
+name: sre
 description: Manages CI/CD pipeline configuration and testbed deployments — use to deploy the testbed via DOCKER_HOST, run post-deploy health checks, and own .github/workflows configuration
 tools:
   - Read

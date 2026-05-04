@@ -1,4 +1,5 @@
 ---
+name: explore
 description: Read-only codebase explorer for scoping and discovery tasks — use when you need to locate where something is defined, trace a call path, find all usages of an interface, or understand the shape of a module before making changes
 tools:
   - Read
