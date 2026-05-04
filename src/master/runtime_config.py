@@ -60,7 +60,15 @@ def _merged_config(conn, workspace_id: str) -> dict[str, str]:
     return merged
 
 
+def _valid_env_key(key: str) -> bool:
+    return bool(key) and key.strip() == key and "=" not in key and "\x00" not in key
+
+
 def _apply_patch(conn, scope_type: str, scope_id: str, patch: ConfigPatch) -> None:
+    bad_set = [k for k in patch.set if not _valid_env_key(k)]
+    bad_del = [k for k in patch.delete if not _valid_env_key(k)]
+    if bad_set or bad_del:
+        raise HTTPException(422, f"invalid env var key(s): {bad_set + bad_del}")
     now = _now()
     for key, value in patch.set.items():
         conn.execute(
