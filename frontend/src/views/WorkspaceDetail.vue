@@ -44,6 +44,14 @@
       </ul>
     </section>
 
+    <!-- ── Env Vars ──────────────────────────────────────────────────── -->
+    <WorkspaceEnvVarsPanel
+      v-if="!isArchived"
+      ref="envPanel"
+      :workspace-id="id"
+      :container-running="agentStatus?.status === 'running'"
+    />
+
     <!-- ── Staff section ─────────────────────────────────────────────── -->
     <section class="staffs-section">
       <div class="header-row">
@@ -126,6 +134,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
+import WorkspaceEnvVarsPanel from '../components/WorkspaceEnvVarsPanel.vue'
 
 const route = useRoute()
 const id = route.params.id
@@ -142,6 +151,7 @@ let statusTimer = null
 
 const refreshing = ref(false)
 const restarting = ref(false)
+const envPanel = ref(null)
 
 const showStaffForm = ref(false)
 const editingStaff = ref(null)
@@ -189,7 +199,10 @@ async function restartAgent() {
   if (!confirm('Restart the agent container? It will pick up the latest config/credentials.')) return
   restarting.value = true
   try {
-    await fetch(`/api/workspaces/${id}/restart-agent`, { method: 'POST' })
+    const r = await fetch(`/api/workspaces/${id}/restart-agent`, { method: 'POST' })
+    if (r.ok) {
+      envPanel.value?.onRestartSuccess()
+    }
     await fetchAgentStatus()
   } finally {
     restarting.value = false
