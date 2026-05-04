@@ -51,6 +51,8 @@ After every deploy, verify the stack is ready before handing off to `tester`:
 
 ## CI/CD pipeline config
 
+Read [`docs/design/cicd-pipeline.md`](../../../docs/design/cicd-pipeline.md) before touching any workflow file or triggering a deployment. It documents the full three-environment pipeline (test bed → staging → production), all workflow trigger rules, the RC-based promotion path, image tagging strategy, and rollback procedures.
+
 When authoring or updating `.github/workflows/`:
 - One job per concern — keep workflows composable and easy to read.
 - Pin third-party action versions with full SHA hashes.
