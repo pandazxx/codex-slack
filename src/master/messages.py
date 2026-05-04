@@ -183,6 +183,15 @@ async def send_message(
         "text": prompt_text,
         "attachments": attachment_metas,
     })
+
+    # Store dispatch payload as user message transcript so the frontend can show the full command.
+    disp_conn = get_connection(request.app.state.db_path)
+    try:
+        disp_conn.execute("UPDATE messages SET transcript = ? WHERE id = ?", (payload, message_id))
+        disp_conn.commit()
+    finally:
+        disp_conn.close()
+
     mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
     mqtt = request.app.state.mqtt
 
@@ -197,7 +206,7 @@ async def send_message(
 
     mqtt.publish(mqtt_topic, payload, qos=1)
 
-    return {"message_id": message_id, "status": "queued", "attachments": attachment_metas}
+    return {"message_id": message_id, "status": "queued", "attachments": attachment_metas, "dispatch": payload}
 
 
 @router.get("", response_model=list[MessageOut])
