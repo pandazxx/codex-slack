@@ -35,6 +35,17 @@
             </div>
           </template>
         </div>
+        <details v-if="m.sender === 'user' && isDispatchPayload(m.transcript)" class="detail-panel">
+          <summary class="detail-toggle">Details</summary>
+          <div class="dispatch-detail">
+            <div class="dispatch-meta">
+              <span class="tr-badge tr-badge-tool">{{ parseDispatch(m.transcript).adapter }}</span>
+              <span class="dispatch-info">@{{ parseDispatch(m.transcript).agent_name }}</span>
+              <span class="dispatch-info">session: {{ parseDispatch(m.transcript).session_scope }} ({{ parseDispatch(m.transcript).is_new_session ? 'new' : 'resumed' }})</span>
+            </div>
+            <pre class="tr-raw dispatch-cmd">{{ buildDispatchCommand(m.transcript) }}</pre>
+          </div>
+        </details>
         <details v-if="m.sender === 'agent' && m.transcript" class="detail-panel">
           <summary class="detail-toggle">
             Details
@@ -226,6 +237,7 @@ async function sendMessage() {
         sender: 'user',
         agent_name: null,
         text: msg,
+        transcript: data.dispatch || null,
         attachments: data.attachments || [],
         created_at: new Date().toISOString(),
       })
@@ -243,6 +255,30 @@ async function sendMessage() {
 }
 
 function toggleRaw(id) { rawView.value[id] = !rawView.value[id] }
+
+function isDispatchPayload(transcript) {
+  if (!transcript) return false
+  try { const p = JSON.parse(transcript); return p && typeof p === 'object' && 'adapter' in p } catch { return false }
+}
+
+function parseDispatch(transcript) {
+  try { return JSON.parse(transcript) } catch { return {} }
+}
+
+function buildDispatchCommand(transcript) {
+  try {
+    const p = JSON.parse(transcript)
+    if (!p.adapter) return ''
+    if (p.adapter === 'codex') return `codex --full-auto -q ${JSON.stringify(p.text)}`
+    const parts = ['claude', '--print', '--verbose', '--output-format', 'stream-json', '--dangerously-skip-permissions']
+    if (p.session_id) parts.push(p.is_new_session ? `--session-id ${p.session_id}` : `--resume ${p.session_id}`)
+    if (p.model) parts.push(`--model ${p.model}`)
+    if (p.system_prompt) parts.push(`--append-system-prompt ${JSON.stringify(p.system_prompt)}`)
+    if (p.subagent) parts.push(`--agent ${p.subagent}`)
+    parts.push(JSON.stringify(p.text))
+    return parts.join(' \\\n  ')
+  } catch { return '(error parsing dispatch payload)' }
+}
 
 function toJsonl(raw) {
   try {
@@ -329,6 +365,10 @@ onUnmounted(() => {
 .attachment-img { max-width: 100%; border-radius: 6px; border: 1px solid #e2e8f0; }
 .attachment-file { font-size: 0.82em; }
 .attachment-file a { color: #2563eb; text-decoration: underline; }
+.dispatch-detail { margin-top: 4px; }
+.dispatch-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 0.78em; }
+.dispatch-info { color: #64748b; }
+.dispatch-cmd { font-size: 0.72em; max-height: 200px; overflow-x: auto; white-space: pre; }
 .send-error { color: #dc2626; font-size: 0.85em; margin-top: 0.25rem; }
 .hint { font-size: 0.8em; text-align: right; margin-top: 0.25rem; }
 .muted { color: #64748b; }
