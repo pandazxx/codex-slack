@@ -101,13 +101,15 @@ def patch_global_config(body: ConfigPatch, request: Request) -> dict[str, str]:
 # ── Workspace config ──────────────────────────────────────────────────────────
 
 @workspace_router.get("", response_model=dict[str, str])
-def get_workspace_config(workspace_id: str, request: Request) -> dict[str, str]:
+def get_workspace_config(workspace_id: str, request: Request, raw: bool = False) -> dict[str, str]:
     conn = get_connection(request.app.state.db_path)
     try:
         if conn.execute(
             "SELECT 1 FROM workspaces WHERE id=?", (workspace_id,)
         ).fetchone() is None:
             raise HTTPException(404, "workspace not found")
+        if raw:
+            return _get_workspace_config_raw(conn, workspace_id)
         return _merged_config(conn, workspace_id)
     finally:
         conn.close()
