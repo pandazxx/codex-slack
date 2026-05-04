@@ -103,7 +103,7 @@ async def send_message(
         if ws_row is None:
             raise HTTPException(404, "workspace not found")
         topic = conn.execute(
-            "SELECT id, worktree_path, branch_name FROM topics"
+            "SELECT id, worktree_path, branch_name, repo_ref FROM topics"
             " WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
             (topic_id, workspace_id),
         ).fetchone()
@@ -175,6 +175,7 @@ async def send_message(
         "subagent": staff["agent"],
         "worktree": topic["worktree_path"],
         "branch": topic["branch_name"],
+        "repo_ref": topic["repo_ref"] or "",
         "session_id": session_uuid,
         "is_new_session": is_new_session,
         "session_scope": staff["session_scope"] or "topic",

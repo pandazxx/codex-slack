@@ -39,16 +39,26 @@ def _response_topic(workspace_id: str, topic_id: str) -> str:
     return f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/response"
 
 
-def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str) -> None:
+def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str, repo_ref: str = "") -> None:
     if Path(worktree_path).exists():
         return
     Path(worktree_path).parent.mkdir(parents=True, exist_ok=True)
+    start_point = "HEAD"
+    if repo_ref:
+        try:
+            subprocess.run(
+                ["git", "-C", repo_dir, "fetch", "origin", repo_ref],
+                capture_output=True, text=True, check=True,
+            )
+            start_point = f"origin/{repo_ref}"
+        except subprocess.CalledProcessError:
+            LOGGER.warning("agent.worktree_fetch_failed repo_ref=%s — falling back to HEAD", repo_ref)
     try:
         subprocess.run(
-            ["git", "-C", repo_dir, "worktree", "add", worktree_path, "-b", branch],
+            ["git", "-C", repo_dir, "worktree", "add", worktree_path, "-b", branch, start_point],
             capture_output=True, text=True, check=True,
         )
-        LOGGER.info("agent.worktree_created path=%s branch=%s", worktree_path, branch)
+        LOGGER.info("agent.worktree_created path=%s branch=%s base=%s", worktree_path, branch, start_point)
     except subprocess.CalledProcessError:
         # Branch already exists — check out without -b
         subprocess.run(
@@ -168,6 +178,7 @@ def _process_prompt(
     agent_name = payload.get("agent_name", "claude")
     worktree = payload.get("worktree", "")
     branch = payload.get("branch", "")
+    repo_ref = payload.get("repo_ref", "")
     text = payload.get("text", "")
     session_id = payload.get("session_id")
     is_new_session = bool(payload.get("is_new_session", False))
@@ -188,9 +199,9 @@ def _process_prompt(
 
     try:
         if worktree and branch and repo_dir:
-            _ensure_worktree(repo_dir, worktree, branch)
+            _ensure_worktree(repo_dir, worktree, branch, repo_ref)
     except Exception:
-        LOGGER.exception("agent.worktree_create_failed worktree=%s branch=%s", worktree, branch)
+        LOGGER.exception("agent.worktree_create_failed worktree=%s branch=%s repo_ref=%s", worktree, branch, repo_ref)
 
     cwd = worktree if (worktree and Path(worktree).exists()) else repo_dir or "/"
 
@@ -212,18 +223,11 @@ def _process_prompt(
     if adapter == "codex":
         response_text, new_session_id, transcript = _run_codex(cwd, text)
     else:
-        # Claude sessions are scoped to the CWD (project directory).
-        # For workspace/global scope we use a stable shared directory so
-        # --resume works across different topic worktrees.
-        session_cwd = cwd
-        if session_scope == "workspace":
-            session_cwd = f"/workspace/sessions/{workspace_id}"
-            Path(session_cwd).mkdir(parents=True, exist_ok=True)
-        elif session_scope == "global":
-            session_cwd = "/workspace/sessions/global"
-            Path(session_cwd).mkdir(parents=True, exist_ok=True)
+        # Always run Claude in the topic worktree so the agent's pwd reflects
+        # the selected branch. Session continuity is maintained via --resume
+        # SESSION_ID which works from any CWD.
         response_text, new_session_id, transcript = _run_claude(
-            session_cwd, text, session_id, is_new_session, subagent, model, system_prompt
+            cwd, text, session_id, is_new_session, subagent, model, system_prompt
         )
 
     LOGGER.info("agent.llm_done topic_id=%s chars=%d", topic_id, len(response_text))

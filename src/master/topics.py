@@ -39,7 +39,7 @@ def _workspace_exists_any(conn, workspace_id: str) -> bool:
 class TopicCreate(BaseModel):
     subject: str
     branch_name: str | None = None
-    repo_ref: str | None = None
+    repo_ref: str
 
 
 class TopicOut(BaseModel):
@@ -74,7 +74,7 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
             raise HTTPException(status_code=404, detail="workspace not found")
         topic_id = str(uuid.uuid4())
         branch_name = (body.branch_name or _slugify(body.subject)).strip()
-        repo_ref = body.repo_ref.strip() if body.repo_ref else None
+        repo_ref = body.repo_ref.strip()
         worktree_path = f"/workspace/worktrees/{topic_id}"
         now = _now()
         conn.execute(

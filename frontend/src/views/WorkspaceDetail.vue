@@ -33,7 +33,7 @@
               @input="onBranchInput"
               @focus="branchDropdownOpen = true"
               @blur="scheduleBranchClose"
-              placeholder="Branch (optional)"
+              placeholder="Branch (required)"
               autocomplete="off"
               class="branch-input"
               :title="selectedBranch ? `Base branch: ${selectedBranch}` : 'Select a base branch'"
@@ -312,6 +312,10 @@ async function load() {
 }
 
 async function createTopic() {
+  if (!selectedBranch.value) {
+    createError.value = 'Please select a branch'
+    return
+  }
   creating.value = true
   createError.value = ''
   try {
