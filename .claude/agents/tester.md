@@ -1,4 +1,5 @@
 ---
+name: tester
 description: Authors test cases and test code, runs the unit test suite, executes UAT against the testbed, and posts signoff results as a PR comment — with a focus on system interface stability
 tools:
   - Read
