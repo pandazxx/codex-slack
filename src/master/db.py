@@ -107,6 +107,7 @@ _MIGRATIONS = [
     "ALTER TABLE workspaces ADD COLUMN last_message_at TEXT",
     "ALTER TABLE messages ADD COLUMN usage_json TEXT",
     "ALTER TABLE topics ADD COLUMN repo_ref TEXT",
+    "ALTER TABLE topics ADD COLUMN base_sha TEXT",
 ]
 
 

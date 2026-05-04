@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+import logging
 import re
+import urllib.request
 import uuid
 from datetime import datetime, timezone
+
+LOGGER = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -36,6 +41,42 @@ def _workspace_exists_any(conn, workspace_id: str) -> bool:
     ).fetchone() is not None
 
 
+def _parse_github_repo(repo_url: str) -> tuple[str, str] | None:
+    url = repo_url.strip().rstrip("/")
+    m = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if m:
+        return m.group(1), m.group(2)
+    m = re.match(r"git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if m:
+        return m.group(1), m.group(2)
+    return None
+
+
+def _fetch_ref_sha(repo_url: str, ref: str, token: str | None) -> str | None:
+    parsed = _parse_github_repo(repo_url)
+    if parsed is None:
+        return None
+    owner, repo = parsed
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/commits/{ref}"
+    req = urllib.request.Request(
+        api_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "codex-slack-master",
+        },
+    )
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        return data.get("sha")
+    except Exception:
+        LOGGER.warning("topics.fetch_ref_sha_failed repo_url=%s ref=%s", repo_url, ref)
+        return None
+
+
 class TopicCreate(BaseModel):
     subject: str
     branch_name: str | None = None
@@ -48,6 +89,7 @@ class TopicOut(BaseModel):
     subject: str
     branch_name: str
     repo_ref: str | None
+    base_sha: str | None
     worktree_path: str
     created_at: str
     archived_at: str | None
@@ -60,6 +102,7 @@ def _row_to_topic(row) -> TopicOut:
         subject=row["subject"],
         branch_name=row["branch_name"],
         repo_ref=row["repo_ref"],
+        base_sha=row["base_sha"],
         worktree_path=row["worktree_path"],
         created_at=row["created_at"],
         archived_at=row["archived_at"],
@@ -70,7 +113,10 @@ def _row_to_topic(row) -> TopicOut:
 def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> TopicOut:
     conn = get_connection(request.app.state.db_path)
     try:
-        if not _workspace_exists(conn, workspace_id):
+        ws_row = conn.execute(
+            "SELECT repo_url FROM workspaces WHERE id = ? AND archived_at IS NULL", (workspace_id,)
+        ).fetchone()
+        if ws_row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
         topic_id = str(uuid.uuid4())
         branch_name = (body.branch_name or _slugify(body.subject)).strip()
@@ -88,6 +134,17 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
         ).fetchone()
     finally:
         conn.close()
+
+    base_sha = _fetch_ref_sha(ws_row["repo_url"], repo_ref, request.app.state.settings.gh_token)
+    if base_sha:
+        conn2 = get_connection(request.app.state.db_path)
+        try:
+            conn2.execute("UPDATE topics SET base_sha = ? WHERE id = ?", (base_sha, topic_id))
+            conn2.commit()
+            row = conn2.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+        finally:
+            conn2.close()
+
     return _row_to_topic(row)
 
 

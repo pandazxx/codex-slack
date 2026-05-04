@@ -68,7 +68,9 @@
           <span class="topic-row">
             <RouterLink :to="`/workspaces/${id}/topics/${t.id}`">{{ t.subject }}</RouterLink>
             <span class="muted small"> — branch: {{ t.branch_name }}</span>
-            <span v-if="t.repo_ref" class="repo-ref-badge">{{ t.repo_ref }}</span>
+            <span v-if="t.repo_ref" class="repo-ref-badge">
+              {{ t.repo_ref }}<template v-if="t.base_sha"> · {{ t.base_sha.substring(0, 7) }}</template>
+            </span>
           </span>
           <button v-if="!isArchived" class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Archive topic">Archive</button>
         </li>
