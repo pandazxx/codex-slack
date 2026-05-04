@@ -1,67 +1,55 @@
 # CD Daemon — example compose file
 #
-# The CD daemon is a lightweight sidecar that polls GHCR for a new image
+# The CD daemon is a lightweight sidecar that polls a registry for a new image
 # digest, deploys it via the master compose file, waits for a health check,
 # and rolls back automatically if the master container fails to stay running.
 #
 # The daemon must be kept OUTSIDE the master container so it can stop/restart
 # the master independently.  Run it on the same host with access to the
-# Podman socket and the master compose project directory.
+# Docker socket and the master compose project directory.
 #
-# Usage (staging)
-# ---------------
-#   Copy this file, fill in the environment variables (or use an .env file),
-#   then:
+# Usage
+# -----
+#   Copy this file alongside docker-compose.yml, fill in the required
+#   environment variables (or add them to .env), then:
 #     docker compose -f docker-compose.cd-daemon.example.yml up -d
-#
-# Usage (production)
-# ------------------
-#   Set CD_IMAGE_TAG to the target semver (e.g. "v1.2.3") or to "latest" if
-#   you track latest on prod.  The daemon will deploy whenever the digest
-#   behind that tag changes.
 #
 # Security note
 # -------------
-#   The daemon is granted read/write access to the Podman socket so it can
+#   The daemon is granted read/write access to the Docker socket so it can
 #   manage the master container.  Restrict who can reach the socket path.
-
-x-podman:
-  in_pod: false
 
 services:
   codex-slack-cd-daemon:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: ${MASTER_RUNTIME_IMAGE:-ghcr.io/pandazxx/codex-slack-master:latest}
+    image: ${MASTER_RUNTIME_IMAGE:-codex-slack-master:latest}
     container_name: codex-slack-cd-daemon
     restart: unless-stopped
     working_dir: /opt/codex-slack
-    userns_mode: "keep-id"
-    user: "${UID:-1000}:${GID:-1000}"
-    security_opt:
-      - label=disable
     command: ["python", "-m", "src.cd.main"]
+    group_add:
+      - "${DOCKER_GID:-999}"
 
     environment:
       # ---- Required -------------------------------------------------------
-      # Full base image name (without tag).
-      CD_IMAGE: ${CD_IMAGE:-ghcr.io/pandazxx/codex-slack-master}
+      # Full image name without tag (e.g. "ghcr.io/org/codex-slack-master"
+      # for a registry image, or "codex-slack-master" for a locally built one).
+      CD_IMAGE: ${CD_IMAGE}
 
       # Tag to track.  "latest" for staging; a semver string for production.
       CD_IMAGE_TAG: ${CD_IMAGE_TAG:-latest}
 
-      # Name of the master container on this host.
+      # Name of the master container managed by this daemon.
       CD_CONTAINER_NAME: ${CD_CONTAINER_NAME:-codex-slack-master}
 
       # Path to the compose file that defines the master service,
-      # as seen from inside this container (use a volume mount below).
-      CD_COMPOSE_FILE: ${CD_COMPOSE_FILE:-/opt/codex-slack/docker-compose.master-agent.example.yml}
+      # as seen from inside this container (use the volume mount below).
+      CD_COMPOSE_FILE: ${CD_COMPOSE_FILE:-/opt/codex-slack/docker-compose.yml}
 
       # ---- Optional -------------------------------------------------------
-      CD_COMPOSE_SERVICE: ${CD_COMPOSE_SERVICE:-codex-slack-master}
-      # "podman-compose" (recommended) or "docker compose" (v2)
-      CD_COMPOSE_BINARY: ${CD_COMPOSE_BINARY:-podman-compose}
+      # Service name inside the compose file.
+      CD_COMPOSE_SERVICE: ${CD_COMPOSE_SERVICE:-master}
+      # Compose binary: "docker compose" (default) or "docker-compose" (v1).
+      CD_COMPOSE_BINARY: ${CD_COMPOSE_BINARY:-docker compose}
       # Path to the .env file used by the master compose project.
       CD_ENV_FILE: ${CD_ENV_FILE:-/opt/codex-slack/.env}
       # Where the daemon persists its deploy state.
@@ -81,15 +69,12 @@ services:
       # Discord incoming-webhook URL to post deploy/rollback events.
       CD_NOTIFY_DISCORD_WEBHOOK_URL: ${CD_NOTIFY_DISCORD_WEBHOOK_URL:-}
 
-      # Podman socket location inside the container.
-      CONTAINER_HOST: unix:///run/podman/podman.sock
+      # Docker socket location inside the container.
+      DOCKER_HOST: unix:///run/container.sock
 
     volumes:
-      # Podman socket — required for all container management commands.
-      - ${PODMAN_SOCKET_PATH:-/run/user/1000/podman/podman.sock}:/run/podman/podman.sock
+      # Docker socket — required for container management.
+      - ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}:/run/container.sock
 
-      # Master compose file and .env so the daemon can drive compose commands.
+      # Master project directory so the daemon can drive compose commands.
       - ${MASTER_PROJECT_DIR:-.}:/opt/codex-slack
-
-      # Persist deploy state across daemon restarts.
-      - ${MASTER_DATA_DIR:-./data/master}:/opt/codex-slack/data
