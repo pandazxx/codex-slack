@@ -47,6 +47,9 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: ${MOSQUITTO_CONTAINER_NAME:-codex-slack-mosquitto}
+    # Write config inline so no host-side file bind-mount is required.
+    # This allows the CD daemon to drive compose without a project directory
+    # present on the host.
     entrypoint:
       - sh
       - -c
