@@ -112,6 +112,7 @@
           rows="3"
           :disabled="sending"
           @keydown.enter.exact.prevent="sendMessage"
+          @paste="onPaste"
         />
         <button type="submit" :disabled="sending || !text.trim()">
           {{ sending ? 'Sending…' : 'Send' }}
@@ -203,6 +204,46 @@ function onFilesSelected(evt) {
 
 function removeFile(index) {
   selectedFiles.value = selectedFiles.value.filter((_, i) => i !== index)
+}
+
+function mimeToExt(mime) {
+  switch (mime) {
+    case 'image/png':     return 'png'
+    case 'image/jpeg':    return 'jpg'
+    case 'image/gif':     return 'gif'
+    case 'image/webp':    return 'webp'
+    case 'image/bmp':     return 'bmp'
+    case 'image/svg+xml': return 'svg'
+    default: {
+      const m = /^image\/([a-z0-9.+-]+)$/i.exec(mime)
+      return m ? m[1].split('+')[0] : 'png'
+    }
+  }
+}
+
+function renamePastedImage(file) {
+  const ext = mimeToExt(file.type) || 'png'
+  const ts = new Date().toISOString().replace(/[:.]/g, '-')
+  const name = `pasted-image-${ts}.${ext}`
+  return new File([file], name, { type: file.type, lastModified: file.lastModified })
+}
+
+function onPaste(evt) {
+  const items = evt.clipboardData?.items
+  if (!items || !items.length) return
+
+  const pastedImages = []
+  for (const item of items) {
+    if (item.kind !== 'file') continue
+    if (!item.type || !item.type.startsWith('image/')) continue
+    const file = item.getAsFile()
+    if (!file) continue
+    pastedImages.push(renamePastedImage(file))
+  }
+
+  if (pastedImages.length === 0) return
+  evt.preventDefault()
+  selectedFiles.value = [...selectedFiles.value, ...pastedImages]
 }
 
 function formatSize(bytes) {
