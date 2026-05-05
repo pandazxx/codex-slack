@@ -79,6 +79,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ steps.tags.outputs.master }}
+          build-args: |
+            APP_VERSION=sha-${{ steps.sha.outputs.short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -108,6 +110,8 @@ jobs:
           file: ./Dockerfile.agent-minimal
           push: true
           tags: ${{ steps.tags.outputs.agent }}
+          build-args: |
+            APP_VERSION=sha-${{ steps.sha.outputs.short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

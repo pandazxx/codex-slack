@@ -56,6 +56,8 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/codex-slack-master:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/codex-slack-master:rc
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -87,6 +89,8 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:rc
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

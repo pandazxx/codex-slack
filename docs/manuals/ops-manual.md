@@ -99,6 +99,23 @@ Add or remove named agents per workspace via the **Agents** section in the works
 | Health check | `curl http://master-host:8080/health` |
 | DB schema | `curl http://master-host:8080/schema` |
 
+### Version display
+
+`GET /health` returns `{"status": "ok", "version": "<build-version>"}`. The `version` field is the value of the `APP_VERSION` environment variable baked into the image at CI build time.
+
+**Production shows the RC string, not the release string.** The `promote-release.yml` workflow promotes a build to production by retagging the RC image (e.g. `:v4.0-rc3` → `:v4.0`) without rebuilding. Because the image is not rebuilt, its `APP_VERSION` env var still contains the RC string that was baked in at RC build time. A production container reporting `version: "v4.0-rc3"` is correct and expected — it is the build that passed UAT and was promoted. This is not a deployment error.
+
+Startup logs follow the same convention: the first field of every `master.startup`, `agent.startup`, and `cd.daemon_start` log line is `version=<build-version>`.
+
+To confirm the running build:
+
+```bash
+curl http://master-host:8080/health
+# {"status":"ok","version":"v4.0-rc3"}
+```
+
+Local and non-tagged CI builds report `version: "dev"`, which is an unambiguous signal that the image was not produced by a tagged RC build.
+
 ## Data Backup
 
 The entire state (workspaces, topics, messages, sessions) is in the SQLite file:

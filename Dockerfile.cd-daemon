@@ -10,9 +10,12 @@
 
 FROM python:3.11-slim
 
+ARG APP_VERSION=dev
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    APP_VERSION=${APP_VERSION}
 
 # Install Docker CLI + Compose plugin from Docker's official apt repository.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -44,6 +47,7 @@ WORKDIR /opt/codex-slack
 # Copy only the files the daemon needs.
 COPY --chown=appuser:appuser src/__init__.py        ./src/__init__.py
 COPY --chown=appuser:appuser src/logging_utils.py   ./src/logging_utils.py
+COPY --chown=appuser:appuser src/version.py         ./src/version.py
 COPY --chown=appuser:appuser src/cd/                ./src/cd/
 
 RUN mkdir -p data/cd

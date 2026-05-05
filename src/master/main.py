@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..logging_utils import LocalTimeFormatter
+from ..version import get_app_version
 from .agent_runner import container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
 from .db import get_connection, init_db, schema_info
@@ -204,7 +205,8 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     configure_logging()
     settings = load_master_settings()
     LOGGER.info(
-        "master.startup mqtt=%s:%s data_dir=%s dry_run=%s base_image=%s runtime=%s",
+        "master.startup version=%s mqtt=%s:%s data_dir=%s dry_run=%s base_image=%s runtime=%s",
+        get_app_version(),
         settings.mqtt_host,
         settings.mqtt_port,
         settings.data_dir,
@@ -264,7 +266,7 @@ if (_STATIC_DIR / "assets").exists():
 
 @app.get("/health")
 async def health() -> dict:  # type: ignore[type-arg]
-    return {"status": "ok"}
+    return {"status": "ok", "version": get_app_version()}
 
 
 @app.get("/schema")
