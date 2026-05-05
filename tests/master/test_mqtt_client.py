@@ -13,6 +13,7 @@ from src.master.mqtt_client import (
     _on_connect,
     _on_disconnect,
     _on_message,
+    _touch_workspace_activity,
     build_client,
 )
 
@@ -97,6 +98,73 @@ def test_on_connect_status_topic_qos0():
     _on_connect(client, None, None, reason_code, None)
     status_calls = [c for c in client.subscribe.call_args_list if c.args[0] == _STATUS_TOPIC]
     assert status_calls and status_calls[0].kwargs.get("qos", status_calls[0].args[1] if len(status_calls[0].args) > 1 else None) == 0
+
+
+# --- _on_message touches workspace activity ---
+
+def _make_msg(topic: str, payload: dict) -> MagicMock:
+    msg = MagicMock()
+    msg.topic = topic
+    import json as _json
+    msg.payload = _json.dumps(payload).encode()
+    return msg
+
+
+def test_on_message_status_touches_activity(tmp_path):
+    import sqlite3, json as _json
+    db = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE workspaces (id TEXT PRIMARY KEY, container_name TEXT, last_message_at TEXT);
+        CREATE TABLE topics (id TEXT PRIMARY KEY, workspace_id TEXT);
+        INSERT INTO workspaces VALUES ('ws1', 'c1', '2000-01-01T00:00:00Z');
+        INSERT INTO topics VALUES ('t1', 'ws1');
+    """)
+    conn.close()
+
+    msg = _make_msg("codex-slack/workspace/ws1/topic/t1/status", {"state": "thinking"})
+    with patch("src.master.mqtt_client._touch_workspace_activity") as mock_touch:
+        _on_message(MagicMock(), {"db_path": db}, msg)
+        mock_touch.assert_called_once_with(db, "t1")
+
+
+def test_on_message_response_touches_activity(tmp_path):
+    import sqlite3
+    db = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE workspaces (id TEXT PRIMARY KEY, container_name TEXT, last_message_at TEXT);
+        CREATE TABLE topics (id TEXT PRIMARY KEY, workspace_id TEXT);
+        INSERT INTO workspaces VALUES ('ws1', 'c1', '2000-01-01T00:00:00Z');
+        INSERT INTO topics VALUES ('t1', 'ws1');
+    """)
+    conn.close()
+
+    msg = _make_msg("codex-slack/workspace/ws1/topic/t1/response", {"last_response": "done"})
+    with patch("src.master.mqtt_client._touch_workspace_activity") as mock_touch, \
+         patch("src.master.mqtt_client._save_agent_response"):
+        _on_message(MagicMock(), {"db_path": db}, msg)
+        mock_touch.assert_called_once_with(db, "t1")
+
+
+def test_touch_workspace_activity_updates_last_message_at(tmp_path):
+    import sqlite3
+    db = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE workspaces (id TEXT PRIMARY KEY, container_name TEXT, last_message_at TEXT);
+        CREATE TABLE topics (id TEXT PRIMARY KEY, workspace_id TEXT);
+        INSERT INTO workspaces VALUES ('ws1', 'c1', '2000-01-01T00:00:00Z');
+        INSERT INTO topics VALUES ('t1', 'ws1');
+    """)
+    conn.close()
+
+    _touch_workspace_activity(db, "t1")
+
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT last_message_at FROM workspaces WHERE id = 'ws1'").fetchone()
+    conn.close()
+    assert row[0] != "2000-01-01T00:00:00Z"
 
 
 # --- lifespan integration ---

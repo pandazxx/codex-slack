@@ -46,6 +46,27 @@ def _extract_usage(transcript: str | None) -> str | None:
     return None
 
 
+def _touch_workspace_activity(db_path: str, topic_id: str) -> None:
+    """Reset last_message_at for the workspace that owns this topic.
+
+    Called on every inbound agent event (status or response) so the idle-stop
+    timer measures agent silence, not user silence.
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "UPDATE workspaces SET last_message_at = ?"
+                " WHERE id = (SELECT workspace_id FROM topics WHERE id = ?)",
+                (_now(), topic_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.exception("mqtt.touch_workspace_activity_error topic_id=%s", topic_id)
+
+
 def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  # type: ignore[type-arg]
     try:
         conn = sqlite3.connect(db_path)
@@ -105,13 +126,16 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
         LOGGER.warning("mqtt.message_parse_error topic=%s", msg.topic)
         return
 
+    db_path = userdata.get("db_path")
     if msg_type == "status":
         message = {"type": "status", "state": payload.get("state")}
+        if db_path:
+            _touch_workspace_activity(db_path, topic_id)
     elif msg_type == "response":
         message = {"type": "message", "sender": "agent", **payload}
-        db_path = userdata.get("db_path")
         if db_path:
             _save_agent_response(db_path, topic_id, payload)
+            _touch_workspace_activity(db_path, topic_id)
     else:
         return
 
