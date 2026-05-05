@@ -27,18 +27,26 @@ persisted exactly once in SQLite).
 
 - Perceived latency: first visible token must arrive within ~1s of the agent
   starting to respond.
-- Minimal blast radius: do not change durable storage, the SQLite schema, or
-  the existing `/response` MQTT contract.
+- Minimal blast radius for the durable contract: do not change the existing
+  `messages` table or the `/response` MQTT contract. (We do add a separate
+  ephemeral `chunks` table, see persistence sub-decision below.)
 - Reuse the existing transport stack (MQTT + WebSocket hub + Vue chat view) —
   no new services, no new dependencies.
-- Lossy-OK for chunks: a dropped chunk must not corrupt the conversation; the
-  authoritative final message is still delivered.
+- Lossy-OK on the wire for chunks: a dropped chunk in flight must not corrupt
+  the conversation; the authoritative final message is still delivered.
+- Survive browser refresh / WebSocket reconnect during a long agent run —
+  the user must not lose the partial reply they were watching just because
+  they hit F5 or their laptop slept.
 - Backpressure-tolerant: slow browsers must not block the agent or the master.
 - Compatible with existing transcript rendering — the frontend already knows
   how to parse `stream-json` events (`TopicChat.vue:parseTranscript`,
   lines 289-296).
 
 ## Considered Options
+
+Two orthogonal choices. We pick one option from each set.
+
+**Transport** (agent → master → browser):
 
 1. **New ephemeral `chunk` MQTT topic at QoS 0; raw stream-json events
    forwarded as a new WebSocket message type; frontend renders an in-place
@@ -47,80 +55,114 @@ persisted exactly once in SQLite).
    stream-json events.**
 3. **Switch the master↔frontend transport from WebSocket-broadcast to
    server-sent events (SSE) per topic, push chunks directly through SSE.**
-4. **Persist every chunk to SQLite as it arrives and have the frontend tail
-   the message row.**
+
+**Persistence** (does the master remember chunks across browser reconnects?):
+
+A. **No per-chunk persistence.** A reconnecting browser sees no replay; it
+   waits for the final `/response`.
+B. **Persist each chunk to a dedicated `chunks` table; replay on WebSocket
+   connect; delete on `/response`.** (Recommended.)
+C. **Append each event into the `messages.transcript` row as it arrives.**
+   Mutates the durable row mid-flight.
 
 ## Decision Outcome
 
-*Chosen option:* Option 1 — **new `chunk` topic, QoS 0, raw stream-json
-passthrough**.
+*Chosen options:* **Transport Option 1** (new `/chunk` topic, QoS 0, raw
+stream-json passthrough) **+ Persistence Option B** (dedicated `chunks` table
+with replay on WS connect and delete on `/response`).
 
 Rationale, against the drivers:
 
-- *Minimal blast radius.* The existing `/response` topic and DB write path are
-  untouched. The streaming path is purely additive: new MQTT topic, new
-  WebSocket `type`, new frontend handler. If streaming breaks, the system
-  degrades to today's behaviour.
-- *Lossy-OK with hard guarantees on the tail.* QoS 0 fits the semantics:
-  losing a chunk only causes a momentary visual gap that the final `response`
-  message immediately repairs (same `message_id`).
+- *Minimal blast radius for the durable contract.* The existing `/response`
+  topic and `messages` table are untouched. Streaming adds a new MQTT topic,
+  a new ephemeral DB table that is empty whenever no agent is mid-run, and a
+  new WebSocket message type. If streaming or replay breaks, the system
+  degrades to today's "single-shot reply" behaviour.
+- *Lossy-OK on the wire, durable on the master.* QoS 0 keeps the hot path
+  cheap; the `chunks` row is the master's local copy and survives broker
+  hiccups and WebSocket drops. A browser that refreshes mid-stream gets the
+  full sequence replayed from `chunks`.
 - *Backpressure-tolerant.* The hub's `broadcast_threadsafe` is fire-and-forget;
-  paho's QoS 0 publish is non-blocking; no per-client queue is needed.
+  paho's QoS 0 publish is non-blocking; the `chunks` insert is a single
+  prepared statement on a WAL-mode SQLite DB (microseconds at expected rates).
 - *Reuses existing renderer.* The frontend already parses identical events
-  from the durable transcript; the live view appends to the same array.
+  from the durable transcript; the live view and the replayed view both
+  append to the same array.
+- *Bounded storage.* Chunks are deleted on `/response` and a background TTL
+  sweep (default 1h) removes orphans from agent crashes.
 
 ### Consequences
 
 - *Good:* Users see incremental output (text, tool calls, tool results) within
-  ~1s of the agent starting work. Operators see no change in storage or
-  recovery semantics. The change is small (~80 lines of Python, ~50 lines of
-  Vue) and reverts cleanly.
+  ~1s of the agent starting work. The durable `messages` schema is unchanged;
+  recovery semantics for completed conversations are identical to today.
+- *Good:* Browser refresh, laptop sleep, or a brief network blip during a
+  long agent run no longer loses the partial reply. On reconnect the master
+  replays every chunk seen so far for any in-progress `message_id`, and the
+  live placeholder is reconstructed exactly.
 - *Good:* The agent stops being a hard subprocess sink — `Popen` + line
   iteration unblocks future features such as cancellation and progress
   metrics.
-- *Bad (accepted):* QoS 0 means chunk loss is possible on broker hiccup or
-  WebSocket congestion; the live view may briefly skip ahead. The final
-  `response` message corrects this, so the conversation history is always
-  faithful.
+- *Bad (accepted):* QoS 0 means chunk loss is still possible on the
+  agent→broker→master leg; gaps will not be filled by replay (the master
+  never received the dropped chunk). The final `/response` repairs the
+  authoritative transcript, so the durable record is faithful.
 - *Bad (accepted):* The agent process now keeps a thread blocked on
   `proc.stdout.readline()` for the duration of a Claude run. Today's
-  `ThreadPoolExecutor(max_workers=4)` already permits this — no change. If we
-  ever exceed 4 concurrent topics per workspace we revisit (orthogonal).
-- *Bad (accepted):* A browser that connects mid-stream sees no replay; it gets
-  the `thinking` status and then the final `response`, exactly as today. We
-  judge replay as out of scope for v1.
+  `ThreadPoolExecutor(max_workers=4)` already permits this — no change.
+- *Bad (accepted):* New ephemeral table `chunks` adds write traffic on the
+  hot path (~one INSERT per stream-json line, typically 10s–100s per turn).
+  SQLite under WAL handles this comfortably at our scale; we monitor.
+- *Bad (accepted):* If the master crashes between a chunk being persisted and
+  the corresponding `/response` arriving, orphan rows linger until the TTL
+  sweep runs. They are invisible to users (no in-progress `message_id` will
+  ever resolve) and bounded in size; the sweep cleans them up.
 
 ### Confirmation
 
 - Unit test in `tests/agent/test_mqtt_loop.py` asserts that
   `_stream_claude_once` publishes one chunk per JSON line read from a
   fixture pipe and one final `response`.
-- Master integration test asserts that `/chunk` MQTT messages produce
-  WebSocket frames of `type: "chunk"` and that DB writes only happen on
-  `/response`.
+- Master integration test asserts that `/chunk` MQTT messages produce both
+  (a) a row in the `chunks` table with monotonically increasing `seq` and
+  (b) a WebSocket frame of `type: "chunk"`. The `messages` table receives
+  no row until the corresponding `/response` arrives, at which point the
+  matching `chunks` rows are deleted in the same transaction.
+- Master replay test: feed N `/chunk` messages, open a fresh WebSocket
+  before `/response`, and assert the client receives exactly one
+  `type: "chunk_replay"` frame containing the N events in order.
+- TTL sweep test: insert chunk rows with `created_at` older than the TTL
+  and assert they are deleted by the cleanup task.
 - UAT case "live typing" in `docs/test-plans/streaming-agent-reply.md`:
-  the user sends a long prompt and observes incremental rendering before the
+  user sends a long prompt and observes incremental rendering before the
   result event arrives.
+- UAT case "refresh mid-stream": user sends a long prompt, refreshes the
+  browser while the agent is still streaming, and observes the partial
+  reply restored within ~1s of the page reload.
 
 ## Pros and Cons of the Options
 
-### Option 1: New `chunk` topic, QoS 0, raw passthrough
+### Transport — Option 1: New `chunk` topic, QoS 0, raw passthrough (chosen)
 
 The agent reads Claude stdout line-by-line and publishes each parsed event
-to `codex-slack/workspace/{wid}/topic/{tid}/chunk` at QoS 0. Master forwards
-each chunk to WebSocket clients as `{ "type": "chunk", "message_id": ..., "event": <stream-json event> }`. Frontend appends events to a live message
-keyed by `message_id`; the eventual `/response` replaces the live message.
+to `codex-slack/workspace/{wid}/topic/{tid}/chunk` at QoS 0. Master persists
+the chunk to the `chunks` table and forwards it to WebSocket clients as
+`{ "type": "chunk", "message_id": ..., "event": <stream-json event> }`.
+Frontend appends events to a live message keyed by `message_id`; the eventual
+`/response` replaces the live message and master deletes the matching
+`chunks` rows.
 
-- Pro: Streaming and durable paths are independent — failure in one does not
-  affect the other.
+- Pro: Streaming and durable-final paths are independent — failure in one
+  does not affect the other.
 - Pro: Wire format is the same Claude `stream-json` shape the frontend
   already parses; zero translation cost.
-- Pro: Lossy chunks are repaired by the guaranteed final message.
+- Pro: Lossy chunks (broker hop) are repaired by the guaranteed final
+  message; reconnect gaps (master → browser) are repaired by the replay
+  out of `chunks`.
 - Con: Two topics carry related state — slight extra branching in the
   consumer.
-- Con: Mid-stream reconnect has no replay (acceptable for v1).
 
-### Option 2: Reuse `/status` topic for chunks
+### Transport — Option 2: Reuse `/status` topic for chunks
 
 Extend status payload to carry stream-json events, e.g.
 `{"state": "streaming", "event": {...}}`.
@@ -133,7 +175,7 @@ Extend status payload to carry stream-json events, e.g.
   payloads in the DB-write path, which means the routing logic gets more
   conditional, not less.
 
-### Option 3: Server-sent events from master to frontend
+### Transport — Option 3: Server-sent events from master to frontend
 
 Replace WebSocket broadcast with per-topic SSE; push chunks straight from
 master to the SSE stream.
@@ -146,17 +188,56 @@ master to the SSE stream.
   the WebSocket leaves room for future client→server signals (e.g. cancel).
   SSE forecloses that.
 
-### Option 4: Persist every chunk to SQLite
+### Persistence — Option A: No per-chunk persistence
 
-Append each event to the message row as it arrives; the frontend polls or
-tails the row.
+A reconnecting browser sees no replay; the live placeholder is lost on
+refresh and the user waits for the final `/response`.
 
-- Pro: Free replay on reconnect.
-- Con: Vastly more database writes (potentially hundreds per turn) on the
-  hot path; SQLite under the WAL is fine for this rate but we gain nothing
-  the live-view doesn't already give us, and we still need a push channel
-  to avoid polling.
-- Con: Complicates the schema invariant ("one row per finished message").
+- Pro: Zero database writes on the hot path. Simplest possible master.
+- Con: Browser refresh during a long agent run silently discards the partial
+  reply the user was watching. UX regression vs. expectations set by every
+  other modern chat product. This was the v1 behaviour and was the most
+  common complaint in early dogfooding.
+- Con: Laptop sleep / brief network drops produce the same poor UX.
+
+### Persistence — Option B: Dedicated `chunks` table (chosen)
+
+Each chunk is INSERTed into a small `chunks` table keyed by `message_id` and
+ordered by `seq`. On WebSocket connect the master finds any `message_id`
+with rows in `chunks` but no matching row in `messages`, and emits a single
+`type: "chunk_replay"` frame containing the ordered events. On `/response`
+arrival, the matching `chunks` rows are DELETEd in the same transaction
+that INSERTs into `messages`. A periodic background task deletes orphaned
+chunks older than a configurable TTL (default 1 hour).
+
+- Pro: Browser refresh / reconnect during streaming restores the partial
+  reply within ~1s of page load.
+- Pro: Keeps the durable `messages` schema invariant intact ("one row per
+  finished message") — chunks live in their own table.
+- Pro: Bounded storage: empty whenever no agent is mid-run; TTL sweep
+  handles the rare orphan case.
+- Pro: Cheap writes (single prepared INSERT, no FK, no joins) on a
+  WAL-mode SQLite.
+- Con: Adds one DB write per stream-json line on the hot path; the DELETE
+  on `/response` is a small extra cost. Acceptable at expected volumes.
+- Con: Extra branch in the master MQTT handler and a new replay branch in
+  the WebSocket connect path.
+
+### Persistence — Option C: Append into the `messages.transcript` row mid-flight
+
+Same idea as B but mutating the durable row directly: on first chunk INSERT
+a row with `streaming = 1`, on each chunk UPDATE the `transcript` column,
+on `/response` finalise.
+
+- Pro: One table instead of two; no DELETE step.
+- Con: Breaks the "one row per finished message" invariant. Every consumer
+  of `messages` (REST list, summarisation, exports) now must filter or
+  understand `streaming = 1`. Migration cost across the codebase.
+- Con: Repeated UPDATE of a TEXT column the size of the full transcript so
+  far is O(N²) write amplification over the turn — much heavier than B's
+  O(N) inserts.
+- Con: A crashed agent leaves a half-built row visible in the UI's history
+  view forever, requiring an explicit cleanup path.
 
 ## Implementation Notes (binding)
 
@@ -169,9 +250,25 @@ tails the row.
 - Reply `message_id` is generated **before** the stream starts (today it is
   generated at line 234 of `mqtt_loop.py`), so chunks and the final response
   share the same id.
-- Master `mqtt_client._on_message` adds a third branch for `chunk` that
-  forwards a WebSocket frame and performs **no** DB write.
+- DB schema gains a `chunks` table (see design doc); `init_db` creates it
+  and the `idx_chunks_message` index.
+- Master `mqtt_client._on_message`:
+  - `chunk` branch: INSERT into `chunks (message_id, topic_id, seq, event, created_at)`
+    then forward a `type: "chunk"` WebSocket frame.
+  - `response` branch: in a single transaction, INSERT the `messages` row
+    (today's behaviour) and DELETE FROM `chunks` WHERE `message_id = ?`.
+- Master WebSocket connect handler (`/ws/{topic_id}` in `main.py`): after
+  `hub.connect`, query for any `message_id` in `chunks` for this `topic_id`
+  that has no matching row in `messages`; for each such id, send one
+  `{"type": "chunk_replay", "message_id": ..., "events": [...]}` frame.
+- Master background task: every N seconds (default 300), DELETE FROM
+  `chunks` WHERE `created_at < unixepoch('now') - TTL_SECONDS`. Default
+  TTL = 3600. Configured via `CHUNK_TTL_SECONDS` env var.
 - `ws_hub` needs no change — it is content-agnostic.
-- Frontend appends an in-memory message on first chunk, mutates its
-  `transcript` event array on each subsequent chunk, and is replaced by the
-  authoritative `message` event when it arrives (same `message_id`).
+- Frontend:
+  - On `type: "chunk"`: append to in-memory live message keyed by
+    `message_id` (today's draft behaviour).
+  - On `type: "chunk_replay"`: same code path as receiving each event in
+    order (initialise the live placeholder then push each event).
+  - On `type: "message"` with matching `message_id`: replace the live
+    placeholder with the authoritative durable message.
