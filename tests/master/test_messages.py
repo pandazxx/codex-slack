@@ -23,7 +23,7 @@ def client(tmp_path, monkeypatch):
 def workspace_topic(client):
     c, _ = client
     ws = c.post("/api/workspaces", json={"name": "repo", "repo_url": "https://github.com/x/y"}).json()
-    topic = c.post(f"/api/workspaces/{ws['id']}/topics", json={"subject": "Fix bug"}).json()
+    topic = c.post(f"/api/workspaces/{ws['id']}/topics", json={"subject": "Fix bug", "repo_ref": "main"}).json()
     return ws["id"], topic["id"]
 
 

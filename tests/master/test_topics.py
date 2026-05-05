@@ -21,8 +21,8 @@ def workspace_id(client):
     return r.json()["id"]
 
 
-def create_topic(client, workspace_id, subject="Fix the bug", branch_name=None):
-    body = {"subject": subject}
+def create_topic(client, workspace_id, subject="Fix the bug", branch_name=None, repo_ref="main"):
+    body = {"subject": subject, "repo_ref": repo_ref}
     if branch_name:
         body["branch_name"] = branch_name
     return client.post(f"/api/workspaces/{workspace_id}/topics", json=body)
@@ -58,7 +58,7 @@ def test_create_topic_body(client, workspace_id):
     body = r.json()
     assert body["subject"] == "Fix the bug"
     assert body["workspace_id"] == workspace_id
-    assert body["branch_name"] == "fix-the-bug"
+    assert body["branch_name"].startswith("topic/fix-the-bug")
     assert body["worktree_path"].startswith("/workspace/worktrees/")
     assert "id" in body and "created_at" in body
 

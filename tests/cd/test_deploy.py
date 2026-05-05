@@ -32,7 +32,7 @@ def test_get_image_repo_digest_returns_digest_on_success() -> None:
         result = get_image_repo_digest("ghcr.io/org/image:latest")
     assert result == _DIGEST
     mock_run.assert_called_once_with(
-        ["podman", "image", "inspect", "--format", "{{index .RepoDigests 0}}", "ghcr.io/org/image:latest"]
+        ["docker", "image", "inspect", "--format", "{{index .RepoDigests 0}}", "ghcr.io/org/image:latest"]
     )
 
 
@@ -58,7 +58,7 @@ def test_pull_image_returns_digest_on_success() -> None:
          patch("src.cd.deploy.get_image_repo_digest", return_value=_DIGEST):
         result = pull_image("ghcr.io/org/image:latest")
     assert result == _DIGEST
-    mock_run.assert_called_once_with(["podman", "pull", "ghcr.io/org/image:latest"])
+    mock_run.assert_called_once_with(["docker", "pull", "ghcr.io/org/image:latest"])
 
 
 def test_pull_image_returns_none_on_pull_failure() -> None:
@@ -196,7 +196,7 @@ def test_rollback_image_pulls_then_deploys() -> None:
             dry_run=False,
         )
     assert ok is True
-    mock_run.assert_called_once_with(["podman", "pull", _OLD_DIGEST])
+    mock_run.assert_called_once_with(["docker", "pull", _OLD_DIGEST])
     mock_deploy.assert_called_once()
 
 

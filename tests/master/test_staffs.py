@@ -23,7 +23,7 @@ def _make_ws(client, name="repo"):
 
 
 def _make_topic(client, ws_id):
-    return client.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "work"}).json()
+    return client.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "work", "repo_ref": "main"}).json()
 
 
 # ── Global staff CRUD ─────────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ def test_mention_routes_to_workspace_staff(client):
         mock_build.return_value = mock_mqtt
         with TestClient(app) as c:
             ws_id = c.post("/api/workspaces", json={"name": "r", "repo_url": "http://x"}).json()["id"]
-            topic_id = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t"}).json()["id"]
+            topic_id = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t", "repo_ref": "main"}).json()["id"]
             import json as _json
             r = c.post(
                 f"/api/workspaces/{ws_id}/topics/{topic_id}/messages",
@@ -209,7 +209,7 @@ def test_cascade_global_staff_resolved_via_message(client):
             # Create a global staff with a unique name
             c.post("/api/staffs", json={"name": "reviewer", "adapter": "claude-code", "model": "gm"})
             ws_id = c.post("/api/workspaces", json={"name": "r2", "repo_url": "http://x"}).json()["id"]
-            topic_id = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t"}).json()["id"]
+            topic_id = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t", "repo_ref": "main"}).json()["id"]
             import json as _json
             r = c.post(
                 f"/api/workspaces/{ws_id}/topics/{topic_id}/messages",
@@ -230,7 +230,7 @@ def test_staff_session_uuid_is_deterministic(client):
         with TestClient(app) as c:
             import json as _json
             ws_id = c.post("/api/workspaces", json={"name": "r3", "repo_url": "http://x"}).json()["id"]
-            topic_id = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t"}).json()["id"]
+            topic_id = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t", "repo_ref": "main"}).json()["id"]
             c.post(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages", data={"text": "first"})
             p1 = _json.loads(mock_mqtt.publish.call_args.args[1])
             # Simulate new TestClient session (same DB) — UUID should be same
@@ -246,7 +246,7 @@ def test_staff_session_is_new_on_first_send(client):
         with TestClient(app) as c:
             import json as _json
             ws_id = c.post("/api/workspaces", json={"name": "r4", "repo_url": "http://x"}).json()["id"]
-            topic_id = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t"}).json()["id"]
+            topic_id = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t", "repo_ref": "main"}).json()["id"]
             c.post(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages", data={"text": "first"})
             p1 = _json.loads(mock_mqtt.publish.call_args.args[1])
             assert p1["is_new_session"] is True
@@ -267,8 +267,8 @@ def test_workspace_session_scope_shares_across_topics(client):
             c.put(f"/api/workspaces/{ws_id}/staffs/claude", json={
                 "name": "claude", "adapter": "claude-code", "session_scope": "workspace", "is_default": True
             })
-            t1 = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t1"}).json()["id"]
-            t2 = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t2"}).json()["id"]
+            t1 = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t1", "repo_ref": "main"}).json()["id"]
+            t2 = c.post(f"/api/workspaces/{ws_id}/topics", json={"subject": "t2", "repo_ref": "main"}).json()["id"]
             c.post(f"/api/workspaces/{ws_id}/topics/{t1}/messages", data={"text": "msg1"})
             p1 = _json.loads(mock_mqtt.publish.call_args.args[1])
             c.post(f"/api/workspaces/{ws_id}/topics/{t2}/messages", data={"text": "msg2"})
