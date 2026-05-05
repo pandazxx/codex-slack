@@ -47,8 +47,10 @@ COPY --chown=appuser:appuser src/__init__.py        /app/src/__init__.py
 COPY --chown=appuser:appuser src/logging_utils.py   /app/src/logging_utils.py
 COPY --chown=appuser:appuser src/cd/                /app/src/cd/
 
+# Bake in the master compose file so no project-dir volume mount is needed.
+COPY --chown=appuser:appuser docker-compose.yml     /opt/codex-slack/docker-compose.yml
+
 USER appuser
-# Working dir is /opt/codex-slack so compose commands resolve paths correctly.
 WORKDIR /opt/codex-slack
 
 RUN mkdir -p data/cd

@@ -4,16 +4,17 @@
 # digest, deploys it via the master compose file, waits for a health check,
 # and rolls back automatically if the master container fails to stay running.
 #
-# The daemon must be kept OUTSIDE the master container so it can stop/restart
-# the master independently.  Run it on the same host with access to the
-# Docker socket and the master compose project directory.
+# The daemon image is self-contained: the master docker-compose.yml is baked
+# in at build time, so no project directory needs to be mounted on the host.
+# Deploy state is persisted in a named Docker volume.
 #
 # Usage
 # -----
-#   1. Copy this file alongside docker-compose.yml.
-#   2. Create a .env file with at minimum:
+#   1. Create a .env file with at minimum:
 #        CD_IMAGE=ghcr.io/<org>/codex-slack-master
-#   3. Start the daemon:
+#        CD_DAEMON_IMAGE=ghcr.io/<org>/codex-slack-cd-daemon:<tag>
+#        DOCKER_GID=<gid of the docker group on the host>
+#   2. Start the daemon:
 #        docker compose -f docker-compose.cd-daemon.example.yml up -d
 #
 # Security note
@@ -29,7 +30,6 @@ services:
     image: ${CD_DAEMON_IMAGE:-ghcr.io/your-org/codex-slack-cd-daemon:latest}
     container_name: codex-slack-cd-daemon
     restart: unless-stopped
-    working_dir: /opt/codex-slack
     command: ["python", "-m", "src.cd.main"]
     group_add:
       - "${DOCKER_GID:-999}"
@@ -45,6 +45,7 @@ services:
       # Name of the master container managed by this daemon.
       CD_CONTAINER_NAME: ${CD_CONTAINER_NAME:-codex-slack-master}
       # Path to the compose file, as seen from inside this container.
+      # Defaults to the file baked into the image at build time.
       CD_COMPOSE_FILE: ${CD_COMPOSE_FILE:-/opt/codex-slack/docker-compose.yml}
       # Service name inside the compose file.
       CD_COMPOSE_SERVICE: ${CD_COMPOSE_SERVICE:-master}
@@ -78,5 +79,8 @@ services:
       # Docker socket — required for container management.
       - ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}:/run/container.sock
 
-      # Master project directory so the daemon can drive compose commands.
-      - ${MASTER_PROJECT_DIR:-.}:/opt/codex-slack
+      # Named volume for deploy state persistence across daemon restarts.
+      - codex-slack-cd-state:/opt/codex-slack/data/cd
+
+volumes:
+  codex-slack-cd-state:
