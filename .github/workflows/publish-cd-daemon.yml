@@ -17,6 +17,7 @@ on:
       - 'src/__init__.py'
       - 'src/logging_utils.py'
       - 'Dockerfile.cd-daemon'
+      - 'docker-compose.yml'
       - '.github/workflows/publish-cd-daemon.yml'
   workflow_dispatch:
 
