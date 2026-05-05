@@ -2,10 +2,12 @@ FROM python:3.11-slim
 
 ARG CODEX_NPM_PACKAGE=@openai/codex
 ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code
+ARG APP_VERSION=dev
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    APP_VERSION=${APP_VERSION}
 
 # Minimal worker image: keep only runtime dependencies required for agent-worker.
 RUN apt-get update && apt-get install -y --no-install-recommends \
