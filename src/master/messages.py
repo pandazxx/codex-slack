@@ -133,7 +133,8 @@ async def send_message(
             (message_id, topic_id, text.strip(), now),
         )
         conn.execute(
-            "UPDATE workspaces SET last_message_at = ? WHERE id = ?", (now, workspace_id)
+            "UPDATE workspaces SET last_message_at = ?, last_dispatched_at = ? WHERE id = ?",
+            (now, now, workspace_id),
         )
         conn.commit()
     finally:

@@ -13,7 +13,7 @@ from src.master.mqtt_client import (
     _on_connect,
     _on_disconnect,
     _on_message,
-    _touch_workspace_activity,
+    _record_agent_response,
     build_client,
 )
 
@@ -100,7 +100,7 @@ def test_on_connect_status_topic_qos0():
     assert status_calls and status_calls[0].kwargs.get("qos", status_calls[0].args[1] if len(status_calls[0].args) > 1 else None) == 0
 
 
-# --- _on_message touches workspace activity ---
+# --- _on_message and _record_agent_response ---
 
 def _make_msg(topic: str, payload: dict) -> MagicMock:
     msg = MagicMock()
@@ -110,60 +110,48 @@ def _make_msg(topic: str, payload: dict) -> MagicMock:
     return msg
 
 
-def test_on_message_status_touches_activity(tmp_path):
-    import sqlite3, json as _json
-    db = str(tmp_path / "test.db")
-    conn = sqlite3.connect(db)
-    conn.executescript("""
-        CREATE TABLE workspaces (id TEXT PRIMARY KEY, container_name TEXT, last_message_at TEXT);
-        CREATE TABLE topics (id TEXT PRIMARY KEY, workspace_id TEXT);
-        INSERT INTO workspaces VALUES ('ws1', 'c1', '2000-01-01T00:00:00Z');
-        INSERT INTO topics VALUES ('t1', 'ws1');
-    """)
-    conn.close()
-
-    msg = _make_msg("codex-slack/workspace/ws1/topic/t1/status", {"state": "thinking"})
-    with patch("src.master.mqtt_client._touch_workspace_activity") as mock_touch:
-        _on_message(MagicMock(), {"db_path": db}, msg)
-        mock_touch.assert_called_once_with(db, "t1")
-
-
-def test_on_message_response_touches_activity(tmp_path):
+def _make_db(tmp_path) -> str:
     import sqlite3
     db = str(tmp_path / "test.db")
     conn = sqlite3.connect(db)
     conn.executescript("""
-        CREATE TABLE workspaces (id TEXT PRIMARY KEY, container_name TEXT, last_message_at TEXT);
+        CREATE TABLE workspaces (
+            id TEXT PRIMARY KEY, container_name TEXT,
+            last_message_at TEXT, last_dispatched_at TEXT, last_responded_at TEXT
+        );
         CREATE TABLE topics (id TEXT PRIMARY KEY, workspace_id TEXT);
-        INSERT INTO workspaces VALUES ('ws1', 'c1', '2000-01-01T00:00:00Z');
+        INSERT INTO workspaces VALUES ('ws1', 'c1', '2000-01-01T00:00:00Z', NULL, NULL);
         INSERT INTO topics VALUES ('t1', 'ws1');
     """)
     conn.close()
+    return db
 
+
+def test_on_message_status_does_not_record_response(tmp_path):
+    db = _make_db(tmp_path)
+    msg = _make_msg("codex-slack/workspace/ws1/topic/t1/status", {"state": "thinking"})
+    with patch("src.master.mqtt_client._record_agent_response") as mock_rec:
+        _on_message(MagicMock(), {"db_path": db}, msg)
+        mock_rec.assert_not_called()
+
+
+def test_on_message_response_records_response(tmp_path):
+    db = _make_db(tmp_path)
     msg = _make_msg("codex-slack/workspace/ws1/topic/t1/response", {"last_response": "done"})
-    with patch("src.master.mqtt_client._touch_workspace_activity") as mock_touch, \
+    with patch("src.master.mqtt_client._record_agent_response") as mock_rec, \
          patch("src.master.mqtt_client._save_agent_response"):
         _on_message(MagicMock(), {"db_path": db}, msg)
-        mock_touch.assert_called_once_with(db, "t1")
+        mock_rec.assert_called_once_with(db, "t1")
 
 
-def test_touch_workspace_activity_updates_last_message_at(tmp_path):
+def test_record_agent_response_sets_last_responded_at(tmp_path):
     import sqlite3
-    db = str(tmp_path / "test.db")
+    db = _make_db(tmp_path)
+    _record_agent_response(db, "t1")
     conn = sqlite3.connect(db)
-    conn.executescript("""
-        CREATE TABLE workspaces (id TEXT PRIMARY KEY, container_name TEXT, last_message_at TEXT);
-        CREATE TABLE topics (id TEXT PRIMARY KEY, workspace_id TEXT);
-        INSERT INTO workspaces VALUES ('ws1', 'c1', '2000-01-01T00:00:00Z');
-        INSERT INTO topics VALUES ('t1', 'ws1');
-    """)
+    row = conn.execute("SELECT last_responded_at FROM workspaces WHERE id = 'ws1'").fetchone()
     conn.close()
-
-    _touch_workspace_activity(db, "t1")
-
-    conn = sqlite3.connect(db)
-    row = conn.execute("SELECT last_message_at FROM workspaces WHERE id = 'ws1'").fetchone()
-    conn.close()
+    assert row[0] is not None
     assert row[0] != "2000-01-01T00:00:00Z"
 
 

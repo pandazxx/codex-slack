@@ -46,17 +46,18 @@ def _extract_usage(transcript: str | None) -> str | None:
     return None
 
 
-def _touch_workspace_activity(db_path: str, topic_id: str) -> None:
-    """Reset last_message_at for the workspace that owns this topic.
+def _record_agent_response(db_path: str, topic_id: str) -> None:
+    """Set last_responded_at on the workspace that owns this topic.
 
-    Called on every inbound agent event (status or response) so the idle-stop
-    timer measures agent silence, not user silence.
+    Called only on agent `response` events (not status). The idle-stop logic
+    compares last_responded_at against last_dispatched_at: the container is
+    only eligible for idle-stop when the agent has responded to every dispatch.
     """
     try:
         conn = sqlite3.connect(db_path)
         try:
             conn.execute(
-                "UPDATE workspaces SET last_message_at = ?"
+                "UPDATE workspaces SET last_responded_at = ?"
                 " WHERE id = (SELECT workspace_id FROM topics WHERE id = ?)",
                 (_now(), topic_id),
             )
@@ -64,7 +65,7 @@ def _touch_workspace_activity(db_path: str, topic_id: str) -> None:
         finally:
             conn.close()
     except Exception:
-        LOGGER.exception("mqtt.touch_workspace_activity_error topic_id=%s", topic_id)
+        LOGGER.exception("mqtt.record_agent_response_error topic_id=%s", topic_id)
 
 
 def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  # type: ignore[type-arg]
@@ -129,13 +130,11 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
     db_path = userdata.get("db_path")
     if msg_type == "status":
         message = {"type": "status", "state": payload.get("state")}
-        if db_path:
-            _touch_workspace_activity(db_path, topic_id)
     elif msg_type == "response":
         message = {"type": "message", "sender": "agent", **payload}
         if db_path:
             _save_agent_response(db_path, topic_id, payload)
-            _touch_workspace_activity(db_path, topic_id)
+            _record_agent_response(db_path, topic_id)
     else:
         return
 
