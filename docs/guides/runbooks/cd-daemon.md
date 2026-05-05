@@ -53,18 +53,20 @@ pointing to a new commit).
 
 ## Environment Variables
 
-All settings are read from environment variables.  Use a `.env` file or pass them
-directly when running the daemon container.
+All settings are read from environment variables.  Only `CD_IMAGE` is required —
+everything else has a sensible default.  The master service variables
+(`ANTHROPIC_API_KEY`, `GH_TOKEN`, etc.) are managed by the master itself and do
+**not** need to appear in the daemon's `.env`.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `CD_IMAGE` | **yes** | — | Base image name without tag, e.g. `ghcr.io/org/codex-slack-master` |
 | `CD_IMAGE_TAG` | no | `latest` | Tag to track. Set to a semver for production. |
 | `CD_CONTAINER_NAME` | no | `codex-slack-master` | Name of the master container on this host. |
-| `CD_COMPOSE_FILE` | no | `docker-compose.master-agent.example.yml` | Path to the compose file that defines the master service (as seen from inside the daemon container). |
-| `CD_COMPOSE_SERVICE` | no | `codex-slack-master` | Service name inside the compose file. |
-| `CD_COMPOSE_BINARY` | no | `docker compose` | Compose binary to invoke. Use `podman-compose` for rootless Podman hosts. |
-| `CD_ENV_FILE` | no | — | `.env` file passed to compose via `--env-file`. |
+| `CD_COMPOSE_FILE` | no | `docker-compose.yml` | Path to the compose file that defines the master service (as seen from inside the daemon container). |
+| `CD_COMPOSE_SERVICE` | no | `master` | Service name inside the compose file. |
+| `CD_COMPOSE_BINARY` | no | `docker compose` | Compose binary to invoke. Use `docker-compose` for Compose v1. |
+| `CD_ENV_FILE` | no | — | Extra `.env` file forwarded to compose via `--env-file`. Rarely needed; omit unless you have variables that must be injected at deploy time. |
 | `CD_STATE_FILE` | no | `data/cd/state.json` | JSON file where the daemon persists its deploy state. |
 | `CD_POLL_INTERVAL_SECONDS` | no | `300` | How often (seconds) to poll the registry. |
 | `CD_HEALTH_CHECK_DELAY_SECONDS` | no | `30` | Seconds to wait after container start before checking health. |
@@ -152,40 +154,40 @@ poll cycle.
 
 ### Prerequisites
 
-- Docker or rootless Podman on the host.
-- The master compose file (`docker-compose.master-agent.example.yml` or a copy
-  you maintain) checked out on the host.
-- A `.env` file with all master environment variables.
-- Podman socket exposed at a path the daemon container can reach.
-- GHCR credentials accessible to the daemon for pulling private images
-  (set via `DOCKER_CONFIG` or by logging in before starting the daemon).
+- Docker (or rootless Podman) on the host.
+- `docker-compose.yml` and `docker-compose.cd-daemon.example.yml` checked out
+  on the host in the same directory.
+- Docker socket accessible at `CONTAINER_SOCKET_PATH` (default `/var/run/docker.sock`).
+- GHCR credentials available to the daemon for pulling private images
+  (log in with `docker login ghcr.io` or set `DOCKER_CONFIG` before starting).
+
+### Minimal .env
+
+Copy `.env.example` to `.env` and set the one required variable:
+
+```bash
+cp .env.example .env
+# Edit .env — at minimum set:
+#   CD_IMAGE=ghcr.io/<org>/codex-slack-master
+```
+
+Master-service variables (`ANTHROPIC_API_KEY`, `GH_TOKEN`, etc.) are managed
+by the master container itself and do not belong in this file.
 
 ### Staging
 
 Staging tracks `latest`, which is pushed on every merge to `master`.
 
 ```bash
-# .env.staging (add alongside your master .env)
+# .env  (staging)
 CD_IMAGE=ghcr.io/<org>/codex-slack-master
-CD_IMAGE_TAG=latest
-CD_CONTAINER_NAME=codex-slack-master
-CD_COMPOSE_FILE=/opt/codex-slack/docker-compose.master-agent.example.yml
-CD_ENV_FILE=/opt/codex-slack/.env
-CD_STATE_FILE=/opt/codex-slack/data/cd/state.json
-CD_POLL_INTERVAL_SECONDS=120
-CD_HEALTH_CHECK_DELAY_SECONDS=30
+# CD_IMAGE_TAG=latest          # default — no need to set
+# CD_POLL_INTERVAL_SECONDS=120 # optional: poll more frequently
 ```
 
 ```bash
-export PODMAN_SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
-export MASTER_PROJECT_DIR="$(pwd)"
-export UID="$(id -u)"
-export GID="$(id -g)"
-
-podman compose -f docker-compose.cd-daemon.example.yml \
-  --env-file .env.staging up -d
-
-podman compose -f docker-compose.cd-daemon.example.yml logs -f
+docker compose -f docker-compose.cd-daemon.example.yml up -d
+docker compose -f docker-compose.cd-daemon.example.yml logs -f
 ```
 
 ### Production
@@ -194,15 +196,10 @@ Production tracks a specific semver tag.  Update `CD_IMAGE_TAG` when you want
 to promote a release.
 
 ```bash
-# .env.production
+# .env  (production)
 CD_IMAGE=ghcr.io/<org>/codex-slack-master
 CD_IMAGE_TAG=v1.2.3           # ← update this when promoting a release
-CD_CONTAINER_NAME=codex-slack-master
-CD_COMPOSE_FILE=/opt/codex-slack/docker-compose.master-agent.example.yml
-CD_ENV_FILE=/opt/codex-slack/.env
-CD_STATE_FILE=/opt/codex-slack/data/cd/state.json
-CD_POLL_INTERVAL_SECONDS=300
-CD_HEALTH_CHECK_DELAY_SECONDS=45
+# CD_HEALTH_CHECK_DELAY_SECONDS=45  # optional: give the master more time
 ```
 
 To release a new version to production:
@@ -214,9 +211,8 @@ git push origin v1.2.3
 # GitHub Actions publishes image:v1.2.3 to GHCR automatically.
 
 # On the production host, bump the tag and restart the daemon:
-sed -i 's/^CD_IMAGE_TAG=.*/CD_IMAGE_TAG=v1.2.3/' .env.production
-podman compose -f docker-compose.cd-daemon.example.yml \
-  --env-file .env.production restart codex-slack-cd-daemon
+sed -i 's/^CD_IMAGE_TAG=.*/CD_IMAGE_TAG=v1.2.3/' .env
+docker compose -f docker-compose.cd-daemon.example.yml restart codex-slack-cd-daemon
 ```
 
 The daemon picks up `v1.2.3` on its next poll, detects the new digest, and
@@ -294,7 +290,7 @@ gh workflow run publish-master.yml
 - Check that `CD_IMAGE` and `CD_IMAGE_TAG` match what was pushed to GHCR exactly.
 - Verify GHCR credentials inside the daemon container:
   ```bash
-  podman exec codex-slack-cd-daemon podman pull $CD_IMAGE:$CD_IMAGE_TAG
+  docker exec codex-slack-cd-daemon docker pull $CD_IMAGE:$CD_IMAGE_TAG
   ```
 - Reduce `CD_POLL_INTERVAL_SECONDS` temporarily.
 
@@ -303,29 +299,29 @@ gh workflow run publish-master.yml
 - Check `cd.health_check_failed` in daemon logs.
 - Inspect the failed master container:
   ```bash
-  podman logs codex-slack-master
-  podman inspect codex-slack-master | jq '.[0].State'
+  docker logs codex-slack-master
+  docker inspect codex-slack-master | jq '.[0].State'
   ```
-- Common causes: missing env var in `.env` file, incompatible image for the
-  running compose config, Podman socket permission error.
+- Common causes: incompatible image for the running compose config, Docker
+  socket permission error, or a missing master-side setting.
 - If `CD_ROLLBACK_ON_FAILURE=true`, the daemon will have already rolled back.
   Check `state.json` — `deployed_digest` should point to the previous good image.
 
 ### Rollback also fails (`cd.rollback_also_unhealthy`)
 
 The `previous_digest` image is also failing to start.  This usually means a
-bad shared config (`.env` file, secret mounts) rather than a bad image.
+bad shared config (secret mounts, master-side settings) rather than a bad image.
 
 Manual recovery:
 
 ```bash
 # Find a known-good sha- tag from GHCR
-podman pull ghcr.io/org/codex-slack-master:sha-<good-commit>
+docker pull ghcr.io/org/codex-slack-master:sha-<good-commit>
 
 # Deploy it manually
 MASTER_RUNTIME_IMAGE=ghcr.io/org/codex-slack-master:sha-<good-commit> \
-  docker compose -f docker-compose.master-agent.example.yml \
-  up -d --no-build --force-recreate codex-slack-master
+  docker compose -f docker-compose.yml \
+  up -d --no-build --force-recreate master
 
 # Reset daemon state to the known-good digest
 cat > data/cd/state.json <<EOF
@@ -349,7 +345,7 @@ The daemon is failing on every poll.  Common causes:
 Enable debug logging:
 
 ```bash
-podman exec codex-slack-cd-daemon \
+docker exec codex-slack-cd-daemon \
   python -c "import logging; logging.basicConfig(level=logging.DEBUG); \
   from src.cd.config import load_cd_settings; print(load_cd_settings())"
 ```
@@ -358,7 +354,7 @@ podman exec codex-slack-cd-daemon \
 
 ## Security Notes
 
-- The CD daemon is granted **read/write access to the Podman socket** so it can
+- The CD daemon is granted **read/write access to the Docker socket** so it can
   stop, remove, and recreate the master container.  Treat it with the same trust
   level as the master itself.
 - GHCR pull credentials should be scoped to `read:packages` only.
