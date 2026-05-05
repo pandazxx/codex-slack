@@ -46,12 +46,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
 
 RUN useradd -m -u 1000 -s /bin/bash appuser \
-    && mkdir -p /workspace/home /home/appuser/.claude \
-    && chown -R appuser:appuser /workspace /home/appuser/.claude
+    && mkdir -p /workspace/home /home/appuser/.claude /opt/codex-slack/data/master \
+    && chown -R appuser:appuser /workspace /home/appuser/.claude /opt/codex-slack
 USER appuser
 WORKDIR /opt/codex-slack
-
-RUN mkdir -p data/master data/cd
 
 COPY --chown=appuser:appuser requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
