@@ -353,49 +353,50 @@ Notes:
 
 `ws_hub.ConnectionHub` requires no change — it is content-agnostic.
 
-#### 2c. Master chunk cleanup (background task)
-
-A periodic task deletes orphaned chunks (e.g. left by a crashed agent that
-never sent `/response`).
-
-```python
-# in src/master/service.py or a new src/master/chunk_sweeper.py
-async def _chunk_sweep_loop(db_path: str, ttl_seconds: int, interval: int) -> None:
-    while True:
-        try:
-            def _sweep() -> int:
-                conn = sqlite3.connect(db_path)
-                try:
-                    cur = conn.execute(
-                        "DELETE FROM chunks"
-                        " WHERE created_at < unixepoch('now','subsec') - ?",
-                        (ttl_seconds,),
-                    )
-                    conn.commit()
-                    return cur.rowcount
-                finally:
-                    conn.close()
-            n = await asyncio.get_running_loop().run_in_executor(None, _sweep)
-            if n:
-                LOGGER.info("chunks.sweep_deleted count=%d", n)
-        except Exception:
-            LOGGER.exception("chunks.sweep_error")
-        await asyncio.sleep(interval)
-```
-
-Started from the FastAPI lifespan/startup hook with
-`asyncio.create_task(_chunk_sweep_loop(db_path, CHUNK_TTL_SECONDS, CHUNK_SWEEP_INTERVAL_SECONDS))`.
-
 #### 3. Frontend (`frontend/src/views/TopicChat.vue`)
 
-State:
+##### Visual structure
+
+During streaming, each agent reply is a single message bubble containing two
+zones stacked vertically:
+
+```
+┌─────────────────────────────────────────────────┐
+│  ⚙ Bash: git log --oneline -5                   │  ← activity rows
+│  📄 Read: src/master/db.py                       │    (live, scrolling)
+│  ↳ Running git log --oneline                     │
+│  🤖 Agent: Exploring codebase structure          │
+│  ↳ Reading src/master/mqtt_client.py             │
+│  ···                                             │  ← folded tool_result
+│                                                  │
+│  The exploration reveals great news: almost all  │  ← text zone
+│  the infrastructure is already in place…▍        │    (cursor while streaming)
+└─────────────────────────────────────────────────┘
+```
+
+When the final `/response` arrives, the activity rows are **folded** into a
+single collapsed toggle, leaving only the clean reply text:
+
+```
+┌─────────────────────────────────────────────────┐
+│  ▶ Show trace (47 steps)                         │  ← collapsed, click to expand
+│                                                  │
+│  The exploration reveals great news: almost all  │  ← reply text (unchanged)
+│  the infrastructure is already in place…         │
+└─────────────────────────────────────────────────┘
+```
+
+Clicking `▶ Show trace` expands it back to the full activity list in-place.
+
+##### State
 
 ```js
-// keyed by message_id; values are { events: [], text: '', placeholder: true }
+// keyed by message_id; values are { rows: [], text: '', traceOpen: false }
+// rows: classified render items (see classifyEvent below)
 const liveStreams = ref({})
 ```
 
-WebSocket handler (replace lines 176-189):
+##### WebSocket handler
 
 ```js
 ws.onmessage = (evt) => {
@@ -405,74 +406,123 @@ ws.onmessage = (evt) => {
   } else if (data.type === 'chunk') {
     handleChunk(data)
   } else if (data.type === 'chunk_replay') {
-    // Reconnect / refresh: replay every persisted chunk for an in-progress
-    // agent reply. Treated identically to receiving each event live.
-    const { message_id, agent_name, events } = data
-    for (const event of events) {
-      handleChunk({ message_id, agent_name, event })
+    for (const event of data.events) {
+      handleChunk({ message_id: data.message_id, agent_name: data.agent_name, event })
     }
   } else if (data.type === 'message') {
-    // Final authoritative message — replace any live placeholder with same id
-    const existingIdx = messages.value.findIndex(m => m.id === data.message_id)
-    const finalMsg = {
-      id: data.message_id,
-      sender: data.sender || 'agent',
-      agent_name: data.agent_name || null,
-      text: data.last_response || data.text || '',
-      transcript: data.transcript || null,
-      created_at: new Date().toISOString(),
-    }
-    if (existingIdx >= 0) messages.value.splice(existingIdx, 1, finalMsg)
-    else messages.value.push(finalMsg)
-    delete liveStreams.value[data.message_id]
-    scrollToBottom()
+    finaliseMessage(data)
   }
 }
+```
 
+##### `handleChunk` — build the live bubble
+
+```js
 function handleChunk({ message_id, agent_name, event }) {
   let live = liveStreams.value[message_id]
   if (!live) {
-    // Derive agent_name from system/init event if it was omitted (replay path).
-    let derivedAgent = agent_name || null
-    if (!derivedAgent && event.type === 'system' && event.subtype === 'init') {
-      derivedAgent = event.agent_name || null
-    }
-    live = { events: [], text: '' }
+    live = { rows: [], text: '', traceOpen: false }
     liveStreams.value[message_id] = live
     messages.value.push({
       id: message_id,
       sender: 'agent',
-      agent_name: derivedAgent,
+      agent_name: agent_name || null,
       text: '',
-      transcript: null,                          // built lazily below
+      rows: live.rows,        // reactive reference — rows update in place
+      streaming: true,
+      traceOpen: false,
       created_at: new Date().toISOString(),
-      streaming: true,                            // flag for UI cue (cursor, spinner)
     })
   }
-  live.events.push(event)
-  if (event.type === 'assistant' && event.message?.content) {
-    for (const blk of event.message.content) {
-      if (blk.type === 'text' && blk.text) live.text += blk.text
+
+  const kind = classifyEvent(event)
+  if (kind === 'text') {
+    for (const blk of event.message?.content || []) {
+      if (blk.type === 'text') live.text += blk.text
     }
+    const msg = messages.value.find(m => m.id === message_id)
+    if (msg) msg.text = live.text
+  } else if (kind !== 'hidden') {
+    // activity row — push into the shared rows array (reactive in the message object)
+    live.rows.push({ kind, event })
   }
-  // mutate the placeholder message in place
-  const msg = messages.value.find(m => m.id === message_id)
-  if (msg) {
-    msg.text = live.text
-    msg.transcript = JSON.stringify(live.events)  // re-serialise for the same renderer
-  }
+
   scrollToBottom()
 }
 ```
 
+##### `finaliseMessage` — fold the trace, replace with durable message
+
+```js
+function finaliseMessage(data) {
+  const existingIdx = messages.value.findIndex(m => m.id === data.message_id)
+  const live = liveStreams.value[data.message_id]
+  const traceRows = live?.rows ?? []
+
+  const finalMsg = {
+    id: data.message_id,
+    sender: data.sender || 'agent',
+    agent_name: data.agent_name || null,
+    text: data.last_response || data.text || '',
+    transcript: data.transcript || null,
+    // Preserve the collected trace rows, but start folded
+    traceRows,
+    traceOpen: false,
+    streaming: false,
+    created_at: new Date().toISOString(),
+  }
+
+  if (existingIdx >= 0) messages.value.splice(existingIdx, 1, finalMsg)
+  else messages.value.push(finalMsg)
+
+  delete liveStreams.value[data.message_id]
+  scrollToBottom()
+}
+```
+
+##### Template sketch (message bubble component)
+
+```html
+<div class="message agent" :class="{ streaming: msg.streaming }">
+  <!-- Trace section -->
+  <template v-if="msg.streaming && msg.rows?.length">
+    <!-- Live: show all activity rows -->
+    <div class="trace-row" v-for="(row, i) in msg.rows" :key="i">
+      <span v-if="row.kind === 'tool_use'">{{ toolUseLabel(row.event) }}</span>
+      <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
+      <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
+      <details v-else-if="row.kind === 'folded'"><summary>···</summary>
+        <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
+      </details>
+    </div>
+  </template>
+  <template v-else-if="!msg.streaming && msg.traceRows?.length">
+    <!-- Finished: collapsed toggle -->
+    <details :open="msg.traceOpen" @toggle="msg.traceOpen = $event.target.open">
+      <summary>▶ Show trace ({{ msg.traceRows.length }} steps)</summary>
+      <div class="trace-row" v-for="(row, i) in msg.traceRows" :key="i">
+        <!-- same row rendering as above -->
+      </div>
+    </details>
+  </template>
+
+  <!-- Reply text (always visible) -->
+  <MarkdownMessage :text="msg.text" />
+
+  <!-- Streaming cursor -->
+  <span v-if="msg.streaming" class="cursor">▍</span>
+</div>
+```
+
 Ordering note: the REST `GET .../messages` history call (`fetch` at
 `TopicChat.vue:162`) must complete and populate `messages.value` before the
-WS `chunk_replay` frame is processed; otherwise the replay's `messages.push`
-of the live placeholder could be wiped by a later history overwrite. The
-existing flow already opens the WebSocket after the history fetch resolves,
-which preserves this order. Keep it that way.
+WS `chunk_replay` frame is processed. The existing flow already opens the
+WebSocket after the history fetch resolves — keep it that way.
 
-Optional CSS cue: `.message.agent.streaming .bubble::after { content: '▍'; animation: blink 1s steps(2) infinite; }` so users see a cursor while the stream is open. Add a `streaming` flag in the v-bind class.
+For historical messages loaded from REST (which already have a `transcript`
+field), the trace rows are derived by running the same `classifyEvent` pass
+over the stored transcript JSON at render time. This makes live and historical
+views consistent without storing `traceRows` in the DB.
 
 ### Wire formats
 
@@ -545,7 +595,7 @@ this is what enables the "replace placeholder" step on the frontend.
 | Browser refresh (F5) mid-stream | Same as reconnect: REST history loads finished messages, WS connect triggers `chunk_replay` for the in-progress id. User sees the partial reply restored within ~1s. |
 | Browser connects for the first time mid-stream | `chunk_replay` delivers everything seen so far on the master; new chunks stream normally. |
 | Claude exits non-zero                 | `/chunk` may have already published partial events (now persisted in `chunks`); final `/response` carries `is_error: true` and triggers the DELETE of those chunks; frontend overwrites placeholder with the error message. |
-| Agent crashes between chunks and `/response` | Persisted chunks remain in the `chunks` table for that `message_id`. The frontend keeps showing the partial reply with `streaming: true`. The chunk-sweep background task deletes the orphan rows after the TTL (default 1h). The next user message produces a fresh `message_id`; the stale placeholder will not collide. **UX gap**: the spinner stays until either a new message arrives or the page is refreshed after TTL. Track in lessons-learned. |
+| Agent crashes between chunks and `/response` | Persisted chunks remain in the `chunks` table for that `message_id`. The frontend keeps showing the partial reply with `streaming: true`. The next user message produces a fresh `message_id`; the stale placeholder will not collide. **UX gap**: the spinner stays until the page is refreshed. Orphaned chunk rows accumulate until manually deleted. Track in lessons-learned; a cleanup pass can be added later. |
 | Master restarts mid-stream | Master loses in-flight chunk subscription; chunks already in `chunks` table survive. New chunks published while master is down (QoS 0, no retain) are dropped by the broker. On master restart, sub-resumes; new chunks persist normally. Final `/response` (QoS 1) is queued and delivered when master reconnects, triggering the chunks DELETE. Connected browsers reconnect via WS and get a `chunk_replay` of whatever survived. |
 | Two clients on the same topic | Both receive the same live chunks; both receive a `chunk_replay` on connect. Both apply the same `replace placeholder` step on `/response`. No coordination needed. |
 | `_save_chunk` fails (DB locked, disk full) | Logged; live broadcast still happens, so the user still sees the chunk. Replay on a future reconnect will be missing this event — accepted, this is a degraded mode and operator-visible via the log. |
@@ -566,39 +616,16 @@ this is what enables the "replace placeholder" step on the frontend.
 
 ### Chunk cleanup
 
-Chunks are deleted on two paths:
+Chunks are deleted synchronously when the final `/response` arrives:
+`_save_agent_response` runs the message INSERT and
+`DELETE FROM chunks WHERE message_id = ?` in the same transaction.
+This keeps the table near-empty in steady state.
 
-1. **Synchronous, on `/response`.** `_save_agent_response` runs the message
-   INSERT and `DELETE FROM chunks WHERE message_id = ?` in the same
-   transaction. This is the common case and keeps the table near-empty in
-   steady state.
-2. **Asynchronous TTL sweep.** A background asyncio task in the master
-   periodically deletes any chunk older than `CHUNK_TTL_SECONDS`. This
-   handles the rare case where an agent crashed without producing a
-   `/response`, or where the master crashed between the chunk INSERT and
-   the response DELETE on a previous run.
-
-The sweep runs every `CHUNK_SWEEP_INTERVAL_SECONDS` (default 300 s = 5 min)
-and uses a single DELETE statement with the `created_at` index. Default TTL
-is 3600 s (1 hour) — long enough that a slow but legitimately running agent
-is never affected, short enough that orphans do not accumulate.
-
-Operationally, `chunks` row count is a useful diagnostic: in normal
-operation it is `O(active streams × events per stream)` — typically 0–500.
-Sustained growth indicates an agent crash pattern; we can add an alert
-on `SELECT COUNT(*) FROM chunks WHERE created_at < unixepoch('now') - 600`
-in a future runbook.
-
-### Configuration
-
-| Key                            | Default | Purpose                                         |
-|--------------------------------|---------|-------------------------------------------------|
-| `CHUNK_TTL_SECONDS`            | 3600    | Chunks older than this are swept.               |
-| `CHUNK_SWEEP_INTERVAL_SECONDS` | 300     | How often the sweep task wakes up.              |
-
-Streaming itself has no toggle — it is always on. (We could gate it behind
-`STREAMING_ENABLED` if rollout risk is a concern, but the additive design
-makes that unnecessary.)
+Orphaned chunks (from a crashed agent that never sent `/response`) are not
+swept automatically in this version. They can be cleaned up manually with
+`DELETE FROM chunks WHERE message_id NOT IN (SELECT id FROM messages)`.
+A background TTL sweep can be added later if orphan accumulation becomes a
+practical problem.
 
 ### Observability
 
@@ -607,8 +634,6 @@ makes that unnecessary.)
   `agent.llm_done chunks=N chars=…`).
 - Master log line per chunk persisted+forwarded: DEBUG only.
 - Master log line per WS replay: INFO — `ws.chunk_replay topic_id=… message_id=… events=N`.
-- Master log line per sweep: INFO when rows are deleted —
-  `chunks.sweep_deleted count=N`; silent otherwise.
 - Existing `agent.llm_start` / `agent.llm_done` / `mqtt.message` lines are
   preserved.
 
@@ -729,11 +754,6 @@ Persistence:
       can carry it without forcing the frontend to derive it from the
       `system/init` event? Tradeoff: trivial extra column vs. zero work
       now. (owner: engineer at implementation time)
-- [ ] What happens to chunks for an archived topic? `topics.archived_at`
-      is set but the `chunks` rows are not deleted. The TTL sweep still
-      catches them within an hour; do we want a cascading delete on
-      topic archive for cleanliness? (owner: architect, low priority)
-
 ## Implementation Plan
 
 Phase 1 — agent streaming (1 PR):
@@ -760,23 +780,15 @@ Phase 3 — master replay on WS connect (same PR):
 3. Integration test: persist N chunks, open WS, assert `chunk_replay`
    frame contents and ordering.
 
-Phase 4 — chunk sweeper (same PR):
+Phase 4 — frontend live + replay rendering:
 
-1. Add `_chunk_sweep_loop` task.
-2. Start it from FastAPI lifespan.
-3. Read `CHUNK_TTL_SECONDS` and `CHUNK_SWEEP_INTERVAL_SECONDS` from env
-   with safe defaults.
-4. Unit test: insert old + fresh rows, run sweep, assert only old removed.
+1. Add `liveStreams` state, `handleChunk`, and `finaliseMessage` to `TopicChat.vue`.
+2. Render activity rows inside the bubble during streaming; fold to `▶ Show trace` toggle on finalise.
+3. Derive trace rows from `transcript` JSON for historical messages loaded via REST.
+4. Add `streaming` class hook for the cursor cue.
+5. Verify history-fetch-then-WS-connect ordering is preserved.
 
-Phase 5 — frontend live + replay rendering:
-
-1. Add `liveStreams` state, `handleChunk`, and the `chunk_replay`
-   handler to `TopicChat.vue`.
-2. Add `streaming` class hook for the cursor cue.
-3. Wire the placeholder-replace step to `type: 'message'` handler.
-4. Verify history-fetch-then-WS-connect ordering is preserved.
-
-Phase 6 — UAT and docs:
+Phase 5 — UAT and docs:
 
 1. Test plan in `docs/test-plans/streaming-agent-reply.md` (include the
    "refresh mid-stream" UAT).
