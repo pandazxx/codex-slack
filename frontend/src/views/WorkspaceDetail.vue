@@ -32,7 +32,7 @@
             <input
               v-model="branchFilter"
               @input="onBranchInput"
-              @focus="branchDropdownOpen = true"
+              @focus="onBranchFocus"
               @blur="scheduleBranchClose"
               placeholder="Branch (required)"
               autocomplete="off"
@@ -185,6 +185,7 @@ let statusTimer = null
 
 const branches = ref([])
 const branchesLoading = ref(false)
+const branchesFetched = ref(false)
 const branchFilter = ref('')
 const selectedBranch = ref('')
 const branchDropdownOpen = ref(false)
@@ -264,13 +265,22 @@ async function fetchAgentStatus() {
 }
 
 async function fetchBranches() {
+  if (branchesFetched.value) return
   branchesLoading.value = true
   try {
     const r = await fetch(`/api/workspaces/${id}/branches`)
-    if (r.ok) branches.value = await r.json()
+    if (r.ok) {
+      branches.value = await r.json()
+      branchesFetched.value = true
+    }
   } catch { /* ignore */ } finally {
     branchesLoading.value = false
   }
+}
+
+function onBranchFocus() {
+  fetchBranches()
+  branchDropdownOpen.value = true
 }
 
 function onBranchInput() {
@@ -290,6 +300,7 @@ function clearBranch() {
 }
 
 function toggleBranchDropdown() {
+  if (!branchDropdownOpen.value) fetchBranches()
   branchDropdownOpen.value = !branchDropdownOpen.value
 }
 
@@ -416,7 +427,6 @@ async function deleteStaff(name) {
 onMounted(async () => {
   await load()
   if (!isArchived.value) {
-    fetchBranches()
     await fetchAgentStatus()
     statusTimer = setInterval(fetchAgentStatus, 10000)
   }
