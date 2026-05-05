@@ -98,15 +98,19 @@ def test_deploy_image_calls_compose_with_correct_args() -> None:
             dry_run=False,
         )
     assert ok is True
-    mock_run.assert_called_once()
-    args, kwargs = mock_run.call_args
-    cmd = args[0]
-    assert "docker" in cmd and "compose" in cmd
-    assert "-f" in cmd and "docker-compose.master.yml" in cmd
-    assert "up" in cmd and "--force-recreate" in cmd
-    assert "codex-slack-master" in cmd
-    assert "--env-file" not in cmd
-    assert kwargs.get("extra_env", {}).get("MASTER_RUNTIME_IMAGE") == _DIGEST
+    assert mock_run.call_count == 3
+    calls = mock_run.call_args_list
+    stop_cmd = calls[0].args[0]
+    rm_cmd = calls[1].args[0]
+    up_cmd = calls[2].args[0]
+
+    assert stop_cmd == ["docker", "compose", "-f", "docker-compose.master.yml", "stop", "codex-slack-master"]
+    assert rm_cmd == ["docker", "compose", "-f", "docker-compose.master.yml", "rm", "-f", "codex-slack-master"]
+    assert up_cmd == ["docker", "compose", "-f", "docker-compose.master.yml", "up", "-d", "--no-build", "codex-slack-master"]
+    assert "--force-recreate" not in up_cmd
+    assert "--env-file" not in up_cmd
+    for c in calls:
+        assert c.kwargs.get("extra_env", {}).get("MASTER_RUNTIME_IMAGE") == _DIGEST
 
 
 def test_deploy_image_includes_env_file_when_set() -> None:
@@ -120,10 +124,11 @@ def test_deploy_image_includes_env_file_when_set() -> None:
             env_file="/path/to/.env",
             dry_run=False,
         )
-    cmd = mock_run.call_args[0][0]
-    assert "--env-file" in cmd
-    idx = cmd.index("--env-file")
-    assert cmd[idx + 1] == "/path/to/.env"
+    # --env-file is added to base_cmd, so all three calls (stop, rm, up) carry it.
+    for c in mock_run.call_args_list:
+        cmd = c.args[0]
+        assert "--env-file" in cmd
+        assert cmd[cmd.index("--env-file") + 1] == "/path/to/.env"
 
 
 def test_deploy_image_dry_run_skips_subprocess() -> None:
