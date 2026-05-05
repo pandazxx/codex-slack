@@ -21,7 +21,9 @@
 
 services:
   codex-slack-cd-daemon:
-    image: ${MASTER_RUNTIME_IMAGE:-codex-slack-master:latest}
+    # Set CD_DAEMON_IMAGE (or the legacy MASTER_RUNTIME_IMAGE) in .env to the
+    # image that contains the cd/ package.  Defaults to the locally-built image.
+    image: ${CD_DAEMON_IMAGE:-codex-slack-master:latest}
     container_name: codex-slack-cd-daemon
     restart: unless-stopped
     working_dir: /opt/codex-slack
@@ -43,7 +45,7 @@ services:
 
       # Path to the compose file that defines the master service,
       # as seen from inside this container (use the volume mount below).
-      CD_COMPOSE_FILE: ${CD_COMPOSE_FILE:-/opt/codex-slack/docker-compose.yml}
+      CD_COMPOSE_FILE: ${CD_COMPOSE_FILE:-/opt/codex-slack-host/docker-compose.yml}
 
       # ---- Optional -------------------------------------------------------
       # Service name inside the compose file.
@@ -51,9 +53,9 @@ services:
       # Compose binary: "docker compose" (default) or "docker-compose" (v1).
       CD_COMPOSE_BINARY: ${CD_COMPOSE_BINARY:-docker compose}
       # Path to the .env file used by the master compose project.
-      CD_ENV_FILE: ${CD_ENV_FILE:-/opt/codex-slack/.env}
+      CD_ENV_FILE: ${CD_ENV_FILE:-/opt/codex-slack-host/.env}
       # Where the daemon persists its deploy state.
-      CD_STATE_FILE: ${CD_STATE_FILE:-/opt/codex-slack/data/cd/state.json}
+      CD_STATE_FILE: ${CD_STATE_FILE:-/opt/codex-slack-host/data/cd/state.json}
       # Poll interval in seconds (default 5 minutes).
       CD_POLL_INTERVAL_SECONDS: ${CD_POLL_INTERVAL_SECONDS:-300}
       # Seconds to wait after container (re)start before health-checking.
@@ -76,5 +78,8 @@ services:
       # Docker socket — required for container management.
       - ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}:/run/container.sock
 
-      # Master project directory so the daemon can drive compose commands.
-      - ${MASTER_PROJECT_DIR:-.}:/opt/codex-slack
+      # Master project directory — mounted to a SEPARATE path so it does NOT
+      # shadow /opt/codex-slack where the image's src/ package lives.
+      # Mounting straight to /opt/codex-slack would overwrite src/ and cause:
+      #   ModuleNotFoundError: No module named 'src'
+      - ${MASTER_PROJECT_DIR:-.}:/opt/codex-slack-host
