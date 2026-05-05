@@ -4,6 +4,18 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-05-05 — CD daemon fails with `ModuleNotFoundError: No module named 'src'`
+
+*Summary:* The CD daemon container started with `/usr/local/bin/python: Error while finding module specification for 'src.cd.main' (ModuleNotFoundError: No module named 'src')` immediately on startup.
+
+*Root cause:* `docker-compose.cd-daemon.example.yml` mounted the host project directory directly over `/opt/codex-slack` — the same path where the image bakes in the `src/` package. The volume mount shadowed the entire directory, hiding `src/` from Python's module search path.
+
+*Fix applied:* Changed the volume mount target from `/opt/codex-slack` to `/opt/codex-slack-host`, and updated the defaults for `CD_COMPOSE_FILE`, `CD_ENV_FILE`, and `CD_STATE_FILE` to point to the new mount path. Also updated the image variable from `MASTER_RUNTIME_IMAGE` to `CD_DAEMON_IMAGE` (with fallback) to align with the operator's `.env` convention.
+
+*Prevention:* When a container mounts an external directory over a path that also contains baked-in code (`COPY … ./src`), the code is silently hidden. Always mount external config/data to a path that does not overlap with the image's working directory.
+
+---
+
 ## 2026-05-02 — v3 bug triage: three bugs fixed
 
 *Summary:* Bug triage of pre-v3 issues against the v3 codebase revealed three actionable bugs: (A) `Dockerfile.agent-minimal` was missing the `/home/appuser/.claude` pre-creation fix applied to `Dockerfile`, causing agent session volumes to be root-owned and unwritable; (B) `_respawn_agents` in `main.py` was respawning archived workspace containers on master restart; (C) `send_message` in `messages.py` accepted messages to archived workspaces/topics whose containers had already been stopped.

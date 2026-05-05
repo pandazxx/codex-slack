@@ -58,6 +58,6 @@ def test_invalid_container_runtime_raises(monkeypatch):
         _load(monkeypatch, CONTAINER_RUNTIME="kubernetes")
 
 
-def test_podman_runtime_accepted(monkeypatch):
-    s = _load(monkeypatch, CONTAINER_RUNTIME="podman")
-    assert s.container_runtime == "podman"
+def test_docker_runtime_accepted(monkeypatch):
+    s = _load(monkeypatch, CONTAINER_RUNTIME="docker")
+    assert s.container_runtime == "docker"

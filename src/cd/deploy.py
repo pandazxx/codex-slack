@@ -90,7 +90,10 @@ def deploy_image(
 
     cmd = [*compose_binary.split(), "-f", compose_file]
     if env_file:
-        cmd.extend(["--env-file", env_file])
+        if os.path.isfile(env_file):
+            cmd.extend(["--env-file", env_file])
+        else:
+            LOGGER.warning("cd.env_file_missing path=%s skipping_--env-file", env_file)
     cmd.extend(["up", "-d", "--no-build", "--force-recreate", compose_service])
 
     LOGGER.info("cd.deploy_start image=%s cmd=%r", image_ref, cmd)
