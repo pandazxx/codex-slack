@@ -60,8 +60,8 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=master
+          cache-to: type=gha,mode=max,scope=master
 
       - name: Build agent-minimal image + smoke test
         uses: docker/build-push-action@v5
@@ -70,8 +70,8 @@ jobs:
           file: ./Dockerfile.agent-minimal
           load: true
           tags: codex-slack-agent-minimal:pr-smoke
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=agent-minimal
+          cache-to: type=gha,mode=max,scope=agent-minimal
 
       - name: Smoke test agent-minimal runtime contract
         run: |

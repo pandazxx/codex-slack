@@ -81,8 +81,8 @@ jobs:
           tags: ${{ steps.tags.outputs.master }}
           build-args: |
             APP_VERSION=sha-${{ steps.sha.outputs.short }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=master
+          cache-to: type=gha,mode=max,scope=master
 
       # ── Agent-minimal image (smoke-tested before push) ───────────────────────
       - name: Build agent-minimal image for smoke test
@@ -92,7 +92,7 @@ jobs:
           file: ./Dockerfile.agent-minimal
           load: true
           tags: codex-slack-agent-minimal:demand-smoke
-          cache-from: type=gha
+          cache-from: type=gha,scope=agent-minimal
 
       - name: Smoke test agent-minimal runtime contract
         run: |
@@ -112,8 +112,8 @@ jobs:
           tags: ${{ steps.tags.outputs.agent }}
           build-args: |
             APP_VERSION=sha-${{ steps.sha.outputs.short }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=agent-minimal
+          cache-to: type=gha,mode=max,scope=agent-minimal
 
       - name: Summary
         run: |

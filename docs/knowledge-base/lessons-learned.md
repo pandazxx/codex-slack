@@ -138,6 +138,18 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-05-05 — 5-minute master image build: Debian npm bloat + missing GHA cache scopes
+
+*Summary:* The `build-rc.yml` master image build took ~5 minutes per run. The dominant bottleneck was a 62-second `apt-get install nodejs npm` step caused by the Debian `npm` metapackage pulling in ~200 extraneous packages (webpack, eslint, babel, and the full Debian node ecosystem). Secondary issues were absent GHA cache scopes (causing `build-rc.yml` and `ci-pr.yml` to overwrite each other's layer caches) and sequential master + agent-minimal builds in `build-rc.yml` that could run in parallel.
+
+*Root cause:* The Debian `npm` package has deep dependency chains into the Debian-packaged node ecosystem. Installing `nodejs npm` via apt on Debian trixie installs hundreds of unneeded packages. Without explicit `scope=` parameters on `type=gha` cache entries, all workflows share one undifferentiated cache bucket; a push from `build-rc.yml` evicts layers written by `ci-pr.yml` and vice versa.
+
+*Fix applied:* (1) Both `Dockerfile` and `Dockerfile.agent-minimal` now install Node 20 from NodeSource (`curl -fsSL https://deb.nodesource.com/setup_20.x | bash -` followed by `apt-get install nodejs`). The NodeSource `nodejs` package bundles npm — the separate `npm` apt package is removed. (2) All `cache-from` and `cache-to` entries in every docker-related workflow now carry explicit scopes: `scope=master` for the master image and `scope=agent-minimal` for the agent-minimal image. (3) `build-rc.yml` was restructured from one sequential job into three parallel-friendly jobs (`build-master`, `build-cd-daemon`, `build-agent-minimal`, `summary`) so all images build and push simultaneously.
+
+*Prevention:* Never install Node.js via the Debian `nodejs`/`npm` apt packages in a lean Docker image — use NodeSource or a similar vendor-maintained binary distribution. Always add explicit `scope=` to GHA cache entries when more than one workflow writes to the same cache type. When two independent Docker image builds appear in the same workflow job, split them into separate jobs to exploit parallel runners.
+
+---
+
 ## 2026-03-24 — docs/knowledge-base directory initialised
 
 *Summary:* The project `CLAUDE.md` references [`docs/knowledge-base/lessons-learned.md`](lessons-learned.md) and [`docs/knowledge-base/faq.md`](faq.md) as required knowledge-persistence targets, but neither file nor the directory existed.
