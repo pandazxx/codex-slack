@@ -59,6 +59,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # ── CD daemon image ────────────────────────────────────────────────────
+      - name: Build and push CD daemon RC image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.cd-daemon
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/codex-slack-cd-daemon:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/codex-slack-cd-daemon:rc
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       # ── Agent-minimal image (smoke-tested before push) ────────────────────
       - name: Build agent-minimal RC image for smoke test
         uses: docker/build-push-action@v5
@@ -94,7 +107,7 @@ jobs:
         run: |
           echo "## RC build complete: \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Both images pushed with tags \`${{ github.ref_name }}\` and \`rc\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "All three images (master, agent-minimal, cd-daemon) pushed with tags \`${{ github.ref_name }}\` and \`rc\`." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Staging CD daemon will auto-deploy the new \`:rc\` image within the next poll cycle." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
