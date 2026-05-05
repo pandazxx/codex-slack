@@ -49,6 +49,26 @@ pytest -q                  # run full test suite
 
 For containerised development, start with [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) and [`docs/guides/container-runtime.md`](docs/guides/container-runtime.md).
 
+## CI/CD and Deployments
+
+The project uses a three-environment pipeline (test bed → staging → production) with
+RC-based promotion. No code reaches master before UAT sign-off.
+
+**Read [`docs/design/cicd-pipeline.md`](docs/design/cicd-pipeline.md) before:**
+- Triggering any image build or deployment action
+- Pushing version tags (RC or release)
+- Making changes to `.github/workflows/`
+- Deploying to or troubleshooting any environment
+
+Key rules for agents:
+- Use `gh workflow run build-on-demand.yml --ref <branch>` to build images for test bed
+  use. Wait on the run ID with `gh run watch <run-id>` before deploying.
+- Tag the feature branch with `v<semver>-rc<N>` to trigger a staging RC build.
+  Do not tag master with RC tags.
+- Never push `:rc`, `:staging`, or release semver tags manually — those are owned by
+  `build-rc.yml` and `promote-release.yml` respectively.
+- Production `CD_IMAGE_TAG` is updated by a human operator after UAT sign-off, not by agents.
+
 ## Coding Style & Naming Conventions
 
 Until language-specific configs are added:

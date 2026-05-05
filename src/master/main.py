@@ -1,22 +1,38 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from threading import Thread
+import threading
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..logging_utils import LocalTimeFormatter
-from slack_bolt.adapter.socket_mode import SocketModeHandler
-
+from .agent_runner import container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
-from .discord_app import run_discord_frontend
-from .dispatch_guard import install_sigterm_handler
-from .provisioning import GitHubRepoProvisioner
-from .registry import AgentRegistry
-from .router import ChannelRouter, ClaudeCodeDispatcher, MultiAgentDispatcher, PodmanExecDispatcher
-from .runtime_adapter import PodmanRuntimeAdapter
-from .service import MasterService
-from .slack_app import CommandRateLimiter, create_master_app
+from .db import get_connection, init_db, schema_info
+from .runtime_config import load_agent_env, load_global_env
+from .attachments import router as attachments_router
+from .messages import router as messages_router
+from .mqtt_client import build_client as build_mqtt_client
+from .runtime_config import global_router as global_config_router
+from .runtime_config import workspace_router as workspace_config_router
+from .staffs import global_router as global_staffs_router
+from .staffs import topic_router as topic_staffs_router
+from .staffs import workspace_router as workspace_staffs_router
+from .storage import LocalAttachmentStore
+from .topics import router as topics_router
+from .workspaces import router as workspaces_router
+from .ws_hub import ConnectionHub
+
+LOGGER = logging.getLogger(__name__)
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 def configure_logging() -> None:
@@ -25,144 +41,240 @@ def configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, handlers=[handler])
 
 
-def mask_token(token: str) -> str:
-    value = token.strip()
-    if not value:
-        return "-"
-    if len(value) <= 8:
-        return "*" * len(value)
-    return f"{value[:4]}...{value[-4:]}"
+def _db_path(data_dir: str) -> str:
+    return str(Path(data_dir) / "master_data.db")
 
 
-def build_agent_prepare_callback(service: MasterService):  # type: ignore[no-untyped-def]
-    def prepare(agent_name: str) -> None:
-        result = service.prepare_agent_for_message(name=agent_name)
-        if not result.ok:
-            raise RuntimeError(result.message)
+def _active_workspaces(db_path: str) -> list[dict]:  # type: ignore[type-arg]
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, container_name, last_message_at, last_refreshed_at"
+            " FROM workspaces WHERE archived_at IS NULL AND container_name IS NOT NULL"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
-    return prepare
+
+def _background_tasks(settings, db_path: str, stop_event: threading.Event) -> None:
+    """Background loop: idle auto-stop, health-check respawn, and auth auto-refresh."""
+    idle_timeout = settings.agent_idle_timeout_seconds
+    auth_interval = settings.agent_auth_refresh_interval_seconds
+
+    while not stop_event.wait(60):
+        now = time.time()
+        try:
+            workspaces = _active_workspaces(db_path)
+            global_cfg = load_global_env(db_path)
+        except Exception:
+            LOGGER.exception("master.bg_task_list_failed")
+            continue
+        gh_token_effective = settings.gh_token or global_cfg.get("GH_TOKEN")
+
+        for ws in workspaces:
+            cname = ws["container_name"]
+            ws_id = ws["id"]
+
+            # Health check: restart containers that exited unexpectedly
+            try:
+                status = get_container_status(name=cname, dry_run=settings.dry_run)
+                exit_code = status.get("exit_code") or 0
+                # 143 = SIGTERM: container was gracefully stopped by pause_agent (idle-stop).
+                # Do not restart — let auto-start on next message handle it.
+                if status["status"] == "exited" and exit_code not in (0, 143):
+                    LOGGER.warning("master.health_restart container=%s exit_code=%s", cname, exit_code)
+                    start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
+            except Exception:
+                LOGGER.exception("master.health_check_failed container=%s", cname)
+
+            # Idle auto-stop
+            if idle_timeout > 0:
+                last_msg = ws.get("last_message_at")
+                if last_msg:
+                    try:
+                        import datetime
+                        last_ts = datetime.datetime.strptime(last_msg, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+                        if now - last_ts > idle_timeout:
+                            st = get_container_status(name=cname, dry_run=settings.dry_run)
+                            if st["status"] == "running":
+                                LOGGER.info("master.idle_stop container=%s idle_s=%d", cname, int(now - last_ts))
+                                pause_agent(name=cname, dry_run=settings.dry_run)
+                    except Exception:
+                        LOGGER.exception("master.idle_stop_failed container=%s", cname)
+
+            # Auto auth-refresh
+            if auth_interval > 0:
+                last_ref = ws.get("last_refreshed_at")
+                needs_refresh = last_ref is None
+                if not needs_refresh and last_ref:
+                    try:
+                        import datetime
+                        ref_ts = datetime.datetime.strptime(last_ref, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+                        needs_refresh = now - ref_ts > auth_interval
+                    except Exception:
+                        pass
+                if needs_refresh:
+                    try:
+                        LOGGER.info("master.auto_refresh_auth container=%s", cname)
+                        refresh_auth(name=cname, gh_token=gh_token_effective, dry_run=settings.dry_run)
+                        from datetime import datetime, timezone
+                        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        conn = get_connection(db_path)
+                        try:
+                            conn.execute(
+                                "UPDATE workspaces SET last_refreshed_at = ? WHERE id = ?",
+                                (now_str, ws_id),
+                            )
+                            conn.commit()
+                        finally:
+                            conn.close()
+                    except Exception:
+                        LOGGER.exception("master.auto_refresh_auth_failed container=%s", cname)
 
 
-def main() -> None:
+def _respawn_agents(settings, db_path: str) -> None:
+    """Respawn agent containers for all workspaces on master startup."""
+    import docker
+    import docker.errors
+    try:
+        docker_client = docker.from_env()
+    except Exception:
+        LOGGER.warning("master.respawn_skip reason=docker_unavailable")
+        return
+
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, repo_url, container_name FROM workspaces"
+            " WHERE container_name IS NOT NULL AND archived_at IS NULL"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for row in rows:
+        ws_id = row["id"]
+        cname = row["container_name"]
+        try:
+            docker_client.containers.get(cname)
+            LOGGER.info("master.respawn_skip container=%s reason=already_running", cname)
+            continue
+        except docker.errors.NotFound:
+            pass
+        try:
+            spawn_agent(
+                runtime=settings.container_runtime,
+                workspace_id=ws_id,
+                repo_url=row["repo_url"],
+                image=settings.agent_base_image,
+                mqtt_host=settings.mqtt_host,
+                mqtt_port=settings.mqtt_port,
+                network=settings.agent_network,
+                claude_code_oauth_token=settings.claude_code_oauth_token,
+                anthropic_api_key=settings.anthropic_api_key,
+                openai_api_key=settings.openai_api_key,
+                gh_token=settings.gh_token,
+                ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
+                ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
+                dry_run=settings.dry_run,
+                master_url=settings.master_url,
+                extra_env=load_agent_env(db_path, ws_id),
+            )
+            LOGGER.info("master.respawned container=%s workspace_id=%s", cname, ws_id)
+        except Exception:
+            LOGGER.exception("master.respawn_failed workspace_id=%s", ws_id)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     load_dotenv()
     configure_logging()
-    install_sigterm_handler()
-
     settings = load_master_settings()
-    logging.getLogger(__name__).info(
-        "master.startup frontends=%s registry_path=%s thread_state_path=%s admin_channels=%s discord_admin_channels=%s dry_run=%s base_image=%s auth_json_path=%s codex_config_dir_path=%s claude_config_dir_path=%s ssh_auth_sock_path=%s ssh_known_hosts_path=%s git_user=%s git_email=%s default_adapter=%s bot_token=%s app_token=%s discord_token=%s dispatch_timeout=%s auth_refresh_days=%s rate_limit=%d/%ds",
-        ",".join(sorted(settings.frontends)),
-        settings.registry_path,
-        settings.thread_state_path,
-        ",".join(sorted(settings.admin_channels)),
-        ",".join(sorted(settings.discord_admin_channels)),
+    LOGGER.info(
+        "master.startup mqtt=%s:%s data_dir=%s dry_run=%s base_image=%s runtime=%s",
+        settings.mqtt_host,
+        settings.mqtt_port,
+        settings.data_dir,
         settings.dry_run,
         settings.agent_base_image,
-        settings.agent_codex_auth_json_path or "-",
-        settings.agent_codex_config_dir_path or "-",
-        settings.agent_claude_config_dir_path or "-",
-        settings.agent_ssh_auth_sock_path or "-",
-        settings.agent_ssh_known_hosts_path or "-",
-        settings.git_user_name or "-",
-        settings.git_user_email or "-",
-        settings.default_agent_adapter,
-        mask_token(settings.slack_bot_token),
-        mask_token(settings.slack_app_token),
-        mask_token(settings.discord_bot_token or ""),
-        settings.dispatch_timeout_seconds,
-        settings.auth_refresh_max_age_days,
-        settings.command_rate_limit_count,
-        settings.command_rate_limit_window_seconds,
+        settings.container_runtime,
     )
-    registry = AgentRegistry(settings.registry_path)
-    migrated = registry.migrate_schema()
-    if migrated:
-        logging.getLogger(__name__).info("master.registry_schema_migrated path=%s", settings.registry_path)
-    runtime = PodmanRuntimeAdapter(dry_run=settings.dry_run)
-    service = MasterService(
-        registry=registry,
-        runtime=runtime,
-        default_image=settings.agent_base_image,
-        agent_codex_auth_json_path=settings.agent_codex_auth_json_path,
-        agent_codex_config_dir_path=settings.agent_codex_config_dir_path,
-        agent_claude_config_dir_path=settings.agent_claude_config_dir_path,
-        agent_ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
-        agent_ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
-        git_user_name=settings.git_user_name,
-        git_user_email=settings.git_user_email,
-        default_agent_adapter=settings.default_agent_adapter,
-        auth_refresh_max_age_days=settings.auth_refresh_max_age_days,
-    )
-    agent_prepare_callback = build_agent_prepare_callback(service)
-    codex_dispatcher = PodmanExecDispatcher(
-        command_template=settings.codex_command_template,
-        timeout_seconds=settings.dispatch_timeout_seconds,
-        slack_bot_token=settings.slack_bot_token,
-        agent_prepare_callback=agent_prepare_callback,
-    )
-    claude_dispatcher = ClaudeCodeDispatcher(
-        command_template=settings.claude_command_template,
-        timeout_seconds=settings.dispatch_timeout_seconds,
-        slack_bot_token=settings.slack_bot_token,
-        state_path=settings.thread_state_path,
-        agent_prepare_callback=agent_prepare_callback,
-    )
-    dispatcher = MultiAgentDispatcher(
-        dispatchers={"codex": codex_dispatcher, "claude-code": claude_dispatcher},
-        default_adapter=settings.default_agent_adapter,
-    )
-    router = ChannelRouter(
-        registry=registry,
-        dispatcher=dispatcher,
-        admin_channels=settings.admin_channels,
-        tracked_threads_path=settings.thread_state_path,
-    )
-    rate_limiter = CommandRateLimiter(
-        max_calls=settings.command_rate_limit_count,
-        window_seconds=settings.command_rate_limit_window_seconds,
-    )
-    repo_provisioner = GitHubRepoProvisioner()
+    db_path = _db_path(settings.data_dir)
+    init_db(db_path)
+    LOGGER.info("master.db_init path=%s", db_path)
+    hub = ConnectionHub()
+    loop = asyncio.get_event_loop()
+    mqtt = build_mqtt_client(settings, hub=hub, loop=loop, db_path=db_path)
+    mqtt.loop_start()
+    LOGGER.info("master.mqtt_loop_start host=%s port=%s", settings.mqtt_host, settings.mqtt_port)
+    attachment_dir = settings.effective_attachment_data_dir()
+    attachment_store = LocalAttachmentStore(attachment_dir)
+    LOGGER.info("master.attachment_store dir=%s", attachment_dir)
+    app.state.settings = settings
+    app.state.db_path = db_path
+    app.state.hub = hub
+    app.state.mqtt = mqtt
+    app.state.attachment_store = attachment_store
+    _respawn_agents(settings, db_path)
 
-    threads: list[Thread] = []
-    if "slack" in settings.frontends:
-        app = create_master_app(
-            bot_token=settings.slack_bot_token,
-            admin_channels=settings.admin_channels,
-            service=service,
-            router=router,
-            rate_limiter=rate_limiter,
-            repo_provisioner=repo_provisioner,
-        )
-        handler = SocketModeHandler(app, settings.slack_app_token)
-        slack_thread = Thread(target=handler.start, name="frontend-slack", daemon=True)
-        slack_thread.start()
-        threads.append(slack_thread)
-        logging.getLogger(__name__).info("master.frontend_started name=slack")
+    stop_event = threading.Event()
+    bg_thread = threading.Thread(
+        target=_background_tasks, args=(settings, db_path, stop_event), daemon=True, name="master-bg"
+    )
+    bg_thread.start()
+    LOGGER.info("master.bg_task_start idle_timeout=%ds auth_refresh=%ds",
+                settings.agent_idle_timeout_seconds, settings.agent_auth_refresh_interval_seconds)
 
-    if "discord" in settings.frontends:
-        discord_thread = Thread(
-            target=run_discord_frontend,
-            kwargs={
-                "bot_token": settings.discord_bot_token or "",
-                "admin_channels": settings.discord_admin_channels,
-                "service": service,
-                "router": router,
-                "rate_limiter": rate_limiter,
-                "repo_provisioner": repo_provisioner,
-            },
-            name="frontend-discord",
-            daemon=True,
-        )
-        discord_thread.start()
-        threads.append(discord_thread)
-        logging.getLogger(__name__).info("master.frontend_started name=discord")
+    yield
 
-    if not threads:
-        raise RuntimeError("No frontends enabled")
-
-    for thread in threads:
-        thread.join()
+    stop_event.set()
+    bg_thread.join(timeout=5)
+    mqtt.loop_stop()
+    mqtt.disconnect()
+    LOGGER.info("master.shutdown")
 
 
-if __name__ == "__main__":
-    main()
+app = FastAPI(lifespan=lifespan)
+app.include_router(workspaces_router, prefix="/api")
+app.include_router(topics_router, prefix="/api")
+app.include_router(messages_router, prefix="/api")
+app.include_router(global_staffs_router, prefix="/api")
+app.include_router(workspace_staffs_router, prefix="/api")
+app.include_router(topic_staffs_router, prefix="/api")
+app.include_router(global_config_router, prefix="/api")
+app.include_router(workspace_config_router, prefix="/api")
+app.include_router(attachments_router, prefix="/api")
+
+if (_STATIC_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="static-assets")
+
+
+@app.get("/health")
+async def health() -> dict:  # type: ignore[type-arg]
+    return {"status": "ok"}
+
+
+@app.get("/schema")
+async def schema() -> dict:  # type: ignore[type-arg]
+    return schema_info(app.state.db_path)
+
+
+@app.websocket("/ws/{topic_id}")
+async def ws_endpoint(topic_id: str, websocket: WebSocket) -> None:
+    await websocket.accept()
+    app.state.hub.connect(topic_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        app.state.hub.disconnect(topic_id, websocket)
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_index(full_path: str) -> FileResponse:
+    index = _STATIC_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(404, "frontend not built")
+    return FileResponse(str(index))

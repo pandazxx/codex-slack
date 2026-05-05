@@ -58,6 +58,7 @@ class RuntimeAdapter(Protocol):
 @dataclass
 class PodmanRuntimeAdapter:
     dry_run: bool = False
+    runtime: str = "podman"
 
     def _run(self, cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
         if self.dry_run:
@@ -82,11 +83,16 @@ class PodmanRuntimeAdapter:
         return completed
 
     def _container_exists(self, container_name: str) -> bool:
-        completed = self._run(["podman", "container", "exists", container_name], check=False)
+        # Both `docker inspect` and `podman inspect` return non-zero when the
+        # container does not exist, making this check runtime-agnostic.
+        completed = self._run(
+            [self.runtime, "inspect", "--type", "container", container_name],
+            check=False,
+        )
         return completed.returncode == 0
 
     def pull_image(self, image: str) -> None:
-        self._run(["podman", "pull", image])
+        self._run([self.runtime, "pull", image])
 
     def build_image(self, *, name: str, repo_path: str, context_rel: str, dockerfile_rel: str) -> str:
         image_tag = f"codex-agent-{name}:latest"
@@ -94,7 +100,7 @@ class PodmanRuntimeAdapter:
         dockerfile = Path(repo_path) / dockerfile_rel
         self._run(
             [
-                "podman",
+                self.runtime,
                 "build",
                 "--pull=always",
                 "-t",
@@ -116,7 +122,7 @@ class PodmanRuntimeAdapter:
         mounts: list[str] | None = None,
     ) -> None:
         if self._container_exists(container_name):
-            self._run(["podman", "rm", "-f", container_name], check=False)
+            self._run([self.runtime, "rm", "-f", container_name], check=False)
 
         env = env or {}
         mounts = mounts or []
@@ -128,17 +134,11 @@ class PodmanRuntimeAdapter:
             ",".join(sorted(env)) or "-",
             json.dumps(mounts),
         )
-        cmd = [
-            "podman",
-            "create",
-            "--userns=keep-id",
-            "--security-opt",
-            "label=disable",
-            "--name",
-            container_name,
-            "-v",
-            f"{repo_volume}:/workspace",
-        ]
+        cmd = [self.runtime, "create"]
+        # Podman-specific flags for rootless container isolation
+        if self.runtime == "podman":
+            cmd += ["--userns=keep-id", "--security-opt", "label=disable"]
+        cmd += ["--name", container_name, "-v", f"{repo_volume}:/workspace"]
         for mount in mounts:
             cmd.extend(["-v", mount])
         for key, value in sorted(env.items()):
@@ -148,18 +148,18 @@ class PodmanRuntimeAdapter:
         self._run(cmd)
 
     def start_agent(self, name: str) -> None:
-        self._run(["podman", "start", name])
+        self._run([self.runtime, "start", name])
 
     def stop_agent(self, name: str) -> None:
-        self._run(["podman", "stop", name])
+        self._run([self.runtime, "stop", name])
 
     def remove_agent(self, name: str) -> None:
-        self._run(["podman", "rm", name])
+        self._run([self.runtime, "rm", name])
 
     def refresh_agent_auth(self, *, volume_name: str, host_auth_path: str) -> None:
         self._run(
             [
-                "podman",
+                self.runtime,
                 "run",
                 "--rm",
                 "-v",
@@ -180,7 +180,7 @@ class PodmanRuntimeAdapter:
     def refresh_agent_config(self, *, volume_name: str, host_config_dir: str) -> None:
         self._run(
             [
-                "podman",
+                self.runtime,
                 "run",
                 "--rm",
                 "-v",
@@ -199,7 +199,9 @@ class PodmanRuntimeAdapter:
         )
 
     def inspect_agent(self, name: str) -> dict[str, Any] | None:
-        completed = self._run(["podman", "inspect", "--type", "container", name], check=False)
+        completed = self._run(
+            [self.runtime, "inspect", "--type", "container", name], check=False
+        )
         if completed.returncode != 0:
             return None
         payload = json.loads(completed.stdout)
@@ -208,7 +210,9 @@ class PodmanRuntimeAdapter:
         return payload[0]
 
     def tail_logs(self, name: str, lines: int) -> str:
-        completed = self._run(["podman", "logs", "--tail", str(lines), name], check=False)
+        completed = self._run(
+            [self.runtime, "logs", "--tail", str(lines), name], check=False
+        )
         if completed.returncode != 0:
             return completed.stderr.strip()
         return completed.stdout
