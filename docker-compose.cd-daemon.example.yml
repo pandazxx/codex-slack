@@ -52,8 +52,10 @@ services:
       CD_COMPOSE_SERVICE: ${CD_COMPOSE_SERVICE:-master}
       # Compose binary: "docker compose" (default) or "docker-compose" (v1).
       CD_COMPOSE_BINARY: ${CD_COMPOSE_BINARY:-docker compose}
-      # Path to the .env file used by the master compose project.
-      CD_ENV_FILE: ${CD_ENV_FILE:-/opt/codex-slack-host/.env}
+      # Path to the .env file passed to the master compose via --env-file.
+      # Leave unset (default) when using the passthrough block below — the
+      # daemon subprocess already inherits all env vars from its own environment.
+      CD_ENV_FILE: ${CD_ENV_FILE:-}
       # Where the daemon persists its deploy state.
       CD_STATE_FILE: ${CD_STATE_FILE:-/opt/codex-slack-host/data/cd/state.json}
       # Poll interval in seconds (default 5 minutes).
@@ -73,6 +75,33 @@ services:
 
       # Docker socket location inside the container.
       DOCKER_HOST: unix:///run/container.sock
+
+      # ---- Master compose passthrough -------------------------------------
+      # These vars are forwarded into the daemon container so that when the
+      # daemon invokes "docker compose up" it can resolve all ${...} references
+      # in docker-compose.yml without needing a .env file on the remote host.
+      # Docker Compose reads your LOCAL .env when starting the daemon (even
+      # with DOCKER_HOST=ssh://...), so the resolved values travel with the
+      # container config automatically.
+      DOCKER_GID: ${DOCKER_GID:-999}
+      CONTAINER_SOCKET_PATH: ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}
+      CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-docker}
+      MASTER_PORT: ${MASTER_PORT:-8080}
+      MASTER_CONTAINER_NAME: ${MASTER_CONTAINER_NAME:-codex-slack-master}
+      MASTER_AGENT_BASE_IMAGE: ${MASTER_AGENT_BASE_IMAGE:-}
+      MASTER_DRY_RUN: ${MASTER_DRY_RUN:-false}
+      MASTER_CODEX_AUTH_JSON_PATH: ${MASTER_CODEX_AUTH_JSON_PATH:-}
+      MASTER_SSH_AUTH_SOCK_PATH: ${MASTER_SSH_AUTH_SOCK_PATH:-}
+      MASTER_SSH_KNOWN_HOSTS_PATH: ${MASTER_SSH_KNOWN_HOSTS_PATH:-}
+      MASTER_GIT_USER_NAME: ${MASTER_GIT_USER_NAME:-}
+      MASTER_GIT_USER_EMAIL: ${MASTER_GIT_USER_EMAIL:-}
+      MOSQUITTO_CONTAINER_NAME: ${MOSQUITTO_CONTAINER_NAME:-codex-slack-mosquitto}
+      AGENT_IDLE_TIMEOUT_SECONDS: ${AGENT_IDLE_TIMEOUT_SECONDS:-3600}
+      AGENT_AUTH_REFRESH_INTERVAL_SECONDS: ${AGENT_AUTH_REFRESH_INTERVAL_SECONDS:-43200}
+      GH_TOKEN: ${GH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
 
     volumes:
       # Docker socket — required for container management.
