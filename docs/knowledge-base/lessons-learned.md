@@ -90,6 +90,18 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-05-05 — Vendor MIME subtype dots produce multi-dot extensions in filename generation
+
+*Summary:* When generating filenames for clipboard-pasted images, vendor MIME types such as `image/vnd.microsoft.icon` contain dots in the subtype. A naive regex that includes `.` in its character class (e.g. `[a-z0-9.+-]+`) extracts the entire subtype including dots, producing malformed extensions like `.vnd.microsoft.icon` instead of falling back to a safe default.
+
+*Root cause:* The `mimeToExt` fallback regex in the paste-image handler originally used `[a-z0-9.+-]+` for the subtype portion, which allowed dot characters through and incorporated them directly into the generated filename extension.
+
+*Fix applied:* Removed `.` from the regex character class, changing it to `[a-z0-9+-]+`. Subtypes containing dots no longer match, causing the function to fall back to `'png'` as the safe default extension.
+
+*Prevention:* When extracting file extensions from MIME type subtypes, restrict the character class to `[a-z0-9+-]` (no dots). Vendor MIME types with dotted subtypes should not produce dotted extensions — always fall back to a sensible default for unrecognised subtypes.
+
+---
+
 ## 2026-03-24 — docs/knowledge-base directory initialised
 
 *Summary:* The project `CLAUDE.md` references [`docs/knowledge-base/lessons-learned.md`](lessons-learned.md) and [`docs/knowledge-base/faq.md`](faq.md) as required knowledge-persistence targets, but neither file nor the directory existed.
