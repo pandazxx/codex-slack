@@ -31,6 +31,11 @@ class MasterSettings:
     master_url: str = "http://master:8080"
     agent_idle_timeout_seconds: int = 3600
     agent_auth_refresh_interval_seconds: int = 43200
+    master_public_url: str = ""
+    notify_discord_webhook_url: str = ""
+    notify_telegram_bot_token: str = ""
+    notify_telegram_chat_id: str = ""
+    notify_preview_chars: int = 200
 
     @property
     def attachment_max_size_bytes(self) -> int:
@@ -130,6 +135,22 @@ def load_master_settings() -> MasterSettings:
     agent_auth_refresh_interval_seconds = int(os.getenv("AGENT_AUTH_REFRESH_INTERVAL_SECONDS", "43200") or "43200")
     _log_env("AGENT_AUTH_REFRESH_INTERVAL_SECONDS", os.getenv("AGENT_AUTH_REFRESH_INTERVAL_SECONDS"))
 
+    master_public_url = os.getenv("MASTER_PUBLIC_URL", "").strip()
+    _log_env("MASTER_PUBLIC_URL", os.getenv("MASTER_PUBLIC_URL"))
+
+    notify_discord_webhook_url = os.getenv("MASTER_NOTIFY_DISCORD_WEBHOOK_URL", "").strip()
+    _log_env("MASTER_NOTIFY_DISCORD_WEBHOOK_URL", "<redacted>" if os.getenv("MASTER_NOTIFY_DISCORD_WEBHOOK_URL") else None)
+
+    notify_telegram_bot_token = os.getenv("MASTER_NOTIFY_TELEGRAM_BOT_TOKEN", "").strip()
+    _log_env("MASTER_NOTIFY_TELEGRAM_BOT_TOKEN", "<redacted>" if os.getenv("MASTER_NOTIFY_TELEGRAM_BOT_TOKEN") else None)
+
+    notify_telegram_chat_id = os.getenv("MASTER_NOTIFY_TELEGRAM_CHAT_ID", "").strip()
+    _log_env("MASTER_NOTIFY_TELEGRAM_CHAT_ID", os.getenv("MASTER_NOTIFY_TELEGRAM_CHAT_ID"))
+
+    raw_notify_preview_chars = os.getenv("MASTER_NOTIFY_PREVIEW_CHARS", "200").strip()
+    _log_env("MASTER_NOTIFY_PREVIEW_CHARS", os.getenv("MASTER_NOTIFY_PREVIEW_CHARS"))
+    notify_preview_chars = int(raw_notify_preview_chars) if raw_notify_preview_chars else 200
+
     LOGGER.info(
         "master.env_load done data_dir=%s dry_run=%s mqtt=%s:%s runtime=%s master_url=%s",
         data_dir, dry_run, mqtt_host, mqtt_port, container_runtime, master_url,
@@ -158,4 +179,9 @@ def load_master_settings() -> MasterSettings:
         master_url=master_url,
         agent_idle_timeout_seconds=agent_idle_timeout_seconds,
         agent_auth_refresh_interval_seconds=agent_auth_refresh_interval_seconds,
+        master_public_url=master_public_url,
+        notify_discord_webhook_url=notify_discord_webhook_url,
+        notify_telegram_bot_token=notify_telegram_bot_token,
+        notify_telegram_chat_id=notify_telegram_chat_id,
+        notify_preview_chars=notify_preview_chars,
     )

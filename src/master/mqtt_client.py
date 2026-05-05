@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
+from . import notify
 from .config import MasterSettings
 
 LOGGER = logging.getLogger(__name__)
@@ -150,6 +151,12 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
         if db_path:
             _save_agent_response(db_path, topic_id, payload)
             _record_agent_response(db_path, topic_id)
+            notify.notify_reply(
+                db_path=db_path,
+                settings=userdata["settings"],
+                topic_id=topic_id,
+                payload=payload,
+            )
     else:
         return
 
@@ -165,7 +172,7 @@ def build_client(
     loop: asyncio.AbstractEventLoop | None = None,
     db_path: str | None = None,
 ) -> mqtt.Client:
-    userdata = {"hub": hub, "loop": loop, "db_path": db_path}
+    userdata = {"hub": hub, "loop": loop, "db_path": db_path, "settings": settings}
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, userdata=userdata)
     client.on_connect = _on_connect
     client.on_disconnect = _on_disconnect
