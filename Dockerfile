@@ -50,6 +50,7 @@ RUN cd frontend && npm run build && rm -rf node_modules
 
 COPY --chown=appuser:appuser config ./config
 COPY --chown=appuser:appuser docs ./docs
+COPY --chown=appuser:appuser docker-compose.yml ./
 COPY --chown=appuser:appuser README.md BUILD.md USAGE.md ./
 COPY --chown=appuser:appuser docker/entrypoint.sh /usr/local/bin/bot-entrypoint
 RUN chmod +x /usr/local/bin/bot-entrypoint

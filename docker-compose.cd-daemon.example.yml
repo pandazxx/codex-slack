@@ -43,9 +43,9 @@ services:
       # Name of the master container managed by this daemon.
       CD_CONTAINER_NAME: ${CD_CONTAINER_NAME:-codex-slack-master}
 
-      # Path to the compose file that defines the master service,
-      # as seen from inside this container (use the volume mount below).
-      CD_COMPOSE_FILE: ${CD_COMPOSE_FILE:-/opt/codex-slack-host/docker-compose.yml}
+      # Path to the compose file that defines the master service.
+      # Defaults to the copy baked into the image — no host mount required.
+      CD_COMPOSE_FILE: ${CD_COMPOSE_FILE:-/opt/codex-slack/docker-compose.yml}
 
       # ---- Optional -------------------------------------------------------
       # Service name inside the compose file.
@@ -57,7 +57,7 @@ services:
       # daemon subprocess already inherits all env vars from its own environment.
       CD_ENV_FILE: ${CD_ENV_FILE:-}
       # Where the daemon persists its deploy state.
-      CD_STATE_FILE: ${CD_STATE_FILE:-/opt/codex-slack-host/data/cd/state.json}
+      CD_STATE_FILE: ${CD_STATE_FILE:-/opt/codex-slack/data/cd/state.json}
       # Poll interval in seconds (default 5 minutes).
       CD_POLL_INTERVAL_SECONDS: ${CD_POLL_INTERVAL_SECONDS:-300}
       # Seconds to wait after container (re)start before health-checking.
@@ -107,13 +107,9 @@ services:
       # Docker socket — required for container management.
       - ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}:/run/container.sock
 
-      # Master project directory — mounted to a SEPARATE path so it does NOT
-      # shadow /opt/codex-slack where the image's src/ package lives.
-      # Mounting straight to /opt/codex-slack would overwrite src/ and cause:
-      #   ModuleNotFoundError: No module named 'src'
-      #
-      # The daemon writes state to data/cd/state.json inside this directory.
-      # The container runs as uid 1000 (appuser), so the host directory must
-      # be writable by that uid:
-      #   mkdir -p data/cd && chown -R 1000:1000 data/
-      - ${MASTER_PROJECT_DIR:-.}:/opt/codex-slack-host
+      # Named volume for deploy state — persists across daemon restarts without
+      # requiring any host directory or file-system permissions setup.
+      - cd_state:/opt/codex-slack/data/cd
+
+volumes:
+  cd_state:
