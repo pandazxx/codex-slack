@@ -88,16 +88,23 @@ def deploy_image(
         LOGGER.info("cd.deploy_dry_run image=%s", image_ref)
         return True
 
-    cmd = [*compose_binary.split(), "-f", compose_file]
+    base_cmd = [*compose_binary.split(), "-f", compose_file]
     if env_file:
         if os.path.isfile(env_file):
-            cmd.extend(["--env-file", env_file])
+            base_cmd.extend(["--env-file", env_file])
         else:
             LOGGER.warning("cd.env_file_missing path=%s skipping_--env-file", env_file)
-    cmd.extend(["up", "-d", "--no-build", "--force-recreate", compose_service])
+    extra_env = {"MASTER_RUNTIME_IMAGE": image_ref}
 
+    # Stop then remove before recreating — avoids a name conflict when
+    # container_name is set and --force-recreate tries to create the new
+    # container before the old one has released its name.
+    _run([*base_cmd, "stop", compose_service], extra_env=extra_env)
+    _run([*base_cmd, "rm", "-f", compose_service], extra_env=extra_env)
+
+    cmd = [*base_cmd, "up", "-d", "--no-build", compose_service]
     LOGGER.info("cd.deploy_start image=%s cmd=%r", image_ref, cmd)
-    completed = _run(cmd, extra_env={"MASTER_RUNTIME_IMAGE": image_ref})
+    completed = _run(cmd, extra_env=extra_env)
     if completed.returncode != 0:
         LOGGER.warning(
             "cd.deploy_failed image=%s\nSTDERR:\n%s\nSTDOUT:\n%s",
