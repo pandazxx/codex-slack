@@ -2,6 +2,8 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
+<!-- last updated: 2026-05-05 -->
+
 ---
 
 ## 2026-05-05 — CD daemon fails with `ModuleNotFoundError: No module named 'src'`
