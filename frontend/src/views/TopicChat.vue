@@ -22,8 +22,7 @@
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
         <div class="bubble">
-          <MarkdownMessage v-if="m.sender !== 'user'" :text="m.text" />
-          <template v-else>{{ m.text }}</template>
+          <MarkdownMessage :text="m.text" />
         </div>
         <div v-if="m.attachments && m.attachments.length" class="attachment-list">
           <template v-for="a in m.attachments" :key="a.id">
