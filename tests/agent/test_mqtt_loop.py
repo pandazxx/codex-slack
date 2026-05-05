@@ -52,6 +52,26 @@ def test_run_claude_returns_stdout(tmp_path):
     assert isinstance(_json.loads(transcript), list)
 
 
+def test_run_claude_joins_multiple_final_responses(tmp_path):
+    """When the CLI emits more than one result event (e.g. main response + background
+    task notification), all result texts must be joined so nothing is dropped."""
+    import json as _json
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "First response"}]}},
+        {"type": "result", "result": "First response", "session_id": "s1", "is_error": False},
+        {"type": "system", "subtype": "task_updated"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Second response"}]}},
+        {"type": "result", "result": "Second response", "session_id": "s1", "is_error": False},
+    ]
+    stream = "\n".join(_json.dumps(e) for e in events)
+    with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout=stream, stderr="", returncode=0)
+        text, session, transcript = _run_claude(str(tmp_path), "run it", None, False, None, None, None)
+    assert "First response" in text
+    assert "Second response" in text
+    assert session == "s1"
+
+
 def test_run_claude_includes_resume_when_session_id(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout='{"type":"result","result":"ok","session_id":"ses-123"}', stderr="", returncode=0)

@@ -30,6 +30,18 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-05-05 — Multiple final responses from Claude CLI were silently dropped
+
+*Summary:* When the Claude CLI produces more than one `result` event in a single run (e.g. a main response followed by a background-task completion notification), the frontend only showed the last one. The first response was silently discarded.
+
+*Root cause:* `_run_claude_once` in `src/agent/mqtt_loop.py` assigned `output = event.get("result")` inside the `result`-event loop, overwriting on each iteration. Only the final result event's text survived.
+
+*Fix applied:* Changed to collect all result texts into a list (`outputs`) and join them with `"\n\n---\n\n"` after the loop. Also changed `is_error` to accumulate with `or` so any error in any turn is preserved.
+
+*Prevention:* When iterating over a stream of events and extracting a single value, check whether multiple occurrences of the target event type are possible. If so, accumulate rather than overwrite.
+
+---
+
 ## 2026-05-02 — `--verbose` required for stream-json `result` event (v3 slices 3–4)
 
 *Summary:* The claude-code agent returned `(no output)` for all LLM turns, and no `session_id` was ever stored in the `sessions` table. Agent responses appeared empty in the UI.
