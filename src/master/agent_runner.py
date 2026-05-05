@@ -185,21 +185,31 @@ def refresh_auth(*, name: str, gh_token: str | None, dry_run: bool = False) -> N
             LOGGER.exception("agent_runner.refresh_auth_failed container=%s", name)
 
 
+def _parse_app_version(env_list: list[str]) -> str | None:
+    for item in env_list:
+        if item.startswith("APP_VERSION="):
+            val = item[len("APP_VERSION="):].strip()
+            return val or None
+    return None
+
+
 def get_container_status(*, name: str, dry_run: bool = False) -> dict:  # type: ignore[type-arg]
     if dry_run:
-        return {"status": "dry_run", "exit_code": None, "restart_count": None, "error": None}
+        return {"status": "dry_run", "exit_code": None, "restart_count": None, "error": None, "version": None}
     try:
         c = _client()
         container = c.containers.get(name)
         state = container.attrs.get("State", {})
+        env_list = container.attrs.get("Config", {}).get("Env") or []
         return {
             "status": container.status,
             "exit_code": state.get("ExitCode"),
             "restart_count": container.attrs.get("RestartCount", 0),
             "error": state.get("Error") or None,
+            "version": _parse_app_version(env_list),
         }
     except docker.errors.NotFound:
-        return {"status": "not_found", "exit_code": None, "restart_count": None, "error": None}
+        return {"status": "not_found", "exit_code": None, "restart_count": None, "error": None, "version": None}
     except Exception as exc:
         LOGGER.warning("agent_runner.inspect_failed name=%s error=%s", name, exc)
-        return {"status": "unknown", "exit_code": None, "restart_count": None, "error": str(exc)}
+        return {"status": "unknown", "exit_code": None, "restart_count": None, "error": str(exc), "version": None}
