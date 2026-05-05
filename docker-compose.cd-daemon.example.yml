@@ -14,6 +14,8 @@
 #        CD_IMAGE=ghcr.io/<org>/codex-slack-master
 #        CD_DAEMON_IMAGE=ghcr.io/<org>/codex-slack-cd-daemon:<tag>
 #        DOCKER_GID=<gid of the docker group on the host>
+#        MASTER_AGENT_BASE_IMAGE=ghcr.io/<org>/codex-slack-agent-minimal:<tag>
+#        ANTHROPIC_API_KEY=<key>   # or CLAUDE_CODE_OAUTH_TOKEN
 #   2. Start the daemon:
 #        docker compose -f docker-compose.cd-daemon.example.yml up -d
 #
@@ -79,6 +81,29 @@ services:
 
       # Docker socket location inside the container.
       DOCKER_HOST: unix:///run/container.sock
+
+      # ---- Master service variables ----------------------------------------
+      # These are forwarded into the `docker compose up` subprocess so that
+      # all ${VAR} references in docker-compose.yml resolve correctly when the
+      # daemon brings up the master container.
+      MASTER_AGENT_BASE_IMAGE: ${MASTER_AGENT_BASE_IMAGE:-}
+      MASTER_PORT: ${MASTER_PORT:-8080}
+      MASTER_CONTAINER_NAME: ${MASTER_CONTAINER_NAME:-codex-slack-master}
+      MASTER_DRY_RUN: ${MASTER_DRY_RUN:-false}
+      MASTER_SSH_AUTH_SOCK_PATH: ${MASTER_SSH_AUTH_SOCK_PATH:-}
+      MASTER_SSH_KNOWN_HOSTS_PATH: ${MASTER_SSH_KNOWN_HOSTS_PATH:-}
+      MASTER_CODEX_AUTH_JSON_PATH: ${MASTER_CODEX_AUTH_JSON_PATH:-}
+      MASTER_GIT_USER_NAME: ${MASTER_GIT_USER_NAME:-}
+      MASTER_GIT_USER_EMAIL: ${MASTER_GIT_USER_EMAIL:-}
+      CONTAINER_SOCKET_PATH: ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}
+      CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-docker}
+      MOSQUITTO_CONTAINER_NAME: ${MOSQUITTO_CONTAINER_NAME:-codex-slack-mosquitto}
+      AGENT_IDLE_TIMEOUT_SECONDS: ${AGENT_IDLE_TIMEOUT_SECONDS:-3600}
+      AGENT_AUTH_REFRESH_INTERVAL_SECONDS: ${AGENT_AUTH_REFRESH_INTERVAL_SECONDS:-43200}
+      GH_TOKEN: ${GH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
 
     volumes:
       # Docker socket — required for container management.
