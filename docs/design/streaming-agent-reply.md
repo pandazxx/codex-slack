@@ -216,11 +216,55 @@ Codex adapter (`_run_codex`) is unchanged. Codex emits no streaming events;
 the response arrives as one `/response` message exactly as today. If we ever
 want streaming for Codex, the same `/chunk` topic is available.
 
-Session-expiry retry path (`_run_claude`, lines 126-143) keeps working
-unchanged: the second attempt streams its own chunks under the same
-`reply_message_id`. The frontend will see the (truncated) first attempt's
-chunks discarded when the second attempt's chunks overwrite by `seq` order.
-This is acceptable cosmetic noise on a rare error path.
+Session-expiry retry path (`_run_claude`, lines 126-143) is amended:
+
+1. **Agent** — before starting the second attempt, publish one special chunk:
+   ```python
+   client.publish(chunk_topic, json.dumps({
+       "message_id": reply_message_id,
+       "agent_name": agent_name,
+       "seq": seq,
+       "event": {"type": "system", "subtype": "retry"},
+   }), qos=0)
+   seq += 1
+   ```
+   Then delete all prior chunks for this `message_id` from the broker side
+   is not possible (QoS 0, no retain), but the master should delete them from
+   the DB before the second stream starts — publish a `/chunk_reset` signal
+   or, simpler: the agent publishes the `retry` event and increments `seq`
+   continuously so the master can detect the `retry` subtype and issue the
+   DELETE itself.
+
+   Simplest implementation: agent publishes the `retry` event as a normal
+   chunk; master's `_on_message` chunk branch detects
+   `event.type == "system" and event.subtype == "retry"` and executes
+   `DELETE FROM chunks WHERE message_id = ?` before inserting the retry
+   event itself. The `seq` counter is **not** reset — it continues, so
+   replay ordering is unambiguous.
+
+2. **Frontend** — on receiving a chunk whose `event` is
+   `{type: "system", subtype: "retry"}`, reset the live placeholder's
+   activity rows and show a one-line notice:
+
+   ```js
+   if (event.type === 'system' && event.subtype === 'retry') {
+     live.rows = [{ kind: 'retry_notice', event }]
+     live.text = ''
+     const msg = messages.value.find(m => m.id === message_id)
+     if (msg) { msg.rows = live.rows; msg.text = '' }
+     return
+   }
+   ```
+
+   The `retry_notice` kind renders as a muted inline line inside the bubble:
+
+   ```
+   ⟳ Session expired — retrying…
+   ```
+
+   This line stays visible in the activity list (and in the folded trace after
+   completion) so the user knows a retry happened, but it does not interrupt
+   the reply text zone.
 
 #### 2. Master (`src/master/mqtt_client.py`)
 
@@ -651,6 +695,9 @@ practical problem.
   (downgraded to DEBUG to avoid log flood; INFO summary at end:
   `agent.llm_done chunks=N chars=…`).
 - Master log line per chunk persisted+forwarded: DEBUG only.
+- Master INFO log when `seq == 0` arrives: `ws.first_chunk topic_id=… message_id=… elapsed_ms=…`
+  (elapsed since the matching `/prompt` publish timestamp, if available, otherwise wall clock).
+  This measures agent→browser first-token latency in production without log flood.
 - Master log line per WS replay: INFO — `ws.chunk_replay topic_id=… message_id=… events=N`.
 - Existing `agent.llm_start` / `agent.llm_done` / `mqtt.message` lines are
   preserved.
@@ -675,6 +722,7 @@ classifies every event type observed in the sample response attached to issue
 | `system` / `init` | 1 per run | **Hidden** | Session plumbing (tools list, model, session_id); no user value |
 | `rate_limit_event` | rare | **Hidden** | Infrastructure metadata; never user-relevant |
 | `user` / `text` | rare | **Hidden** | Internal artefact; not a real user message |
+| `system` / `retry` (synthetic) | rare | **Retry notice** — `⟳ Session expired — retrying…` | Injected by the agent on session-expiry retry; signals a clean restart to the user |
 
 **Folded vs. hidden:**
 - *Folded* (`...`) — the row is rendered but collapsed; a click expands it to show the raw JSON. This lets power users inspect tool results without cluttering the default view.
@@ -755,23 +803,22 @@ Persistence:
 
 ## Open Questions
 
-- [ ] Should we add a small "first-chunk seen" log line on the master to
-      help measure agent→browser latency in practice? (owner: sre)
-- [ ] Do we want a CSS cursor on streaming bubbles, or is the `thinking`
-      status pill in the header enough? (owner: doc-writer / UX call)
-- [ ] When the session-expiry retry path fires, the frontend will see two
-      streams under the same `message_id`. The proposed re-serialise of
-      `live.events` makes the second stream simply append to the first.
-      Is that the desired UX, or should we reset the placeholder when
-      the second `system/init` arrives? Note: the agent's retry path also
-      writes a second batch of chunk rows for the same `message_id` —
-      we should decide whether the agent DELETEs prior chunks before
-      retrying, or whether replay shows the concatenated stream. (owner:
-      tester to author UAT, engineer for the agent-side decision)
-- [ ] Should we store `agent_name` on the `chunks` row so `chunk_replay`
-      can carry it without forcing the frontend to derive it from the
-      `system/init` event? Tradeoff: trivial extra column vs. zero work
-      now. (owner: engineer at implementation time)
+All resolved.
+
+- [x] **First-chunk latency log** — yes. Master emits one INFO line
+      (`ws.first_chunk … elapsed_ms=…`) when `seq == 0` arrives. See
+      Observability section.
+- [x] **CSS streaming cursor** — yes. Blinking `▍` at the end of the text
+      zone via `.message.agent.streaming .cursor`. The topic-level status
+      pill is coarse-grained; the per-bubble cursor is unambiguous.
+- [x] **Session-expiry retry UX** — agent publishes a synthetic
+      `{type:"system", subtype:"retry"}` chunk before restarting; master
+      deletes prior chunks for that `message_id`; frontend resets the
+      activity rows and shows `⟳ Session expired — retrying…` in the
+      bubble. See the retry section under Agent component changes.
+- [x] **`agent_name` on `chunks` row** — no extra column. Frontend derives
+      it from the `system/init` event (always seq 0). Engineer may add the
+      column at implementation time if derivation proves awkward.
 ## Implementation Plan
 
 Phase 1 — agent streaming (1 PR):
