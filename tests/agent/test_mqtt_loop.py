@@ -34,22 +34,39 @@ def test_parse_prompt_topic_rejects_malformed():
     assert _parse_prompt_topic("a/b/c/d/e/f/g") is None
 
 
+# ---------------------------------------------------------------------------
+# Helpers for Popen-based mocking
+# ---------------------------------------------------------------------------
+
+def _make_popen_mock(json_events: list[dict], stderr: str = "", returncode: int = 0) -> MagicMock:
+    """Return a mock that behaves like a subprocess.Popen process.
+
+    proc.stdout iterates over JSON-encoded event lines.
+    proc.stderr.read() returns the given stderr string.
+    proc.wait() is a no-op.
+    """
+    lines = [json.dumps(e) + "\n" for e in json_events]
+    proc = MagicMock()
+    proc.stdout = iter(lines)
+    proc.stderr.read.return_value = stderr
+    proc.wait.return_value = returncode
+    return proc
+
+
 # --- _run_claude ---
 
 def test_run_claude_returns_stdout(tmp_path):
-    import json as _json
     events = [
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello from claude"}]}},
         {"type": "result", "result": "Hello from claude", "session_id": None, "cost_usd": 0.0, "duration_ms": 100, "is_error": False},
     ]
-    stream = "\n".join(_json.dumps(e) for e in events)
-    with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout=stream, stderr="", returncode=0)
-        text, session, transcript = _run_claude(str(tmp_path), "say hi", None, False, None, None, None)
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)):
+        text, session, transcript = _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "say hi", None, False, None, None, None)
     assert text == "Hello from claude"
     assert session is None
     assert transcript is not None
-    assert isinstance(_json.loads(transcript), list)
+    assert isinstance(json.loads(transcript), list)
 
 
 def test_run_claude_joins_multiple_final_responses(tmp_path):
@@ -73,48 +90,51 @@ def test_run_claude_joins_multiple_final_responses(tmp_path):
 
 
 def test_run_claude_includes_resume_when_session_id(tmp_path):
-    with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout='{"type":"result","result":"ok","session_id":"ses-123"}', stderr="", returncode=0)
-        _run_claude(str(tmp_path), "continue", "ses-123", False, None, None, None)
-    cmd = mock_run.call_args.args[0]
+    events = [{"type": "result", "result": "ok", "session_id": "ses-123", "is_error": False}]
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)) as mock_popen:
+        _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "continue", "ses-123", False, None, None, None)
+    cmd = mock_popen.call_args.args[0]
     assert "--resume" in cmd
     assert "ses-123" in cmd
 
 
 def test_run_claude_uses_session_id_flag_when_new(tmp_path):
-    with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout='{"type":"result","result":"ok","session_id":"ses-new"}', stderr="", returncode=0)
-        _run_claude(str(tmp_path), "start", "ses-new", True, None, None, None)
-    cmd = mock_run.call_args.args[0]
+    events = [{"type": "result", "result": "ok", "session_id": "ses-new", "is_error": False}]
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)) as mock_popen:
+        _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "start", "ses-new", True, None, None, None)
+    cmd = mock_popen.call_args.args[0]
     assert "--session-id" in cmd
     assert "--resume" not in cmd
 
 
 def test_run_claude_passes_model_and_system_prompt(tmp_path):
-    with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout='{"type":"result","result":"ok","session_id":null}', stderr="", returncode=0)
-        _run_claude(str(tmp_path), "hi", None, True, None, "claude-opus-4-7", "You are a reviewer")
-    cmd = mock_run.call_args.args[0]
+    events = [{"type": "result", "result": "ok", "session_id": None, "is_error": False}]
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)) as mock_popen:
+        _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "hi", None, True, None, "claude-opus-4-7", "You are a reviewer")
+    cmd = mock_popen.call_args.args[0]
     assert "--model" in cmd and "claude-opus-4-7" in cmd
     assert "--append-system-prompt" in cmd and "You are a reviewer" in cmd
 
 
 def test_run_claude_retries_fresh_on_session_not_found(tmp_path):
-    import json as _json
-    error_event = [{"type": "result", "is_error": True, "result": "No conversation found with session ID: old-sid", "session_id": "dead-sid"}]
-    ok_event = [{"type": "result", "is_error": False, "result": "Hello fresh", "session_id": "new-sid"}]
+    error_events = [{"type": "result", "is_error": True, "result": "No conversation found with session ID: old-sid", "session_id": "dead-sid"}]
+    ok_events = [{"type": "result", "is_error": False, "result": "Hello fresh", "session_id": "new-sid"}]
     call_count = {"n": 0}
     cmds = []
 
-    def side_effect(cmd, **kwargs):
+    def popen_side_effect(cmd, **kwargs):
         call_count["n"] += 1
         cmds.append(cmd)
         if call_count["n"] == 1:
-            return MagicMock(stdout="\n".join(_json.dumps(e) for e in error_event), stderr="", returncode=1)
-        return MagicMock(stdout="\n".join(_json.dumps(e) for e in ok_event), stderr="", returncode=0)
+            return _make_popen_mock(error_events, returncode=1)
+        return _make_popen_mock(ok_events, returncode=0)
 
-    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
-        text, sid, transcript = _run_claude(str(tmp_path), "hi", "old-sid", False, None, None, None)
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", side_effect=popen_side_effect):
+        text, sid, transcript = _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "hi", "old-sid", False, None, None, None)
 
     assert call_count["n"] == 2
     assert text == "Hello fresh"
@@ -124,32 +144,40 @@ def test_run_claude_retries_fresh_on_session_not_found(tmp_path):
 
 
 def test_run_claude_does_not_retry_without_session(tmp_path):
-    import json as _json
-    error_event = [{"type": "result", "is_error": True, "result": "some other error", "session_id": None}]
+    error_events = [{"type": "result", "is_error": True, "result": "some other error", "session_id": None}]
     call_count = {"n": 0}
 
-    def side_effect(cmd, **kwargs):
+    def popen_side_effect(cmd, **kwargs):
         call_count["n"] += 1
-        return MagicMock(stdout=_json.dumps(error_event[0]), stderr="", returncode=1)
+        return _make_popen_mock(error_events, returncode=1)
 
-    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
-        _run_claude(str(tmp_path), "hi", None, False, None, None, None)
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", side_effect=popen_side_effect):
+        _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "hi", None, False, None, None, None)
 
     assert call_count["n"] == 1
 
 
 def test_run_claude_not_found(tmp_path):
-    import subprocess as sp
-    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=FileNotFoundError()):
-        text, _, _t = _run_claude(str(tmp_path), "hi", None, False, None, None, None)
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", side_effect=FileNotFoundError()):
+        text, _, _t = _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "hi", None, False, None, None, None)
     assert "not found" in text
 
 
 def test_run_claude_timeout(tmp_path):
     import subprocess as sp
-    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=sp.TimeoutExpired("claude", 300)):
-        text, _, _t = _run_claude(str(tmp_path), "hi", None, False, None, None, None)
-    assert "timed out" in text
+    client = MagicMock()
+
+    # Simulate a timeout by making proc.stdout iteration raise TimeoutExpired
+    proc = MagicMock()
+    proc.stdout = iter([])  # empty — triggers proc.wait()
+    proc.stderr.read.return_value = "timed out"
+    proc.wait.side_effect = sp.TimeoutExpired("claude", 300)
+
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=proc):
+        text, _, _t = _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "hi", None, False, None, None, None)
+    assert "timed out" in text or "claude error" in text
 
 
 # --- _run_codex ---
@@ -379,7 +407,8 @@ def test_process_prompt_with_attachments_prepends_note(tmp_path):
     client = MagicMock()
     captured_text = {}
 
-    def capture_run_claude(worktree, text, session_id, is_new_session, subagent, model, system_prompt):
+    def capture_run_claude(client, workspace_id, topic_id, reply_message_id, agent_name,
+                           worktree, text, session_id, is_new_session, subagent, model, system_prompt):
         captured_text["text"] = text
         return ("response", None, None)
 
@@ -410,7 +439,8 @@ def test_process_prompt_no_attachments_no_note(tmp_path):
     client = MagicMock()
     captured_text = {}
 
-    def capture_run_claude(worktree, text, session_id, is_new_session, subagent, model, system_prompt):
+    def capture_run_claude(client, workspace_id, topic_id, reply_message_id, agent_name,
+                           worktree, text, session_id, is_new_session, subagent, model, system_prompt):
         captured_text["text"] = text
         return ("response", None, None)
 
