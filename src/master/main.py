@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -259,11 +261,47 @@ async def schema() -> dict:  # type: ignore[type-arg]
     return schema_info(app.state.db_path)
 
 
+async def _replay_in_progress_chunks(ws: WebSocket, topic_id: str, db_path: str) -> None:
+    def _query() -> list[tuple[str, list[dict]]]:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            in_progress = [
+                r["message_id"] for r in conn.execute(
+                    "SELECT DISTINCT c.message_id FROM chunks c"
+                    " LEFT JOIN messages m ON m.id = c.message_id"
+                    " WHERE c.topic_id = ? AND m.id IS NULL",
+                    (topic_id,),
+                ).fetchall()
+            ]
+            result = []
+            for mid in in_progress:
+                rows = conn.execute(
+                    "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
+                    (mid,),
+                ).fetchall()
+                result.append((mid, [json.loads(r["event"]) for r in rows]))
+            return result
+        finally:
+            conn.close()
+
+    streams = await asyncio.get_running_loop().run_in_executor(None, _query)
+    for message_id, events in streams:
+        if events:
+            await ws.send_json({
+                "type": "chunk_replay",
+                "message_id": message_id,
+                "events": events,
+            })
+    LOGGER.info("ws.chunk_replay topic_id=%s streams=%d", topic_id, len(streams))
+
+
 @app.websocket("/ws/{topic_id}")
 async def ws_endpoint(topic_id: str, websocket: WebSocket) -> None:
     await websocket.accept()
     app.state.hub.connect(topic_id, websocket)
     try:
+        await _replay_in_progress_chunks(websocket, topic_id, app.state.db_path)
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
