@@ -2,7 +2,7 @@
   <div class="chat-layout">
     <p class="breadcrumb">
       <RouterLink to="/">Workspaces</RouterLink> /
-      <RouterLink :to="`/workspaces/${wsId}`">{{ wsId }}</RouterLink> /
+      <RouterLink :to="`/workspaces/${wsId}`" :title="workspace?.name">{{ displayWorkspaceName }}</RouterLink> /
       {{ topic?.subject || topicId }}
     </p>
 
@@ -22,8 +22,7 @@
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
         <div class="bubble">
-          <MarkdownMessage v-if="m.sender !== 'user'" :text="m.text" />
-          <template v-else>{{ m.text }}</template>
+          <MarkdownMessage :text="m.text" />
         </div>
         <div v-if="m.attachments && m.attachments.length" class="attachment-list">
           <template v-for="a in m.attachments" :key="a.id">
@@ -112,6 +111,7 @@
           rows="3"
           :disabled="sending"
           @keydown.enter.exact.prevent="sendMessage"
+          @paste="onPaste"
         />
         <button type="submit" :disabled="sending || !text.trim()">
           {{ sending ? 'Sending…' : 'Send' }}
@@ -133,6 +133,7 @@ const wsId = route.params.wsId
 const topicId = route.params.topicId
 
 const topic = ref(null)
+const workspace = ref(null)
 const messages = ref([])
 const loading = ref(true)
 const sending = ref(false)
@@ -146,6 +147,14 @@ const selectedFiles = ref([])
 const isArchived = computed(() => !!topic.value?.archived_at)
 const sendError = ref('')
 
+const _MAX_WS_NAME = 64
+const displayWorkspaceName = computed(() => {
+  const s = workspace.value?.name
+  if (!s) return wsId
+  const chars = [...s]
+  return chars.length > _MAX_WS_NAME ? chars.slice(0, _MAX_WS_NAME).join('') + '…' : s
+})
+
 let ws = null
 
 function scrollToBottom() {
@@ -154,15 +163,25 @@ function scrollToBottom() {
   })
 }
 
+async function fetchAgentStatus() {
+  const r = await fetch(`/api/workspaces/${wsId}/agent-status`)
+  if (r.ok) {
+    const data = await r.json()
+    if (!agentStatus.value) agentStatus.value = data.status || ''
+  }
+}
+
 async function load() {
   loading.value = true
   try {
-    const [topicRes, msgsRes] = await Promise.all([
+    const [topicRes, msgsRes, wsRes] = await Promise.all([
       fetch(`/api/workspaces/${wsId}/topics/${topicId}`),
       fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages`),
+      fetch(`/api/workspaces/${wsId}`),
     ])
     topic.value = await topicRes.json()
     messages.value = await msgsRes.json()
+    if (wsRes.ok) workspace.value = await wsRes.json()
     scrollToBottom()
   } finally {
     loading.value = false
@@ -172,6 +191,8 @@ async function load() {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   ws = new WebSocket(`${proto}://${location.host}/ws/${topicId}`)
+
+  ws.onopen = () => { fetchAgentStatus() }
 
   ws.onmessage = (evt) => {
     const data = JSON.parse(evt.data)
@@ -203,6 +224,49 @@ function onFilesSelected(evt) {
 
 function removeFile(index) {
   selectedFiles.value = selectedFiles.value.filter((_, i) => i !== index)
+}
+
+function mimeToExt(mime) {
+  switch (mime) {
+    case 'image/png':     return 'png'
+    case 'image/jpeg':    return 'jpg'
+    case 'image/gif':     return 'gif'
+    case 'image/webp':    return 'webp'
+    case 'image/bmp':     return 'bmp'
+    case 'image/svg+xml': return 'svg'
+    default: {
+      const m = /^image\/([a-z0-9+-]+)$/i.exec(mime)
+      if (!m) return 'png'
+      const ext = m[1].split('+')[0].replace(/[^a-z0-9]/gi, '')
+      return ext || 'png'
+    }
+  }
+}
+
+function renamePastedImage(file) {
+  const ext = mimeToExt(file.type) || 'png'
+  const ts = new Date().toISOString().replace(/[:.]/g, '-')
+  const name = `pasted-image-${ts}.${ext}`
+  return new File([file], name, { type: file.type, lastModified: file.lastModified })
+}
+
+function onPaste(evt) {
+  if (sending.value) return
+  const items = evt.clipboardData?.items
+  if (!items || !items.length) return
+
+  const pastedImages = []
+  for (const item of items) {
+    if (item.kind !== 'file') continue
+    if (!item.type || !item.type.startsWith('image/')) continue
+    const file = item.getAsFile()
+    if (!file) continue
+    pastedImages.push(renamePastedImage(file))
+  }
+
+  if (pastedImages.length === 0) return
+  evt.preventDefault()
+  selectedFiles.value = [...selectedFiles.value, ...pastedImages]
 }
 
 function formatSize(bytes) {

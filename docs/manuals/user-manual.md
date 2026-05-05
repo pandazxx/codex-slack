@@ -50,6 +50,12 @@ The topic gets its own git worktree at `/workspace/worktrees/<topic-id>` inside 
 4. A thinking spinner appears while the agent is processing.
 5. The agent's response appears in the thread when complete.
 
+### Attach images by pasting from the clipboard
+
+While the message input box is focused, press Ctrl+V (or Cmd+V on Mac) to paste an image directly from your clipboard. The image appears as an attachment chip alongside the text input, identical to a file selected via the file picker. You can paste multiple images in a single paste action; each becomes a separate chip. Plain-text clipboard content is unaffected and pastes into the text field as normal.
+
+Pasted images are uploaded with your message when you submit. Filenames are generated automatically in the form `pasted-image-{timestamp}.{ext}`.
+
 ### Session persistence
 
 Each agent maintains a separate LLM session per topic. The first message in a topic starts a new session. Subsequent messages in the same topic resume the session automatically. If a session expires on the server side, the agent retries the prompt with a fresh session transparently.

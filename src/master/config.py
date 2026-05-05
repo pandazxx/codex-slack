@@ -65,8 +65,13 @@ def load_master_settings() -> MasterSettings:
     dry_run = _parse_bool(os.getenv("MASTER_DRY_RUN", "false"))
     _log_env("MASTER_DRY_RUN", os.getenv("MASTER_DRY_RUN"))
 
-    agent_base_image = os.getenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-master:latest").strip() or "codex-slack-master:latest"
+    agent_base_image = (
+        os.getenv("MASTER_AGENT_BASE_IMAGE", "").strip()
+        or os.getenv("MASTER_RUNTIME_IMAGE", "").strip()
+        or "codex-slack-master:latest"
+    )
     _log_env("MASTER_AGENT_BASE_IMAGE", os.getenv("MASTER_AGENT_BASE_IMAGE"))
+    _log_env("MASTER_RUNTIME_IMAGE", os.getenv("MASTER_RUNTIME_IMAGE"))
 
     agent_network = os.getenv("MASTER_AGENT_NETWORK", "codex-slack_internal").strip() or "codex-slack_internal"
     _log_env("MASTER_AGENT_NETWORK", os.getenv("MASTER_AGENT_NETWORK"))
@@ -109,10 +114,10 @@ def load_master_settings() -> MasterSettings:
     _log_env("MASTER_PORT", os.getenv("MASTER_PORT"))
     master_port = int(raw_master_port) if raw_master_port else 8080
 
-    container_runtime = os.getenv("CONTAINER_RUNTIME", "podman").strip().lower() or "podman"
+    container_runtime = os.getenv("CONTAINER_RUNTIME", "docker").strip().lower() or "docker"
     _log_env("CONTAINER_RUNTIME", os.getenv("CONTAINER_RUNTIME"))
-    if container_runtime not in {"podman", "docker"}:
-        raise ValueError(f"CONTAINER_RUNTIME must be 'podman' or 'docker', got: {container_runtime!r}")
+    if container_runtime != "docker":
+        raise ValueError(f"CONTAINER_RUNTIME must be 'docker', got: {container_runtime!r}")
 
     raw_attachment_max_size_mb = os.getenv("ATTACHMENT_MAX_SIZE_MB", "20").strip()
     _log_env("ATTACHMENT_MAX_SIZE_MB", os.getenv("ATTACHMENT_MAX_SIZE_MB"))

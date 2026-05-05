@@ -72,29 +72,70 @@
       </table>
     </section>
 
-    <!-- ── Global Config ─────────────────────────────────────────────── -->
+    <!-- ── System Variables ──────────────────────────────────────────── -->
     <section>
       <div class="section-header">
-        <h2>Global Config</h2>
+        <h2>System Variables</h2>
       </div>
-      <p class="muted hint">Environment variables applied to every agent container at startup. Workspace config overrides these. Changes take effect on next container start.</p>
+      <p class="muted hint">Credentials injected into every agent container. Set these to enable the corresponding features.</p>
       <p class="warn hint">⚠ Values are stored as plain text. Treat this database file as a sensitive asset.</p>
 
+      <table class="config-table">
+        <thead>
+          <tr><th>Key</th><th>Value</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="sv in systemVars" :key="sv.name">
+            <td><code>{{ sv.name }}</code></td>
+            <td class="config-val">
+              <template v-if="editingSysVar === sv.name">
+                <input v-model="sysVarEditValue" class="config-inline-input" @keydown.enter="saveSysVar(sv.name)" @keydown.escape="editingSysVar = null" />
+              </template>
+              <template v-else-if="config[sv.name] !== undefined">
+                <span v-if="sv.sensitive && !revealedKeys[sv.name]">••••••••</span>
+                <span v-else>{{ config[sv.name] }}</span>
+                <button v-if="sv.sensitive" class="reveal-btn" @click="toggleReveal(sv.name)">{{ revealedKeys[sv.name] ? 'hide' : 'show' }}</button>
+              </template>
+              <span v-else class="unset-label">— unset —</span>
+            </td>
+            <td class="sysvar-actions">
+              <template v-if="editingSysVar === sv.name">
+                <button class="action-btn" @click="saveSysVar(sv.name)">Save</button>
+                <button class="action-btn" @click="editingSysVar = null">Cancel</button>
+              </template>
+              <template v-else>
+                <button class="action-btn" @click="startEditSysVar(sv.name)">{{ config[sv.name] !== undefined ? 'Update' : 'Set' }}</button>
+                <button v-if="config[sv.name] !== undefined" class="action-btn remove-btn" @click="deleteConfigKey(sv.name)">Unset</button>
+              </template>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ── User-defined Config ────────────────────────────────────────── -->
+    <section>
+      <div class="section-header">
+        <h2>User-defined Config</h2>
+      </div>
+      <p class="muted hint">Arbitrary environment variables applied to every agent container. Workspace config overrides these. Changes take effect on next container start.</p>
+
       <div class="config-add-form">
-        <input v-model="newConfigKey" placeholder="KEY" class="config-key-input" />
+        <input v-model="newConfigKey" placeholder="KEY" class="config-key-input" @input="checkSysVarWarning" />
         <input v-model="newConfigValue" placeholder="value" class="config-val-input" />
         <button class="btn-primary" @click="addConfigKey" :disabled="!newConfigKey.trim()">Add / Update</button>
       </div>
+      <p v-if="sysVarWarning" class="sysvar-warning">⚠ {{ sysVarWarning }}</p>
 
-      <p v-if="!Object.keys(config).length" class="muted">No global config keys set.</p>
+      <p v-if="!userConfigKeys.length" class="muted">No user-defined config keys set.</p>
       <table v-else class="config-table">
         <thead>
           <tr><th>Key</th><th>Value</th><th></th></tr>
         </thead>
         <tbody>
-          <tr v-for="(val, key) in config" :key="key">
+          <tr v-for="key in userConfigKeys" :key="key">
             <td><code>{{ key }}</code></td>
-            <td class="config-val">{{ isSensitive(key) ? '••••••••' : val }}</td>
+            <td class="config-val">{{ isSensitive(key) ? '••••••••' : config[key] }}</td>
             <td><button class="action-btn remove-btn" @click="deleteConfigKey(key)">✕</button></td>
           </tr>
         </tbody>
@@ -104,7 +145,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 
 const staffs = ref([])
 const showStaffForm = ref(false)
@@ -114,12 +155,48 @@ const staffError = ref('')
 const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false })
 
 const config = ref({})
+const systemVars = ref([])
 const newConfigKey = ref('')
 const newConfigValue = ref('')
+const sysVarWarning = ref('')
+const editingSysVar = ref(null)
+const sysVarEditValue = ref('')
+const revealedKeys = ref({})
 
 const _SENSITIVE = ['API_KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'OAUTH']
 function isSensitive(key) {
   return _SENSITIVE.some(s => key.toUpperCase().includes(s))
+}
+
+const systemVarNames = computed(() => new Set(systemVars.value.map(sv => sv.name)))
+const userConfigKeys = computed(() => Object.keys(config.value).filter(k => !systemVarNames.value.has(k)))
+
+function checkSysVarWarning() {
+  const key = newConfigKey.value.trim().toUpperCase()
+  sysVarWarning.value = systemVarNames.value.has(key)
+    ? `"${key}" is a system variable — use the System Variables section above.`
+    : ''
+}
+
+function toggleReveal(name) {
+  revealedKeys.value[name] = !revealedKeys.value[name]
+}
+
+function startEditSysVar(name) {
+  editingSysVar.value = name
+  sysVarEditValue.value = config.value[name] ?? ''
+}
+
+async function saveSysVar(name) {
+  const value = sysVarEditValue.value
+  await fetch('/api/config', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ set: { [name]: value }, delete: [] }),
+  })
+  editingSysVar.value = null
+  sysVarEditValue.value = ''
+  await loadConfig()
 }
 
 async function loadStaffs() {
@@ -130,6 +207,11 @@ async function loadStaffs() {
 async function loadConfig() {
   const r = await fetch('/api/config')
   config.value = await r.json()
+}
+
+async function loadSystemVars() {
+  const r = await fetch('/api/config/system-variables')
+  if (r.ok) systemVars.value = await r.json()
 }
 
 function startCreateStaff() {
@@ -220,7 +302,7 @@ async function deleteConfigKey(key) {
 }
 
 onMounted(async () => {
-  await Promise.all([loadStaffs(), loadConfig()])
+  await Promise.all([loadStaffs(), loadConfig(), loadSystemVars()])
 })
 </script>
 
@@ -254,6 +336,11 @@ section { margin-bottom: 3rem; border-top: 1px solid #e2e8f0; padding-top: 1.5re
 .config-add-form { display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
 .config-key-input { width: 200px; padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
 .config-val-input { flex: 1; padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.9em; }
+.config-inline-input { width: 100%; padding: 0.25rem 0.5rem; border: 1px solid #93c5fd; border-radius: 4px; font-size: 0.9em; font-family: monospace; }
+.unset-label { color: #94a3b8; font-style: italic; font-size: 0.9em; }
+.reveal-btn { background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.8em; margin-left: 0.5rem; text-decoration: underline; padding: 0; }
+.sysvar-actions { white-space: nowrap; }
+.sysvar-warning { color: #92400e; background: #fef9c3; padding: 0.3rem 0.75rem; border-radius: 4px; font-size: 0.85em; margin-bottom: 0.5rem; }
 
 .btn-primary { padding: 0.4rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
