@@ -4,6 +4,7 @@ import logging
 import time
 
 from .config import CdSettings
+from ..version import get_app_version
 from .deploy import (
     check_health,
     deploy_image,
@@ -151,7 +152,8 @@ def _do_rollback(*, settings: CdSettings, image_ref: str, current_state: CdState
 def run_loop(settings: CdSettings) -> None:
     """Poll for new images in a blocking loop, deploying and rolling back as needed."""
     LOGGER.info(
-        "cd.daemon_start image=%s tag=%s container=%s poll_interval=%ds health_delay=%ds rollback=%s dry_run=%s",
+        "cd.daemon_start version=%s image=%s tag=%s container=%s poll_interval=%ds health_delay=%ds rollback=%s dry_run=%s",
+        get_app_version(),
         settings.image,
         settings.image_tag,
         settings.container_name,

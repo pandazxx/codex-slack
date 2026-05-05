@@ -21,7 +21,9 @@ def client(tmp_path, monkeypatch):
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    body = r.json()
+    assert body["status"] == "ok"
+    assert "version" in body
 
 
 def test_schema_lists_all_tables(client):

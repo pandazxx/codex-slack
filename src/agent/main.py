@@ -5,6 +5,9 @@ import logging
 
 from .worker import load_worker_settings, run_worker
 from ..logging_utils import LocalTimeFormatter
+from ..version import get_app_version
+
+LOGGER = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,6 +26,7 @@ def configure_logging(log_level: str) -> None:
 def main() -> int:
     args = parse_args()
     configure_logging(args.log_level)
+    LOGGER.info("agent.startup version=%s", get_app_version())
     settings = load_worker_settings()
     return run_worker(settings)
 

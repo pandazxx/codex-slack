@@ -126,6 +126,18 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-05-05 — Production /health reports RC tag, not release tag
+
+*Summary:* After a release promotion, production containers report a version string like `v4.0-rc3` in `/health` and startup logs, not `v4.0`. On-call responders initially suspected a bad deploy.
+
+*Root cause:* `promote-release.yml` promotes a build to production by retagging the RC image without rebuilding it. The `APP_VERSION` environment variable is baked at RC build time, so the running container retains the RC string regardless of the Docker image tag it was launched from.
+
+*Fix applied:* This is intentional behaviour, not a bug. Rebuilding on promote would break the "bit-identical to UAT-approved RC" invariant. The ops manual (`docs/manuals/ops-manual.md`, Version display section) now documents this explicitly.
+
+*Prevention:* When triaging an incident, a `version` field ending in `-rc<N>` in production is expected and does not indicate a misdeployment. The RC string identifies which UAT-approved build is running. Check `promote-release.yml` history to confirm which RC was promoted if a cross-reference is needed.
+
+---
+
 ## 2026-03-24 — docs/knowledge-base directory initialised
 
 *Summary:* The project `CLAUDE.md` references [`docs/knowledge-base/lessons-learned.md`](lessons-learned.md) and [`docs/knowledge-base/faq.md`](faq.md) as required knowledge-persistence targets, but neither file nor the directory existed.
