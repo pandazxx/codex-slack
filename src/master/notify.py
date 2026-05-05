@@ -131,10 +131,11 @@ def notify_reply(
     raw_preview = payload.get("last_response", "") or ""
     preview = _trim_preview(raw_preview, preview_chars)
 
+    public_url = effective.get("MASTER_PUBLIC_URL") or settings.master_public_url
     content = NotificationContent(
         workspace_name=workspace_name,
         topic_subject=topic_subject,
-        topic_url=build_topic_url(settings.master_public_url, workspace_id, topic_id),
+        topic_url=build_topic_url(public_url, workspace_id, topic_id),
         preview=preview,
     )
 
