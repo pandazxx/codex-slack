@@ -16,3 +16,6 @@ Status flow: `proposed` → `accepted` → `deprecated` / `superseded`
 | 0006 | [Drop Slack and Discord integration](0006-drop-slack-discord-integration.md) | accepted |
 | 0007 | [Native attachment management with pluggable storage](0007-native-attachment-management.md) | accepted |
 | 0008 | [Auth token refresh — explicit API and auto-refresh](0008-auth-token-refresh.md) | accepted |
+| 0009 | [Runtime configuration and staff system](0009-runtime-configuration-and-staff-system.md) | accepted |
+| 0010 | [Workspace env var overrides](0010-workspace-env-var-overrides.md) | accepted |
+| 0011 | [Stream agent reply incrementally](0011-streaming-agent-reply.md) | proposed |
