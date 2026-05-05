@@ -612,6 +612,82 @@ makes that unnecessary.)
 - Existing `agent.llm_start` / `agent.llm_done` / `mqtt.message` lines are
   preserved.
 
+## Noise Filtering
+
+Not all `stream-json` events are worth surfacing to the user. The table below
+classifies every event type observed in the sample response attached to issue
+#119, defining what the frontend should render and what it should fold.
+
+### Event classification
+
+| Event type / subtype | Frequency (sample) | Render as | Rationale |
+|---|---|---|---|
+| `assistant` / `text` | low | **Full text** — append to the reply bubble | Primary content; the whole point of streaming |
+| `assistant` / `tool_use` | high | **Compact action label** — `⚙ Bash: git log --oneline -5` or `📄 Read: src/master/db.py` or `🤖 Agent: [description]` | Shows the agent working; extracting the key input field keeps it short |
+| `system` / `task_progress` | high | **Compact progress line** — `↳ [description]` | Subagent step descriptions (e.g. "Running git log --oneline -5", "Reading src/master/db.py") are human-readable and valuable |
+| `system` / `task_started` | low | **Compact label** — `🚀 Subagent: [description]` | Tells the user a subagent was spawned |
+| `result` | 1 per run | **Hidden** — the final `/response` MQTT message replaces the placeholder at this point | The durable `/response` arrives on the same tick; rendering the result event would flicker |
+| `user` / `tool_result` | high | **Folded** — `...` (collapsed by default, expandable on click) | Raw output can be thousands of lines of file content or command output; `task_progress` already summarises the action |
+| `assistant` / `thinking` | low | **Folded** — `...` | Internal chain-of-thought; not user-facing by convention |
+| `system` / `init` | 1 per run | **Hidden** | Session plumbing (tools list, model, session_id); no user value |
+| `rate_limit_event` | rare | **Hidden** | Infrastructure metadata; never user-relevant |
+| `user` / `text` | rare | **Hidden** | Internal artefact; not a real user message |
+
+**Folded vs. hidden:**
+- *Folded* (`...`) — the row is rendered but collapsed; a click expands it to show the raw JSON. This lets power users inspect tool results without cluttering the default view.
+- *Hidden* — the event is not rendered at all. It is still stored in `chunks` / `transcript` so it is available for debugging.
+
+### Extracting compact labels for `assistant/tool_use`
+
+```js
+function toolUseLabel(event) {
+  const block = event.message?.content?.find(b => b.type === 'tool_use')
+  if (!block) return null
+  const { name, input } = block
+  if (name === 'Bash')   return `⚙ Bash: ${(input.command  || '').slice(0, 80)}`
+  if (name === 'Read')   return `📄 Read: ${input.file_path || ''}`
+  if (name === 'Write')  return `✏️ Write: ${input.file_path || ''}`
+  if (name === 'Edit')   return `✏️ Edit: ${input.file_path || ''}`
+  if (name === 'Glob')   return `🔍 Glob: ${input.pattern  || ''}`
+  if (name === 'Grep')   return `🔍 Grep: ${input.pattern  || ''}`
+  if (name === 'Agent')  return `🤖 Agent: ${input.description || ''}`
+  if (name === 'WebFetch') return `🌐 Fetch: ${input.url   || ''}`
+  return `⚙ ${name}`
+}
+```
+
+### Rendering pipeline in `handleChunk`
+
+When a chunk arrives, classify the event before updating the placeholder:
+
+```js
+function classifyEvent(event) {
+  const t = event.type
+  const s = event.subtype
+  if (t === 'assistant') {
+    const content = event.message?.content || []
+    if (content.some(b => b.type === 'text'))     return 'text'
+    if (content.some(b => b.type === 'tool_use')) return 'tool_use'
+    if (content.some(b => b.type === 'thinking')) return 'folded'
+  }
+  if (t === 'system' && s === 'task_progress')    return 'task_progress'
+  if (t === 'system' && s === 'task_started')     return 'task_started'
+  if (t === 'user'   && content_has_tool_result(event)) return 'folded'
+  return 'hidden'
+}
+```
+
+The live placeholder renders a list of rows:
+- `text` → append to the text bubble (existing behaviour)
+- `tool_use` → compact label row (e.g. `⚙ Bash: git log …`)
+- `task_progress` → compact label row (e.g. `↳ Running git log …`)
+- `task_started` → compact label row (e.g. `🚀 Subagent: …`)
+- `folded` → collapsed `...` row, expandable
+- `hidden` → not rendered
+
+This classification applies equally to live chunks and `chunk_replay` events,
+so historical and live views are consistent.
+
 ## Alternatives Considered
 
 See [ADR-0011](../decisions/0011-streaming-agent-reply.md) for the full
