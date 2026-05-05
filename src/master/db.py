@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS workspaces (
     created_at        TEXT NOT NULL,
     archived_at       TEXT,
     last_refreshed_at TEXT,
-    last_message_at   TEXT
+    last_message_at   TEXT,
+    last_dispatched_at TEXT,
+    last_responded_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS staffs (
@@ -108,6 +110,8 @@ _MIGRATIONS = [
     "ALTER TABLE messages ADD COLUMN usage_json TEXT",
     "ALTER TABLE topics ADD COLUMN repo_ref TEXT",
     "ALTER TABLE topics ADD COLUMN base_sha TEXT",
+    "ALTER TABLE workspaces ADD COLUMN last_dispatched_at TEXT",
+    "ALTER TABLE workspaces ADD COLUMN last_responded_at TEXT",
 ]
 
 

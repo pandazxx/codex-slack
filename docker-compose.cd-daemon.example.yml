@@ -10,9 +10,11 @@
 #
 # Usage
 # -----
-#   Copy this file alongside docker-compose.yml, fill in the required
-#   environment variables (or add them to .env), then:
-#     docker compose -f docker-compose.cd-daemon.example.yml up -d
+#   1. Copy this file alongside docker-compose.yml.
+#   2. Create a .env file with at minimum:
+#        CD_IMAGE=ghcr.io/<org>/codex-slack-master
+#   3. Start the daemon:
+#        docker compose -f docker-compose.cd-daemon.example.yml up -d
 #
 # Security note
 # -------------
@@ -21,9 +23,10 @@
 
 services:
   codex-slack-cd-daemon:
-    # Set CD_DAEMON_IMAGE (or the legacy MASTER_RUNTIME_IMAGE) in .env to the
-    # image that contains the cd/ package.  Defaults to the locally-built image.
-    image: ${CD_DAEMON_IMAGE:-codex-slack-master:latest}
+    # Dedicated CD daemon image — built by CI from Dockerfile.cd-daemon.
+    # Much smaller than the master image: Python + Docker CLI only.
+    # Set CD_DAEMON_IMAGE in .env to pin a specific sha- tag.
+    image: ${CD_DAEMON_IMAGE:-ghcr.io/your-org/codex-slack-cd-daemon:latest}
     container_name: codex-slack-cd-daemon
     restart: unless-stopped
     working_dir: /opt/codex-slack
@@ -33,28 +36,23 @@ services:
 
     environment:
       # ---- Required -------------------------------------------------------
-      # Full image name without tag (e.g. "ghcr.io/org/codex-slack-master"
-      # for a registry image, or "codex-slack-master" for a locally built one).
+      # Full image name without tag (e.g. "ghcr.io/org/codex-slack-master").
       CD_IMAGE: ${CD_IMAGE}
 
+      # ---- Optional -------------------------------------------------------
       # Tag to track.  "latest" for staging; a semver string for production.
       CD_IMAGE_TAG: ${CD_IMAGE_TAG:-latest}
-
       # Name of the master container managed by this daemon.
       CD_CONTAINER_NAME: ${CD_CONTAINER_NAME:-codex-slack-master}
-
-      # Path to the compose file that defines the master service.
-      # Defaults to the copy baked into the image — no host mount required.
+      # Path to the compose file, as seen from inside this container.
       CD_COMPOSE_FILE: ${CD_COMPOSE_FILE:-/opt/codex-slack/docker-compose.yml}
-
-      # ---- Optional -------------------------------------------------------
       # Service name inside the compose file.
       CD_COMPOSE_SERVICE: ${CD_COMPOSE_SERVICE:-master}
       # Compose binary: "docker compose" (default) or "docker-compose" (v1).
       CD_COMPOSE_BINARY: ${CD_COMPOSE_BINARY:-docker compose}
-      # Path to the .env file passed to the master compose via --env-file.
-      # Leave unset (default) when using the passthrough block below — the
-      # daemon subprocess already inherits all env vars from its own environment.
+      # Extra .env file forwarded to compose via --env-file (rarely needed;
+      # master vars not in this file default to empty, which is fine if the
+      # master is configured through its own settings).
       CD_ENV_FILE: ${CD_ENV_FILE:-}
       # Where the daemon persists its deploy state.
       CD_STATE_FILE: ${CD_STATE_FILE:-/opt/codex-slack/data/cd/state.json}
@@ -76,40 +74,9 @@ services:
       # Docker socket location inside the container.
       DOCKER_HOST: unix:///run/container.sock
 
-      # ---- Master compose passthrough -------------------------------------
-      # These vars are forwarded into the daemon container so that when the
-      # daemon invokes "docker compose up" it can resolve all ${...} references
-      # in docker-compose.yml without needing a .env file on the remote host.
-      # Docker Compose reads your LOCAL .env when starting the daemon (even
-      # with DOCKER_HOST=ssh://...), so the resolved values travel with the
-      # container config automatically.
-      DOCKER_GID: ${DOCKER_GID:-999}
-      CONTAINER_SOCKET_PATH: ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}
-      CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-docker}
-      MASTER_PORT: ${MASTER_PORT:-8080}
-      MASTER_CONTAINER_NAME: ${MASTER_CONTAINER_NAME:-codex-slack-master}
-      MASTER_AGENT_BASE_IMAGE: ${MASTER_AGENT_BASE_IMAGE:-}
-      MASTER_DRY_RUN: ${MASTER_DRY_RUN:-false}
-      MASTER_CODEX_AUTH_JSON_PATH: ${MASTER_CODEX_AUTH_JSON_PATH:-}
-      MASTER_SSH_AUTH_SOCK_PATH: ${MASTER_SSH_AUTH_SOCK_PATH:-}
-      MASTER_SSH_KNOWN_HOSTS_PATH: ${MASTER_SSH_KNOWN_HOSTS_PATH:-}
-      MASTER_GIT_USER_NAME: ${MASTER_GIT_USER_NAME:-}
-      MASTER_GIT_USER_EMAIL: ${MASTER_GIT_USER_EMAIL:-}
-      MOSQUITTO_CONTAINER_NAME: ${MOSQUITTO_CONTAINER_NAME:-codex-slack-mosquitto}
-      AGENT_IDLE_TIMEOUT_SECONDS: ${AGENT_IDLE_TIMEOUT_SECONDS:-3600}
-      AGENT_AUTH_REFRESH_INTERVAL_SECONDS: ${AGENT_AUTH_REFRESH_INTERVAL_SECONDS:-43200}
-      GH_TOKEN: ${GH_TOKEN:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-
     volumes:
       # Docker socket — required for container management.
       - ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}:/run/container.sock
 
-      # Named volume for deploy state — persists across daemon restarts without
-      # requiring any host directory or file-system permissions setup.
-      - cd_state:/opt/codex-slack/data/cd
-
-volumes:
-  cd_state:
+      # Master project directory so the daemon can drive compose commands.
+      - ${MASTER_PROJECT_DIR:-.}:/opt/codex-slack
