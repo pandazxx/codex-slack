@@ -17,7 +17,7 @@ services:
       MASTER_SSH_KNOWN_HOSTS_PATH: ${MASTER_SSH_KNOWN_HOSTS_PATH:-}
       MASTER_GIT_USER_NAME: ${MASTER_GIT_USER_NAME:-}
       MASTER_GIT_USER_EMAIL: ${MASTER_GIT_USER_EMAIL:-}
-      CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-docker}
+      CONTAINER_RUNTIME: docker
       DOCKER_HOST: unix:///run/container.sock
       CONTAINER_HOST: unix:///run/container.sock
       MQTT_HOST: mosquitto

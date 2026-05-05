@@ -13,7 +13,7 @@ from .registry import AgentRecord, AgentRegistry, utc_now_iso
 from .runtime_adapter import RuntimeAdapter
 
 DEFAULT_IMAGE = "codex-slack-bot:latest"
-DEFAULT_RUNTIME = "podman"
+DEFAULT_RUNTIME = "docker"
 DEFAULT_AGENT_ADAPTER = "codex"
 SUPPORTED_AGENT_ADAPTERS = {"codex", "claude-code"}
 LOGGER = logging.getLogger(__name__)

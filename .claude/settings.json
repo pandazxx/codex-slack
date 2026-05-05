@@ -22,12 +22,7 @@
       "Bash(find src *)",
       "Bash(find tests *)",
       "Bash(find docs *)",
-      "Bash(podman ps*)",
-      "Bash(podman images*)",
-      "Bash(podman logs*)",
-      "Bash(podman inspect*)",
-      "Bash(podman compose*)",
-      "Bash(podman info*)",
+
       "Bash(docker ps*)",
       "Bash(docker images*)",
       "Bash(docker logs*)",

@@ -37,14 +37,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     openssh-client \
-    podman \
     poppler-utils \
     tini \
     && rm -rf /var/lib/apt/lists/*
-
-# Install podman-compose via pip — the apt package (1.3.0) has a broken
-# entry_point that crashes on load. pip ships a working recent version.
-RUN pip install --no-cache-dir podman-compose
 
 RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
 

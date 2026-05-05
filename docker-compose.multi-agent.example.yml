@@ -1,6 +1,3 @@
-x-podman:
-  in_pod: false
-
 services:
   codex-agent-foo:
     image: codex-slack-bot:latest
@@ -10,8 +7,7 @@ services:
     container_name: codex-agent-foo
     restart: unless-stopped
     working_dir: /opt/codex-slack
-    userns_mode: "keep-id"
-    user: "${UID:-1000}:${GID:-1000}"
+
     command: ["python", "-m", "src.bot.main"]
     environment:
       SLACK_BOT_TOKEN: ${FOO_SLACK_BOT_TOKEN}
@@ -41,8 +37,7 @@ services:
     container_name: codex-agent-bar
     restart: unless-stopped
     working_dir: /opt/codex-slack
-    userns_mode: "keep-id"
-    user: "${UID:-1000}:${GID:-1000}"
+
     command: ["python", "-m", "src.bot.main"]
     environment:
       SLACK_BOT_TOKEN: ${BAR_SLACK_BOT_TOKEN}
@@ -72,8 +67,7 @@ services:
     container_name: codex-agent-baz
     restart: unless-stopped
     working_dir: /opt/codex-slack
-    userns_mode: "keep-id"
-    user: "${UID:-1000}:${GID:-1000}"
+
     command: ["python", "-m", "src.bot.main"]
     environment:
       SLACK_BOT_TOKEN: ${BAZ_SLACK_BOT_TOKEN}

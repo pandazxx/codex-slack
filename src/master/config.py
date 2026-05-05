@@ -104,10 +104,10 @@ def load_master_settings() -> MasterSettings:
     _log_env("MASTER_PORT", os.getenv("MASTER_PORT"))
     master_port = int(raw_master_port) if raw_master_port else 8080
 
-    container_runtime = os.getenv("CONTAINER_RUNTIME", "podman").strip().lower() or "podman"
+    container_runtime = os.getenv("CONTAINER_RUNTIME", "docker").strip().lower() or "docker"
     _log_env("CONTAINER_RUNTIME", os.getenv("CONTAINER_RUNTIME"))
-    if container_runtime not in {"podman", "docker"}:
-        raise ValueError(f"CONTAINER_RUNTIME must be 'podman' or 'docker', got: {container_runtime!r}")
+    if container_runtime != "docker":
+        raise ValueError(f"CONTAINER_RUNTIME must be 'docker', got: {container_runtime!r}")
 
     raw_attachment_max_size_mb = os.getenv("ATTACHMENT_MAX_SIZE_MB", "20").strip()
     _log_env("ATTACHMENT_MAX_SIZE_MB", os.getenv("ATTACHMENT_MAX_SIZE_MB"))
