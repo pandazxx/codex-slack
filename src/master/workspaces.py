@@ -297,7 +297,7 @@ def get_agent_status(workspace_id: str, request: Request) -> dict:  # type: igno
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT container_name FROM workspaces WHERE id = ?", (workspace_id,)
+            "SELECT container_name, last_agent_state FROM workspaces WHERE id = ?", (workspace_id,)
         ).fetchone()
     finally:
         conn.close()
@@ -305,7 +305,10 @@ def get_agent_status(workspace_id: str, request: Request) -> dict:  # type: igno
         raise HTTPException(status_code=404, detail="workspace not found")
     name = row["container_name"] or container_name(workspace_id)
     settings = request.app.state.settings
-    return get_container_status(name=name, dry_run=settings.dry_run)
+    result = get_container_status(name=name, dry_run=settings.dry_run)
+    if row["last_agent_state"] and result.get("status") == "running":
+        result["status"] = row["last_agent_state"]
+    return result
 
 
 def _parse_github_repo(repo_url: str) -> tuple[str, str] | None:

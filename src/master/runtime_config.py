@@ -26,6 +26,13 @@ def load_global_env(db_path: str) -> dict[str, str]:
     finally:
         conn.close()
 
+_SYSTEM_VARIABLES: list[dict] = [
+    {"name": "GH_TOKEN",                "sensitive": True},
+    {"name": "ANTHROPIC_API_KEY",       "sensitive": True},
+    {"name": "CLAUDE_CODE_OAUTH_TOKEN", "sensitive": True},
+    {"name": "OPENAI_API_KEY",          "sensitive": True},
+]
+
 global_router = APIRouter(prefix="/config", tags=["config"])
 workspace_router = APIRouter(prefix="/workspaces/{workspace_id}/config", tags=["config"])
 
@@ -86,6 +93,11 @@ def _apply_patch(conn, scope_type: str, scope_id: str, patch: ConfigPatch) -> No
 
 
 # ── Global config ─────────────────────────────────────────────────────────────
+
+@global_router.get("/system-variables", response_model=list[dict])
+def get_system_variables() -> list[dict]:
+    return _SYSTEM_VARIABLES
+
 
 @global_router.get("", response_model=dict[str, str])
 def get_global_config(request: Request) -> dict[str, str]:
