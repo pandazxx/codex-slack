@@ -82,4 +82,9 @@ services:
       # shadow /opt/codex-slack where the image's src/ package lives.
       # Mounting straight to /opt/codex-slack would overwrite src/ and cause:
       #   ModuleNotFoundError: No module named 'src'
+      #
+      # The daemon writes state to data/cd/state.json inside this directory.
+      # The container runs as uid 1000 (appuser), so the host directory must
+      # be writable by that uid:
+      #   mkdir -p data/cd && chown -R 1000:1000 data/
       - ${MASTER_PROJECT_DIR:-.}:/opt/codex-slack-host
