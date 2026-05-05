@@ -14,22 +14,22 @@ automatically rolls back to the previous image if the container fails to stay
 running after the deploy.
 
 ```
-GitHub push ──► GitHub Actions (publish-master.yml)
-                  │  build + push
+GitHub push ──► GitHub Actions (CI)
+                  │  build + push master image
                   ▼
               GHCR registry
-                  │  image:latest  (staging tracks this)
-                  │  image:v1.2.3  (production tracks this)
-                  │  image:sha-abc (pinned rollback ref, always pushed)
+                  │  codex-slack-master:latest   (staging tracks this)
+                  │  codex-slack-master:v1.2.3   (production tracks this)
+                  │  codex-slack-master:sha-abc  (pinned rollback ref)
                   │
                   │  poll every CD_POLL_INTERVAL_SECONDS
                   ▼
-          CD Daemon  (host or sidecar container)
+          CD Daemon  (dedicated codex-slack-cd-daemon image)
             │
             ├── pull image, compare digest to state.json
-            ├── NEW: docker compose up -d --force-recreate
+            ├── docker compose up -d --force-recreate
             ├── wait CD_HEALTH_CHECK_DELAY_SECONDS
-            ├── podman inspect → State.Status == "running"?
+            ├── docker inspect → State.Status == "running"?
             │       YES ──► save new digest to state.json ✓
             │       NO  ──► rollback: pull previous digest, compose up with old image
             └── save consecutive_failures to state.json
@@ -37,12 +37,33 @@ GitHub push ──► GitHub Actions (publish-master.yml)
 
 ---
 
-## Image Tag Strategy
+## Daemon Image
+
+The CD daemon runs from a dedicated minimal image (`Dockerfile.cd-daemon`) that
+contains only Python, the Docker CLI, the Compose plugin, and `python-dotenv`.
+It is published to GHCR by `publish-cd-daemon.yml` on every `master` commit that
+touches `src/cd/`, `src/logging_utils.py`, or the Dockerfile itself.
+
+| Image | Tag | Description |
+|-------|-----|-------------|
+| `ghcr.io/<org>/codex-slack-cd-daemon` | `latest` | Built on every qualifying master commit |
+| `ghcr.io/<org>/codex-slack-cd-daemon` | `sha-<7>` | Immutable per-commit reference for pinning |
+
+**Why separate from the master image?**  The daemon image rarely changes and
+must remain stable regardless of what the master image contains.  A bad master
+release cannot accidentally break the daemon binary.
+
+Set `CD_DAEMON_IMAGE` in `.env` to pin the daemon to a specific `sha-` tag for
+reproducible deployments.
+
+---
+
+## Master Image Tag Strategy
 
 | Tag | Pushed on | Used by |
 |-----|-----------|---------|
-| `latest` | Every merge to `master` | Staging CD daemon |
-| `v1.2.3` | Semver release tag (e.g. `git tag v1.2.3 && git push --tags`) | Production CD daemon |
+| `latest` | Every merge to `master` | Staging (default) |
+| `v1.2.3` | Semver release tag (e.g. `git tag v1.2.3 && git push --tags`) | Production |
 | `sha-abc1234` | Every push | Pinned rollback references |
 
 The daemon uses the **repo-digest** (`image@sha256:…`) internally so it can

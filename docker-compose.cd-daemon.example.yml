@@ -23,7 +23,10 @@
 
 services:
   codex-slack-cd-daemon:
-    image: ${MASTER_RUNTIME_IMAGE:-codex-slack-master:latest}
+    # Dedicated CD daemon image — built by CI from Dockerfile.cd-daemon.
+    # Much smaller than the master image: Python + Docker CLI only.
+    # Set CD_DAEMON_IMAGE in .env to pin a specific sha- tag.
+    image: ${CD_DAEMON_IMAGE:-ghcr.io/your-org/codex-slack-cd-daemon:latest}
     container_name: codex-slack-cd-daemon
     restart: unless-stopped
     working_dir: /opt/codex-slack
