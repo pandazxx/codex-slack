@@ -73,7 +73,7 @@ const props = defineProps({
   containerRunning: { type: Boolean, default: false },
 })
 
-const SECRET_KEY_SUBSTRINGS = ['KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'CREDENTIAL', 'PASSPHRASE']
+const SECRET_KEY_SUBSTRINGS = ['KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'CREDENTIAL', 'PASSPHRASE', 'WEBHOOK']
 
 const mergedConfig = ref({})
 const globalConfig = ref({})

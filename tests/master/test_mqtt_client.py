@@ -130,17 +130,20 @@ def _make_db(tmp_path) -> str:
 def test_on_message_status_does_not_record_response(tmp_path):
     db = _make_db(tmp_path)
     msg = _make_msg("codex-slack/workspace/ws1/topic/t1/status", {"state": "thinking"})
+    settings = _make_settings()
     with patch("src.master.mqtt_client._record_agent_response") as mock_rec:
-        _on_message(MagicMock(), {"db_path": db}, msg)
+        _on_message(MagicMock(), {"db_path": db, "settings": settings}, msg)
         mock_rec.assert_not_called()
 
 
 def test_on_message_response_records_response(tmp_path):
     db = _make_db(tmp_path)
     msg = _make_msg("codex-slack/workspace/ws1/topic/t1/response", {"last_response": "done"})
+    settings = _make_settings()
     with patch("src.master.mqtt_client._record_agent_response") as mock_rec, \
-         patch("src.master.mqtt_client._save_agent_response"):
-        _on_message(MagicMock(), {"db_path": db}, msg)
+         patch("src.master.mqtt_client._save_agent_response"), \
+         patch("src.master.mqtt_client.notify.notify_reply"):
+        _on_message(MagicMock(), {"db_path": db, "settings": settings}, msg)
         mock_rec.assert_called_once_with(db, "t1")
 
 
