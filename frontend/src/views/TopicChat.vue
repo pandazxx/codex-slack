@@ -2,7 +2,7 @@
   <div class="chat-layout">
     <p class="breadcrumb">
       <RouterLink to="/">Workspaces</RouterLink> /
-      <RouterLink :to="`/workspaces/${wsId}`">{{ wsId }}</RouterLink> /
+      <RouterLink :to="`/workspaces/${wsId}`" :title="workspace?.name">{{ displayWorkspaceName }}</RouterLink> /
       {{ topic?.subject || topicId }}
     </p>
 
@@ -133,6 +133,7 @@ const wsId = route.params.wsId
 const topicId = route.params.topicId
 
 const topic = ref(null)
+const workspace = ref(null)
 const messages = ref([])
 const loading = ref(true)
 const sending = ref(false)
@@ -146,6 +147,14 @@ const selectedFiles = ref([])
 const isArchived = computed(() => !!topic.value?.archived_at)
 const sendError = ref('')
 
+const _MAX_WS_NAME = 64
+const displayWorkspaceName = computed(() => {
+  const s = workspace.value?.name
+  if (!s) return wsId
+  const chars = [...s]
+  return chars.length > _MAX_WS_NAME ? chars.slice(0, _MAX_WS_NAME).join('') + '…' : s
+})
+
 let ws = null
 
 function scrollToBottom() {
@@ -154,15 +163,25 @@ function scrollToBottom() {
   })
 }
 
+async function fetchAgentStatus() {
+  const r = await fetch(`/api/workspaces/${wsId}/agent-status`)
+  if (r.ok) {
+    const data = await r.json()
+    if (!agentStatus.value) agentStatus.value = data.status || ''
+  }
+}
+
 async function load() {
   loading.value = true
   try {
-    const [topicRes, msgsRes] = await Promise.all([
+    const [topicRes, msgsRes, wsRes] = await Promise.all([
       fetch(`/api/workspaces/${wsId}/topics/${topicId}`),
       fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages`),
+      fetch(`/api/workspaces/${wsId}`),
     ])
     topic.value = await topicRes.json()
     messages.value = await msgsRes.json()
+    if (wsRes.ok) workspace.value = await wsRes.json()
     scrollToBottom()
   } finally {
     loading.value = false
@@ -172,6 +191,8 @@ async function load() {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   ws = new WebSocket(`${proto}://${location.host}/ws/${topicId}`)
+
+  ws.onopen = () => { fetchAgentStatus() }
 
   ws.onmessage = (evt) => {
     const data = JSON.parse(evt.data)
