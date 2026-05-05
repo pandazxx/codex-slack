@@ -60,8 +60,13 @@ def load_master_settings() -> MasterSettings:
     dry_run = _parse_bool(os.getenv("MASTER_DRY_RUN", "false"))
     _log_env("MASTER_DRY_RUN", os.getenv("MASTER_DRY_RUN"))
 
-    agent_base_image = os.getenv("MASTER_AGENT_BASE_IMAGE", "codex-slack-master:latest").strip() or "codex-slack-master:latest"
+    agent_base_image = (
+        os.getenv("MASTER_AGENT_BASE_IMAGE", "").strip()
+        or os.getenv("MASTER_RUNTIME_IMAGE", "").strip()
+        or "codex-slack-master:latest"
+    )
     _log_env("MASTER_AGENT_BASE_IMAGE", os.getenv("MASTER_AGENT_BASE_IMAGE"))
+    _log_env("MASTER_RUNTIME_IMAGE", os.getenv("MASTER_RUNTIME_IMAGE"))
 
     agent_network = os.getenv("MASTER_AGENT_NETWORK", "codex-slack_internal").strip() or "codex-slack_internal"
     _log_env("MASTER_AGENT_NETWORK", os.getenv("MASTER_AGENT_NETWORK"))
