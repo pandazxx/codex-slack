@@ -58,7 +58,7 @@ class RuntimeAdapter(Protocol):
 @dataclass
 class PodmanRuntimeAdapter:
     dry_run: bool = False
-    runtime: str = "podman"
+    runtime: str = "docker"
 
     def _run(self, cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
         if self.dry_run:
@@ -68,7 +68,7 @@ class PodmanRuntimeAdapter:
         if shutil.which(executable) is None:
             raise RuntimeErrorAdapter(
                 f"{executable} CLI is not installed in the master runtime; "
-                "rebuild the image with the client binary available"
+                "ensure docker-ce-cli is present in the image"
             )
 
         completed = subprocess.run(
@@ -134,11 +134,7 @@ class PodmanRuntimeAdapter:
             ",".join(sorted(env)) or "-",
             json.dumps(mounts),
         )
-        cmd = [self.runtime, "create"]
-        # Podman-specific flags for rootless container isolation
-        if self.runtime == "podman":
-            cmd += ["--userns=keep-id", "--security-opt", "label=disable"]
-        cmd += ["--name", container_name, "-v", f"{repo_volume}:/workspace"]
+        cmd = [self.runtime, "create", "--name", container_name, "-v", f"{repo_volume}:/workspace"]
         for mount in mounts:
             cmd.extend(["-v", mount])
         for key, value in sorted(env.items()):

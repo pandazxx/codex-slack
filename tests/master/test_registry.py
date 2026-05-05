@@ -13,7 +13,7 @@ def test_registry_upsert_and_get(tmp_path) -> None:
         repo_path="/tmp/repo",
         channel_id="C123",
         container_name="agent-payments-api",
-        runtime="podman",
+        runtime="docker",
         image_plan={"type": "default", "image": "codex-slack-bot:latest"},
         status="loaded",
     )
@@ -35,7 +35,7 @@ def test_registry_find_by_channel(tmp_path) -> None:
             repo_path="/tmp/repo",
             channel_id="C123",
             container_name="agent-payments-api",
-            runtime="podman",
+            runtime="docker",
             image_plan={"type": "default", "image": "codex-slack-bot:latest"},
             status="loaded",
         )
@@ -54,7 +54,7 @@ def test_registry_find_by_channel_is_platform_scoped(tmp_path) -> None:
             repo_path="/tmp/repo",
             channel_id="123456789012345678",
             container_name="agent-payments-discord",
-            runtime="podman",
+            runtime="docker",
             image_plan={"type": "default", "image": "codex-slack-bot:latest"},
             status="loaded",
             platform="discord",

@@ -49,7 +49,8 @@ def _active_workspaces(db_path: str) -> list[dict]:  # type: ignore[type-arg]
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            "SELECT id, container_name, last_message_at, last_refreshed_at"
+            "SELECT id, container_name, last_message_at, last_refreshed_at,"
+            " last_dispatched_at, last_responded_at"
             " FROM workspaces WHERE archived_at IS NULL AND container_name IS NOT NULL"
         ).fetchall()
         return [dict(r) for r in rows]
@@ -88,20 +89,32 @@ def _background_tasks(settings, db_path: str, stop_event: threading.Event) -> No
             except Exception:
                 LOGGER.exception("master.health_check_failed container=%s", cname)
 
-            # Idle auto-stop
+            # Idle auto-stop: only when the agent has responded to every dispatch
             if idle_timeout > 0:
-                last_msg = ws.get("last_message_at")
-                if last_msg:
-                    try:
-                        import datetime
-                        last_ts = datetime.datetime.strptime(last_msg, "%Y-%m-%dT%H:%M:%SZ").timestamp()
-                        if now - last_ts > idle_timeout:
+                try:
+                    import datetime
+
+                    def _ts(val: str | None) -> float:
+                        if not val:
+                            return 0.0
+                        return datetime.datetime.strptime(val, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+
+                    dispatched_ts = _ts(ws.get("last_dispatched_at"))
+                    responded_ts = _ts(ws.get("last_responded_at"))
+
+                    # Agent has an outstanding request — it is actively working; skip.
+                    if dispatched_ts > responded_ts:
+                        pass
+                    else:
+                        # Measure idle from the later of last response or last message.
+                        idle_since = max(responded_ts, _ts(ws.get("last_message_at")))
+                        if idle_since > 0 and now - idle_since > idle_timeout:
                             st = get_container_status(name=cname, dry_run=settings.dry_run)
                             if st["status"] == "running":
-                                LOGGER.info("master.idle_stop container=%s idle_s=%d", cname, int(now - last_ts))
+                                LOGGER.info("master.idle_stop container=%s idle_s=%d", cname, int(now - idle_since))
                                 pause_agent(name=cname, dry_run=settings.dry_run)
-                    except Exception:
-                        LOGGER.exception("master.idle_stop_failed container=%s", cname)
+                except Exception:
+                    LOGGER.exception("master.idle_stop_failed container=%s", cname)
 
             # Auto auth-refresh
             if auth_interval > 0:

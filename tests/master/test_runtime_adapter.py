@@ -7,21 +7,22 @@ import pytest
 from src.master.runtime_adapter import PodmanRuntimeAdapter, RuntimeErrorAdapter
 
 
-def test_runtime_adapter_reports_missing_podman(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_runtime_adapter_reports_missing_docker(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = PodmanRuntimeAdapter()
     monkeypatch.setattr("src.master.runtime_adapter.shutil.which", lambda _: None)
 
     with pytest.raises(RuntimeErrorAdapter) as excinfo:
         adapter.start_agent("agent-payments-api")
 
-    assert "podman CLI is not installed" in str(excinfo.value)
+    assert "docker CLI is not installed" in str(excinfo.value)
+
 
 
 def test_runtime_adapter_dry_run_skips_binary_lookup(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = PodmanRuntimeAdapter(dry_run=True)
     monkeypatch.setattr("src.master.runtime_adapter.shutil.which", lambda _: None)
 
-    completed = adapter._run(["podman", "ps"])
+    completed = adapter._run(["docker", "ps"])
 
     assert isinstance(completed, subprocess.CompletedProcess)
     assert completed.returncode == 0
@@ -46,13 +47,10 @@ def test_create_or_update_agent_recreates_existing_container(monkeypatch) -> Non
         env={"CODEX_CONTAINER_MODE": "agent-worker"},
     )
 
-    assert seen[0] == ["podman", "rm", "-f", "agent-payments-api"]
-    assert seen[1][0:8] == [
-        "podman",
+    assert seen[0] == ["docker", "rm", "-f", "agent-payments-api"]
+    assert seen[1][0:5] == [
+        "docker",
         "create",
-        "--userns=keep-id",
-        "--security-opt",
-        "label=disable",
         "--name",
         "agent-payments-api",
         "-v",
@@ -79,12 +77,9 @@ def test_create_or_update_agent_adds_extra_mounts(monkeypatch) -> None:  # type:
         mounts=["/host/auth.json:/run/secrets/codex_auth.json:ro"],
     )
 
-    assert seen[0][0:11] == [
-        "podman",
+    assert seen[0][0:8] == [
+        "docker",
         "create",
-        "--userns=keep-id",
-        "--security-opt",
-        "label=disable",
         "--name",
         "agent-payments-api",
         "-v",
@@ -118,7 +113,7 @@ def test_build_image_always_pulls_base_layers(monkeypatch, tmp_path) -> None:  #
 
     assert image == "codex-agent-payments-api:latest"
     assert seen == [[
-        "podman",
+        "docker",
         "build",
         "--pull=always",
         "-t",
@@ -129,7 +124,7 @@ def test_build_image_always_pulls_base_layers(monkeypatch, tmp_path) -> None:  #
     ]]
 
 
-def test_pull_image_uses_podman_pull(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_pull_image_uses_docker_pull(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = PodmanRuntimeAdapter()
     seen: list[list[str]] = []
 
@@ -141,7 +136,7 @@ def test_pull_image_uses_podman_pull(monkeypatch) -> None:  # type: ignore[no-un
 
     adapter.pull_image("ghcr.io/pandazxx/codex-slack-agent-minimal:latest")
 
-    assert seen == [["podman", "pull", "ghcr.io/pandazxx/codex-slack-agent-minimal:latest"]]
+    assert seen == [["docker", "pull", "ghcr.io/pandazxx/codex-slack-agent-minimal:latest"]]
 
 
 def test_refresh_agent_auth_replaces_auth_file_without_deleting_codex_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -160,7 +155,7 @@ def test_refresh_agent_auth_replaces_auth_file_without_deleting_codex_home(monke
     )
 
     assert seen[0] == [
-        "podman",
+        "docker",
         "run",
         "--rm",
         "-v",

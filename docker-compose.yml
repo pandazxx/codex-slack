@@ -11,13 +11,14 @@ services:
       MASTER_PORT: ${MASTER_PORT:-8080}
       MASTER_DATA_DIR: /opt/codex-slack/data/master
       MASTER_DRY_RUN: ${MASTER_DRY_RUN:-false}
-      MASTER_AGENT_BASE_IMAGE: ${MASTER_AGENT_BASE_IMAGE:-codex-slack-master:latest}
+      MASTER_AGENT_BASE_IMAGE: ${MASTER_AGENT_BASE_IMAGE:-}
+      MASTER_RUNTIME_IMAGE: ${MASTER_RUNTIME_IMAGE:-}
       MASTER_CODEX_AUTH_JSON_PATH: ${MASTER_CODEX_AUTH_JSON_PATH:-}
       MASTER_SSH_AUTH_SOCK_PATH: ${MASTER_SSH_AUTH_SOCK_PATH:-}
       MASTER_SSH_KNOWN_HOSTS_PATH: ${MASTER_SSH_KNOWN_HOSTS_PATH:-}
       MASTER_GIT_USER_NAME: ${MASTER_GIT_USER_NAME:-}
       MASTER_GIT_USER_EMAIL: ${MASTER_GIT_USER_EMAIL:-}
-      CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-docker}
+      CONTAINER_RUNTIME: docker
       DOCKER_HOST: unix:///run/container.sock
       CONTAINER_HOST: unix:///run/container.sock
       MQTT_HOST: mosquitto
@@ -46,9 +47,13 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: ${MOSQUITTO_CONTAINER_NAME:-codex-slack-mosquitto}
-    entrypoint: ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
-    volumes:
-      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        printf 'listener 1883\nallow_anonymous true\npersistence false\nlog_type error\n' \
+          > /mosquitto/config/mosquitto.conf
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
     networks:
       - internal
     restart: unless-stopped

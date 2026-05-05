@@ -110,7 +110,8 @@ def test_deploy_image_calls_compose_with_correct_args() -> None:
 
 
 def test_deploy_image_includes_env_file_when_set() -> None:
-    with patch("src.cd.deploy._run", return_value=_proc()) as mock_run:
+    with patch("src.cd.deploy._run", return_value=_proc()) as mock_run, \
+         patch("src.cd.deploy.os.path.isfile", return_value=True):
         deploy_image(
             image_ref=_DIGEST,
             compose_binary="docker compose",
