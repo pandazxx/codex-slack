@@ -22,7 +22,38 @@
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
         <div class="bubble">
-          <MarkdownMessage :text="m.text" />
+          <template v-if="m.sender === 'agent'">
+            <template v-if="m.streaming && m.rows?.length">
+              <div class="trace-row" v-for="(row, i) in m.rows" :key="i">
+                <span v-if="row.kind === 'tool_use'">{{ toolUseLabel(row.event) }}</span>
+                <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
+                <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
+                <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                <details v-else-if="row.kind === 'folded'">
+                  <summary>···</summary>
+                  <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
+                </details>
+              </div>
+            </template>
+            <template v-else-if="!m.streaming && m.traceRows?.length">
+              <details :open="m.traceOpen" @toggle="m.traceOpen = $event.target.open">
+                <summary>▶ Show trace ({{ m.traceRows.length }} steps)</summary>
+                <div class="trace-row" v-for="(row, i) in m.traceRows" :key="i">
+                  <span v-if="row.kind === 'tool_use'">{{ toolUseLabel(row.event) }}</span>
+                  <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
+                  <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
+                  <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                  <details v-else-if="row.kind === 'folded'">
+                    <summary>···</summary>
+                    <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
+                  </details>
+                </div>
+              </details>
+            </template>
+            <MarkdownMessage :text="m.text" />
+            <span v-if="m.streaming" class="cursor">▍</span>
+          </template>
+          <template v-else>{{ m.text }}</template>
         </div>
         <div v-if="m.attachments && m.attachments.length" class="attachment-list">
           <template v-for="a in m.attachments" :key="a.id">
@@ -143,6 +174,7 @@ const msgBox = ref(null)
 const rawView = ref({})
 const fileInput = ref(null)
 const selectedFiles = ref([])
+const liveStreams = ref({})
 
 const isArchived = computed(() => !!topic.value?.archived_at)
 const sendError = ref('')
@@ -171,6 +203,98 @@ async function fetchAgentStatus() {
   }
 }
 
+function classifyEvent(event) {
+  const t = event.type, s = event.subtype
+  if (t === 'assistant') {
+    const c = event.message?.content || []
+    if (c.some(b => b.type === 'text'))     return 'text'
+    if (c.some(b => b.type === 'tool_use')) return 'tool_use'
+    if (c.some(b => b.type === 'thinking')) return 'folded'
+  }
+  if (t === 'system' && s === 'task_progress') return 'task_progress'
+  if (t === 'system' && s === 'task_started')  return 'task_started'
+  if (t === 'system' && s === 'retry')         return 'retry_notice'
+  if (t === 'user') {
+    const c = event.message?.content || []
+    if (c.some(b => b.type === 'tool_result')) return 'folded'
+  }
+  return 'hidden'
+}
+
+function toolUseLabel(event) {
+  const block = event.message?.content?.find(b => b.type === 'tool_use')
+  if (!block) return ''
+  const { name, input } = block
+  if (name === 'Bash')     return `⚙ Bash: ${(input.command   || '').slice(0, 80)}`
+  if (name === 'Read')     return `📄 Read: ${input.file_path  || ''}`
+  if (name === 'Write')    return `✏️ Write: ${input.file_path || ''}`
+  if (name === 'Edit')     return `✏️ Edit: ${input.file_path  || ''}`
+  if (name === 'Glob')     return `🔍 Glob: ${input.pattern    || ''}`
+  if (name === 'Grep')     return `🔍 Grep: ${input.pattern    || ''}`
+  if (name === 'Agent')    return `🤖 Agent: ${input.description || ''}`
+  if (name === 'WebFetch') return `🌐 Fetch: ${input.url       || ''}`
+  return `⚙ ${name}`
+}
+
+function transcriptToRows(transcriptJson) {
+  if (!transcriptJson) return []
+  try {
+    return JSON.parse(transcriptJson)
+      .map(event => ({ kind: classifyEvent(event), event }))
+      .filter(r => r.kind !== 'hidden')
+  } catch { return [] }
+}
+
+function handleChunk({ message_id, agent_name, event }) {
+  let live = liveStreams.value[message_id]
+  if (!live) {
+    live = { rows: [], text: '' }
+    liveStreams.value[message_id] = live
+    messages.value.push({
+      id: message_id, sender: 'agent',
+      agent_name: agent_name || null,
+      text: '', rows: live.rows,
+      streaming: true, traceOpen: false,
+      created_at: new Date().toISOString(),
+    })
+  }
+  if (event.type === 'system' && event.subtype === 'retry') {
+    live.rows.splice(0, live.rows.length, { kind: 'retry_notice', event })
+    live.text = ''
+    const msg = messages.value.find(m => m.id === message_id)
+    if (msg) msg.text = ''
+    scrollToBottom()
+    return
+  }
+  const kind = classifyEvent(event)
+  if (kind === 'text') {
+    for (const blk of event.message?.content || [])
+      if (blk.type === 'text') live.text += blk.text
+    const msg = messages.value.find(m => m.id === message_id)
+    if (msg) msg.text = live.text
+  } else if (kind !== 'hidden') {
+    live.rows.push({ kind, event })
+  }
+  scrollToBottom()
+}
+
+function finaliseMessage(data) {
+  const idx = messages.value.findIndex(m => m.id === data.message_id)
+  const finalMsg = {
+    id: data.message_id, sender: data.sender || 'agent',
+    agent_name: data.agent_name || null,
+    text: data.last_response || data.text || '',
+    transcript: data.transcript || null,
+    traceRows: transcriptToRows(data.transcript),
+    traceOpen: false, streaming: false,
+    created_at: new Date().toISOString(),
+  }
+  if (idx >= 0) messages.value.splice(idx, 1, finalMsg)
+  else messages.value.push(finalMsg)
+  delete liveStreams.value[data.message_id]
+  scrollToBottom()
+}
+
 async function load() {
   loading.value = true
   try {
@@ -180,7 +304,13 @@ async function load() {
       fetch(`/api/workspaces/${wsId}`),
     ])
     topic.value = await topicRes.json()
-    messages.value = await msgsRes.json()
+    const rawMsgs = await msgsRes.json()
+    messages.value = rawMsgs.map(m => ({
+      ...m,
+      traceRows: transcriptToRows(m.transcript),
+      traceOpen: false,
+      streaming: false,
+    }))
     if (wsRes.ok) workspace.value = await wsRes.json()
     scrollToBottom()
   } finally {
@@ -198,16 +328,14 @@ function connectWs() {
     const data = JSON.parse(evt.data)
     if (data.type === 'status') {
       agentStatus.value = data.state || ''
+    } else if (data.type === 'chunk') {
+      handleChunk(data)
+    } else if (data.type === 'chunk_replay') {
+      for (const event of data.events) {
+        handleChunk({ message_id: data.message_id, agent_name: data.agent_name, event })
+      }
     } else if (data.type === 'message') {
-      messages.value.push({
-        id: data.message_id || Date.now().toString(),
-        sender: data.sender || 'agent',
-        agent_name: data.agent_name || null,
-        text: data.last_response || data.text || '',
-        transcript: data.transcript || null,
-        created_at: new Date().toISOString(),
-      })
-      scrollToBottom()
+      finaliseMessage(data)
     }
   }
 
@@ -437,4 +565,11 @@ onUnmounted(() => {
 .hint { font-size: 0.8em; text-align: right; margin-top: 0.25rem; }
 .muted { color: #64748b; }
 .center { text-align: center; }
+.cursor {
+  display: inline-block;
+  animation: blink 1s steps(2) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
+.trace-row { font-size: 0.85em; color: #888; padding: 1px 0; font-family: monospace; }
+.trace-row details summary { cursor: pointer; }
 </style>
