@@ -453,11 +453,24 @@ function handleChunk({ message_id, agent_name, event }) {
 
 ##### `finaliseMessage` — fold the trace, replace with durable message
 
+`traceRows` is derived from `data.transcript` (the full event array carried
+in the `/response` payload), **not** from the in-memory `live.rows`. This
+ensures the same code path works in every situation: current session, after
+browser refresh, and for historical messages loaded via REST — in all cases
+the source of truth is the `transcript` JSON stored in the `messages` row.
+
 ```js
+function transcriptToRows(transcriptJson) {
+  if (!transcriptJson) return []
+  try {
+    return JSON.parse(transcriptJson)
+      .map(event => ({ kind: classifyEvent(event), event }))
+      .filter(r => r.kind !== 'hidden')
+  } catch { return [] }
+}
+
 function finaliseMessage(data) {
   const existingIdx = messages.value.findIndex(m => m.id === data.message_id)
-  const live = liveStreams.value[data.message_id]
-  const traceRows = live?.rows ?? []
 
   const finalMsg = {
     id: data.message_id,
@@ -465,8 +478,8 @@ function finaliseMessage(data) {
     agent_name: data.agent_name || null,
     text: data.last_response || data.text || '',
     transcript: data.transcript || null,
-    // Preserve the collected trace rows, but start folded
-    traceRows,
+    // Derive trace rows from transcript JSON — survives refresh and history load
+    traceRows: transcriptToRows(data.transcript),
     traceOpen: false,
     streaming: false,
     created_at: new Date().toISOString(),
@@ -479,6 +492,11 @@ function finaliseMessage(data) {
   scrollToBottom()
 }
 ```
+
+Historical messages loaded from `GET .../messages` (REST) go through the
+same `transcriptToRows` call at render time — the template receives the same
+`traceRows` shape regardless of whether the message arrived live or from
+history.
 
 ##### Template sketch (message bubble component)
 
@@ -519,10 +537,10 @@ Ordering note: the REST `GET .../messages` history call (`fetch` at
 WS `chunk_replay` frame is processed. The existing flow already opens the
 WebSocket after the history fetch resolves — keep it that way.
 
-For historical messages loaded from REST (which already have a `transcript`
-field), the trace rows are derived by running the same `classifyEvent` pass
-over the stored transcript JSON at render time. This makes live and historical
-views consistent without storing `traceRows` in the DB.
+The `transcript` field in the `messages` DB row is the single source of truth
+for the trace. The `chunks` table is only used during an active stream; once
+`/response` arrives and the chunks are deleted, everything the user needs to
+expand "Show trace" is already in `transcript`.
 
 ### Wire formats
 
