@@ -8,6 +8,7 @@
       <span class="agent-status-label">Agent container:</span>
       <span v-if="agentStatus" :class="['status-badge', statusClass]">{{ statusLabel }}</span>
       <span v-else class="status-badge status-unknown">checking…</span>
+      <span v-if="agentStatus?.version" class="agent-version">{{ agentStatus.version }}</span>
       <span v-if="agentStatus?.error" class="status-error">{{ agentStatus.error }}</span>
       <button class="btn-refresh-auth" @click="refreshAuth" :disabled="refreshing || restarting">
         {{ refreshing ? 'Refreshing…' : 'Refresh Auth' }}
@@ -438,6 +439,7 @@ onUnmounted(() => {
 .status-crashed { background: #fee2e2; color: #dc2626; }
 .status-stopped { background: #f1f5f9; color: #475569; }
 .status-unknown { background: #f1f5f9; color: #94a3b8; }
+.agent-version { color: #94a3b8; font-size: 0.85em; }
 .status-error { color: #dc2626; font-size: 0.9em; }
 .btn-refresh-auth { margin-left: 0.75rem; padding: 2px 10px; font-size: 0.8em; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; }
 .btn-refresh-auth:hover:not(:disabled) { background: #e2e8f0; }
