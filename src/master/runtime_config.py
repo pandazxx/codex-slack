@@ -27,10 +27,16 @@ def load_global_env(db_path: str) -> dict[str, str]:
         conn.close()
 
 _SYSTEM_VARIABLES: list[dict] = [
-    {"name": "GH_TOKEN",                "sensitive": True},
-    {"name": "ANTHROPIC_API_KEY",       "sensitive": True},
-    {"name": "CLAUDE_CODE_OAUTH_TOKEN", "sensitive": True},
-    {"name": "OPENAI_API_KEY",          "sensitive": True},
+    {"name": "GH_TOKEN",                         "sensitive": True},
+    {"name": "ANTHROPIC_API_KEY",                "sensitive": True},
+    {"name": "CLAUDE_CODE_OAUTH_TOKEN",          "sensitive": True},
+    {"name": "OPENAI_API_KEY",                   "sensitive": True},
+    # Agent-reply notifications
+    {"name": "MASTER_PUBLIC_URL",                "sensitive": False},
+    {"name": "NOTIFY_DISCORD_WEBHOOK_URL",       "sensitive": True},
+    {"name": "NOTIFY_TELEGRAM_BOT_TOKEN",        "sensitive": True},
+    {"name": "NOTIFY_TELEGRAM_CHAT_ID",          "sensitive": False},
+    {"name": "NOTIFY_PREVIEW_CHARS",             "sensitive": False},
 ]
 
 global_router = APIRouter(prefix="/config", tags=["config"])
