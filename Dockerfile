@@ -36,11 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     less \
     make \
-    nodejs \
-    npm \
     openssh-client \
     poppler-utils \
     tini \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
