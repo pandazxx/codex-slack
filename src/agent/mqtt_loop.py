@@ -96,7 +96,7 @@ def _run_claude_once(
         result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True, timeout=_LLM_TIMEOUT)
         events = []
         new_session_id = None
-        output = None
+        outputs: list[str] = []
         is_error = False
         for line in result.stdout.splitlines():
             line = line.strip()
@@ -107,11 +107,15 @@ def _run_claude_once(
                 events.append(event)
                 if event.get("type") == "result":
                     new_session_id = event.get("session_id")
-                    output = event.get("result") or event.get("last_response")
-                    is_error = bool(event.get("is_error"))
+                    result_text = event.get("result") or event.get("last_response")
+                    if result_text:
+                        outputs.append(result_text)
+                    if event.get("is_error"):
+                        is_error = True
             except (json.JSONDecodeError, AttributeError):
                 continue
         transcript = json.dumps(events) if events else None
+        output = "\n\n---\n\n".join(outputs) if outputs else None
         if not output:
             output = result.stderr.strip() or "(no output)"
         return output, new_session_id, transcript, is_error
