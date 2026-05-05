@@ -1,29 +1,19 @@
 name: Publish Master Image
 
-# Builds and pushes the master orchestrator image to GHCR.
+# Manual / ad-hoc build of the master orchestrator image.
 #
-# Tag strategy
-# ------------
-# - Push to `master`  → image tagged `latest`  (staging environment tracks this)
-# - Push of `v*` tag  → image tagged with the semver (production environment tracks this)
-# - Every push        → image additionally tagged `sha-<short-commit>` for pinned rollbacks
+# Automated builds are handled by dedicated workflows:
+#   - ci-pr.yml          — PR gate (build, no push)
+#   - build-on-demand.yml — agent test bed builds (:sha-<hash>)
+#   - build-rc.yml        — RC builds from feature branch tags (:v1.2.3-rc1, :rc)
+#   - promote-release.yml — release promotion by retagging :rc → :v1.2.3
 #
-# The CD daemon on each environment watches the relevant tag and auto-deploys
-# when the digest changes.
+# This workflow is retained for ad-hoc manual builds only.
+# It no longer triggers on master branch pushes or version tags.
+#
+# See docs/design/cicd-pipeline.md for the full pipeline design.
 
 on:
-  push:
-    branches:
-      - master
-    tags:
-      - "v*"
-    paths:
-      - "Dockerfile"
-      - "docker/entrypoint.sh"
-      - "src/**"
-      - "config/**"
-      - "requirements.txt"
-      - ".github/workflows/publish-master.yml"
   workflow_dispatch:
 
 permissions:
@@ -54,12 +44,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/codex-slack-master
           tags: |
-            # "latest" on every push to master — staging tracks this
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
-            # Short commit SHA for pinned rollback references
             type=sha,prefix=sha-
-            # Semver tag on releases — production tracks this
-            type=ref,event=tag
 
       - name: Build and push
         uses: docker/build-push-action@v5

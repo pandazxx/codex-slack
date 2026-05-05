@@ -9,6 +9,13 @@
       <span v-if="agentStatus" :class="['status-badge', statusClass]">{{ statusLabel }}</span>
       <span v-else class="status-badge status-unknown">checking…</span>
       <span v-if="agentStatus?.error" class="status-error">{{ agentStatus.error }}</span>
+      <button class="btn-refresh-auth" @click="refreshAuth" :disabled="refreshing || restarting">
+        {{ refreshing ? 'Refreshing…' : 'Refresh Auth' }}
+      </button>
+      <button class="btn-restart-agent" @click="restartAgent" :disabled="restarting || refreshing">
+        {{ restarting ? 'Restarting…' : 'Restart Agent' }}
+      </button>
+      <span v-if="workspace?.last_refreshed_at" class="muted small">refreshed {{ workspace.last_refreshed_at }}</span>
     </div>
 
     <section>
@@ -18,6 +25,36 @@
       </div>
       <form v-if="!isArchived" @submit.prevent="createTopic" class="create-form">
         <input v-model="subject" placeholder="Topic subject" required />
+
+        <div class="branch-picker" ref="branchPickerEl">
+          <div class="branch-input-wrap">
+            <input
+              v-model="branchFilter"
+              @input="onBranchInput"
+              @focus="branchDropdownOpen = true"
+              @blur="scheduleBranchClose"
+              placeholder="Branch (required)"
+              autocomplete="off"
+              class="branch-input"
+              :title="selectedBranch ? `Base branch: ${selectedBranch}` : 'Select a base branch'"
+            />
+            <button v-if="selectedBranch" type="button" class="branch-clear" @mousedown.prevent="clearBranch" title="Clear branch">×</button>
+            <span class="branch-caret" @mousedown.prevent="toggleBranchDropdown">▾</span>
+          </div>
+          <ul v-if="branchDropdownOpen" class="branch-dropdown">
+            <li v-if="branchesLoading" class="branch-hint">Loading…</li>
+            <li v-else-if="!filteredBranches.length" class="branch-hint">No branches found</li>
+            <template v-else>
+              <li
+                v-for="b in filteredBranches"
+                :key="b"
+                @mousedown.prevent="selectBranch(b)"
+                :class="{ 'branch-selected': b === selectedBranch }"
+              >{{ b }}</li>
+            </template>
+          </ul>
+        </div>
+
         <button type="submit" :disabled="creating">
           {{ creating ? 'Creating…' : 'New Topic' }}
         </button>
@@ -31,44 +68,98 @@
           <span class="topic-row">
             <RouterLink :to="`/workspaces/${id}/topics/${t.id}`">{{ t.subject }}</RouterLink>
             <span class="muted small"> — branch: {{ t.branch_name }}</span>
+            <span v-if="t.repo_ref" class="repo-ref-badge">
+              {{ t.repo_ref }}<template v-if="t.base_sha"> · {{ t.base_sha.substring(0, 7) }}</template>
+            </span>
           </span>
           <button v-if="!isArchived" class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Archive topic">Archive</button>
         </li>
       </ul>
     </section>
 
-    <section class="agents-section">
-      <h2>Agents</h2>
-      <form v-if="!isArchived" @submit.prevent="addAgent" class="create-form">
-        <input v-model="agentForm.agent_name" placeholder="Name (e.g. engineer)" required />
-        <select v-model="agentForm.adapter">
-          <option value="claude-code">claude-code</option>
-          <option value="codex">codex</option>
-        </select>
-        <input v-model="agentForm.subagent" placeholder="Subagent (optional)" />
-        <button type="submit" :disabled="addingAgent">
-          {{ addingAgent ? 'Adding…' : 'Add Agent' }}
-        </button>
-        <span v-if="agentError" class="error">{{ agentError }}</span>
-      </form>
+    <!-- ── Env Vars ──────────────────────────────────────────────────── -->
+    <WorkspaceEnvVarsPanel
+      v-if="!isArchived"
+      ref="envPanel"
+      :workspace-id="id"
+      :container-running="agentStatus?.status === 'running'"
+    />
 
-      <p v-if="!agents.length" class="muted">No agents configured.</p>
-      <table v-else class="agent-table">
+    <!-- ── Staff section ─────────────────────────────────────────────── -->
+    <section class="staffs-section">
+      <div class="header-row">
+        <h2>Staff</h2>
+        <button v-if="!isArchived && !showStaffForm" class="btn-add" @click="startCreateStaff">+ Add Staff</button>
+      </div>
+      <p class="muted hint">Use <code>@name</code> in a message to address a specific staff. Staff shown with a <span class="badge-global">global</span> badge are inherited from global settings.</p>
+
+      <div v-if="showStaffForm && !isArchived" class="staff-form card">
+        <h3>{{ editingStaff ? `Edit @${editingStaff}` : 'New Workspace Staff' }}</h3>
+        <div class="form-grid">
+          <label>Name <span class="req">*</span></label>
+          <input v-model="staffForm.name" placeholder="e.g. engineer" :disabled="!!editingStaff" required />
+
+          <label>Adapter <span class="req">*</span></label>
+          <select v-model="staffForm.adapter">
+            <option value="claude-code">claude-code</option>
+            <option value="codex">codex</option>
+          </select>
+
+          <label>Model</label>
+          <input v-model="staffForm.model" placeholder="e.g. claude-opus-4-7 (blank = adapter default)" />
+
+          <label>System Prompt</label>
+          <textarea v-model="staffForm.system_prompt" placeholder="--append-system-prompt value (optional)" rows="3" />
+
+          <label>Sub-agent</label>
+          <input v-model="staffForm.agent" placeholder="--agent flag value (optional)" />
+
+          <label>Session Scope</label>
+          <select v-model="staffForm.session_scope">
+            <option value="topic">topic — fresh session per topic</option>
+            <option value="workspace">workspace — shared across all topics</option>
+            <option value="global">global — single shared session</option>
+          </select>
+
+          <label>Default</label>
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="staffForm.is_default" />
+            Route messages here when no @mention is used
+          </label>
+        </div>
+        <div class="form-actions">
+          <button class="btn-primary" @click="saveStaff" :disabled="savingStaff">{{ savingStaff ? 'Saving…' : 'Save' }}</button>
+          <button class="btn-secondary" @click="cancelStaffForm">Cancel</button>
+          <span v-if="staffError" class="error">{{ staffError }}</span>
+        </div>
+      </div>
+
+      <p v-if="!staffs.length" class="muted">No staff configured.</p>
+      <table v-else class="staff-table">
         <thead>
-          <tr><th>Name</th><th>Adapter</th><th>Subagent</th><th></th></tr>
+          <tr><th>@Name</th><th>Adapter</th><th>Model</th><th>Session</th><th>Default</th><th>Source</th><th v-if="!isArchived"></th></tr>
         </thead>
         <tbody>
-          <tr v-for="a in agents" :key="a.id">
-            <td><code>@{{ a.agent_name }}</code></td>
-            <td>{{ a.adapter }}</td>
-            <td>{{ a.subagent || '—' }}</td>
+          <tr v-for="s in staffs" :key="s.name" :class="{ inherited: s.inherited_from }">
+            <td><code>@{{ s.name }}</code></td>
+            <td>{{ s.adapter }}</td>
+            <td>{{ s.model || '—' }}</td>
+            <td>{{ s.session_scope }}</td>
+            <td>{{ s.is_default ? '✓' : '' }}</td>
             <td>
-              <button v-if="!isArchived" class="remove-btn" @click="removeAgent(a.id)" title="Remove">✕</button>
+              <span v-if="s.inherited_from" class="badge-global">{{ s.inherited_from }}</span>
+              <span v-else class="badge-local">workspace</span>
+            </td>
+            <td v-if="!isArchived" class="actions">
+              <template v-if="!s.inherited_from">
+                <button class="action-btn" @click="startEditStaff(s)">Edit</button>
+                <button class="action-btn remove-btn" @click="deleteStaff(s.name)">✕</button>
+              </template>
+              <span v-else class="muted small">manage in <RouterLink to="/settings">Settings</RouterLink></span>
             </td>
           </tr>
         </tbody>
       </table>
-      <p class="hint muted">Use <code>@agent-name</code> in a topic to address a specific agent.</p>
     </section>
   </div>
 </template>
@@ -76,22 +167,43 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
+import WorkspaceEnvVarsPanel from '../components/WorkspaceEnvVarsPanel.vue'
 
 const route = useRoute()
 const id = route.params.id
 
 const workspace = ref(null)
 const topics = ref([])
-const agents = ref([])
+const staffs = ref([])
 const loading = ref(true)
 const creating = ref(false)
 const createError = ref('')
 const subject = ref('')
-const addingAgent = ref(false)
-const agentError = ref('')
-const agentForm = ref({ agent_name: '', adapter: 'claude-code', subagent: '' })
 const agentStatus = ref(null)
 let statusTimer = null
+
+const branches = ref([])
+const branchesLoading = ref(false)
+const branchFilter = ref('')
+const selectedBranch = ref('')
+const branchDropdownOpen = ref(false)
+let branchCloseTimer = null
+
+const filteredBranches = computed(() => {
+  const q = branchFilter.value.toLowerCase()
+  if (!q || q === selectedBranch.value.toLowerCase()) return branches.value
+  return branches.value.filter(b => b.toLowerCase().includes(q))
+})
+
+const refreshing = ref(false)
+const restarting = ref(false)
+const envPanel = ref(null)
+
+const showStaffForm = ref(false)
+const editingStaff = ref(null)
+const savingStaff = ref(false)
+const staffError = ref('')
+const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false })
 
 const isArchived = computed(() => !!workspace.value?.archived_at)
 
@@ -99,7 +211,7 @@ const statusClass = computed(() => {
   const s = agentStatus.value?.status
   if (s === 'running') return 'status-running'
   if (s === 'restarting') return 'status-restarting'
-  if (s === 'exited') return agentStatus.value?.exit_code === 0 ? 'status-stopped' : 'status-crashed'
+  if (s === 'exited') return (agentStatus.value?.exit_code === 0 || agentStatus.value?.exit_code === 143) ? 'status-stopped' : 'status-crashed'
   if (s === 'not_found') return 'status-unknown'
   return 'status-unknown'
 })
@@ -111,12 +223,37 @@ const statusLabel = computed(() => {
   if (s.status === 'restarting') return `Restarting (restarts: ${s.restart_count ?? '?'})`
   if (s.status === 'exited') {
     const code = s.exit_code ?? '?'
-    return code === 0 ? 'Stopped (exit 0)' : `Crashed (exit ${code}, restarts: ${s.restart_count ?? '?'})`
+    if (code === 0 || code === 143) return 'Stopped'
+    return `Crashed (exit ${code}, restarts: ${s.restart_count ?? '?'})`
   }
   if (s.status === 'not_found') return 'Not found'
   if (s.status === 'dry_run') return 'Dry run'
   return s.status
 })
+
+async function refreshAuth() {
+  refreshing.value = true
+  try {
+    await fetch(`/api/workspaces/${id}/refresh-auth`, { method: 'POST' })
+    await load()
+  } finally {
+    refreshing.value = false
+  }
+}
+
+async function restartAgent() {
+  if (!confirm('Restart the agent container? It will pick up the latest config/credentials.')) return
+  restarting.value = true
+  try {
+    const r = await fetch(`/api/workspaces/${id}/restart-agent`, { method: 'POST' })
+    if (r.ok) {
+      envPanel.value?.onRestartSuccess()
+    }
+    await fetchAgentStatus()
+  } finally {
+    restarting.value = false
+  }
+}
 
 async function fetchAgentStatus() {
   try {
@@ -125,31 +262,72 @@ async function fetchAgentStatus() {
   } catch { /* ignore */ }
 }
 
+async function fetchBranches() {
+  branchesLoading.value = true
+  try {
+    const r = await fetch(`/api/workspaces/${id}/branches`)
+    if (r.ok) branches.value = await r.json()
+  } catch { /* ignore */ } finally {
+    branchesLoading.value = false
+  }
+}
+
+function onBranchInput() {
+  if (branchFilter.value !== selectedBranch.value) selectedBranch.value = ''
+  branchDropdownOpen.value = true
+}
+
+function selectBranch(b) {
+  selectedBranch.value = b
+  branchFilter.value = b
+  branchDropdownOpen.value = false
+}
+
+function clearBranch() {
+  selectedBranch.value = ''
+  branchFilter.value = ''
+}
+
+function toggleBranchDropdown() {
+  branchDropdownOpen.value = !branchDropdownOpen.value
+}
+
+function scheduleBranchClose() {
+  branchCloseTimer = setTimeout(() => { branchDropdownOpen.value = false }, 150)
+}
+
 async function load() {
   loading.value = true
   try {
     const wsRes = await fetch(`/api/workspaces/${id}`)
     workspace.value = await wsRes.json()
     const topicsParam = workspace.value.archived_at ? '?archived=true' : ''
-    const [topicsRes, agentsRes] = await Promise.all([
+    const [topicsRes, staffsRes] = await Promise.all([
       fetch(`/api/workspaces/${id}/topics${topicsParam}`),
-      fetch(`/api/workspaces/${id}/agents`),
+      fetch(`/api/workspaces/${id}/staffs`),
     ])
     topics.value = await topicsRes.json()
-    agents.value = await agentsRes.json()
+    staffs.value = await staffsRes.json()
   } finally {
     loading.value = false
   }
 }
 
 async function createTopic() {
+  if (!selectedBranch.value) {
+    createError.value = 'Please select a branch'
+    return
+  }
   creating.value = true
   createError.value = ''
   try {
     const r = await fetch(`/api/workspaces/${id}/topics`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subject: subject.value }),
+      body: JSON.stringify({
+        subject: subject.value,
+        repo_ref: selectedBranch.value || null,
+      }),
     })
     if (!r.ok) {
       const err = await r.json()
@@ -157,35 +335,10 @@ async function createTopic() {
       return
     }
     subject.value = ''
+    clearBranch()
     await load()
   } finally {
     creating.value = false
-  }
-}
-
-async function addAgent() {
-  addingAgent.value = true
-  agentError.value = ''
-  try {
-    const payload = {
-      agent_name: agentForm.value.agent_name,
-      adapter: agentForm.value.adapter,
-      subagent: agentForm.value.subagent || null,
-    }
-    const r = await fetch(`/api/workspaces/${id}/agents`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (!r.ok) {
-      const err = await r.json()
-      agentError.value = err.detail || 'Error adding agent'
-      return
-    }
-    agentForm.value = { agent_name: '', adapter: 'claude-code', subagent: '' }
-    await load()
-  } finally {
-    addingAgent.value = false
   }
 }
 
@@ -195,14 +348,74 @@ async function deleteTopic(topicId, subject) {
   await load()
 }
 
-async function removeAgent(agentId) {
-  await fetch(`/api/workspaces/${id}/agents/${agentId}`, { method: 'DELETE' })
+function startCreateStaff() {
+  editingStaff.value = null
+  staffForm.value = { name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false }
+  showStaffForm.value = true
+  staffError.value = ''
+}
+
+function startEditStaff(s) {
+  editingStaff.value = s.name
+  staffForm.value = {
+    name: s.name,
+    adapter: s.adapter,
+    model: s.model || '',
+    system_prompt: s.system_prompt || '',
+    agent: s.agent || '',
+    session_scope: s.session_scope,
+    is_default: s.is_default,
+  }
+  showStaffForm.value = true
+  staffError.value = ''
+}
+
+function cancelStaffForm() {
+  showStaffForm.value = false
+  editingStaff.value = null
+  staffError.value = ''
+}
+
+async function saveStaff() {
+  savingStaff.value = true
+  staffError.value = ''
+  try {
+    const body = {
+      name: staffForm.value.name.trim().toLowerCase(),
+      adapter: staffForm.value.adapter,
+      model: staffForm.value.model.trim() || null,
+      system_prompt: staffForm.value.system_prompt.trim() || null,
+      agent: staffForm.value.agent.trim() || null,
+      session_scope: staffForm.value.session_scope,
+      is_default: staffForm.value.is_default,
+    }
+    const name = editingStaff.value
+    const url = name ? `/api/workspaces/${id}/staffs/${name}` : `/api/workspaces/${id}/staffs`
+    const method = name ? 'PUT' : 'POST'
+    const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    if (!r.ok) {
+      const err = await r.json()
+      staffError.value = err.detail || 'Error saving staff'
+      return
+    }
+    showStaffForm.value = false
+    editingStaff.value = null
+    await load()
+  } finally {
+    savingStaff.value = false
+  }
+}
+
+async function deleteStaff(name) {
+  if (!confirm(`Delete staff @${name} from this workspace?`)) return
+  await fetch(`/api/workspaces/${id}/staffs/${name}`, { method: 'DELETE' })
   await load()
 }
 
 onMounted(async () => {
   await load()
   if (!isArchived.value) {
+    fetchBranches()
     await fetchAgentStatus()
     statusTimer = setInterval(fetchAgentStatus, 10000)
   }
@@ -210,6 +423,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer)
+  if (branchCloseTimer) clearTimeout(branchCloseTimer)
 })
 </script>
 
@@ -225,26 +439,71 @@ onUnmounted(() => {
 .status-stopped { background: #f1f5f9; color: #475569; }
 .status-unknown { background: #f1f5f9; color: #94a3b8; }
 .status-error { color: #dc2626; font-size: 0.9em; }
+.btn-refresh-auth { margin-left: 0.75rem; padding: 2px 10px; font-size: 0.8em; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; }
+.btn-refresh-auth:hover:not(:disabled) { background: #e2e8f0; }
+.btn-refresh-auth:disabled { opacity: 0.6; cursor: default; }
+.btn-restart-agent { padding: 2px 10px; font-size: 0.8em; background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; border-radius: 4px; cursor: pointer; }
+.btn-restart-agent:hover:not(:disabled) { background: #ffedd5; }
+.btn-restart-agent:disabled { opacity: 0.6; cursor: default; }
 h2 { margin: 0; }
 .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .archived-link { font-size: 0.85em; color: #64748b; text-decoration: none; }
 .archived-link:hover { text-decoration: underline; color: #2563eb; }
 section { margin-bottom: 2rem; }
-.agents-section { border-top: 1px solid #e2e8f0; padding-top: 1.5rem; }
+.staffs-section { border-top: 1px solid #e2e8f0; padding-top: 1.5rem; }
 .create-form { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; }
-.create-form input, .create-form select { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; flex: 1; min-width: 120px; }
+.create-form input { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; flex: 1; min-width: 120px; }
 .create-form button { padding: 0.4rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
 .create-form button:disabled { opacity: 0.6; cursor: default; }
 .list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
 .list li { background: #fff; padding: 0.75rem 1rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); display: flex; align-items: center; justify-content: space-between; }
 .topic-row { display: flex; align-items: center; gap: 0.5rem; flex: 1; }
-.agent-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
-.agent-table th { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 2px solid #e2e8f0; color: #64748b; font-weight: 600; }
-.agent-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; }
+
+.card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.25rem; }
+.card h3 { margin: 0 0 1rem; font-size: 1rem; color: #334155; }
+.form-grid { display: grid; grid-template-columns: 150px 1fr; gap: 0.5rem 1rem; align-items: start; margin-bottom: 1rem; }
+.form-grid label { font-size: 0.9em; color: #475569; padding-top: 0.4rem; }
+.form-grid input, .form-grid select, .form-grid textarea { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.9em; font-family: inherit; width: 100%; box-sizing: border-box; }
+.form-grid textarea { resize: vertical; }
+.checkbox-label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9em; padding-top: 0.2rem; }
+.form-actions { display: flex; gap: 0.75rem; align-items: center; }
+.req { color: #dc2626; }
+.error { color: #dc2626; font-size: 0.9em; }
+
+.staff-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+.staff-table th { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 2px solid #e2e8f0; color: #64748b; font-weight: 600; }
+.staff-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; }
+.staff-table tr.inherited td { color: #94a3b8; }
+.badge-global { background: #ede9fe; color: #6d28d9; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 600; }
+.badge-local { background: #dcfce7; color: #15803d; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 600; }
+.actions { white-space: nowrap; }
+.action-btn { background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.85em; padding: 0.15rem 0.4rem; border-radius: 3px; text-decoration: underline; }
+.action-btn:hover { background: #eff6ff; }
+.remove-btn { color: #94a3b8; text-decoration: none; }
+.remove-btn:hover { background: #fee2e2; color: #dc2626; }
+
+.btn-add { padding: 0.35rem 0.85rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+.btn-primary { padding: 0.4rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+.btn-primary:disabled { opacity: 0.6; cursor: default; }
+.btn-secondary { padding: 0.4rem 1rem; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+.hint { font-size: 0.85em; margin-bottom: 0.75rem; }
+.muted { color: #64748b; }
+.small { font-size: 0.82em; }
 .remove-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.9em; padding: 0.15rem 0.4rem; border-radius: 3px; }
 .remove-btn:hover { background: #fee2e2; color: #dc2626; }
-.muted { color: #64748b; }
-.small { font-size: 0.85em; }
-.error { color: #dc2626; font-size: 0.9em; }
-.hint { font-size: 0.82em; margin-top: 0.75rem; }
+
+.branch-picker { position: relative; min-width: 180px; flex: 1; max-width: 260px; }
+.branch-input-wrap { display: flex; align-items: center; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; overflow: visible; }
+.branch-input { flex: 1; padding: 0.4rem 0.5rem; border: none; outline: none; font-size: 0.9em; background: transparent; min-width: 0; }
+.branch-clear { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 1em; padding: 0 0.3rem; line-height: 1; }
+.branch-clear:hover { color: #dc2626; }
+.branch-caret { padding: 0 0.4rem; color: #64748b; cursor: pointer; font-size: 0.75em; user-select: none; }
+.branch-caret:hover { color: #1e293b; }
+.branch-dropdown { position: absolute; top: calc(100% + 2px); left: 0; right: 0; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,.1); max-height: 220px; overflow-y: auto; z-index: 100; list-style: none; padding: 0.25rem 0; margin: 0; }
+.branch-dropdown li { padding: 0.35rem 0.75rem; cursor: pointer; font-size: 0.88em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.branch-dropdown li:hover { background: #f1f5f9; }
+.branch-dropdown li.branch-selected { background: #eff6ff; color: #2563eb; font-weight: 500; }
+.branch-hint { color: #94a3b8; cursor: default !important; font-size: 0.85em; }
+.branch-hint:hover { background: none !important; }
+.repo-ref-badge { background: #dbeafe; color: #1d4ed8; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 500; margin-left: 0.25rem; }
 </style>

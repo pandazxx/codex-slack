@@ -1,23 +1,29 @@
 from __future__ import annotations
 
+import json
 import logging
+import re
 import sqlite3
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from .agent_runner import get_container_status, spawn_agent, stop_agent, container_name
+from .agent_runner import get_container_status, refresh_auth, spawn_agent, stop_agent, container_name
 from .db import get_connection
+from .runtime_config import load_agent_env
+from .staffs import StaffOut, _SELECT_COLS as _STAFF_COLS, _row_to_out as _staff_row_to_out
 
 LOGGER = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
-_DEFAULT_AGENTS = [
-    ("claude", "claude-code", None),
-    ("codex", "codex", None),
+_DEFAULT_STAFFS = [
+    # (name, adapter, is_default)
+    ("claude", "claude-code", True),
+    ("codex", "codex", False),
 ]
 
 
@@ -31,14 +37,6 @@ class WorkspaceCreate(BaseModel):
     repo_ref: str = "master"
 
 
-class WorkspaceAgentOut(BaseModel):
-    id: str
-    agent_name: str
-    adapter: str
-    subagent: str | None
-    active: bool
-
-
 class WorkspaceOut(BaseModel):
     id: str
     name: str
@@ -46,64 +44,50 @@ class WorkspaceOut(BaseModel):
     container_name: str | None
     created_at: str
     archived_at: str | None
-    agents: list[WorkspaceAgentOut]
+    last_refreshed_at: str | None = None
+    staffs: list[StaffOut]
 
 
 def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
     row = conn.execute(
-        "SELECT id, name, repo_url, container_name, created_at, archived_at FROM workspaces WHERE id = ?",
+        "SELECT id, name, repo_url, container_name, created_at, archived_at, last_refreshed_at"
+        " FROM workspaces WHERE id = ?",
         (workspace_id,),
     ).fetchone()
     if row is None:
         return None
-    agents = conn.execute(
-        "SELECT id, agent_name, adapter, subagent, active FROM workspace_agents"
-        " WHERE workspace_id = ? AND active = 1",
+    staff_rows = conn.execute(
+        f"SELECT {_STAFF_COLS} FROM staffs"
+        " WHERE scope_type='workspace' AND scope_id=? ORDER BY name",
         (workspace_id,),
     ).fetchall()
     return WorkspaceOut(
         id=row["id"], name=row["name"], repo_url=row["repo_url"],
         container_name=row["container_name"], created_at=row["created_at"],
-        archived_at=row["archived_at"],
-        agents=[
-            WorkspaceAgentOut(id=a["id"], agent_name=a["agent_name"], adapter=a["adapter"],
-                              subagent=a["subagent"], active=bool(a["active"]))
-            for a in agents
-        ],
+        archived_at=row["archived_at"], last_refreshed_at=row["last_refreshed_at"],
+        staffs=[_staff_row_to_out(s) for s in staff_rows],
     )
 
 
 def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
     """Fetch an active (non-archived) workspace."""
     row = conn.execute(
-        "SELECT id, name, repo_url, container_name, created_at, archived_at FROM workspaces"
-        " WHERE id = ? AND archived_at IS NULL",
+        "SELECT id, name, repo_url, container_name, created_at, archived_at, last_refreshed_at"
+        " FROM workspaces WHERE id = ? AND archived_at IS NULL",
         (workspace_id,),
     ).fetchone()
     if row is None:
         return None
-    agents = conn.execute(
-        "SELECT id, agent_name, adapter, subagent, active FROM workspace_agents"
-        " WHERE workspace_id = ? AND active = 1",
+    staff_rows = conn.execute(
+        f"SELECT {_STAFF_COLS} FROM staffs"
+        " WHERE scope_type='workspace' AND scope_id=? ORDER BY name",
         (workspace_id,),
     ).fetchall()
     return WorkspaceOut(
-        id=row["id"],
-        name=row["name"],
-        repo_url=row["repo_url"],
-        container_name=row["container_name"],
-        created_at=row["created_at"],
-        archived_at=row["archived_at"],
-        agents=[
-            WorkspaceAgentOut(
-                id=a["id"],
-                agent_name=a["agent_name"],
-                adapter=a["adapter"],
-                subagent=a["subagent"],
-                active=bool(a["active"]),
-            )
-            for a in agents
-        ],
+        id=row["id"], name=row["name"], repo_url=row["repo_url"],
+        container_name=row["container_name"], created_at=row["created_at"],
+        archived_at=row["archived_at"], last_refreshed_at=row["last_refreshed_at"],
+        staffs=[_staff_row_to_out(s) for s in staff_rows],
     )
 
 
@@ -121,12 +105,13 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
             )
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail="workspace name already exists")
-        for agent_name, adapter, subagent in _DEFAULT_AGENTS:
+        for name, adapter, is_default in _DEFAULT_STAFFS:
             conn.execute(
-                "INSERT INTO workspace_agents"
-                " (id, workspace_id, agent_name, adapter, subagent, active, created_at, deleted_at)"
-                " VALUES (?, ?, ?, ?, ?, 1, ?, NULL)",
-                (str(uuid.uuid4()), workspace_id, agent_name, adapter, subagent, now),
+                "INSERT INTO staffs"
+                " (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
+                "  session_scope, is_default, extra_flags, created_at, updated_at)"
+                " VALUES (?, 'workspace', ?, ?, ?, NULL, NULL, NULL, 'topic', ?, NULL, ?, ?)",
+                (str(uuid.uuid4()), workspace_id, name, adapter, 1 if is_default else 0, now, now),
             )
         conn.commit()
         result = _fetch_workspace(conn, workspace_id)
@@ -152,6 +137,7 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
             ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
             ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
             dry_run=settings.dry_run,
+            extra_env=load_agent_env(request.app.state.db_path, workspace_id),
         )
         conn2 = get_connection(request.app.state.db_path)
         try:
@@ -228,6 +214,84 @@ def delete_workspace(workspace_id: str, request: Request) -> None:
         LOGGER.exception("workspace.agent_stop_failed container=%s", existing_container)
 
 
+@router.post("/{workspace_id}/refresh-auth", status_code=200)
+def refresh_workspace_auth(workspace_id: str, request: Request) -> dict:  # type: ignore[type-arg]
+    conn = get_connection(request.app.state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
+            (workspace_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        cname = row["container_name"] or container_name(workspace_id)
+        now = _now()
+        conn.execute(
+            "UPDATE workspaces SET last_refreshed_at = ? WHERE id = ?", (now, workspace_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    settings = request.app.state.settings
+    db_cfg = load_agent_env(request.app.state.db_path, workspace_id)
+    gh_token = settings.gh_token or db_cfg.get("GH_TOKEN")
+    try:
+        refresh_auth(name=cname, gh_token=gh_token, dry_run=settings.dry_run)
+    except Exception:
+        LOGGER.exception("workspace.refresh_auth_failed container=%s", cname)
+
+    return {"refreshed_at": now}
+
+
+@router.post("/{workspace_id}/restart-agent", status_code=200)
+def restart_workspace_agent(workspace_id: str, request: Request) -> dict:  # type: ignore[type-arg]
+    conn = get_connection(request.app.state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, repo_url, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
+            (workspace_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        cname = row["container_name"] or container_name(workspace_id)
+        repo_url = row["repo_url"]
+    finally:
+        conn.close()
+
+    settings = request.app.state.settings
+    try:
+        stop_agent(runtime=settings.container_runtime, name=cname, dry_run=settings.dry_run)
+    except Exception:
+        LOGGER.exception("workspace.restart_stop_failed container=%s", cname)
+
+    try:
+        spawn_agent(
+            runtime=settings.container_runtime,
+            workspace_id=workspace_id,
+            repo_url=repo_url,
+            image=settings.agent_base_image,
+            mqtt_host=settings.mqtt_host,
+            mqtt_port=settings.mqtt_port,
+            network=settings.agent_network,
+            claude_code_oauth_token=settings.claude_code_oauth_token,
+            anthropic_api_key=settings.anthropic_api_key,
+            openai_api_key=settings.openai_api_key,
+            gh_token=settings.gh_token,
+            ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
+            ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
+            dry_run=settings.dry_run,
+            master_url=settings.master_url,
+            extra_env=load_agent_env(request.app.state.db_path, workspace_id),
+        )
+    except Exception:
+        LOGGER.exception("workspace.restart_spawn_failed workspace_id=%s", workspace_id)
+        raise HTTPException(status_code=500, detail="failed to restart agent")
+
+    LOGGER.info("workspace.restarted workspace_id=%s container=%s", workspace_id, cname)
+    return {"restarted": True}
+
+
 @router.get("/{workspace_id}/agent-status")
 def get_agent_status(workspace_id: str, request: Request) -> dict:  # type: ignore[type-arg]
     conn = get_connection(request.app.state.db_path)
@@ -242,3 +306,63 @@ def get_agent_status(workspace_id: str, request: Request) -> dict:  # type: igno
     name = row["container_name"] or container_name(workspace_id)
     settings = request.app.state.settings
     return get_container_status(name=name, dry_run=settings.dry_run)
+
+
+def _parse_github_repo(repo_url: str) -> tuple[str, str] | None:
+    url = repo_url.strip().rstrip("/")
+    m = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if m:
+        return m.group(1), m.group(2)
+    m = re.match(r"git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if m:
+        return m.group(1), m.group(2)
+    return None
+
+
+def _fetch_github_branches(owner: str, repo: str, token: str | None) -> list[str]:
+    branches: list[str] = []
+    page = 1
+    while page <= 5:
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/branches?per_page=100&page={page}"
+        req = urllib.request.Request(
+            api_url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "codex-slack-master",
+            },
+        )
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data: list[dict] = json.loads(resp.read().decode())
+        except Exception:
+            LOGGER.exception("workspaces.fetch_branches_failed owner=%s repo=%s page=%d", owner, repo, page)
+            break
+        if not data:
+            break
+        branches.extend(b["name"] for b in data)
+        if len(data) < 100:
+            break
+        page += 1
+    return sorted(branches)
+
+
+@router.get("/{workspace_id}/branches", response_model=list[str])
+def list_workspace_branches(workspace_id: str, request: Request) -> list[str]:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT repo_url FROM workspaces WHERE id = ?", (workspace_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="workspace not found")
+    parsed = _parse_github_repo(row["repo_url"])
+    if parsed is None:
+        return []
+    owner, repo = parsed
+    settings = request.app.state.settings
+    return _fetch_github_branches(owner, repo, settings.gh_token)

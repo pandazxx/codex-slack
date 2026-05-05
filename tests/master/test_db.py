@@ -43,8 +43,10 @@ def test_schema_info_returns_columns(db_path):
     assert set(info.keys()) == set(TABLES)
     assert "id" in info["workspaces"]
     assert "repo_url" in info["workspaces"]
-    assert "active" in info["workspace_agents"]
-    assert "deleted_at" in info["workspace_agents"]
+    assert "scope_type" in info["staffs"]
+    assert "is_default" in info["staffs"]
+    assert "session_id" in info["staff_sessions"]
+    assert "key" in info["config"]
     assert "worktree_path" in info["topics"]
     assert "llm_session_id" in info["sessions"]
     assert "transcript" in info["messages"]
@@ -57,21 +59,26 @@ def test_get_connection_enables_foreign_keys(db_path):
     assert row[0] == 1
 
 
-def test_workspace_agents_unique_constraint(db_path):
+def test_staffs_unique_constraint(db_path):
     conn = get_connection(db_path)
+    now = "2026-01-01T00:00:00Z"
     conn.execute(
-        "INSERT INTO workspaces VALUES (?, ?, ?, ?, ?, ?)",
-        ("w1", "test", "https://github.com/x/y", None, "2026-01-01T00:00:00Z", None),
+        "INSERT INTO workspaces (id, name, repo_url, container_name, created_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("w1", "test", "https://github.com/x/y", None, now, None),
     )
     conn.execute(
-        "INSERT INTO workspace_agents VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        ("a1", "w1", "claude", "claude-code", None, 1, "2026-01-01T00:00:00Z", None),
+        "INSERT INTO staffs (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
+        " session_scope, is_default, extra_flags, created_at, updated_at)"
+        " VALUES (?, 'workspace', ?, 'claude', 'claude-code', NULL, NULL, NULL, 'topic', 1, NULL, ?, ?)",
+        ("s1", "w1", now, now),
     )
     conn.commit()
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO workspace_agents VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("a2", "w1", "claude", "codex", None, 1, "2026-01-01T00:00:00Z", None),
+            "INSERT INTO staffs (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
+            " session_scope, is_default, extra_flags, created_at, updated_at)"
+            " VALUES (?, 'workspace', ?, 'claude', 'codex', NULL, NULL, NULL, 'topic', 0, NULL, ?, ?)",
+            ("s2", "w1", now, now),
         )
         conn.commit()
     conn.close()

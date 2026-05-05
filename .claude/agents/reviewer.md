@@ -1,4 +1,5 @@
 ---
+name: reviewer
 description: Reviews changes on the current branch — reads git diff and changed files, reports findings by severity, never modifies files
 tools:
   - Read

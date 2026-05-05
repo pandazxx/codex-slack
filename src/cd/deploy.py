@@ -28,7 +28,7 @@ def get_image_repo_digest(image_ref: str) -> str | None:
     set later (for rollback).  Returns None when the image is not locally present.
     """
     completed = _run(
-        ["podman", "image", "inspect", "--format", "{{index .RepoDigests 0}}", image_ref]
+        ["docker", "image", "inspect", "--format", "{{index .RepoDigests 0}}", image_ref]
     )
     if completed.returncode != 0:
         return None
@@ -42,7 +42,7 @@ def pull_image(image_ref: str) -> str | None:
     Returns the repo-digest of the pulled image, or None on failure.
     """
     LOGGER.info("cd.pull_start image=%s", image_ref)
-    completed = _run(["podman", "pull", image_ref])
+    completed = _run(["docker", "pull", image_ref])
     if completed.returncode != 0:
         LOGGER.warning(
             "cd.pull_failed image=%s\nSTDERR:\n%s",
@@ -61,7 +61,7 @@ def get_container_status(container_name: str) -> str | None:
     Returns None when the container does not exist.
     """
     completed = _run(
-        ["podman", "inspect", "--type", "container", "--format", "{{.State.Status}}", container_name]
+        ["docker", "inspect", "--type", "container", "--format", "{{.State.Status}}", container_name]
     )
     if completed.returncode != 0:
         return None
@@ -118,7 +118,7 @@ def force_recreate_container(
 ) -> bool:
     """Tear down and re-create *compose_service* using the currently deployed *image_ref*.
 
-    Unlike restart_container (which does ``podman restart`` in-place), this runs
+    Unlike restart_container (which does ``docker restart`` in-place), this runs
     ``compose up --force-recreate`` so updated env files and volume mounts take effect.
     Returns True on success.
     """
@@ -154,7 +154,7 @@ def restart_container(container_name: str, *, dry_run: bool) -> bool:
         return True
 
     LOGGER.info("cd.restart_start container=%s current_status=%s", container_name, status)
-    completed = _run(["podman", "restart", container_name])
+    completed = _run(["docker", "restart", container_name])
     if completed.returncode != 0:
         LOGGER.error(
             "cd.restart_failed container=%s\nSTDERR:\n%s",
@@ -199,7 +199,7 @@ def rollback_image(
     if not dry_run:
         # Ensure the previous image is locally available (it may have been
         # replaced during the failed deploy).
-        completed = _run(["podman", "pull", image_ref])
+        completed = _run(["docker", "pull", image_ref])
         if completed.returncode != 0:
             LOGGER.error(
                 "cd.rollback_pull_failed image=%s\nSTDERR:\n%s",

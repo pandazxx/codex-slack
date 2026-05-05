@@ -1,17 +1,19 @@
 name: Publish Minimal Agent Image
 
+# Manual / ad-hoc build of the agent-minimal worker image.
+#
+# Automated builds are handled by dedicated workflows:
+#   - ci-pr.yml          — PR gate (build, no push)
+#   - build-on-demand.yml — agent test bed builds (:sha-<hash>)
+#   - build-rc.yml        — RC builds from feature branch tags (:v1.2.3-rc1, :rc)
+#   - promote-release.yml — release promotion by retagging :rc → :v1.2.3
+#
+# This workflow is retained for ad-hoc manual builds only.
+# It no longer triggers on master branch pushes or version tags.
+#
+# See docs/design/cicd-pipeline.md for the full pipeline design.
+
 on:
-  push:
-    branches:
-      - master
-    tags:
-      - "v*"
-    paths:
-      - "Dockerfile.agent-minimal"
-      - "docker/entrypoint.sh"
-      - "src/**"
-      - "requirements.txt"
-      - ".github/workflows/publish-agent-minimal.yml"
   workflow_dispatch:
 
 permissions:

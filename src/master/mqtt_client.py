@@ -32,6 +32,20 @@ def _parse_mqtt_topic(raw: str) -> tuple[str, str] | None:
     return parts[4], parts[5]
 
 
+def _extract_usage(transcript: str | None) -> str | None:
+    """Return serialised usage dict from a stream-json transcript, or None."""
+    if not transcript:
+        return None
+    try:
+        events = json.loads(transcript)
+        for evt in events:
+            if isinstance(evt, dict) and evt.get("type") == "result" and evt.get("usage"):
+                return json.dumps(evt["usage"])
+    except Exception:
+        pass
+    return None
+
+
 def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  # type: ignore[type-arg]
     try:
         conn = sqlite3.connect(db_path)
@@ -43,11 +57,12 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
             llm_session_id = payload.get("session_id")
             agent_name = payload.get("agent_name")
             message_id = payload.get("message_id") or str(uuid.uuid4())
+            usage_json = _extract_usage(transcript)
             conn.execute(
                 "INSERT OR IGNORE INTO messages"
-                " (id, topic_id, sender, agent_name, text, transcript, attachments_json, created_at)"
-                " VALUES (?, ?, 'agent', ?, ?, ?, NULL, ?)",
-                (message_id, topic_id, agent_name, text, transcript, _now()),
+                " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, created_at)"
+                " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?)",
+                (message_id, topic_id, agent_name, text, transcript, usage_json, _now()),
             )
             if llm_session_id and agent_name:
                 conn.execute(

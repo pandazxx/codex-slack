@@ -1,10 +1,12 @@
 ---
+name: doc-writer
 description: Writes and updates documentation — README, guides, references, knowledge-base, and manuals — without touching implementation files or design/decision records
 tools:
   - Read
   - Grep
   - Glob
   - Write
+  - Edit
 model: claude-sonnet-4-6
 ---
 

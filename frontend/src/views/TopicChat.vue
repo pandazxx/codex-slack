@@ -20,8 +20,11 @@
         class="message"
         :class="m.sender === 'user' ? 'user' : 'agent'"
       >
-        <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name || 'Agent') }}</span>
-        <div class="bubble">{{ m.text }}</div>
+        <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
+        <div class="bubble">
+          <MarkdownMessage v-if="m.sender !== 'user'" :text="m.text" />
+          <template v-else>{{ m.text }}</template>
+        </div>
         <div v-if="m.attachments && m.attachments.length" class="attachment-list">
           <template v-for="a in m.attachments" :key="a.id">
             <div v-if="a.mime_type && a.mime_type.startsWith('image/')" class="attachment-img-wrap">
@@ -32,6 +35,17 @@
             </div>
           </template>
         </div>
+        <details v-if="m.sender === 'user' && isDispatchPayload(m.transcript)" class="detail-panel">
+          <summary class="detail-toggle">Details</summary>
+          <div class="dispatch-detail">
+            <div class="dispatch-meta">
+              <span class="tr-badge tr-badge-tool">{{ parseDispatch(m.transcript).adapter }}</span>
+              <span class="dispatch-info">@{{ parseDispatch(m.transcript).agent_name }}</span>
+              <span class="dispatch-info">session: {{ parseDispatch(m.transcript).session_scope }} ({{ parseDispatch(m.transcript).is_new_session ? 'new' : 'resumed' }})</span>
+            </div>
+            <pre class="tr-raw dispatch-cmd">{{ buildDispatchCommand(m.transcript) }}</pre>
+          </div>
+        </details>
         <details v-if="m.sender === 'agent' && m.transcript" class="detail-panel">
           <summary class="detail-toggle">
             Details
@@ -67,6 +81,12 @@
                   <span v-if="(evt.total_cost_usd ?? evt.cost_usd) != null" class="tr-stat">${{ (evt.total_cost_usd ?? evt.cost_usd).toFixed(4) }}</span>
                   <span v-if="evt.duration_ms != null" class="tr-stat">{{ (evt.duration_ms / 1000).toFixed(1) }}s</span>
                   <span v-if="evt.num_turns != null" class="tr-stat">{{ evt.num_turns }} turn{{ evt.num_turns !== 1 ? 's' : '' }}</span>
+                  <template v-if="evt.usage">
+                    <span class="tr-stat tr-tokens">{{ (evt.usage.input_tokens ?? 0).toLocaleString() }}↑</span>
+                    <span class="tr-stat tr-tokens">{{ (evt.usage.output_tokens ?? 0).toLocaleString() }}↓</span>
+                    <span v-if="evt.usage.cache_read_input_tokens" class="tr-stat tr-cache">{{ evt.usage.cache_read_input_tokens.toLocaleString() }} cached</span>
+                    <span v-if="evt.usage.cache_creation_input_tokens" class="tr-stat tr-cache">{{ evt.usage.cache_creation_input_tokens.toLocaleString() }} cache_write</span>
+                  </template>
                 </div>
               </template>
             </template>
@@ -97,7 +117,8 @@
           {{ sending ? 'Sending…' : 'Send' }}
         </button>
       </form>
-      <p class="hint muted">Enter to send · Shift+Enter for new line</p>
+      <p v-if="sendError" class="send-error">{{ sendError }}</p>
+      <p class="hint muted">Enter to send · Shift+Enter for new line · Use <code>@name</code> to address a specific staff</p>
     </template>
   </div>
 </template>
@@ -105,6 +126,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
+import MarkdownMessage from '../components/MarkdownMessage.vue'
 
 const route = useRoute()
 const wsId = route.params.wsId
@@ -122,6 +144,7 @@ const fileInput = ref(null)
 const selectedFiles = ref([])
 
 const isArchived = computed(() => !!topic.value?.archived_at)
+const sendError = ref('')
 
 let ws = null
 
@@ -193,6 +216,7 @@ async function sendMessage() {
   const msg = text.value.trim()
   if (!msg || sending.value) return
   sending.value = true
+  sendError.value = ''
   const filesToSend = [...selectedFiles.value]
   try {
     const fd = new FormData()
@@ -208,16 +232,22 @@ async function sendMessage() {
       text.value = ''
       selectedFiles.value = []
       const data = await r.json()
-      const saved = {
+      messages.value.push({
         id: data.message_id,
         sender: 'user',
         agent_name: null,
         text: msg,
+        transcript: data.dispatch || null,
         attachments: data.attachments || [],
         created_at: new Date().toISOString(),
-      }
-      messages.value.push(saved)
+      })
       scrollToBottom()
+    } else {
+      const err = await r.json().catch(() => ({}))
+      const detail = err.detail
+      sendError.value = Array.isArray(detail)
+        ? detail.map(d => d.msg).join(', ')
+        : (typeof detail === 'string' ? detail : `Server error ${r.status}`)
     }
   } finally {
     sending.value = false
@@ -225,6 +255,30 @@ async function sendMessage() {
 }
 
 function toggleRaw(id) { rawView.value[id] = !rawView.value[id] }
+
+function isDispatchPayload(transcript) {
+  if (!transcript) return false
+  try { const p = JSON.parse(transcript); return p && typeof p === 'object' && 'adapter' in p } catch { return false }
+}
+
+function parseDispatch(transcript) {
+  try { return JSON.parse(transcript) } catch { return {} }
+}
+
+function buildDispatchCommand(transcript) {
+  try {
+    const p = JSON.parse(transcript)
+    if (!p.adapter) return ''
+    if (p.adapter === 'codex') return `codex --full-auto -q ${JSON.stringify(p.text)}`
+    const parts = ['claude', '--print', '--verbose', '--output-format', 'stream-json', '--dangerously-skip-permissions']
+    if (p.session_id) parts.push(p.is_new_session ? `--session-id ${p.session_id}` : `--resume ${p.session_id}`)
+    if (p.model) parts.push(`--model ${p.model}`)
+    if (p.system_prompt) parts.push(`--append-system-prompt ${JSON.stringify(p.system_prompt)}`)
+    if (p.subagent) parts.push(`--agent ${p.subagent}`)
+    parts.push(JSON.stringify(p.text))
+    return parts.join(' \\\n  ')
+  } catch { return '(error parsing dispatch payload)' }
+}
 
 function toJsonl(raw) {
   try {
@@ -265,12 +319,13 @@ onUnmounted(() => {
 .status-bar { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; }
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding: 0.5rem 0; }
 .message { display: flex; flex-direction: column; max-width: 72%; }
+.message.agent { max-width: 88%; }
 .message.user { align-self: flex-end; align-items: flex-end; }
 .message.agent { align-self: flex-start; align-items: flex-start; }
 .label { font-size: 0.75em; color: #64748b; margin-bottom: 2px; }
-.bubble { padding: 0.6rem 0.9rem; border-radius: 12px; white-space: pre-wrap; line-height: 1.45; }
-.message.user .bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 3px; }
-.message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; }
+.bubble { padding: 0.6rem 0.9rem; border-radius: 12px; line-height: 1.45; }
+.message.user .bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 3px; white-space: pre-wrap; }
+.message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; max-width: 100%; overflow: hidden; }
 .ts { font-size: 0.7em; color: #94a3b8; margin-top: 2px; }
 .detail-panel { margin-top: 4px; max-width: 100%; }
 .detail-toggle { font-size: 0.72em; color: #94a3b8; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.5rem; }
@@ -285,6 +340,8 @@ onUnmounted(() => {
 .tr-result-body { background: #0f2027; color: #86efac; }
 .tr-meta { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
 .tr-stat { color: #64748b; }
+.tr-tokens { color: #6366f1; font-variant-numeric: tabular-nums; }
+.tr-cache { color: #0891b2; }
 .tr-badge { font-size: 0.78em; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
 .tr-badge-tool { background: #dbeafe; color: #1d4ed8; }
 .tr-badge-result { background: #dcfce7; color: #15803d; }
@@ -308,6 +365,11 @@ onUnmounted(() => {
 .attachment-img { max-width: 100%; border-radius: 6px; border: 1px solid #e2e8f0; }
 .attachment-file { font-size: 0.82em; }
 .attachment-file a { color: #2563eb; text-decoration: underline; }
+.dispatch-detail { margin-top: 4px; }
+.dispatch-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 0.78em; }
+.dispatch-info { color: #64748b; }
+.dispatch-cmd { font-size: 0.72em; max-height: 200px; overflow-x: auto; white-space: pre; }
+.send-error { color: #dc2626; font-size: 0.85em; margin-top: 0.25rem; }
 .hint { font-size: 0.8em; text-align: right; margin-top: 0.25rem; }
 .muted { color: #64748b; }
 .center { text-align: center; }

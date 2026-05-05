@@ -8,17 +8,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from .agent_runner import container_name as _agent_container_name, start_agent_if_stopped
 from .db import get_connection
+from .staffs import resolve_staff, resolve_default_staff
 
 _MENTION_RE = re.compile(r"^@(\S+)\s*(.*)", re.DOTALL)
-
-
-def _parse_mention(text: str, default_agent: str) -> tuple[str, str]:
-    """Return (agent_name, cleaned_text). @mention prefix overrides default_agent."""
-    m = _MENTION_RE.match(text.strip())
-    if m:
-        return m.group(1).lower(), m.group(2).strip()
-    return default_agent, text.strip()
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/topics/{topic_id}/messages",
@@ -27,28 +21,50 @@ router = APIRouter(
 
 _PROMPT_TOPIC = "codex-slack/workspace/{workspace_id}/topic/{topic_id}/prompt"
 
-_DEFAULT_AGENT = "claude"
-
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _get_or_create_session(conn, topic_id: str, agent_name: str, adapter: str) -> tuple[str, str | None]:
+def _parse_mention(text: str) -> tuple[str | None, str]:
+    """Return (staff_name | None, cleaned_text). @mention prefix sets staff_name."""
+    m = _MENTION_RE.match(text.strip())
+    if m:
+        return m.group(1).lower(), m.group(2).strip()
+    return None, text.strip()
+
+
+def _make_session_uuid(scope_type: str, scope_id: str, staff_name: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_OID, f"{scope_type}:{scope_id}:{staff_name}"))
+
+
+def _get_staff_session(conn, scope_type: str, scope_id: str, staff_name: str) -> tuple[str, bool]:
+    """Return (session_uuid, is_new_session). Creates staff_sessions row on first use."""
     row = conn.execute(
-        "SELECT id, llm_session_id FROM sessions WHERE topic_id = ? AND agent_name = ?",
-        (topic_id, agent_name),
+        "SELECT session_id FROM staff_sessions"
+        " WHERE scope_type=? AND scope_id=? AND staff_name=?",
+        (scope_type, scope_id, staff_name),
     ).fetchone()
     if row:
-        return row["id"], row["llm_session_id"]
-    session_id = str(uuid.uuid4())
+        return row["session_id"], False
+    session_uuid = _make_session_uuid(scope_type, scope_id, staff_name)
     conn.execute(
-        "INSERT INTO sessions (id, topic_id, agent_name, adapter, llm_session_id, updated_at)"
-        " VALUES (?, ?, ?, ?, NULL, ?)",
-        (session_id, topic_id, agent_name, adapter, _now()),
+        "INSERT INTO staff_sessions (scope_type, scope_id, staff_name, session_id, started_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (scope_type, scope_id, staff_name, session_uuid, _now()),
     )
-    conn.commit()
-    return session_id, None
+    return session_uuid, True
+
+
+def _staff_session_key(staff, workspace_id: str, topic_id: str) -> tuple[str, str]:
+    """Map staff.session_scope to (scope_type, scope_id) for staff_sessions."""
+    ss = (staff["session_scope"] or "topic")
+    if ss == "workspace":
+        return "workspace", workspace_id
+    elif ss == "global":
+        return "global", ""
+    else:
+        return "topic", topic_id
 
 
 class AttachmentMeta(BaseModel):
@@ -64,6 +80,7 @@ class MessageOut(BaseModel):
     agent_name: str | None
     text: str
     transcript: str | None
+    usage_json: str | None = None
     created_at: str
     attachments: list[AttachmentMeta] = []
 
@@ -74,39 +91,49 @@ async def send_message(
     topic_id: str,
     request: Request,
     text: str = Form(...),
-    agent_name: str = Form(default=_DEFAULT_AGENT),
+    agent_name: str = Form(default="claude"),
     files: list[UploadFile] = File(default=[]),
 ) -> dict:  # type: ignore[type-arg]
     conn = get_connection(request.app.state.db_path)
     try:
-        if conn.execute(
-            "SELECT 1 FROM workspaces WHERE id = ? AND archived_at IS NULL", (workspace_id,)
-        ).fetchone() is None:
+        ws_row = conn.execute(
+            "SELECT id, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
+            (workspace_id,),
+        ).fetchone()
+        if ws_row is None:
             raise HTTPException(404, "workspace not found")
         topic = conn.execute(
-            "SELECT id, worktree_path, branch_name FROM topics"
+            "SELECT id, worktree_path, branch_name, repo_ref FROM topics"
             " WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
             (topic_id, workspace_id),
         ).fetchone()
         if topic is None:
             raise HTTPException(404, "topic not found")
-        routed_agent, prompt_text = _parse_mention(text, agent_name)
-        agent = conn.execute(
-            "SELECT agent_name, adapter, subagent FROM workspace_agents"
-            " WHERE workspace_id = ? AND agent_name = ? AND active = 1",
-            (workspace_id, routed_agent),
-        ).fetchone()
-        if agent is None:
-            raise HTTPException(404, f"agent '{routed_agent}' not found in workspace")
-        _session_id, llm_session_id = _get_or_create_session(
-            conn, topic_id, routed_agent, agent["adapter"]
-        )
+
+        mention_name, prompt_text = _parse_mention(text)
+
+        if mention_name:
+            staff = resolve_staff(conn, mention_name, workspace_id, topic_id)
+            if staff is None:
+                raise HTTPException(404, f"staff '{mention_name}' not found")
+        else:
+            staff = resolve_default_staff(conn, workspace_id, topic_id)
+            if staff is None:
+                raise HTTPException(422, "no default staff configured for this workspace")
+
+        ss_scope_type, ss_scope_id = _staff_session_key(staff, workspace_id, topic_id)
+        session_uuid, is_new_session = _get_staff_session(conn, ss_scope_type, ss_scope_id, staff["name"])
+
         message_id = str(uuid.uuid4())
+        now = _now()
         conn.execute(
             "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, attachments_json, created_at)"
-            " VALUES (?, ?, 'user', NULL, ?, NULL, NULL, ?)",
-            (message_id, topic_id, text.strip(), _now()),
+            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, created_at)"
+            " VALUES (?, ?, 'user', NULL, ?, NULL, NULL, NULL, ?)",
+            (message_id, topic_id, text.strip(), now),
+        )
+        conn.execute(
+            "UPDATE workspaces SET last_message_at = ? WHERE id = ?", (now, workspace_id)
         )
         conn.commit()
     finally:
@@ -143,19 +170,44 @@ async def send_message(
 
     payload = json.dumps({
         "message_id": message_id,
-        "agent_name": routed_agent,
-        "adapter": agent["adapter"],
-        "subagent": agent["subagent"],
+        "agent_name": staff["name"],
+        "adapter": staff["adapter"],
+        "subagent": staff["agent"],
         "worktree": topic["worktree_path"],
         "branch": topic["branch_name"],
-        "session_id": llm_session_id,
+        "repo_ref": topic["repo_ref"] or "",
+        "session_id": session_uuid,
+        "is_new_session": is_new_session,
+        "session_scope": staff["session_scope"] or "topic",
+        "model": staff["model"],
+        "system_prompt": staff["system_prompt"],
         "text": prompt_text,
         "attachments": attachment_metas,
     })
-    mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
-    request.app.state.mqtt.publish(mqtt_topic, payload, qos=1)
 
-    return {"message_id": message_id, "status": "queued", "attachments": attachment_metas}
+    # Store dispatch payload as user message transcript so the frontend can show the full command.
+    disp_conn = get_connection(request.app.state.db_path)
+    try:
+        disp_conn.execute("UPDATE messages SET transcript = ? WHERE id = ?", (payload, message_id))
+        disp_conn.commit()
+    finally:
+        disp_conn.close()
+
+    mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
+    mqtt = request.app.state.mqtt
+
+    # Auto-start agent container if it was stopped (e.g. idle timeout or crash).
+    # The agent uses a persistent MQTT session (fixed client_id, clean_session=False)
+    # so Mosquitto queues this QoS-1 message and delivers it once the agent subscribes.
+    cname = ws_row["container_name"] or _agent_container_name(workspace_id)
+    try:
+        start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
+    except Exception:
+        pass  # don't block the message if Docker is unavailable
+
+    mqtt.publish(mqtt_topic, payload, qos=1)
+
+    return {"message_id": message_id, "status": "queued", "attachments": attachment_metas, "dispatch": payload}
 
 
 @router.get("", response_model=list[MessageOut])
@@ -169,7 +221,7 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
         ).fetchone() is None:
             raise HTTPException(404, "topic not found")
         rows = conn.execute(
-            "SELECT id, sender, agent_name, text, transcript, created_at FROM messages"
+            "SELECT id, sender, agent_name, text, transcript, usage_json, created_at FROM messages"
             " WHERE topic_id = ? ORDER BY created_at",
             (topic_id,),
         ).fetchall()
@@ -189,8 +241,8 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
             result.append(
                 MessageOut(
                     id=r["id"], sender=r["sender"], agent_name=r["agent_name"],
-                    text=r["text"], transcript=r["transcript"], created_at=r["created_at"],
-                    attachments=attachments,
+                    text=r["text"], transcript=r["transcript"], usage_json=r["usage_json"],
+                    created_at=r["created_at"], attachments=attachments,
                 )
             )
     finally:

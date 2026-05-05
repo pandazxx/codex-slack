@@ -25,10 +25,10 @@ def test_health(client):
 
 
 def test_schema_lists_all_tables(client):
+    from src.master.db import TABLES
     r = client.get("/schema")
     assert r.status_code == 200
-    tables = r.json()
-    assert set(tables.keys()) == {"workspaces", "workspace_agents", "topics", "sessions", "messages", "attachments"}
+    assert set(r.json().keys()) == set(TABLES)
 
 
 def test_schema_workspaces_columns(client):
@@ -40,10 +40,11 @@ def test_schema_workspaces_columns(client):
     assert "created_at" in cols
 
 
-def test_schema_workspace_agents_columns(client):
+def test_schema_staffs_columns(client):
     r = client.get("/schema")
-    cols = r.json()["workspace_agents"]
-    for expected in ("id", "workspace_id", "agent_name", "adapter", "subagent", "active", "created_at", "deleted_at"):
+    cols = r.json()["staffs"]
+    for expected in ("id", "scope_type", "scope_id", "name", "adapter", "model",
+                     "system_prompt", "agent", "session_scope", "is_default"):
         assert expected in cols, f"missing column: {expected}"
 
 
