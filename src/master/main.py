@@ -27,6 +27,7 @@ from .staffs import global_router as global_staffs_router
 from .staffs import topic_router as topic_staffs_router
 from .staffs import workspace_router as workspace_staffs_router
 from .storage import LocalAttachmentStore
+from .topics import recent_router as recent_topics_router
 from .topics import router as topics_router
 from .workspaces import router as workspaces_router
 from .ws_hub import ConnectionHub
@@ -252,6 +253,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
 app = FastAPI(lifespan=lifespan)
 app.include_router(workspaces_router, prefix="/api")
 app.include_router(topics_router, prefix="/api")
+app.include_router(recent_topics_router, prefix="/api")
 app.include_router(messages_router, prefix="/api")
 app.include_router(global_staffs_router, prefix="/api")
 app.include_router(workspace_staffs_router, prefix="/api")

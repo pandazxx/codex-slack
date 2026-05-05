@@ -1,0 +1,150 @@
+<template>
+  <aside class="sidebar">
+    <div class="sidebar-title">Recent Topics</div>
+    <ul>
+      <li
+        v-for="topic in topics"
+        :key="topic.topic_id"
+        :class="{ active: isCurrentTopic(topic) }"
+        @click="navigate(topic)"
+      >
+        <span class="topic-name">{{ topic.workspace_name }}/{{ topic.subject }}</span>
+        <span v-if="isNew(topic)" class="new-badge">new</span>
+      </li>
+    </ul>
+    <div v-if="topics.length === 0" class="empty">No topics yet</div>
+  </aside>
+</template>
+
+<script setup>
+import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+
+const router = useRouter()
+const route = useRoute()
+const topics = ref([])
+
+async function load() {
+  try {
+    const res = await fetch('/api/topics/recent?limit=20')
+    if (res.ok) topics.value = await res.json()
+  } catch {}
+}
+
+function nowTs() {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
+
+function getLastSeen(topicId) {
+  return localStorage.getItem(`topic-last-seen:${topicId}`)
+}
+
+function markSeen(topicId) {
+  localStorage.setItem(`topic-last-seen:${topicId}`, nowTs())
+}
+
+function isNew(topic) {
+  const lastSeen = getLastSeen(topic.topic_id)
+  if (!lastSeen) return false
+  return topic.last_activity_at > lastSeen
+}
+
+function isCurrentTopic(topic) {
+  return route.params.topicId === topic.topic_id
+}
+
+function navigate(topic) {
+  if (isCurrentTopic(topic)) return
+  markSeen(topic.topic_id)
+  router.push(`/workspaces/${topic.workspace_id}/topics/${topic.topic_id}`)
+}
+
+watch(
+  () => route.params.topicId,
+  (topicId) => {
+    if (topicId) markSeen(topicId)
+  },
+  { immediate: true },
+)
+
+let interval
+onMounted(() => {
+  load()
+  interval = setInterval(load, 30_000)
+})
+onUnmounted(() => clearInterval(interval))
+</script>
+
+<style scoped>
+.sidebar {
+  width: 220px;
+  min-width: 220px;
+  background: #1e293b;
+  color: #cbd5e1;
+  padding: 1rem 0;
+  overflow-y: auto;
+  border-right: 1px solid #334155;
+}
+
+.sidebar-title {
+  padding: 0 1rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #64748b;
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 1rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  gap: 0.4rem;
+  line-height: 1.3;
+}
+
+li:hover {
+  background: #334155;
+}
+
+li.active {
+  background: #1d4ed8;
+  color: #f8fafc;
+}
+
+.topic-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.new-badge {
+  flex-shrink: 0;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.6rem;
+  padding: 0.1em 0.45em;
+  border-radius: 9999px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.empty {
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  color: #475569;
+  font-style: italic;
+}
+</style>
