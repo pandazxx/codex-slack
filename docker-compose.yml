@@ -46,9 +46,16 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: ${MOSQUITTO_CONTAINER_NAME:-codex-slack-mosquitto}
-    entrypoint: ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
-    volumes:
-      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    # Write config inline so no host-side file bind-mount is required.
+    # This allows the CD daemon to drive compose without a project directory
+    # present on the host.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        printf 'listener 1883\nallow_anonymous true\npersistence false\nlog_type error\n' \
+          > /tmp/mosquitto.conf
+        exec mosquitto -c /tmp/mosquitto.conf
     networks:
       - internal
     restart: unless-stopped
