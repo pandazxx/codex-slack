@@ -47,28 +47,25 @@ jobs:
             type=sha,prefix=sha-
             type=ref,event=tag
 
-      - name: Build smoke image
+      # Single build: load into local daemon for smoke test AND push to registry.
+      - name: Build, load and push
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.agent-minimal
           load: true
-          tags: codex-slack-agent-minimal:smoke
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=agent-minimal
+          cache-to: type=gha,mode=max,scope=agent-minimal
 
       - name: Smoke test runtime contract
         run: |
-          docker run --rm codex-slack-agent-minimal:smoke sh -lc '
+          IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          docker run --rm "$IMAGE" sh -lc '
             codex --version &&
             claude --version &&
             gh --version &&
             python -m src.agent.main --help >/dev/null
           '
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.agent-minimal
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}

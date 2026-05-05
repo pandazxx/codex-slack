@@ -114,6 +114,18 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-05-05 — CD daemon fails with `No module named 'src'` because volume mount shadows baked source
+
+*Summary:* `docker compose -f docker-compose.cd-daemon.example.yml up -d` caused the daemon to crash immediately with `ModuleNotFoundError: No module named 'src'`. The image appeared to build correctly.
+
+*Root cause:* `Dockerfile.cd-daemon` copied `src/` into `/opt/codex-slack/src/` and set `WORKDIR /opt/codex-slack`. The compose file mounts `${MASTER_PROJECT_DIR:-.}` over `/opt/codex-slack`. This volume mount shadows everything baked into that path, including the `src/` package, so Python cannot find the module at runtime.
+
+*Fix applied:* Moved the `COPY` targets in `Dockerfile.cd-daemon` to `/app/src/` (outside the volume mount point) and added `ENV PYTHONPATH=/app`. `WORKDIR` remains `/opt/codex-slack` so compose commands still resolve paths relative to the project root.
+
+*Prevention:* Never bake application source into a path that is volume-mounted at runtime. Use a dedicated source directory (`/app`, `/usr/local/lib/<name>`, etc.) that is disjoint from any host-mounted paths, and expose it via `PYTHONPATH` or an install step.
+
+---
+
 ## 2026-03-24 — docs/knowledge-base directory initialised
 
 *Summary:* The project `CLAUDE.md` references [`docs/knowledge-base/lessons-learned.md`](lessons-learned.md) and [`docs/knowledge-base/faq.md`](faq.md) as required knowledge-persistence targets, but neither file nor the directory existed.

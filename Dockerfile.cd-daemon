@@ -38,13 +38,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir "python-dotenv>=1.0.1"
 
 RUN useradd -m -u 1000 -s /bin/bash appuser
+
+# Source lives at /app so the /opt/codex-slack volume mount cannot shadow it.
+ENV PYTHONPATH=/app
+
+# Copy only the files the daemon needs into /app (not /opt/codex-slack).
+COPY --chown=appuser:appuser src/__init__.py        /app/src/__init__.py
+COPY --chown=appuser:appuser src/logging_utils.py   /app/src/logging_utils.py
+COPY --chown=appuser:appuser src/cd/                /app/src/cd/
+
+# Bake in the master compose file so no project-dir volume mount is needed.
+COPY --chown=appuser:appuser docker-compose.yml     /opt/codex-slack/docker-compose.yml
+
 USER appuser
 WORKDIR /opt/codex-slack
-
-# Copy only the files the daemon needs.
-COPY --chown=appuser:appuser src/__init__.py        ./src/__init__.py
-COPY --chown=appuser:appuser src/logging_utils.py   ./src/logging_utils.py
-COPY --chown=appuser:appuser src/cd/                ./src/cd/
 
 RUN mkdir -p data/cd
 

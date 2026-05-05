@@ -1,7 +1,7 @@
 name: Build RC Image
 
 # Triggers on v*-rc* tags pushed to any branch (e.g. v1.2.3-rc1).
-# Builds both images from the tagged commit and pushes two tags:
+# Builds all three images in parallel and pushes two tags each:
 #
 #   :v1.2.3-rc1  — immutable, permanent audit trail for this RC
 #   :rc          — mutable, always points to the latest RC
@@ -28,26 +28,19 @@ permissions:
   packages: write
 
 jobs:
-  build-rc:
-    name: Build RC ${{ github.ref_name }}
+  # ── Master image ─────────────────────────────────────────────────────────────
+  build-master:
+    name: master ${{ github.ref_name }}
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout RC tag
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      # ── Master image ────────────────────────────────────────────────────────
-      - name: Build and push master RC image
+      - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -56,45 +49,80 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/codex-slack-master:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/codex-slack-master:rc
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=master
+          cache-to: type=gha,mode=max,scope=master
 
-      # ── Agent-minimal image (smoke-tested before push) ────────────────────
-      - name: Build agent-minimal RC image for smoke test
+  # ── CD daemon image ───────────────────────────────────────────────────────────
+  build-cd-daemon:
+    name: cd-daemon ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.cd-daemon
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/codex-slack-cd-daemon:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/codex-slack-cd-daemon:rc
+          cache-from: type=gha,scope=cd-daemon
+          cache-to: type=gha,mode=max,scope=cd-daemon
+
+  # ── Agent-minimal image (smoke-tested before push) ────────────────────────────
+  build-agent-minimal:
+    name: agent-minimal ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Single build: load into local daemon for smoke test AND push to registry.
+      - name: Build, load and push
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.agent-minimal
           load: true
-          tags: codex-slack-agent-minimal:rc-smoke
-          cache-from: type=gha
-
-      - name: Smoke test agent-minimal runtime contract
-        run: |
-          docker run --rm codex-slack-agent-minimal:rc-smoke sh -lc '
-            codex --version &&
-            claude --version &&
-            gh --version &&
-            python -m src.agent.main --help >/dev/null
-          '
-
-      - name: Push agent-minimal RC image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.agent-minimal
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:rc
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=agent-minimal
+          cache-to: type=gha,mode=max,scope=agent-minimal
+      - name: Smoke test runtime contract
+        run: |
+          docker run --rm \
+            ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:${{ github.ref_name }} \
+            sh -lc '
+              codex --version &&
+              claude --version &&
+              gh --version &&
+              python -m src.agent.main --help >/dev/null
+            '
 
-      - name: Summary
+  # ── Summary (runs after all three complete) ───────────────────────────────────
+  summary:
+    name: RC build summary
+    runs-on: ubuntu-latest
+    needs: [build-master, build-cd-daemon, build-agent-minimal]
+    steps:
+      - name: Write summary
         run: |
           echo "## RC build complete: \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Both images pushed with tags \`${{ github.ref_name }}\` and \`rc\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "All three images (master, cd-daemon, agent-minimal) pushed with tags \`${{ github.ref_name }}\` and \`rc\`." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Staging CD daemon will auto-deploy the new \`:rc\` image within the next poll cycle." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
