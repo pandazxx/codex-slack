@@ -56,25 +56,25 @@ sequenceDiagram
     U->>M: POST /messages (text)
     M->>B: publish /prompt (QoS 1)
     B->>A: deliver /prompt
-    A->>B: publish /status {"state":"thinking"} (QoS 0)
+    A->>B: publish /status state=thinking (QoS 0)
     B->>M: deliver /status
-    M->>U: ws send {type:"status", state:"thinking"}
-    A->>C: spawn Popen("claude --output-format stream-json ...")
+    M->>U: ws send type=status state=thinking
+    A->>C: spawn Popen claude --output-format stream-json
     loop one line per Claude event
-        C-->>A: {"type":"assistant", ...}\n
-        A->>B: publish /chunk {message_id, seq, event} (QoS 0)
+        C-->>A: stream-json event line
+        A->>B: publish /chunk message_id+seq+event (QoS 0)
         B->>M: deliver /chunk
-        M->>M: INSERT INTO chunks (message_id, topic_id, seq, event, ...)
-        M->>U: ws send {type:"chunk", message_id, seq, event}
+        M->>M: INSERT INTO chunks
+        M->>U: ws send type=chunk
         Note over U: append to live message
     end
-    C-->>A: {"type":"result", ...}\n  (process exits)
-    A->>B: publish /response {message_id, last_response, transcript} (QoS 1)
+    C-->>A: result event (process exits)
+    A->>B: publish /response message_id+transcript (QoS 1)
     B->>M: deliver /response
-    M->>M: BEGIN; INSERT INTO messages (...); DELETE FROM chunks WHERE message_id=?; COMMIT
-    M->>U: ws send {type:"message", message_id, ...}
-    Note over U: replace live message with durable one (same id)
-    A->>B: publish /status {"state":"idle"} (QoS 0)
+    M->>M: INSERT INTO messages then DELETE FROM chunks (atomic)
+    M->>U: ws send type=message
+    Note over U: replace live placeholder with durable message
+    A->>B: publish /status state=idle (QoS 0)
 ```
 
 ### Reconnect / refresh flow
@@ -83,18 +83,18 @@ sequenceDiagram
 sequenceDiagram
     participant U as User (browser)
     participant M as Master (FastAPI)
-    Note over U,M: Agent is mid-stream; chunks already persisted on master
+    Note over U,M: Agent is mid-stream with chunks already persisted
 
-    U->>M: GET /api/.../messages  (REST history, finished messages only)
-    M-->>U: [...completed messages...]
-    U->>M: WS connect /ws/{topic_id}
-    M->>M: SELECT message_id FROM chunks WHERE topic_id=? AND message_id NOT IN (SELECT id FROM messages)
+    U->>M: GET /api/.../messages (REST history)
+    M-->>U: completed messages
+    U->>M: WS connect /ws/topic_id
+    M->>M: query chunks with no matching messages row
     loop for each in-progress message_id
-        M->>M: SELECT event FROM chunks WHERE message_id=? ORDER BY seq
-        M->>U: ws send {type:"chunk_replay", message_id, agent_name, events:[...]}
+        M->>M: SELECT events ORDER BY seq
+        M->>U: ws send type=chunk_replay with all events so far
         Note over U: reconstruct live placeholder
     end
-    Note over U,M: New chunks (from now on) arrive normally as type:"chunk"
+    Note over U,M: New chunks arrive normally as type=chunk
 ```
 
 ### Schema change
