@@ -129,7 +129,22 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
 
     db_path = userdata.get("db_path")
     if msg_type == "status":
-        message = {"type": "status", "state": payload.get("state")}
+        state = payload.get("state")
+        message = {"type": "status", "state": state}
+        if db_path and state and topic_id:
+            try:
+                conn = sqlite3.connect(db_path)
+                try:
+                    conn.execute(
+                        "UPDATE workspaces SET last_agent_state = ?"
+                        " WHERE id = (SELECT workspace_id FROM topics WHERE id = ?)",
+                        (state, topic_id),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception:
+                LOGGER.warning("mqtt.persist_agent_state_failed topic_id=%s", topic_id)
     elif msg_type == "response":
         message = {"type": "message", "sender": "agent", **payload}
         if db_path:

@@ -112,6 +112,7 @@ _MIGRATIONS = [
     "ALTER TABLE topics ADD COLUMN base_sha TEXT",
     "ALTER TABLE workspaces ADD COLUMN last_dispatched_at TEXT",
     "ALTER TABLE workspaces ADD COLUMN last_responded_at TEXT",
+    "ALTER TABLE workspaces ADD COLUMN last_agent_state TEXT",
 ]
 
 
