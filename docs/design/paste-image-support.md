@@ -1,6 +1,6 @@
 # Design: Paste Image Support in Chat Textarea
 
-**Status:** draft
+**Status:** accepted
 **Author:** architect
 **Date:** 2026-05-05
 **Related issue:** #126

@@ -233,11 +233,13 @@ describe('TopicChat paste handler', () => {
 
     // kind=file, type=image/png, but getAsFile returns null
     const event = makePasteEvent([{ kind: 'file', type: 'image/png', file: null }])
+    const preventDefaultSpy = vi.spyOn(event, 'preventDefault')
 
     expect(() => textarea.dispatchEvent(event)).not.toThrow()
     await wrapper.vm.$nextTick()
 
     expect(wrapper.findAll('.file-chip')).toHaveLength(0)
+    expect(preventDefaultSpy).not.toHaveBeenCalled()
   })
 
   // -------------------------------------------------------------------------
@@ -284,6 +286,38 @@ describe('TopicChat paste handler', () => {
       const lastName = chips[chips.length - 1].text().replace('×', '').trim()
       expect(lastName).toMatch(new RegExp(`\\.${ext}$`))
     }
+  })
+
+  // -------------------------------------------------------------------------
+  // TC-8b: mimeToExt fallback — unknown and vendor MIME types
+  // -------------------------------------------------------------------------
+  it('maps image/tiff to tiff and vendor MIME types with dots to png fallback', async () => {
+    const wrapper = await mountComponent()
+    const textarea = wrapper.find('textarea').element
+
+    // image/tiff — matches regex, produces 'tiff'
+    const tiffFile = new File([new Uint8Array([0])], 'img.tiff', { type: 'image/tiff' })
+    const tiffEvent = makePasteEvent([{ kind: 'file', type: 'image/tiff', file: tiffFile }])
+    textarea.dispatchEvent(tiffEvent)
+    await wrapper.vm.$nextTick()
+    let chips = wrapper.findAll('.file-chip')
+    expect(chips[chips.length - 1].text().replace('×', '').trim()).toMatch(/\.tiff$/)
+
+    // image/vnd.microsoft.icon — dot in subtype, regex rejects it, falls back to 'png'
+    const icoFile = new File([new Uint8Array([0])], 'img.ico', { type: 'image/vnd.microsoft.icon' })
+    const icoEvent = makePasteEvent([{ kind: 'file', type: 'image/vnd.microsoft.icon', file: icoFile }])
+    textarea.dispatchEvent(icoEvent)
+    await wrapper.vm.$nextTick()
+    chips = wrapper.findAll('.file-chip')
+    expect(chips[chips.length - 1].text().replace('×', '').trim()).toMatch(/\.png$/)
+
+    // image/ with empty subtype — regex rejects it, falls back to 'png'
+    const emptyFile = new File([new Uint8Array([0])], 'img', { type: 'image/' })
+    const emptyEvent = makePasteEvent([{ kind: 'file', type: 'image/', file: emptyFile }])
+    textarea.dispatchEvent(emptyEvent)
+    await wrapper.vm.$nextTick()
+    chips = wrapper.findAll('.file-chip')
+    expect(chips[chips.length - 1].text().replace('×', '').trim()).toMatch(/\.png$/)
   })
 
   // -------------------------------------------------------------------------

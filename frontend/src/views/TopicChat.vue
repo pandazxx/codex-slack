@@ -215,8 +215,10 @@ function mimeToExt(mime) {
     case 'image/bmp':     return 'bmp'
     case 'image/svg+xml': return 'svg'
     default: {
-      const m = /^image\/([a-z0-9.+-]+)$/i.exec(mime)
-      return m ? m[1].split('+')[0] : 'png'
+      const m = /^image\/([a-z0-9+-]+)$/i.exec(mime)
+      if (!m) return 'png'
+      const ext = m[1].split('+')[0].replace(/[^a-z0-9]/gi, '')
+      return ext || 'png'
     }
   }
 }
@@ -229,6 +231,7 @@ function renamePastedImage(file) {
 }
 
 function onPaste(evt) {
+  if (sending.value) return
   const items = evt.clipboardData?.items
   if (!items || !items.length) return
 
