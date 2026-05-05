@@ -39,6 +39,11 @@ services:
       # Full image name without tag (e.g. "ghcr.io/org/codex-slack-master").
       CD_IMAGE: ${CD_IMAGE}
 
+      # GID of the docker group on the host — forwarded into the compose
+      # subprocess so ${DOCKER_GID} in docker-compose.yml resolves correctly
+      # when the daemon brings up the master container.
+      DOCKER_GID: ${DOCKER_GID:-999}
+
       # ---- Optional -------------------------------------------------------
       # Tag to track.  "latest" for staging; a semver string for production.
       CD_IMAGE_TAG: ${CD_IMAGE_TAG:-latest}
