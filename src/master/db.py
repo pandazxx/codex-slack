@@ -97,9 +97,21 @@ CREATE TABLE IF NOT EXISTS attachments (
     created_at  TEXT NOT NULL,
     direction   TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound'))
 );
+
+CREATE TABLE IF NOT EXISTS chunks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id  TEXT NOT NULL,
+    topic_id    TEXT NOT NULL,
+    seq         INTEGER NOT NULL,
+    event       TEXT NOT NULL,
+    created_at  REAL NOT NULL DEFAULT (unixepoch('now','subsec'))
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_message ON chunks (message_id, seq);
+CREATE INDEX IF NOT EXISTS idx_chunks_topic   ON chunks (topic_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_created ON chunks (created_at);
 """
 
-TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments"]
+TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks"]
 
 
 _MIGRATIONS = [
