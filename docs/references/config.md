@@ -25,6 +25,26 @@ The master service (`src/master/`) reads these environment variables on startup.
 | `MASTER_CODEX_AUTH_JSON_PATH` | No | unset | Host path to the shared Codex `auth.json` mounted into agents |
 | `MASTER_SSH_AUTH_SOCK_PATH` | No | unset | Host path to the SSH agent socket mounted into agent containers |
 | `MASTER_SSH_KNOWN_HOSTS_PATH` | No | unset | Host path to `known_hosts` mounted into agent containers |
+| `MASTER_PUBLIC_URL` | No | unset | Externally reachable base URL of the web UI (e.g. `https://codex.example.com`). Used to build deep links in notifications. If unset, notifications omit the URL. |
+| `MASTER_NOTIFY_DISCORD_WEBHOOK_URL` | No | unset | Discord incoming-webhook URL for agent-reply notifications. Leave unset to disable Discord globally. |
+| `MASTER_NOTIFY_TELEGRAM_BOT_TOKEN` | No | unset | Telegram bot token. Required together with `MASTER_NOTIFY_TELEGRAM_CHAT_ID`. |
+| `MASTER_NOTIFY_TELEGRAM_CHAT_ID` | No | unset | Telegram chat or channel ID (numeric or `@channelusername`). Required together with `MASTER_NOTIFY_TELEGRAM_BOT_TOKEN`. |
+| `MASTER_NOTIFY_PREVIEW_CHARS` | No | `200` | Max characters of the agent reply included as a preview in notifications. Set to `0` to omit the preview entirely. |
+
+### Workspace config keys (notification overrides)
+
+Per-workspace notification settings are stored in the `config` table and can be
+managed via the workspace Env Vars panel in the web UI. Workspace rows override
+the global env-var defaults above; an empty or absent value falls back to the
+global default.
+
+| Key | Effect |
+|-----|--------|
+| `NOTIFY_DISCORD_WEBHOOK_URL` | Override or set Discord destination for this workspace. |
+| `NOTIFY_TELEGRAM_BOT_TOKEN` | Workspace-specific Telegram bot token. |
+| `NOTIFY_TELEGRAM_CHAT_ID` | Workspace-specific Telegram chat or channel ID. |
+| `NOTIFY_PREVIEW_CHARS` | Workspace-specific preview length (characters). |
+| `NOTIFY_DISABLED` | If truthy (`1`, `true`, `yes`, `on`), skip all notifications for this workspace regardless of global config. |
 
 ### Database
 
