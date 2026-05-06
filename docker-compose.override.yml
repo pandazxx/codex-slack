@@ -9,6 +9,10 @@ services:
       context: .
       dockerfile: Dockerfile.dev
     image: codex-slack-master:dev
+    # Dev-only: run as root so the bind-mounted Docker socket (root:root on
+    # Docker Desktop / macOS) is reachable. Prod uses group_add with the
+    # host's docker group GID instead.
+    user: "0:0"
     ports:
       - "8080:8080"
     volumes:
