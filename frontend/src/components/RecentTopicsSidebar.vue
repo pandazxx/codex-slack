@@ -52,7 +52,7 @@ function isNew(topic) {
 
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  ws = new WebSocket(`${proto}://${location.host}/ws`)
+  ws = new WebSocket(`${proto}://${location.host}/ws/events`)
   ws.onmessage = () => load()
   ws.onclose = () => { wsTimer = setTimeout(connectWs, 3000) }
 }

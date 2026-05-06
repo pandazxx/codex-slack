@@ -276,7 +276,7 @@ async def schema() -> dict:  # type: ignore[type-arg]
     return schema_info(app.state.db_path)
 
 
-@app.websocket("/ws")
+@app.websocket("/ws/events")
 async def ws_global(websocket: WebSocket) -> None:
     await websocket.accept()
     app.state.hub.connect("_global", websocket)
