@@ -289,19 +289,6 @@ async def ws_global(websocket: WebSocket) -> None:
         app.state.hub.disconnect("_global", websocket)
 
 
-@app.websocket("/ws/{topic_id}")
-async def ws_endpoint(topic_id: str, websocket: WebSocket) -> None:
-    await websocket.accept()
-    app.state.hub.connect(topic_id, websocket)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        app.state.hub.disconnect(topic_id, websocket)
-
-
 @app.get("/{full_path:path}", include_in_schema=False)
 async def spa_index(full_path: str) -> FileResponse:
     index = _STATIC_DIR / "index.html"

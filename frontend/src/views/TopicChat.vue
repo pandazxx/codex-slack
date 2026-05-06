@@ -190,12 +190,13 @@ async function load() {
 
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  ws = new WebSocket(`${proto}://${location.host}/ws/${topicId}`)
+  ws = new WebSocket(`${proto}://${location.host}/ws/events`)
 
   ws.onopen = () => { fetchAgentStatus() }
 
   ws.onmessage = (evt) => {
     const data = JSON.parse(evt.data)
+    if (data.topic_id !== topicId) return
     if (data.type === 'status') {
       agentStatus.value = data.state || ''
     } else if (data.type === 'message') {

@@ -194,7 +194,12 @@ async def send_message(
     finally:
         disp_conn.close()
 
-    await request.app.state.hub.broadcast("_global", {"type": "topics_updated"})
+    await request.app.state.hub.broadcast("_global", {
+        "type": "message",
+        "topic_id": topic_id,
+        "message_id": message_id,
+        "sender": "user",
+    })
 
     mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
     mqtt = request.app.state.mqtt
