@@ -123,7 +123,7 @@ def test_replay_sends_chunk_replay_frame_for_in_progress_message(db_path):
     _insert_chunks(db_path, "t1", "msg-inprog", events)
 
     ws = AsyncMock()
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
 
     ws.send_json.assert_called_once()
     sent = ws.send_json.call_args.args[0]
@@ -146,7 +146,7 @@ def test_replay_events_are_in_seq_order(db_path):
     conn.close()
 
     ws = AsyncMock()
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
 
     sent = ws.send_json.call_args.args[0]
     idx_values = [e["idx"] for e in sent["events"]]
@@ -160,14 +160,14 @@ def test_replay_skips_completed_message_id(db_path):
     _insert_message(db_path, "t1", "msg-done")
 
     ws = AsyncMock()
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
 
     ws.send_json.assert_not_called()
 
 
 def test_replay_empty_chunks_table_sends_nothing(db_path):
     ws = AsyncMock()
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
     ws.send_json.assert_not_called()
 
 
@@ -179,7 +179,7 @@ def test_replay_multiple_in_progress_messages(db_path):
         ])
 
     ws = AsyncMock()
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
 
     assert ws.send_json.call_count == 2
     sent_mids = {c.args[0]["message_id"] for c in ws.send_json.call_args_list}
@@ -193,16 +193,16 @@ def test_replay_mixed_completed_and_in_progress(db_path):
     _insert_message(db_path, "t1", "msg-finished")
 
     ws = AsyncMock()
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
 
     assert ws.send_json.call_count == 1
     sent = ws.send_json.call_args.args[0]
     assert sent["message_id"] == "msg-live"
 
 
-def test_replay_scoped_to_topic_id(db_path):
-    """Chunks for a different topic_id are not replayed."""
-    # Insert a second topic
+def test_replay_includes_topic_id_per_frame(db_path):
+    """The global WS replays every in-progress message across all topics; each
+    frame must carry its own topic_id so the frontend can route it."""
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT OR IGNORE INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
@@ -211,15 +211,15 @@ def test_replay_scoped_to_topic_id(db_path):
     conn.commit()
     conn.close()
 
-    _insert_chunks(db_path, "t2", "msg-other-topic", [{"type": "assistant"}])
-    _insert_chunks(db_path, "t1", "msg-this-topic", [{"type": "assistant"}])
+    _insert_chunks(db_path, "t2", "msg-on-t2", [{"type": "assistant"}])
+    _insert_chunks(db_path, "t1", "msg-on-t1", [{"type": "assistant"}])
 
     ws = AsyncMock()
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
 
-    assert ws.send_json.call_count == 1
-    sent = ws.send_json.call_args.args[0]
-    assert sent["message_id"] == "msg-this-topic"
+    assert ws.send_json.call_count == 2
+    by_mid = {c.args[0]["message_id"]: c.args[0]["topic_id"] for c in ws.send_json.call_args_list}
+    assert by_mid == {"msg-on-t1": "t1", "msg-on-t2": "t2"}
 
 
 def test_replay_empty_events_list_skipped(db_path):
@@ -259,7 +259,7 @@ def test_replay_empty_events_list_skipped(db_path):
 
     # Instead of monkeypatching the internal connection, just test with a real
     # empty topic and assert send_json is never called.
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
     ws.send_json.assert_not_called()
 
 
@@ -268,7 +268,7 @@ def test_replay_frame_type_is_chunk_replay(db_path):
     _insert_chunks(db_path, "t1", "msg-type", [{"type": "assistant"}])
 
     ws = AsyncMock()
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
 
     sent = ws.send_json.call_args.args[0]
     assert sent["type"] == "chunk_replay"
@@ -279,7 +279,7 @@ def test_replay_frame_contains_message_id(db_path):
     _insert_chunks(db_path, "t1", "msg-idcheck", [{"type": "assistant"}])
 
     ws = AsyncMock()
-    _run(_replay_in_progress_chunks(ws, "t1", db_path))
+    _run(_replay_in_progress_chunks(ws, db_path))
 
     sent = ws.send_json.call_args.args[0]
     assert "message_id" in sent
