@@ -25,10 +25,17 @@
           <template v-if="m.sender === 'agent'">
             <template v-if="m.streaming && m.rows?.length">
               <div class="trace-row" v-for="(row, i) in m.rows" :key="i">
-                <span v-if="row.kind === 'tool_use'">{{ toolUseLabel(row.event) }}</span>
+                <details v-if="row.kind === 'tool_use'" class="tool-use-fold">
+                  <summary>{{ toolUseLabel(row.event) }}</summary>
+                  <pre class="tr-json">{{ toolUseInput(row.event) }}</pre>
+                </details>
                 <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
                 <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
                 <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                <div v-else-if="row.kind === 'thinking'" class="thinking-block">
+                  <div class="thinking-meta">💭 Thinking</div>
+                  <div class="thinking-text">{{ thinkingText(row.event) }}</div>
+                </div>
                 <div v-else-if="row.kind === 'agent_result'" class="agent-result">
                   <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
                   <MarkdownMessage :text="agentResultText(row.event)" />
@@ -43,10 +50,17 @@
               <details :open="m.traceOpen" @toggle="m.traceOpen = $event.target.open">
                 <summary>▶ Show trace ({{ m.traceRows.length }} steps)</summary>
                 <div class="trace-row" v-for="(row, i) in m.traceRows" :key="i">
-                  <span v-if="row.kind === 'tool_use'">{{ toolUseLabel(row.event) }}</span>
+                  <details v-if="row.kind === 'tool_use'" class="tool-use-fold">
+                    <summary>{{ toolUseLabel(row.event) }}</summary>
+                    <pre class="tr-json">{{ toolUseInput(row.event) }}</pre>
+                  </details>
                   <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
                   <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
                   <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                  <div v-else-if="row.kind === 'thinking'" class="thinking-block">
+                    <div class="thinking-meta">💭 Thinking</div>
+                    <div class="thinking-text">{{ thinkingText(row.event) }}</div>
+                  </div>
                   <div v-else-if="row.kind === 'agent_result'" class="agent-result">
                     <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
                     <MarkdownMessage :text="agentResultText(row.event)" />
@@ -217,8 +231,8 @@ function classifyEvent(event) {
   if (t === 'assistant') {
     const c = event.message?.content || []
     if (c.some(b => b.type === 'text'))     return 'text'
+    if (c.some(b => b.type === 'thinking')) return 'thinking'
     if (c.some(b => b.type === 'tool_use')) return 'tool_use'
-    if (c.some(b => b.type === 'thinking')) return 'folded'
   }
   if (t === 'system' && s === 'task_progress') return 'task_progress'
   if (t === 'system' && s === 'task_started')  return 'task_started'
@@ -246,6 +260,17 @@ function agentResultText(event) {
     if (t) return t
   }
   return ''
+}
+
+function thinkingText(event) {
+  const blk = event.message?.content?.find(b => b.type === 'thinking')
+  return blk?.thinking || ''
+}
+
+function toolUseInput(event) {
+  const blk = event.message?.content?.find(b => b.type === 'tool_use')
+  if (!blk) return ''
+  return JSON.stringify(blk.input || {}, null, 2)
 }
 
 function agentResultMeta(event) {
@@ -633,4 +658,10 @@ onUnmounted(() => {
 .trace-row details summary { cursor: pointer; }
 .agent-result { font-family: inherit; color: inherit; margin: 0.5em 0; padding: 0.5em 0.75em; border-left: 3px solid #6c8cff; background: rgba(108, 140, 255, 0.05); border-radius: 0 4px 4px 0; }
 .agent-result-meta { font-size: 0.75em; color: #6c8cff; margin-bottom: 0.25em; font-family: monospace; }
+.thinking-block { font-family: inherit; color: #555; margin: 0.4em 0; padding: 0.4em 0.75em; border-left: 3px solid #c0a85a; background: rgba(192, 168, 90, 0.06); border-radius: 0 4px 4px 0; }
+.thinking-meta { font-size: 0.75em; color: #c0a85a; margin-bottom: 0.2em; font-family: monospace; }
+.thinking-text { font-style: italic; white-space: pre-wrap; line-height: 1.4; }
+.tool-use-fold > summary { cursor: pointer; list-style: none; }
+.tool-use-fold > summary::-webkit-details-marker { display: none; }
+.tool-use-fold[open] > summary { color: #ccc; }
 </style>
