@@ -80,10 +80,9 @@ def test_run_claude_joins_multiple_final_responses(tmp_path):
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "Second response"}]}},
         {"type": "result", "result": "Second response", "session_id": "s1", "is_error": False},
     ]
-    stream = "\n".join(_json.dumps(e) for e in events)
-    with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout=stream, stderr="", returncode=0)
-        text, session, transcript = _run_claude(str(tmp_path), "run it", None, False, None, None, None)
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)):
+        text, session, transcript = _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "run it", None, False, None, None, None)
     assert "First response" in text
     assert "Second response" in text
     assert session == "s1"
