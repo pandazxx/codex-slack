@@ -8,9 +8,7 @@
       active-class="active"
       @click="markSeen(topic.topic_id)"
     >
-      <span class="topic-name">
-          <span class="ws-name">{{ topic.workspace_name }}</span><span class="sep">/</span><span class="sub-name">{{ topic.subject }}</span>
-        </span>
+      <span class="topic-name">{{ topicLabel(topic) }}</span>
       <span v-if="isNew(topic)" class="new-badge">new</span>
     </RouterLink>
     <div v-if="topics.length === 0" class="empty">No topics yet</div>
@@ -44,6 +42,13 @@ function getLastSeen(topicId) {
 
 function markSeen(topicId) {
   localStorage.setItem(`topic-last-seen:${topicId}`, nowTs())
+}
+
+function topicLabel(topic) {
+  const full = `${topic.workspace_name}/${topic.subject}`
+  const chars = [...full]
+  if (chars.length <= 30) return full
+  return chars.slice(0, 14).join('') + '…' + chars.slice(-15).join('')
 }
 
 function isNew(topic) {
@@ -128,32 +133,11 @@ onUnmounted(() => {
 }
 
 .topic-name {
-  display: flex;
-  align-items: baseline;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   flex: 1;
   min-width: 0;
-}
-
-.ws-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 0 1 auto;
-  min-width: 2ch;
-  max-width: 45%;
-}
-
-.sep {
-  flex: none;
-}
-
-.sub-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 2ch;
 }
 
 .new-badge {
