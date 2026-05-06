@@ -35,6 +35,9 @@ services:
       CONTAINER_HOST: unix:///run/container.sock
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883
+      # Spawned agent containers must join the same project network as
+      # master+mosquitto so they can resolve "mosquitto" and "master".
+      MASTER_AGENT_NETWORK: ${COMPOSE_PROJECT_NAME:-codex-slack}_internal
       # Optional: set these in .env.local for testing
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GH_TOKEN: ${GH_TOKEN:-}
