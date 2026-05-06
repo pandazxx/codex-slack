@@ -44,11 +44,16 @@ function markSeen(topicId) {
   localStorage.setItem(`topic-last-seen:${topicId}`, nowTs())
 }
 
+function midTrunc(str, max) {
+  const chars = [...str]
+  if (chars.length <= max) return str
+  const head = Math.ceil((max - 1) / 2)
+  const tail = Math.floor((max - 1) / 2)
+  return chars.slice(0, head).join('') + '…' + chars.slice(-tail).join('')
+}
+
 function topicLabel(topic) {
-  const full = `${topic.workspace_name}/${topic.subject}`
-  const chars = [...full]
-  if (chars.length <= 30) return full
-  return chars.slice(0, 14).join('') + '…' + chars.slice(-15).join('')
+  return `${midTrunc(topic.workspace_name, 12)}/${midTrunc(topic.subject, 14)}`
 }
 
 function isNew(topic) {
