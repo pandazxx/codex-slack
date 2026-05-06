@@ -1,5 +1,74 @@
 # Project Instructions
 
+## SRE Workflow
+
+**All infrastructure tasks are delegated to the SRE subagent.** Do not run `docker`, `docker compose`, or deploy commands directly — ask SRE instead.
+
+### Required Environment Variables
+
+Before spinning up dev/staging environments or running tests, ensure these are set in your shell (e.g., `~/.config/dev-env` or via direnv):
+
+| Variable | Required for | Example |
+|---|---|---|
+| `DEV_DOCKER_HOST` | Dev env spin-up (optional; uses local Docker if unset) | `ssh://ubuntu@dev.tail-scale.ts.net` |
+| `STAGING_DOCKER_HOST` | Staging deploys, UAT | `ssh://ubuntu@staging.tail-scale.ts.net` |
+| `REGISTRY` | Building/pushing images | `ghcr.io/myorg` |
+| `REGISTRY_TOKEN` | Pushing images | (from secret manager) |
+
+### How to Invoke SRE
+
+**Natural language examples:**
+
+- "Spin up a dev env for branch `feat-auth`" → SRE creates an isolated stack with bind-mounted source, live reload, and returns HTTP endpoints.
+- "Run the tests" or "Run tests matching `test_image_contract`" → SRE runs pytest in a container, returns pass/fail.
+- "Deploy `v1.2.3` to staging" → SRE deploys by image digest, runs smoke tests, auto-rollback if failed.
+- "Tear down the staging env for `feat-billing`" → SRE removes containers/volumes.
+
+**Full details:** See `docs/guides/sre.md` for all supported operations, access methods, troubleshooting.
+
+### Dev Environment Structure
+
+Dev environments run from `docker-compose.override.yml`, which bind-mounts source code:
+
+- Changes to `src/`, `frontend/`, `config/` are **live** — no rebuild needed.
+- Python uvicorn watches for changes and reloads.
+- Frontend build runs in the container and watches `frontend/src/`.
+- API docs at `http://localhost:8080/docs`.
+
+To access the running dev env:
+
+```bash
+# Logs:
+docker compose -p $USER-<branch-slug> logs -f master
+
+# Shell into the service:
+docker compose -p $USER-<branch-slug> exec -it master bash
+
+# MQTT messages:
+docker compose -p $USER-<branch-slug> exec mosquitto mosquitto_sub -h localhost -t '#' -v
+```
+
+### Test Execution
+
+**Fast loop (unit/in-process tests — no env needed):**
+
+```bash
+.sre/test.sh                    # Run all tests
+.sre/test.sh -k test_image      # Run tests matching pattern
+.sre/test.sh tests/test_foo.py  # Run a single file
+```
+
+**Stack tests (against a running dev env):**
+
+Ask SRE to spin up a dev env (see above), then run integration tests from your shell.
+
+### Staging & UAT
+
+- **Canonical staging** — lives on `STAGING_DOCKER_HOST`, always reflects `main`, used for final sign-off before prod.
+- **Feature-branch staging** — parallel environments for high-risk features that need UAT before merge.
+
+Ask SRE to spin up either one; they're deployed by image digest and have identical topology.
+
 ## Git Workflow
 
 - Never commit directly to `master` or `main`. Create a feature branch first.
