@@ -45,12 +45,15 @@ RUN useradd -m -u 1000 -s /bin/bash appuser \
     && mkdir -p /workspace/home /home/appuser/.claude /opt/codex-slack/data/master \
     && chown -R appuser:appuser /workspace /home/appuser/.claude /opt/codex-slack
 
-USER appuser
 WORKDIR /opt/codex-slack
 
-# Install all dependencies including test deps
-COPY --chown=appuser:appuser requirements.txt ./requirements.txt
+# Install Python deps globally (before USER switch) so pytest and other
+# entrypoints land in /usr/local/bin and resolve under tini, which does not
+# extend PATH for the exec'd command.
+COPY requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+USER appuser
 
 COPY --chown=appuser:appuser frontend/package.json frontend/package-lock.json* ./frontend/
 RUN cd frontend && npm ci --prefer-offline 2>/dev/null || npm install

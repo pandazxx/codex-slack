@@ -47,7 +47,10 @@ jobs:
           cache-to: type=gha,mode=max,scope=test
 
       - name: Run pytest suite
-        run: docker run --rm codex-slack:test pytest -vv tests/ --tb=short
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml \
+            run --rm --no-deps --entrypoint "" master \
+            pytest -vv tests/ --tb=short
 
   # ── 2. Docker build validation (no push) ────────────────────────────────────
   docker-build:
