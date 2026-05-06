@@ -1,26 +1,24 @@
 <template>
   <aside class="sidebar">
     <div class="sidebar-title">Recent Topics</div>
-    <ul>
-      <li
-        v-for="topic in topics"
-        :key="topic.topic_id"
-        :class="{ active: isCurrentTopic(topic) }"
-        @click="navigate(topic)"
-      >
-        <span class="topic-name">{{ topic.workspace_name }}/{{ topic.subject }}</span>
-        <span v-if="isNew(topic)" class="new-badge">new</span>
-      </li>
-    </ul>
+    <RouterLink
+      v-for="topic in topics"
+      :key="topic.topic_id"
+      :to="`/workspaces/${topic.workspace_id}/topics/${topic.topic_id}`"
+      active-class="active"
+      @click="markSeen(topic.topic_id)"
+    >
+      <span class="topic-name">{{ topic.workspace_name }}/{{ topic.subject }}</span>
+      <span v-if="isNew(topic)" class="new-badge">new</span>
+    </RouterLink>
     <div v-if="topics.length === 0" class="empty">No topics yet</div>
   </aside>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
 
-const router = useRouter()
 const route = useRoute()
 const topics = ref([])
 
@@ -47,16 +45,6 @@ function isNew(topic) {
   const lastSeen = getLastSeen(topic.topic_id)
   if (!lastSeen) return false
   return topic.last_activity_at > lastSeen
-}
-
-function isCurrentTopic(topic) {
-  return route.params.topicId === topic.topic_id
-}
-
-function navigate(topic) {
-  if (isCurrentTopic(topic)) return
-  markSeen(topic.topic_id)
-  router.push(`/workspaces/${topic.workspace_id}/topics/${topic.topic_id}`)
 }
 
 watch(
@@ -95,28 +83,23 @@ onUnmounted(() => clearInterval(interval))
   color: #64748b;
 }
 
-ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-li {
+.sidebar a {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0.35rem 1rem;
-  cursor: pointer;
   font-size: 0.82rem;
   gap: 0.4rem;
   line-height: 1.3;
+  text-decoration: none;
+  color: #cbd5e1;
 }
 
-li:hover {
+.sidebar a:hover {
   background: #334155;
 }
 
-li.active {
+.sidebar a.active {
   background: #1d4ed8;
   color: #f8fafc;
 }
