@@ -6,15 +6,14 @@ name: Deploy to Testbed
 # Usage (agent or human)
 # ----------------------
 #   gh workflow run deploy-testbed.yml \
-#     --ref topic/my-branch \
 #     --field image_tag=sha-ac4b453
 #
 # Prerequisites
 # -------------
 #   - TESTBED_SSH_KEY  : private SSH key for ubuntu@<testbed host> (repo secret)
-#   - TESTBED_HOST     : testbed hostname/IP (repo secret, e.g. 10.10.10.238)
+#   - TESTBED_HOST     : testbed hostname/IP (repo variable, e.g. 10.10.10.238)
 #   - TESTBED_COMPOSE_DIR : absolute path on the testbed host to the compose project
-#                           directory (repo secret, e.g. /opt/codex-slack)
+#                           directory (repo variable, e.g. /opt/codex-slack)
 #
 # The workflow:
 #   1. SSHes into the testbed host.
@@ -64,7 +63,7 @@ jobs:
           chmod 700 ~/.ssh
           echo "${{ secrets.TESTBED_SSH_KEY }}" > ~/.ssh/testbed_key
           chmod 600 ~/.ssh/testbed_key
-          ssh-keyscan -H "${{ secrets.TESTBED_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "${{ vars.TESTBED_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
           chmod 644 ~/.ssh/known_hosts
 
       - name: Pull new image on testbed
@@ -72,7 +71,7 @@ jobs:
           ssh -i ~/.ssh/testbed_key \
               -o StrictHostKeyChecking=no \
               -o ConnectTimeout=30 \
-              ubuntu@${{ secrets.TESTBED_HOST }} \
+              ubuntu@${{ vars.TESTBED_HOST }} \
             "docker pull ${{ steps.image.outputs.full }}"
 
       - name: Deploy stack on testbed
@@ -80,8 +79,8 @@ jobs:
           ssh -i ~/.ssh/testbed_key \
               -o StrictHostKeyChecking=no \
               -o ConnectTimeout=30 \
-              ubuntu@${{ secrets.TESTBED_HOST }} \
-            "cd ${{ secrets.TESTBED_COMPOSE_DIR }} && \
+              ubuntu@${{ vars.TESTBED_HOST }} \
+            "cd ${{ vars.TESTBED_COMPOSE_DIR }} && \
              MASTER_RUNTIME_IMAGE=${{ steps.image.outputs.full }} \
              DOCKER_GID=${{ inputs.docker_gid }} \
              docker compose stop master && \
@@ -95,7 +94,7 @@ jobs:
           ssh -i ~/.ssh/testbed_key \
               -o StrictHostKeyChecking=no \
               -o ConnectTimeout=30 \
-              ubuntu@${{ secrets.TESTBED_HOST }} \
+              ubuntu@${{ vars.TESTBED_HOST }} \
             '
               MASTER_PORT="${MASTER_PORT:-8080}"
               ATTEMPTS=0
@@ -118,8 +117,8 @@ jobs:
           ssh -i ~/.ssh/testbed_key \
               -o StrictHostKeyChecking=no \
               -o ConnectTimeout=30 \
-              ubuntu@${{ secrets.TESTBED_HOST }} \
-            "cd ${{ secrets.TESTBED_COMPOSE_DIR }} && \
+              ubuntu@${{ vars.TESTBED_HOST }} \
+            "cd ${{ vars.TESTBED_COMPOSE_DIR }} && \
              docker compose ps && \
              echo '--- master logs (last 30 lines) ---' && \
              docker compose logs --tail=30 master"
@@ -132,5 +131,5 @@ jobs:
           echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Image | \`${{ steps.image.outputs.full }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Host | \`${{ secrets.TESTBED_HOST }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Host | \`${{ vars.TESTBED_HOST }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| DOCKER_GID | \`${{ inputs.docker_gid }}\` |" >> "$GITHUB_STEP_SUMMARY"
