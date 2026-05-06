@@ -163,7 +163,7 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
     hub = userdata.get("hub")
     loop = userdata.get("loop")
     if hub is not None and loop is not None:
-        hub.broadcast_threadsafe(topic_id, message, loop)
+        hub.broadcast_threadsafe("_global", {"topic_id": topic_id, **message}, loop)
 
 
 def build_client(

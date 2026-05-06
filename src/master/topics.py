@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from .db import get_connection
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/topics", tags=["topics"])
+recent_router = APIRouter(prefix="/topics", tags=["topics"])
 
 
 def _now() -> str:
@@ -196,3 +197,43 @@ def delete_topic(workspace_id: str, topic_id: str, request: Request) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+class RecentTopicOut(BaseModel):
+    topic_id: str
+    workspace_id: str
+    workspace_name: str
+    subject: str
+    last_activity_at: str
+
+
+@recent_router.get("/recent", response_model=list[RecentTopicOut])
+def list_recent_topics(request: Request, limit: int = 20) -> list[RecentTopicOut]:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT t.id AS topic_id, t.workspace_id, w.name AS workspace_name, t.subject,
+                   COALESCE(MAX(m.created_at), t.created_at) AS last_activity_at
+            FROM topics t
+            JOIN workspaces w ON t.workspace_id = w.id
+            LEFT JOIN messages m ON m.topic_id = t.id
+            WHERE t.archived_at IS NULL AND w.archived_at IS NULL
+            GROUP BY t.id
+            ORDER BY last_activity_at DESC
+            LIMIT ?
+            """,
+            (min(limit, 50),),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        RecentTopicOut(
+            topic_id=r["topic_id"],
+            workspace_id=r["workspace_id"],
+            workspace_name=r["workspace_name"],
+            subject=r["subject"],
+            last_activity_at=r["last_activity_at"],
+        )
+        for r in rows
+    ]

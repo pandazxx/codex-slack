@@ -83,13 +83,14 @@ def ws_client(tmp_path, monkeypatch):
 
 def test_ws_endpoint_accepts_connection(ws_client):
     client, app = ws_client
-    with client.websocket_connect("/ws/topic-123"):
+    with client.websocket_connect("/ws/events"):
         pass  # accepted and cleanly disconnected
 
 
 def test_ws_endpoint_receives_broadcast(ws_client):
     client, app = ws_client
-    with client.websocket_connect("/ws/topic-abc") as ws:
-        asyncio.run(app.state.hub.broadcast("topic-abc", {"type": "status", "state": "thinking"}))
+    with client.websocket_connect("/ws/events") as ws:
+        msg = {"type": "status", "state": "thinking", "topic_id": "topic-abc"}
+        asyncio.run(app.state.hub.broadcast("_global", msg))
         data = ws.receive_json()
-        assert data == {"type": "status", "state": "thinking"}
+        assert data == msg

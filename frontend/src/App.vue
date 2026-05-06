@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
+import RecentTopicsSidebar from './components/RecentTopicsSidebar.vue'
 
 const masterVersion = ref('')
 
@@ -17,9 +18,12 @@ onMounted(async () => {
       <RouterLink to="/">Codex Slack<span v-if="masterVersion" class="version">{{ masterVersion }}</span></RouterLink>
       <RouterLink to="/settings" class="nav-settings">Settings</RouterLink>
     </nav>
-    <main>
-      <RouterView />
-    </main>
+    <div class="body-layout">
+      <RecentTopicsSidebar />
+      <main>
+        <RouterView />
+      </main>
+    </div>
   </div>
 </template>
 
@@ -36,6 +40,14 @@ nav {
 }
 nav a { color: #93c5fd; }
 .nav-settings { margin-left: auto; font-size: 0.9rem; font-weight: 400; }
-main { padding: 1.5rem; max-width: 900px; margin: 0 auto; }
 .version { font-size: 0.7em; font-weight: 400; opacity: 0.65; margin-left: 0.4rem; }
+.body-layout {
+  display: flex;
+  min-height: calc(100vh - 3rem);
+}
+main {
+  flex: 1;
+  padding: 1.5rem;
+  min-width: 0;
+}
 </style>

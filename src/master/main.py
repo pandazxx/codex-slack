@@ -27,6 +27,7 @@ from .staffs import global_router as global_staffs_router
 from .staffs import topic_router as topic_staffs_router
 from .staffs import workspace_router as workspace_staffs_router
 from .storage import LocalAttachmentStore
+from .topics import recent_router as recent_topics_router
 from .topics import router as topics_router
 from .workspaces import router as workspaces_router
 from .ws_hub import ConnectionHub
@@ -252,6 +253,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
 app = FastAPI(lifespan=lifespan)
 app.include_router(workspaces_router, prefix="/api")
 app.include_router(topics_router, prefix="/api")
+app.include_router(recent_topics_router, prefix="/api")
 app.include_router(messages_router, prefix="/api")
 app.include_router(global_staffs_router, prefix="/api")
 app.include_router(workspace_staffs_router, prefix="/api")
@@ -274,17 +276,17 @@ async def schema() -> dict:  # type: ignore[type-arg]
     return schema_info(app.state.db_path)
 
 
-@app.websocket("/ws/{topic_id}")
-async def ws_endpoint(topic_id: str, websocket: WebSocket) -> None:
+@app.websocket("/ws/events")
+async def ws_global(websocket: WebSocket) -> None:
     await websocket.accept()
-    app.state.hub.connect(topic_id, websocket)
+    app.state.hub.connect("_global", websocket)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
-        app.state.hub.disconnect(topic_id, websocket)
+        app.state.hub.disconnect("_global", websocket)
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

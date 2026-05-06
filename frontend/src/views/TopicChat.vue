@@ -124,13 +124,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import MarkdownMessage from '../components/MarkdownMessage.vue'
 
 const route = useRoute()
-const wsId = route.params.wsId
-const topicId = route.params.topicId
+let wsId = route.params.wsId
+let topicId = route.params.topicId
 
 const topic = ref(null)
 const workspace = ref(null)
@@ -190,12 +190,13 @@ async function load() {
 
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  ws = new WebSocket(`${proto}://${location.host}/ws/${topicId}`)
+  ws = new WebSocket(`${proto}://${location.host}/ws/events`)
 
   ws.onopen = () => { fetchAgentStatus() }
 
   ws.onmessage = (evt) => {
     const data = JSON.parse(evt.data)
+    if (data.topic_id !== topicId) return
     if (data.type === 'status') {
       agentStatus.value = data.state || ''
     } else if (data.type === 'message') {
@@ -365,6 +366,20 @@ function extractToolResult(content) {
   if (Array.isArray(content)) return content.map(c => c.text ?? JSON.stringify(c)).join('\n')
   return JSON.stringify(content, null, 2)
 }
+
+watch(
+  () => [route.params.wsId, route.params.topicId],
+  ([newWsId, newTopicId]) => {
+    if (ws) { ws.onclose = null; ws.close() }
+    wsId = newWsId
+    topicId = newTopicId
+    topic.value = null
+    messages.value = []
+    agentStatus.value = ''
+    load()
+    if (!isArchived.value) connectWs()
+  },
+)
 
 onMounted(async () => {
   await load()
