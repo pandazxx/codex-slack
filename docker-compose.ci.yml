@@ -17,6 +17,8 @@ services:
       - ./tests:/opt/codex-slack/tests:ro
       - ./frontend:/opt/codex-slack/frontend:ro
       - ./config:/opt/codex-slack/config:ro
+      - ./Dockerfile.agent-minimal:/opt/codex-slack/Dockerfile.agent-minimal:ro
+      - ./docker:/opt/codex-slack/docker:ro
     depends_on:
       mosquitto:
         condition: service_healthy
