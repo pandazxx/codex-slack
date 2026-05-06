@@ -24,7 +24,7 @@ const topics = ref([])
 
 async function load() {
   try {
-    const res = await fetch('/api/topics/recent?limit=20')
+    const res = await fetch('/api/topics/recent?limit=20', { cache: 'no-store' })
     if (res.ok) topics.value = await res.json()
   } catch {}
 }
@@ -47,18 +47,19 @@ function isNew(topic) {
   return topic.last_activity_at > lastSeen
 }
 
+// Refresh sidebar on every navigation; mark topic as seen when leaving it
 watch(
   () => route.params.topicId,
-  (topicId) => {
-    if (topicId) markSeen(topicId)
+  (topicId, prevTopicId) => {
+    if (prevTopicId && prevTopicId !== topicId) markSeen(prevTopicId)
+    load()
   },
-  { immediate: true },
 )
 
 let interval
 onMounted(() => {
   load()
-  interval = setInterval(load, 30_000)
+  interval = setInterval(load, 10_000)
 })
 onUnmounted(() => clearInterval(interval))
 </script>
