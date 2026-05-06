@@ -16,12 +16,6 @@ on:
       - "Dockerfile.agent-minimal"
       - "docker/entrypoint.sh"
       - ".github/workflows/ci-pr.yml"
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: "Branch or commit SHA to test"
-        required: false
-        default: ""
 
 permissions:
   contents: read
