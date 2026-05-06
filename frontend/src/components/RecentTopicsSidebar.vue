@@ -19,6 +19,9 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
+let ws = null
+let wsTimer = null
+
 const route = useRoute()
 const topics = ref([])
 
@@ -47,6 +50,13 @@ function isNew(topic) {
   return topic.last_activity_at > lastSeen
 }
 
+function connectWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  ws = new WebSocket(`${proto}://${location.host}/ws`)
+  ws.onmessage = () => load()
+  ws.onclose = () => { wsTimer = setTimeout(connectWs, 3000) }
+}
+
 // Refresh sidebar on every navigation; mark topic as seen when leaving it
 watch(
   () => route.params.topicId,
@@ -59,9 +69,14 @@ watch(
 let interval
 onMounted(() => {
   load()
-  interval = setInterval(load, 10_000)
+  connectWs()
+  interval = setInterval(load, 60_000)
 })
-onUnmounted(() => clearInterval(interval))
+onUnmounted(() => {
+  clearInterval(interval)
+  clearTimeout(wsTimer)
+  if (ws) { ws.onclose = null; ws.close() }
+})
 </script>
 
 <style scoped>

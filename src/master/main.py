@@ -276,6 +276,19 @@ async def schema() -> dict:  # type: ignore[type-arg]
     return schema_info(app.state.db_path)
 
 
+@app.websocket("/ws")
+async def ws_global(websocket: WebSocket) -> None:
+    await websocket.accept()
+    app.state.hub.connect("_global", websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        app.state.hub.disconnect("_global", websocket)
+
+
 @app.websocket("/ws/{topic_id}")
 async def ws_endpoint(topic_id: str, websocket: WebSocket) -> None:
     await websocket.accept()
