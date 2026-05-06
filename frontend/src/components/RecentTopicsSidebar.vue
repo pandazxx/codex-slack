@@ -8,7 +8,9 @@
       active-class="active"
       @click="markSeen(topic.topic_id)"
     >
-      <span class="topic-name">{{ topic.workspace_name }}/{{ topic.subject }}</span>
+      <span class="topic-name">
+          <span class="ws-name">{{ topic.workspace_name }}</span><span class="sep">/</span><span class="sub-name">{{ topic.subject }}</span>
+        </span>
       <span v-if="isNew(topic)" class="new-badge">new</span>
     </RouterLink>
     <div v-if="topics.length === 0" class="empty">No topics yet</div>
@@ -53,7 +55,12 @@ function isNew(topic) {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   ws = new WebSocket(`${proto}://${location.host}/ws/events`)
-  ws.onmessage = () => load()
+  ws.onmessage = (evt) => {
+    try {
+      const data = JSON.parse(evt.data)
+      if (data.type === 'message' && data.sender === 'agent') load()
+    } catch {}
+  }
   ws.onclose = () => { wsTimer = setTimeout(connectWs, 3000) }
 }
 
@@ -121,11 +128,32 @@ onUnmounted(() => {
 }
 
 .topic-name {
+  display: flex;
+  align-items: baseline;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+
+.ws-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 2ch;
+  max-width: 45%;
+}
+
+.sep {
+  flex: none;
+}
+
+.sub-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
-  min-width: 0;
+  min-width: 2ch;
 }
 
 .new-badge {
