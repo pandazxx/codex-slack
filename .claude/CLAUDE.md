@@ -74,42 +74,83 @@ docs/
 - *Test plans* — Link to the feature design doc. Cover happy path, edge cases, failure modes, and non-functional requirements.
 - *References* — Factual and stable. Prefer tables. Keep in sync with implementation — stale references are worse than none.
 
-## Common Workflow
 
+## Common Workflows
+ 
+The agents that appear below — `explore`, `architect`, `engineer`, `tester`, `reviewer`, `doc-writer`, `SRE` — are each defined in their own subagent files. Workflows below describe how they cooperate; each agent's own definition governs *how* it does its work.
+ 
+Slash commands referenced: `/commit` (incremental commit on the current branch), `/pr` (open a pull request against the default branch). See `.claude/commands/` for the full list.
+ 
 ### Feature development
-
-1. *User opens a feature branch* — `git checkout -b feat/<name>`. This is the trigger to begin work.
-
-1a. *Scoping (optional)* — if the scope is unclear, spawn the `explore` agent to locate relevant files, trace call paths, or map interfaces before design begins.
-
-2. *Design phase* — spawn the `architect` agent. Hold the discussion with the user until the design is complete: requirements are clear, tradeoffs are resolved, and an ADR and/or design doc are committed to `docs/decisions/` or `docs/design/`. Do not write implementation code before design is signed off.
-
-3. *Build and test authoring (parallel)* — once design is signed off, two tracks run concurrently:
-   - `engineer` agent implements the feature on the branch, committing incrementally with the `/commit` command.
-   - `tester` agent authors test cases and test code in `tests/` and a test plan in `docs/test-plans/`, based on the design doc. Each UAT case is marked `automated` or `needs-human` at authoring time.
-
-4. *Unit test execution loop* — `tester` runs the full test suite. If any tests fail, `engineer` fixes them. Repeat until all tests are green.
-
-5. *Open PR* — use `/pr` to open a pull request against `master`. This triggers the CI/CD pipeline.
-
-6. *CI gate* — wait for CI to pass (monitor with `gh run view`). If CI fails, `engineer` fixes and pushes; CI re-runs automatically.
-
-7. *Testbed deploy* — `sre` agent deploys the PR branch to the testbed via `DOCKER_HOST`, runs health checks, and confirms all containers are healthy before handing off.
-
-8. *UAT execution* — `tester` executes all UAT cases from the test plan against the live testbed and posts a signoff table as a PR comment:
-   - `✅ pass` — executed and verified automatically
-   - `⏭ needs-human` — requires human interaction (real Slack message, visual check, external credential); described clearly so the user knows exactly what to do
-   - `❌ fail` — executed and failed; handed off to `engineer`
-
-9. *Feedback loop* — based on UAT results:
-   - Any `❌ fail` → `engineer` fixes → back to step 4.
-   - Trivial change (wording, minor behaviour) → back to step 3.
-   - Non-trivial change (scope, design, new tradeoff) → back to step 2; `architect` re-enters to update the design and ADR before any further implementation.
-
-10. *User signs off remaining UAT* — user reviews `⏭ needs-human` cases in the PR and replies with ✅ or ❌ per row. Once all cases are signed off, UAT is complete.
-
-11. *Review* — spawn the `reviewer` agent. `engineer` fixes all review issues. `tester` re-runs the unit test suite to confirm nothing regressed.
-
-12. *Documentation* — spawn the `doc-writer` agent to update README, guides, references, and knowledge-base to reflect the completed feature.
-
-13. *Merge* — user reviews the PR and merges. No squashing without explicit instruction — preserve the commit history.
+ 
+**Trigger:** user proposes a new feature or asks to implement a feature-shaped issue.
+ 
+1. *Branch hygiene.* If the workspace is on `main`/`master`, fork a feature branch `feat/<short-desc>`. If the workspace is dirty or the branch has diverged from `main`, alert the user before proceeding.
+2. *Scoping (optional).* If the scope is unclear, spawn `explore` to locate relevant files, trace call paths, or map interfaces. This runs before design.
+3. *Design.* Spawn `architect`. Hold the discussion with the user until requirements are clear, tradeoffs are resolved, and an ADR and/or design doc is committed to `docs/decisions/` or `docs/design/`. **Do not write implementation code before the design is signed off.**
+4. *Test plan and scaffolding (parallel with implementation start).* `tester` authors the test plan in `docs/test-plans/` and sets up scaffolding (fixtures, harnesses, test data) based on the design. Each UAT case is marked `automated` or `needs-human` at authoring time. Test *bodies* against application code wait until step 6 — public interfaces have to stabilize first.
+5. *Implementation.* `engineer` implements the feature on the branch, committing incrementally with `/commit`. Public interfaces (function signatures, API shapes, schema) should stabilize early so tester can fill in test bodies in parallel.
+6. *Test bodies fill in.* Once public interfaces have stabilized, `tester` writes the actual test bodies against the implementation. This may overlap with the tail end of step 5.
+7. *Fast test loop.* `tester` runs unit and in-process tests (no dev env needed). Failures go to `engineer`; loop until green or the same test has failed across more than 5 fix attempts — escalate to user at that point.
+8. *Dev env spin-up.* `tester` asks `SRE` to spin up a dev env for this branch (idempotent — returns the existing env if already up). The env runs from bind-mounted source via `docker-compose.override.yml`, so changes are reflected immediately without rebuilds. `engineer` and `tester` both use the env for troubleshooting.
+9. *Stack test loop.* `tester` runs end-to-end and integration tests against the dev env. `engineer` troubleshoots in-env. Loop until green or the same test has failed across more than 3 fix attempts — escalate to user.
+10. *Review.* Spawn `reviewer`. `engineer` fixes review issues. After fixes:
+    - Style/structure/naming changes only → re-run step 7.
+    - Anything that affects runtime behavior → re-run steps 7 and 9.
+11. *Documentation.* Spawn `doc-writer` to update README, guides, references, and knowledge base.
+12. *Open PR.* Use `/pr` to open a pull request against `main`. Link any GitHub issues. Generate the UAT checklist from the test plan and post it as the PR description (or top comment).
+13. *CI gate.* Wait for CI to pass (`gh run view`). Two failure modes:
+    - *Normal failure* (test, lint, build) → `engineer` fixes and pushes; CI re-runs.
+    - *`SRE-BLOCK` failure* → not a bug fix. `engineer` reads the block's decision record, then either resolves the underlying issue or explicitly removes the block in the diff with rationale. The block's removal is itself reviewable in the PR.
+14. *Feature-branch staging spin-up.* `tester` asks `SRE` to spin up a feature-branch staging env from the latest CI-built image. Staging is image-based (digests), not code-mounted — it mirrors what would actually deploy. This catches "works in dev, fails when built" issues before UAT.
+15. *UAT execution.* `tester` runs all UAT cases against the feature-branch staging env (not the dev env). Posts a signoff table as a PR comment:
+    - `✅ pass` — executed and verified automatically.
+    - `⏭ needs-human` — requires human interaction (real Slack message, visual check, external credential); described clearly so the user knows exactly what to do.
+    - `❌ fail` — executed and failed; handed off to `engineer`.
+16. *Feedback loop.* Based on UAT results:
+    - Trivial fix → `engineer` fixes → re-run step 9 → re-run step 15.
+    - Fix exposes new test cases → loop to step 4 to add cases, then forward.
+    - Design-level change (scope, contract, new tradeoff) → loop to step 3; `architect` updates the design and ADR before any further implementation.
+17. *Human UAT signoff.* User reviews `⏭ needs-human` cases in the PR and replies with ✅ or ❌ per row. UAT is complete when all cases are signed off.
+18. *Merge.* User reviews and merges. No squashing without explicit instruction — preserve commit history.
+19. *Post-merge cleanup.* `SRE` refreshes canonical staging from `main` and tears down the feature-branch staging env. The branch's dev env teardown is up to the developer (ask `SRE` to "tear down dev env for `feat/<short-desc>`" when done).
+---
+ 
+### Bug / issue fix
+ 
+**Trigger:** user reports a bug, links a GitHub issue, or describes unexpected behavior.
+ 
+The bug-fix workflow is shorter than feature development because (a) the design surface is usually narrow, (b) the most important deliverable is a regression test that locks the bug shut. Steps below assume a real bug; if investigation reveals the reported behavior is correct-by-design, exit early and respond to the user.
+ 
+1. *Branch hygiene.* If on `main`/`master`, fork `fix/<issue-id-or-short-desc>`. Same dirty-workspace rule as feature workflow.
+2. *Reproduce first.* Spawn `explore` if needed to locate the relevant code. Reproduce the bug, ideally in a failing test. Two paths:
+    - *Reproducible in a unit test* → write the failing test now. This becomes the regression test. Skip step 4.
+    - *Requires the running stack to reproduce* → ask `SRE` to spin up a dev env (idempotent). Reproduce in-env, capture the exact steps and observed vs. expected behavior in `docs/bug-reports/<issue-id>.md`.
+3. *Root cause.* `engineer` investigates and identifies the cause. **Do not patch symptoms.** If the root cause crosses module boundaries, has architectural implications, or the fix is non-obvious, escalate to step 3a; otherwise proceed to step 4.
+3a. *Design when warranted.* For non-trivial fixes — refactors, contract changes, anything affecting more than one module — spawn `architect`, write a short ADR (one paragraph: cause, fix, alternatives considered) in `docs/decisions/`, and get user signoff before proceeding. Most bug fixes skip this step. The judgment call is: would another engineer understand *why* the fix looks the way it does just from reading the diff? If yes, skip 3a. If no, do it.
+ 
+4. *Failing regression test.* `tester` writes a regression test that reproduces the bug and currently fails. If a failing test already exists from step 2, this is satisfied. The test must fail *for the right reason* — not just because of a typo or environment difference.
+5. *Fix.* `engineer` writes the minimum change that makes the regression test pass. Commits incrementally with `/commit`.
+6. *Fast test loop.* `tester` runs the full unit/in-process test suite to confirm the fix doesn't regress anything. Failures → `engineer` fixes → loop. Same 5-attempt escalation as feature workflow.
+7. *Stack test loop (if step 2 used the dev env).* If the bug was stack-dependent, run the relevant subset of stack tests against the dev env. Skip if the bug was reproducible in unit tests alone.
+8. *Review.* Spawn `reviewer`. The reviewer's focus on a bug fix is different from a feature: *Is this the minimum fix? Does the regression test actually lock the bug? Are there adjacent cases that could fail similarly that aren't covered?* Engineer addresses issues. Re-run step 6 after any fix.
+9. *Documentation (lighter than feature workflow).* Update `docs/bug-reports/<issue-id>.md` with the resolution. Update `CHANGELOG.md` if the project maintains one. Skip `doc-writer` unless the bug fix changes user-facing behavior or documented APIs — in which case, spawn it.
+10. *Open PR.* Use `/pr`. Link the GitHub issue. PR description should include: brief root cause, the fix in one or two sentences, link to the regression test, and a note if the fix changes any documented behavior.
+11. *CI gate.* Same as feature workflow — normal failures get fixed and pushed; `SRE-BLOCK` failures get the architectural-decision treatment.
+12. *UAT (proportional to risk).* The default for bug fixes is *no full UAT cycle*. The regression test is the primary verification. Two exceptions:
+    - *Fix touches a critical path* (auth, payments, data integrity) → spin up feature-branch staging via `SRE`, run focused UAT on the affected paths only, post signoff in the PR.
+    - *Fix changes user-visible behavior* → user sanity-checks in feature-branch staging before merge.
+    - Otherwise the regression test plus standard CI is sufficient.
+13. *Merge.* User reviews and merges. Preserve commit history.
+14. *Post-merge cleanup.* If a feature-branch staging env was spun up in step 12, `SRE` tears it down. Canonical staging refreshes from `main`. Dev env teardown is up to the developer.
+15. *Close the issue.* Reference the merged PR in the GitHub issue and close it. If the bug surfaced gaps in test coverage or monitoring, file follow-up issues rather than expanding the scope of this fix.
+---
+ 
+### When to choose which workflow
+ 
+Bug-fix workflow when: there's a defined incorrect behavior to make correct, the change is localized, and a regression test is the right contract for "done."
+ 
+Feature workflow when: new capability is being added, behavior is being intentionally changed, or the change spans multiple modules with new interfaces.
+ 
+When in doubt — when something starts as a "small fix" and the engineer realizes mid-work that it's actually a feature — stop, re-scope with the user, and switch workflows. Don't try to hammer feature-shaped work through the bug-fix path; the truncated UAT and lighter design phase exist because bugs have narrow blast radius, and they stop being safe shortcuts the moment that assumption breaks.
+ 
