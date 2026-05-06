@@ -277,7 +277,7 @@ async def schema() -> dict:  # type: ignore[type-arg]
 
 
 async def _replay_in_progress_chunks(ws: WebSocket, topic_id: str, db_path: str) -> None:
-    def _query() -> list[tuple[str, list[dict]]]:
+    def _query() -> list[tuple[str, str | None, list[dict]]]:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         try:
@@ -292,20 +292,22 @@ async def _replay_in_progress_chunks(ws: WebSocket, topic_id: str, db_path: str)
             result = []
             for mid in in_progress:
                 rows = conn.execute(
-                    "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
+                    "SELECT event, agent_name FROM chunks WHERE message_id = ? ORDER BY seq",
                     (mid,),
                 ).fetchall()
-                result.append((mid, [json.loads(r["event"]) for r in rows]))
+                agent_name = rows[0]["agent_name"] if rows else None
+                result.append((mid, agent_name, [json.loads(r["event"]) for r in rows]))
             return result
         finally:
             conn.close()
 
     streams = await asyncio.get_running_loop().run_in_executor(None, _query)
-    for message_id, events in streams:
+    for message_id, agent_name, events in streams:
         if events:
             await ws.send_json({
                 "type": "chunk_replay",
                 "message_id": message_id,
+                "agent_name": agent_name,
                 "events": events,
             })
     LOGGER.info("ws.chunk_replay topic_id=%s streams=%d", topic_id, len(streams))
@@ -314,13 +316,14 @@ async def _replay_in_progress_chunks(ws: WebSocket, topic_id: str, db_path: str)
 @app.websocket("/ws/{topic_id}")
 async def ws_endpoint(topic_id: str, websocket: WebSocket) -> None:
     await websocket.accept()
-    app.state.hub.connect(topic_id, websocket)
     try:
         await _replay_in_progress_chunks(websocket, topic_id, app.state.db_path)
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
+        app.state.hub.connect(topic_id, websocket)
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
     finally:
         app.state.hub.disconnect(topic_id, websocket)
 

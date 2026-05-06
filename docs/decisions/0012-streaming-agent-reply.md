@@ -1,5 +1,5 @@
 ---
-title: "ADR-0011: Stream agent reply incrementally to the topic chat UI"
+title: "ADR-0012: Stream agent reply incrementally to the topic chat UI"
 status: proposed
 date: 2026-05-05
 decision-makers: [architect, engineer]
@@ -88,8 +88,9 @@ Rationale, against the drivers:
 - *Reuses existing renderer.* The frontend already parses identical events
   from the durable transcript; the live view and the replayed view both
   append to the same array.
-- *Bounded storage.* Chunks are deleted on `/response` and a background TTL
-  sweep (default 1h) removes orphans from agent crashes.
+- *Bounded storage.* Chunks are deleted on `/response`. In steady state the
+  table is near-empty; orphaned rows from agent crashes are rare and can be
+  cleaned up manually. No periodic sweep is implemented in this version.
 
 ### Consequences
 
@@ -114,9 +115,11 @@ Rationale, against the drivers:
   hot path (~one INSERT per stream-json line, typically 10s–100s per turn).
   SQLite under WAL handles this comfortably at our scale; we monitor.
 - *Bad (accepted):* If the master crashes between a chunk being persisted and
-  the corresponding `/response` arriving, orphan rows linger until the TTL
-  sweep runs. They are invisible to users (no in-progress `message_id` will
-  ever resolve) and bounded in size; the sweep cleans them up.
+  the corresponding `/response` arriving, orphan rows linger indefinitely.
+  They are invisible to users (no in-progress `message_id` will ever resolve)
+  and bounded in size. Orphaned chunks are cleaned up by
+  `DELETE FROM chunks WHERE message_id = ?` when the response is saved.
+  No periodic sweep is implemented in this version.
 
 ### Confirmation
 
@@ -131,8 +134,10 @@ Rationale, against the drivers:
 - Master replay test: feed N `/chunk` messages, open a fresh WebSocket
   before `/response`, and assert the client receives exactly one
   `type: "chunk_replay"` frame containing the N events in order.
-- TTL sweep test: insert chunk rows with `created_at` older than the TTL
-  and assert they are deleted by the cleanup task.
+- Orphan cleanup test: insert chunk rows with no matching `messages` row
+  and assert that `DELETE FROM chunks WHERE message_id = ?` removes them
+  when the corresponding `/response` is processed. No periodic TTL sweep
+  is implemented in this version; orphans are removed on response arrival.
 - UAT case "live typing" in `docs/test-plans/streaming-agent-reply.md`:
   user sends a long prompt and observes incremental rendering before the
   result event arrives.
@@ -207,15 +212,16 @@ ordered by `seq`. On WebSocket connect the master finds any `message_id`
 with rows in `chunks` but no matching row in `messages`, and emits a single
 `type: "chunk_replay"` frame containing the ordered events. On `/response`
 arrival, the matching `chunks` rows are DELETEd in the same transaction
-that INSERTs into `messages`. A periodic background task deletes orphaned
-chunks older than a configurable TTL (default 1 hour).
+that INSERTs into `messages`. Orphaned chunks are cleaned up by
+`DELETE FROM chunks WHERE message_id = ?` when the response is saved.
+No periodic sweep is implemented in this version.
 
 - Pro: Browser refresh / reconnect during streaming restores the partial
   reply within ~1s of page load.
 - Pro: Keeps the durable `messages` schema invariant intact ("one row per
   finished message") — chunks live in their own table.
-- Pro: Bounded storage: empty whenever no agent is mid-run; TTL sweep
-  handles the rare orphan case.
+- Pro: Bounded storage: empty whenever no agent is mid-run; orphan rows
+  are removed on `/response` arrival in the same transaction.
 - Pro: Cheap writes (single prepared INSERT, no FK, no joins) on a
   WAL-mode SQLite.
 - Con: Adds one DB write per stream-json line on the hot path; the DELETE
@@ -257,13 +263,16 @@ on `/response` finalise.
     then forward a `type: "chunk"` WebSocket frame.
   - `response` branch: in a single transaction, INSERT the `messages` row
     (today's behaviour) and DELETE FROM `chunks` WHERE `message_id = ?`.
-- Master WebSocket connect handler (`/ws/{topic_id}` in `main.py`): after
-  `hub.connect`, query for any `message_id` in `chunks` for this `topic_id`
-  that has no matching row in `messages`; for each such id, send one
-  `{"type": "chunk_replay", "message_id": ..., "events": [...]}` frame.
-- Master background task: every N seconds (default 300), DELETE FROM
-  `chunks` WHERE `created_at < unixepoch('now') - TTL_SECONDS`. Default
-  TTL = 3600. Configured via `CHUNK_TTL_SECONDS` env var.
+- Master WebSocket connect handler (`/ws/{topic_id}` in `main.py`): replay
+  happens **before** `hub.connect` to avoid a race where a live chunk
+  arrives between accept and replay. Query for any `message_id` in `chunks`
+  for this `topic_id` that has no matching row in `messages`; for each such
+  id, send one `{"type": "chunk_replay", "message_id": ..., "events": [...]}`
+  frame; then register with the hub.
+- No background TTL sweep is implemented in this version. Orphaned chunks
+  are cleaned up by `DELETE FROM chunks WHERE message_id = ?` when the
+  response is saved. Manual cleanup query:
+  `DELETE FROM chunks WHERE message_id NOT IN (SELECT id FROM messages)`.
 - `ws_hub` needs no change — it is content-agnostic.
 - Frontend:
   - On `type: "chunk"`: append to in-memory live message keyed by
