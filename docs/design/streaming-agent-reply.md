@@ -3,7 +3,7 @@
 **Status:** draft
 **Author:** architect
 **Date:** 2026-05-05
-**Related ADRs:** [ADR-0011](../decisions/0011-streaming-agent-reply.md), [ADR-0005 v3 architecture](../decisions/0005-v3-system-architecture.md)
+**Related ADRs:** [ADR-0012](../decisions/0012-streaming-agent-reply.md), [ADR-0005 v3 architecture](../decisions/0005-v3-system-architecture.md)
 
 ## Problem Statement
 
@@ -781,7 +781,7 @@ so historical and live views are consistent.
 
 ## Alternatives Considered
 
-See [ADR-0011](../decisions/0011-streaming-agent-reply.md) for the full
+See [ADR-0012](../decisions/0012-streaming-agent-reply.md) for the full
 options table. Summary:
 
 Transport:
@@ -857,8 +857,7 @@ Phase 5 — UAT and docs:
 
 1. Test plan in `docs/test-plans/streaming-agent-reply.md` (include the
    "refresh mid-stream" UAT).
-2. Reference entry in `docs/references/config.md` for the new
-   `CHUNK_TTL_SECONDS` / `CHUNK_SWEEP_INTERVAL_SECONDS` keys.
-3. Lesson entry once shipped: cover the "agent crash leaves orphan
-   chunks until TTL" caveat and the diagnostic queries from the
-   Observability section.
+2. Lesson entry once shipped: cover the "agent crash leaves orphan
+   chunks until manual cleanup" caveat and the diagnostic queries from the
+   Observability section. No periodic TTL sweep is implemented in this
+   version — orphaned rows are removed on `/response` arrival only.

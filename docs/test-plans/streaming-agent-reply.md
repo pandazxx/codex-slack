@@ -3,7 +3,7 @@
 **Status:** draft
 **Date:** 2026-05-05
 **Design doc:** [docs/design/streaming-agent-reply.md](../design/streaming-agent-reply.md)
-**Related ADR:** [ADR-0011](../decisions/0011-streaming-agent-reply.md)
+**Related ADR:** [ADR-0012](../decisions/0012-streaming-agent-reply.md)
 
 ## Scope
 

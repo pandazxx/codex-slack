@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     topic_id    TEXT NOT NULL,
     seq         INTEGER NOT NULL,
     event       TEXT NOT NULL,
+    agent_name  TEXT,
     created_at  REAL NOT NULL DEFAULT (unixepoch('now','subsec'))
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_message ON chunks (message_id, seq);
@@ -125,6 +126,7 @@ _MIGRATIONS = [
     "ALTER TABLE workspaces ADD COLUMN last_dispatched_at TEXT",
     "ALTER TABLE workspaces ADD COLUMN last_responded_at TEXT",
     "ALTER TABLE workspaces ADD COLUMN last_agent_state TEXT",
+    "ALTER TABLE chunks ADD COLUMN agent_name TEXT",
 ]
 
 

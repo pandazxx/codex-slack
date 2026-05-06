@@ -77,6 +77,7 @@ def _save_chunk(db_path: str, topic_id: str, payload: dict) -> None:  # type: ig
             message_id = payload["message_id"]
             seq = payload["seq"]
             event = payload["event"]
+            agent_name = payload.get("agent_name")
             is_retry = (
                 isinstance(event, dict)
                 and event.get("type") == "system"
@@ -88,9 +89,9 @@ def _save_chunk(db_path: str, topic_id: str, payload: dict) -> None:  # type: ig
                         "DELETE FROM chunks WHERE message_id = ?", (message_id,)
                     )
                 conn.execute(
-                    "INSERT INTO chunks (message_id, topic_id, seq, event)"
-                    " VALUES (?, ?, ?, ?)",
-                    (message_id, topic_id, seq, json.dumps(event)),
+                    "INSERT INTO chunks (message_id, topic_id, seq, event, agent_name)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (message_id, topic_id, seq, json.dumps(event), agent_name),
                 )
         finally:
             conn.close()

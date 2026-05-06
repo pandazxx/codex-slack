@@ -284,7 +284,7 @@ async def _replay_in_progress_chunks(ws: WebSocket, db_path: str) -> None:
     Master's WS is global (single `_global` channel) so we replay across all
     topics; the frontend filters by `topic_id` in the frame.
     """
-    def _query() -> list[tuple[str, str, list[dict]]]:
+    def _query() -> list[tuple[str, str, str | None, list[dict]]]:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         try:
@@ -298,21 +298,23 @@ async def _replay_in_progress_chunks(ws: WebSocket, db_path: str) -> None:
             result = []
             for mid, tid in in_progress:
                 rows = conn.execute(
-                    "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
+                    "SELECT event, agent_name FROM chunks WHERE message_id = ? ORDER BY seq",
                     (mid,),
                 ).fetchall()
-                result.append((mid, tid, [json.loads(r["event"]) for r in rows]))
+                agent_name = rows[0]["agent_name"] if rows else None
+                result.append((mid, tid, agent_name, [json.loads(r["event"]) for r in rows]))
             return result
         finally:
             conn.close()
 
     streams = await asyncio.get_running_loop().run_in_executor(None, _query)
-    for message_id, topic_id, events in streams:
+    for message_id, topic_id, agent_name, events in streams:
         if events:
             await ws.send_json({
                 "type": "chunk_replay",
                 "topic_id": topic_id,
                 "message_id": message_id,
+                "agent_name": agent_name,
                 "events": events,
             })
     LOGGER.info("ws.chunk_replay streams=%d", len(streams))

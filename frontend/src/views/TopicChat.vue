@@ -175,6 +175,7 @@ const rawView = ref({})
 const fileInput = ref(null)
 const selectedFiles = ref([])
 const liveStreams = ref({})
+const seenSeq = new Map()
 
 const isArchived = computed(() => !!topic.value?.archived_at)
 const sendError = ref('')
@@ -245,7 +246,13 @@ function transcriptToRows(transcriptJson) {
   } catch { return [] }
 }
 
-function handleChunk({ message_id, agent_name, event }) {
+function handleChunk({ message_id, agent_name, seq, event }) {
+  if (seq !== undefined) {
+    const maxSeen = seenSeq.get(message_id) ?? -1
+    if (seq <= maxSeen) return
+    seenSeq.set(message_id, seq)
+  }
+
   let live = liveStreams.value[message_id]
   if (!live) {
     live = { rows: [], text: '' }
@@ -292,6 +299,7 @@ function finaliseMessage(data) {
   if (idx >= 0) messages.value.splice(idx, 1, finalMsg)
   else messages.value.push(finalMsg)
   delete liveStreams.value[data.message_id]
+  seenSeq.delete(data.message_id)
   scrollToBottom()
 }
 
@@ -332,9 +340,9 @@ function connectWs() {
     } else if (data.type === 'chunk') {
       handleChunk(data)
     } else if (data.type === 'chunk_replay') {
-      for (const event of data.events) {
-        handleChunk({ message_id: data.message_id, agent_name: data.agent_name, event })
-      }
+      data.events.forEach((event, idx) => {
+        handleChunk({ message_id: data.message_id, agent_name: data.agent_name, seq: idx, event })
+      })
     } else if (data.type === 'message') {
       finaliseMessage(data)
     }
