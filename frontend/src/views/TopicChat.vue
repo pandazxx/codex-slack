@@ -29,6 +29,10 @@
                 <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
                 <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
                 <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                <div v-else-if="row.kind === 'agent_result'" class="agent-result">
+                  <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
+                  <MarkdownMessage :text="agentResultText(row.event)" />
+                </div>
                 <details v-else-if="row.kind === 'folded'">
                   <summary>···</summary>
                   <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
@@ -43,6 +47,10 @@
                   <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
                   <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
                   <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                  <div v-else-if="row.kind === 'agent_result'" class="agent-result">
+                    <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
+                    <MarkdownMessage :text="agentResultText(row.event)" />
+                  </div>
                   <details v-else-if="row.kind === 'folded'">
                     <summary>···</summary>
                     <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
@@ -217,9 +225,37 @@ function classifyEvent(event) {
   if (t === 'system' && s === 'retry')         return 'retry_notice'
   if (t === 'user') {
     const c = event.message?.content || []
-    if (c.some(b => b.type === 'tool_result')) return 'folded'
+    if (c.some(b => b.type === 'tool_result')) {
+      // Subagent (Agent tool) results are a synthesized summary worth showing
+      // expanded; raw tool_results (Bash/Read/...) stay folded.
+      if (event.tool_use_result?.agentType) return 'agent_result'
+      return 'folded'
+    }
   }
   return 'hidden'
+}
+
+function agentResultText(event) {
+  const blocks = event.tool_use_result?.content || []
+  const text = blocks.find(b => b.type === 'text')?.text
+  if (text) return text
+  // Fallback: dig into the inner tool_result block.
+  const inner = event.message?.content?.find(b => b.type === 'tool_result')?.content
+  if (Array.isArray(inner)) {
+    const t = inner.find(b => b.type === 'text')?.text
+    if (t) return t
+  }
+  return ''
+}
+
+function agentResultMeta(event) {
+  const r = event.tool_use_result || {}
+  const parts = []
+  if (r.agentType) parts.push(r.agentType)
+  if (r.totalDurationMs != null) parts.push(`${(r.totalDurationMs / 1000).toFixed(1)}s`)
+  if (r.totalTokens != null) parts.push(`${r.totalTokens.toLocaleString()} tok`)
+  if (r.totalToolUseCount != null) parts.push(`${r.totalToolUseCount} tools`)
+  return parts.join(' · ')
 }
 
 function toolUseLabel(event) {
@@ -595,4 +631,6 @@ onUnmounted(() => {
 @keyframes blink { to { visibility: hidden; } }
 .trace-row { font-size: 0.85em; color: #888; padding: 1px 0; font-family: monospace; }
 .trace-row details summary { cursor: pointer; }
+.agent-result { font-family: inherit; color: inherit; margin: 0.5em 0; padding: 0.5em 0.75em; border-left: 3px solid #6c8cff; background: rgba(108, 140, 255, 0.05); border-radius: 0 4px 4px 0; }
+.agent-result-meta { font-size: 0.75em; color: #6c8cff; margin-bottom: 0.25em; font-family: monospace; }
 </style>
