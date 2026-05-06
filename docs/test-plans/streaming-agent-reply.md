@@ -1,6 +1,6 @@
 # Test Plan: Streaming Agent Reply
 
-**Status:** draft
+**Status:** accepted
 **Date:** 2026-05-05
 **Design doc:** [docs/design/streaming-agent-reply.md](../design/streaming-agent-reply.md)
 **Related ADR:** [ADR-0012](../decisions/0012-streaming-agent-reply.md)
@@ -40,6 +40,9 @@ failover.
 | TC-10 | Agent crash (no `/response`) — chunks remain in DB; `streaming: true` spinner stays; no collision with next `message_id` | automated | After N chunks are inserted with no matching `messages` row, the chunks remain; a second message with a different `message_id` does not touch the first set of chunks |
 | TC-11 | `_save_chunk` DB failure — live broadcast still happens; failure is logged | automated | When the SQLite write in `_save_chunk` raises an exception, the function does not re-raise; the MQTT `_on_message` handler continues to call `hub.broadcast_threadsafe`; a log record at ERROR/WARNING level is emitted |
 | TC-12 | First-chunk latency log — `ws.first_chunk` INFO line emitted on seq==0 | automated | When a chunk payload with `seq == 0` is processed by the master MQTT handler, a log record containing `ws.first_chunk` is emitted at INFO level |
+| TC-13 | Subagent result rendering — `user/tool_result` events render in a blue block with markdown | needs-human | When a stream includes a `user` event with a `tool_result` content block produced by a subagent, the live bubble shows a blue 🤖 block; the block renders the result body as markdown (not raw text); the block is visible during streaming and in the folded trace after finalise |
+| TC-14 | Thinking visible — `assistant/thinking` events render in an amber block | needs-human | When a stream includes an `assistant` event whose content contains a `thinking` block, the live bubble shows an amber 💭 block with the thinking text; the block appears in the activity rows during streaming and survives in the expanded trace after finalise |
+| TC-15 | Tool-use folding — `assistant/tool_use` rows are `<details>` foldable to show input JSON | needs-human | Each `assistant/tool_use` activity row in the live bubble is rendered as a `<details>` element; the summary line shows the compact label (e.g. `⚙ Bash: git log …`); expanding it reveals the full input JSON; the same foldable behaviour is present in the historical trace view loaded from `transcript` |
 
 ---
 

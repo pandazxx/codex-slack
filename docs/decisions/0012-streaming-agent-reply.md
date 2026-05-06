@@ -1,6 +1,6 @@
 ---
 title: "ADR-0012: Stream agent reply incrementally to the topic chat UI"
-status: proposed
+status: accepted
 date: 2026-05-05
 decision-makers: [architect, engineer]
 consulted: [tester, sre]
@@ -263,12 +263,13 @@ on `/response` finalise.
     then forward a `type: "chunk"` WebSocket frame.
   - `response` branch: in a single transaction, INSERT the `messages` row
     (today's behaviour) and DELETE FROM `chunks` WHERE `message_id = ?`.
-- Master WebSocket connect handler (`/ws/{topic_id}` in `main.py`): replay
-  happens **before** `hub.connect` to avoid a race where a live chunk
-  arrives between accept and replay. Query for any `message_id` in `chunks`
-  for this `topic_id` that has no matching row in `messages`; for each such
-  id, send one `{"type": "chunk_replay", "message_id": ..., "events": [...]}`
-  frame; then register with the hub.
+- Master WebSocket connect handler (`/ws/events` in `main.py`): a single
+  global channel; replay happens **before** `hub.connect` to avoid a race
+  where a live chunk arrives between accept and replay. Query for all
+  `message_id`s in `chunks` with no matching `messages` row (across all
+  topics); for each, send one
+  `{"type": "chunk_replay", "topic_id": ..., "message_id": ..., "agent_name": ..., "events": [...]}`
+  frame; then register with the hub. The frontend filters frames by `topic_id`.
 - No background TTL sweep is implemented in this version. Orphaned chunks
   are cleaned up by `DELETE FROM chunks WHERE message_id = ?` when the
   response is saved. Manual cleanup query:

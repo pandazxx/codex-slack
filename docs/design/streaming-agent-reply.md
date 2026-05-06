@@ -1,6 +1,6 @@
 # Design: Streaming Agent Reply
 
-**Status:** draft
+**Status:** accepted
 **Author:** architect
 **Date:** 2026-05-05
 **Related ADRs:** [ADR-0012](../decisions/0012-streaming-agent-reply.md), [ADR-0005 v3 architecture](../decisions/0005-v3-system-architecture.md)
@@ -87,12 +87,12 @@ sequenceDiagram
 
     U->>M: GET /api/.../messages (REST history)
     M-->>U: completed messages
-    U->>M: WS connect /ws/topic_id
-    M->>M: query chunks with no matching messages row
+    U->>M: WS connect /ws/events
+    M->>M: query chunks with no matching messages row (all topics)
     loop for each in-progress message_id
         M->>M: SELECT events ORDER BY seq
-        M->>U: ws send type=chunk_replay with all events so far
-        Note over U: reconstruct live placeholder
+        M->>U: ws send type=chunk_replay with topic_id + all events so far
+        Note over U: frontend filters by topic_id, reconstructs live placeholder
     end
     Note over U,M: New chunks arrive normally as type=chunk
 ```
@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     topic_id    TEXT NOT NULL,
     seq         INTEGER NOT NULL,       -- monotonically increasing per message_id
     event       TEXT NOT NULL,          -- raw stream-json event JSON
+    agent_name  TEXT,                   -- added via migration; populated from chunk payload
     created_at  REAL NOT NULL DEFAULT (unixepoch('now','subsec'))
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_message ON chunks (message_id, seq);
@@ -121,7 +122,11 @@ Notes on the schema:
 - No FK on `message_id` — the matching `messages` row is created **after**
   the last chunk arrives, so a FK would be violated for the entire stream.
 - `topic_id` is denormalised onto the row so the WS-connect replay query
-  can scope by topic without a join.
+  can scope by topic without a join. The global `/ws/events` endpoint queries
+  across all topics; `topic_id` is included in `chunk_replay` frames so the
+  frontend can filter.
+- `agent_name` is denormalised per row (added via migration) and read from
+  the first row when building a `chunk_replay` frame.
 - `seq` is supplied by the agent (the per-message counter incremented in
   `_stream_claude_once`); the master trusts it. The composite index
   `(message_id, seq)` makes ordered replay an O(N) range scan.
@@ -329,71 +334,73 @@ with conn:                                    # implicit BEGIN/COMMIT
 
 #### 2b. Master WebSocket connect — replay (`src/master/main.py`)
 
-Today's `ws_endpoint` accepts the connection and registers it with the hub.
-It needs one new step: query for in-progress message_ids on this topic and
-emit a `chunk_replay` frame for each.
+The WebSocket endpoint is a single global channel at `/ws/events`. On connect
+it replays all in-progress chunk streams across all topics before registering
+with the hub; the frontend filters frames by `topic_id`.
 
 ```python
-@app.websocket("/ws/{topic_id}")
-async def ws_endpoint(topic_id: str, websocket: WebSocket) -> None:
+@app.websocket("/ws/events")
+async def ws_global(websocket: WebSocket) -> None:
     await websocket.accept()
-    app.state.hub.connect(topic_id, websocket)
     try:
-        await _replay_in_progress_chunks(websocket, topic_id, app.state.db_path)
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
+        await _replay_in_progress_chunks(websocket, app.state.db_path)
+        app.state.hub.connect("_global", websocket)
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
     finally:
-        app.state.hub.disconnect(topic_id, websocket)
+        app.state.hub.disconnect("_global", websocket)
 
 
-async def _replay_in_progress_chunks(ws: WebSocket, topic_id: str, db_path: str) -> None:
-    def _query() -> list[tuple[str, list[dict]]]:
+async def _replay_in_progress_chunks(ws: WebSocket, db_path: str) -> None:
+    def _query() -> list[tuple[str, str, str | None, list[dict]]]:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         try:
-            ids = [r["message_id"] for r in conn.execute(
-                "SELECT DISTINCT c.message_id FROM chunks c"
-                " LEFT JOIN messages m ON m.id = c.message_id"
-                " WHERE c.topic_id = ? AND m.id IS NULL",
-                (topic_id,),
-            ).fetchall()]
-            out: list[tuple[str, list[dict]]] = []
-            for mid in ids:
+            in_progress = [
+                (r["message_id"], r["topic_id"]) for r in conn.execute(
+                    "SELECT DISTINCT c.message_id, c.topic_id FROM chunks c"
+                    " LEFT JOIN messages m ON m.id = c.message_id"
+                    " WHERE m.id IS NULL"
+                ).fetchall()
+            ]
+            result = []
+            for mid, tid in in_progress:
                 rows = conn.execute(
-                    "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
+                    "SELECT event, agent_name FROM chunks WHERE message_id = ? ORDER BY seq",
                     (mid,),
                 ).fetchall()
-                out.append((mid, [json.loads(r["event"]) for r in rows]))
-            return out
+                agent_name = rows[0]["agent_name"] if rows else None
+                result.append((mid, tid, agent_name, [json.loads(r["event"]) for r in rows]))
+            return result
         finally:
             conn.close()
 
-    # SQLite call is sync; run in default executor to avoid blocking the loop.
     streams = await asyncio.get_running_loop().run_in_executor(None, _query)
-    for message_id, events in streams:
-        if not events:
-            continue
-        await ws.send_json({
-            "type": "chunk_replay",
-            "message_id": message_id,
-            "events": events,
-        })
+    for message_id, topic_id, agent_name, events in streams:
+        if events:
+            await ws.send_json({
+                "type": "chunk_replay",
+                "topic_id": topic_id,
+                "message_id": message_id,
+                "agent_name": agent_name,
+                "events": events,
+            })
 ```
 
 Notes:
 
-- The `LEFT JOIN messages` filter is what defines "in progress": chunks
-  exist but no durable message row does. After `/response` arrives those
-  chunks are deleted, so a finished message never replays.
-- Replay is per-connection — every fresh WS connection on the topic gets
-  the same replay independently. Two browsers on the same topic both see
-  it; this is the desired behaviour.
-- The `agent_name` is intentionally absent from the replay frame — it is
-  carried in the live `chunk` payload but not stored per row. The frontend
-  can derive it from any `system/init` event in `events`. (If we want
-  cheaper UX, store `agent_name` on the row in v2.)
+- The `LEFT JOIN messages` filter defines "in progress": chunks exist but
+  no durable message row does. After `/response` arrives those chunks are
+  deleted, so a finished message never replays.
+- Replay is global — the single `/ws/events` channel replays all topics;
+  the frontend filters by `topic_id`. Two browsers on the same topic both
+  receive the replay independently.
+- `agent_name` is stored per chunk row (added via migration) and read from
+  the first row; it is included in the `chunk_replay` frame so the frontend
+  does not need to derive it from a `system/init` event.
 
 `ws_hub.ConnectionHub` requires no change — it is content-agnostic.
 
@@ -617,12 +624,15 @@ expand "Show trace" is already in `transcript`.
 #### WebSocket `chunk_replay` frame to browser (new)
 
 Sent once per in-progress `message_id` immediately after a WebSocket
-connect/reconnect, before any further live `chunk` frames for that id.
+connect/reconnect on `/ws/events`, before any further live `chunk` frames
+for that id. Includes `topic_id` so the frontend can filter by topic.
 
 ```json
 {
   "type": "chunk_replay",
+  "topic_id": "a4f1…",
   "message_id": "9c2b…",
+  "agent_name": "claude",
   "events": [
     { "type": "system", "subtype": "init", "agent_name": "claude", ... },
     { "type": "assistant", "message": { "content": [{ "type": "text", "text": "Hel" }] } },
@@ -713,12 +723,12 @@ classifies every event type observed in the sample response attached to issue
 | Event type / subtype | Frequency (sample) | Render as | Rationale |
 |---|---|---|---|
 | `assistant` / `text` | low | **Full text** — append to the reply bubble | Primary content; the whole point of streaming |
-| `assistant` / `tool_use` | high | **Compact action label** — `⚙ Bash: git log --oneline -5` or `📄 Read: src/master/db.py` or `🤖 Agent: [description]` | Shows the agent working; extracting the key input field keeps it short |
+| `assistant` / `tool_use` | high | **Foldable `<details>` row** — summary shows compact label (`⚙ Bash: git log --oneline -5`, `📄 Read: src/master/db.py`, `🤖 Agent: [description]`); expanding reveals full input JSON | Shows the agent working; foldable so power users can inspect inputs without cluttering the default view |
 | `system` / `task_progress` | high | **Compact progress line** — `↳ [description]` | Subagent step descriptions (e.g. "Running git log --oneline -5", "Reading src/master/db.py") are human-readable and valuable |
 | `system` / `task_started` | low | **Compact label** — `🚀 Subagent: [description]` | Tells the user a subagent was spawned |
 | `result` | 1 per run | **Hidden** — the final `/response` MQTT message replaces the placeholder at this point | The durable `/response` arrives on the same tick; rendering the result event would flicker |
-| `user` / `tool_result` | high | **Folded** — `...` (collapsed by default, expandable on click) | Raw output can be thousands of lines of file content or command output; `task_progress` already summarises the action |
-| `assistant` / `thinking` | low | **Folded** — `...` | Internal chain-of-thought; not user-facing by convention |
+| `user` / `tool_result` | high | **Blue 🤖 block** — collapsed by default; content rendered as markdown when expanded | Raw output can be thousands of lines; the block distinguishes subagent results from agent text and renders structured output readably |
+| `assistant` / `thinking` | low | **Amber 💭 block** — collapsed by default; thinking text shown when expanded | Internal chain-of-thought; surfaced for power users who want to inspect reasoning |
 | `system` / `init` | 1 per run | **Hidden** | Session plumbing (tools list, model, session_id); no user value |
 | `rate_limit_event` | rare | **Hidden** | Infrastructure metadata; never user-relevant |
 | `user` / `text` | rare | **Hidden** | Internal artefact; not a real user message |
@@ -816,9 +826,9 @@ All resolved.
       deletes prior chunks for that `message_id`; frontend resets the
       activity rows and shows `⟳ Session expired — retrying…` in the
       bubble. See the retry section under Agent component changes.
-- [x] **`agent_name` on `chunks` row** — no extra column. Frontend derives
-      it from the `system/init` event (always seq 0). Engineer may add the
-      column at implementation time if derivation proves awkward.
+- [x] **`agent_name` on `chunks` row** — column added via migration. Stored
+      per chunk row; included in `chunk_replay` frames so the frontend does
+      not need to derive it from the `system/init` event.
 ## Implementation Plan
 
 Phase 1 — agent streaming (1 PR):

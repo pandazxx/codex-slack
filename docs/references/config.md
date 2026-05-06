@@ -50,7 +50,7 @@ global default.
 
 SQLite database file: `{MASTER_DATA_DIR}/master_data.db` (default `/opt/codex-slack/data/master/master_data.db`).
 
-Tables: `workspaces`, `workspace_agents`, `topics`, `sessions`, `messages`.
+Tables: `workspaces`, `workspace_agents`, `topics`, `sessions`, `messages`, `chunks`.
 
 Soft-delete columns: `workspaces.archived_at TEXT` and `topics.archived_at TEXT`. Active records have `archived_at IS NULL`.
 

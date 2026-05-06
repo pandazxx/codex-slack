@@ -164,6 +164,42 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-05-06 — Agent containers spawned on wrong network when Docker project name differs from default
+
+*Summary:* Agent containers started by the master were unreachable from the MQTT broker (mosquitto) and from each other. The agents would connect to `localhost:1883` and immediately fail with `Connection refused`.
+
+*Root cause:* `MASTER_AGENT_NETWORK` defaults to `codex-slack_internal` — a network name derived from the Compose project name `codex-slack`. When the project is started with a custom project name (e.g. `docker compose -p myproject up`) or the working directory slug differs, Docker creates a network named `myproject_internal` instead. Agent containers attached to the wrong network are isolated from the broker.
+
+*Fix applied:* Set `MASTER_AGENT_NETWORK` explicitly in `.env` to match the actual network name created by Compose (visible via `docker network ls`). Alternatively, pin the Compose project name with `COMPOSE_PROJECT_NAME=codex-slack` in `.env` so the default network name is always predictable.
+
+*Prevention:* When the default value of `MASTER_AGENT_NETWORK` is derived from a Compose project name, document that the value must match the actual network created by `docker compose`. Always verify with `docker network inspect <network>` that agent containers and the broker share the same network before debugging connectivity further.
+
+---
+
+## 2026-05-06 — Docker socket on macOS is root:root; master container needs group_add or socket override
+
+*Summary:* The master container could not reach the Docker daemon on macOS (`docker.from_env()` raised `PermissionError: [Errno 13] Permission denied: '/var/run/docker.sock'`), preventing agent container spawn and stop.
+
+*Root cause:* On macOS Docker Desktop, `/var/run/docker.sock` inside a container is owned by `root:root` with mode `0660`. The master image runs as `appuser` (UID 1000), which is not in the `root` group (GID 0). The result is a permission error on every Docker API call.
+
+*Fix applied:* Added `group_add: ["0"]` (root GID) to the master service in the Compose file, or alternatively changed the socket bind-mount to the Docker Desktop user socket (`~/.docker/run/docker.sock`) where permissions are more permissive. The `group_add` approach is preferred because it does not depend on the socket path differing between Docker Desktop and Linux Docker.
+
+*Prevention:* When a container needs access to the Docker socket on macOS, always add `group_add: ["0"]` to the Compose service definition, or use a socket proxy (e.g. `tecnativa/docker-socket-proxy`) to restrict permissions. Do not assume the socket is world-writable or that the running user's GID matches the socket GID.
+
+---
+
+## 2026-05-06 — pip deps baked as appuser make pytest unreachable to tini exec
+
+*Summary:* The agent container's `tini` entrypoint could not exec `pytest` during test runs: `exec: "pytest": executable file not found in $PATH`. The package was installed, but only in `/home/appuser/.local/bin/`, which was not on `PATH` for the exec context.
+
+*Root cause:* The Dockerfile ran `pip install --user` as `appuser`, placing pytest and other console-scripts into `/home/appuser/.local/bin/`. `tini` execs the command with the process environment, which at container startup includes `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`. `/home/appuser/.local/bin` is not in that default PATH, so `tini` cannot find the script.
+
+*Fix applied:* Added `ENV PATH="/home/appuser/.local/bin:${PATH}"` to the Dockerfile after the `USER appuser` line, ensuring the user-local bin directory is on PATH for both interactive shells and tini-exec'd commands.
+
+*Prevention:* When installing Python packages with `pip install --user` as a non-root user in a Dockerfile, always add the user's `.local/bin` to `ENV PATH` explicitly. Alternatively, install into the system site-packages as root (remove `--user`), which avoids the PATH issue entirely at the cost of needing a `USER root` block during install.
+
+---
+
 ## 2026-03-24 — docs/knowledge-base directory initialised
 
 *Summary:* The project `CLAUDE.md` references [`docs/knowledge-base/lessons-learned.md`](lessons-learned.md) and [`docs/knowledge-base/faq.md`](faq.md) as required knowledge-persistence targets, but neither file nor the directory existed.
