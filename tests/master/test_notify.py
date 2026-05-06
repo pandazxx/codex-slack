@@ -675,7 +675,7 @@ class TestNotifyReply:
     # ── TC-11: dry_run=True — no HTTP call, log line emitted ──────────────
 
     def test_dry_run_no_http_call(self, tmp_path, caplog):
-        import logging
+        import logging  # noqa: PLC0415
 
         db = _make_db(tmp_path)
         settings = _make_settings(
