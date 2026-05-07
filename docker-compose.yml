@@ -30,14 +30,18 @@ services:
       AGENT_IDLE_TIMEOUT_SECONDS: ${AGENT_IDLE_TIMEOUT_SECONDS:-3600}
       AGENT_AUTH_REFRESH_INTERVAL_SECONDS: ${AGENT_AUTH_REFRESH_INTERVAL_SECONDS:-43200}
       SSH_AUTH_SOCK: /run/ssh-agent.sock
-    ports:
-      - "${MASTER_PORT:-8080}:8080"
+    # No host port binding here. Override files (override.yml / remote.yml /
+    # ci.yml / staging.yml) decide whether to publish a port directly or to
+    # route via Traefik labels. See:
+    #   docs/sre-decisions/2026-05-07-traefik-multi-env-routing.md
     group_add:
       - "${DOCKER_GID:-999}"
     volumes:
       - master_data:/opt/codex-slack/data/master
       - ${MASTER_SSH_AUTH_SOCK_PATH:-/dev/null}:/run/ssh-agent.sock
       - ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}:/run/container.sock
+    expose:
+      - "8080"
     depends_on:
       - mosquitto
     networks:

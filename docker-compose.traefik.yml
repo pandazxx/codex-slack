@@ -1,0 +1,61 @@
+# Traefik ingress stack — runs ONCE per Docker host, separate from any branch env.
+#
+# Bring up:    .sre/traefik-up.sh
+# Tear down:   .sre/traefik-down.sh
+#
+# Branch envs auto-register via Docker labels on the shared `sre_ingress`
+# external network. See docs/sre-decisions/2026-05-07-traefik-multi-env-routing.md.
+
+services:
+  traefik:
+    image: traefik:v3.7.0
+    container_name: sre-ingress-traefik
+    restart: unless-stopped
+    command:
+      # Logging
+      - --log.level=INFO
+      - --accesslog=true
+      # Static API + dashboard (insecure for dev — see decision record).
+      # The dashboard is routed through the `web` entrypoint via the labels
+      # below; no separate port is published.
+      - --api=true
+      - --api.dashboard=true
+      - --api.insecure=true
+      # EntryPoints — only :80 is published. Dashboard is reached via Host header.
+      - --entrypoints.web.address=:80
+      # Docker provider — only services with explicit labels are exposed.
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=sre_ingress
+      - --providers.docker.watch=true
+      # Health check endpoint on the web entrypoint.
+      - --ping=true
+      - --ping.entrypoint=web
+    ports:
+      # HTTP ingress for all branch envs and the dashboard.
+      - "80:80"
+    volumes:
+      # Read-only socket: Traefik only needs to discover containers, not control them.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - sre_ingress
+    labels:
+      # Route the dashboard through Traefik itself.
+      - traefik.enable=true
+      - traefik.http.routers.traefik-dashboard.rule=Host(`traefik.dev.docker-testbed.local`)
+      - traefik.http.routers.traefik-dashboard.entrypoints=web
+      - traefik.http.routers.traefik-dashboard.service=api@internal
+    healthcheck:
+      # Traefik's `ping` endpoint on the web entrypoint (enabled by --ping below).
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:80/ping || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+networks:
+  # Shared external network — branch envs join this in addition to their own
+  # `internal` network. Created by .sre/traefik-up.sh before this stack starts.
+  sre_ingress:
+    external: true
+    name: sre_ingress

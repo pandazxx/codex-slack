@@ -30,32 +30,54 @@ The SRE agent will:
 
 1. Check if an environment already exists (idempotent).
 2. Build or pull images as needed.
-3. Start the stack with `docker compose.override.yml` (bind-mounted source code for live reload).
-4. Wait for health checks to pass.
-5. Return access information (HTTP endpoints, direct-access commands).
+3. Detect whether the shared Traefik ingress is up on the target Docker host.
+4. Start the stack with `docker-compose.override.yml` (bind-mounted source code for live reload) when local; with `docker-compose.remote.yml` (no bind mounts, image-baked source) when `DEV_DOCKER_HOST` is set.
+5. Add a `/etc/hosts` entry on the laptop for the branch hostname (Traefik mode only; requires `sudo` non-interactively or prints the line for the user to add manually).
+6. Wait for health checks to pass.
+7. Return access information (HTTP endpoints, direct-access commands).
 
-**Accessing the dev env:**
+**Accessing the dev env (Traefik mode — default):**
 
-```bash
-# Web UI:
-curl http://localhost:8080
+Each branch is reachable at a label-routed hostname:
 
-# API docs (FastAPI Swagger):
-curl http://localhost:8080/docs
-
-# Master logs:
-docker compose -p $USER-feat-auth logs -f master
-
-# Shell into master:
-docker compose -p $USER-feat-auth exec -it master bash
-
-# MQTT messages:
-docker compose -p $USER-feat-auth exec mosquitto mosquitto_sub -h localhost -t '#' -v
+```
+http://master.<branch>.dev.docker-testbed.local/
+http://master.<branch>.dev.docker-testbed.local/docs
+http://master.<branch>.dev.docker-testbed.local/health
 ```
 
-**Source code changes are live:**
+The Traefik dashboard is at `http://traefik.dev.docker-testbed.local/dashboard/`.
 
-Edits to `src/`, `frontend/`, and `config/` are visible immediately in the running container. The Python uvicorn server and frontend build watch for changes and reload automatically.
+Multiple branches run in parallel without per-branch ports or per-env SSH tunnels. See `docs/sre-decisions/2026-05-07-traefik-multi-env-routing.md` for the design and rationale.
+
+**One-time host setup** (once per dev Docker host, not per branch):
+
+```bash
+.sre/traefik-up.sh   # brings up the shared ingress on $DEV_DOCKER_HOST
+```
+
+Subsequent branch spin-ups just need `.sre/env-up.sh <branch>`.
+
+**Fallback (per-branch port):**
+
+If the Traefik ingress is not up on the target Docker host, `env-up.sh` falls back to publishing a deterministic per-branch port (hash of project name + 8080). The script prints the SSH-tunnel command. Use this only when Traefik is unavailable.
+
+**Direct-access commands (both modes):**
+
+```bash
+# Master logs:
+DOCKER_HOST=$DEV_DOCKER_HOST docker compose -p $USER-feat-auth logs -f master
+
+# Shell into master:
+DOCKER_HOST=$DEV_DOCKER_HOST docker compose -p $USER-feat-auth exec -it master bash
+
+# MQTT messages (mosquitto stays internal — no Traefik route, see decision record):
+DOCKER_HOST=$DEV_DOCKER_HOST docker compose -p $USER-feat-auth exec mosquitto mosquitto_sub -h localhost -t '#' -v
+```
+
+**Source code changes are live (local Docker only):**
+
+Edits to `src/`, `frontend/`, and `config/` are visible immediately when running on local Docker via `docker-compose.override.yml`. On a remote `DEV_DOCKER_HOST`, source is baked into the image at build time and `env-up.sh` rebuilds when invoked.
 
 ### Tear Down Dev Environment
 
@@ -117,11 +139,13 @@ If smoke tests fail, the deploy is rolled back automatically.
 | `Dockerfile` | Engineer | Prod image; SRE proposes safe additions (healthchecks, non-root user). |
 | `Dockerfile.dev`, `Dockerfile.test` | SRE | Dev/test images; SRE owns outright. |
 | `docker-compose.yml` | Shared | Base topology; SRE manages via decision records if changing. |
-| `docker-compose.override.yml` | SRE | Dev overrides; bind-mounts, dev flags, local ports. |
+| `docker-compose.override.yml` | SRE | Dev overrides; bind-mounts, dev flags, Traefik labels. |
+| `docker-compose.remote.yml` | SRE | Remote-host dev overrides; image-baked source, Traefik labels. |
+| `docker-compose.traefik.yml` | SRE | Shared ingress stack (one per dev host). |
 | `docker-compose.ci.yml` | SRE | CI test config; read-only volumes, pytest entrypoint. |
 | `.sre/`, `scripts/sre/` | SRE | SRE implementation scripts; not user-facing. |
 | `.github/workflows/` | SRE | CI/CD pipeline; propose changes via PR, not directly edited. |
-| `docs/sre*.md`, `docs/guides/sre.md` | SRE | SRE documentation; user-facing guides. |
+| `docs/sre*.md`, `docs/guides/sre.md`, `docs/sre-decisions/*` | SRE | SRE documentation; user-facing guides. |
 
 ## Container Runtime Detection
 

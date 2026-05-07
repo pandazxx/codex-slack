@@ -1,7 +1,13 @@
-# Development override — bind-mounts source code for live reload
-# Invoked when COMPOSE_FILE includes this file (set by env-up.sh)
-# Run `docker compose up` to start the dev stack; changes to src/ and frontend/
+# Development override — bind-mounts source code for live reload.
+# Invoked when COMPOSE_FILE includes this file (set by env-up.sh).
+# Run `.sre/env-up.sh` to start the dev stack; changes to src/ and frontend/
 # are reflected immediately without rebuilds.
+#
+# Routing: master is exposed via Traefik labels at
+#   master.${BRANCH_SLUG}.dev.docker-testbed.local
+# Traefik must be running on the same Docker host (.sre/traefik-up.sh).
+# If Traefik is not present, env-up.sh falls back to a per-branch published port.
+# See docs/sre-decisions/2026-05-07-traefik-multi-env-routing.md.
 
 services:
   master:
@@ -13,8 +19,6 @@ services:
     # Docker Desktop / macOS) is reachable. Prod uses group_add with the
     # host's docker group GID instead.
     user: "0:0"
-    ports:
-      - "${MASTER_PORT:-8080}:8080"
     volumes:
       # Source code — bind-mounted for live reload
       - ./src:/opt/codex-slack/src
@@ -55,6 +59,11 @@ services:
       - mosquitto
     networks:
       - internal
+      # SRE_INGRESS_ATTACHMENT — env-up.sh enables this stanza by writing the
+      # branch's effective compose file. When Traefik is up on this host, master
+      # joins sre_ingress so Traefik can route to it. When Traefik is down,
+      # env-up.sh strips the `sre_ingress` entry and uses the fallback port.
+      - sre_ingress
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -62,9 +71,19 @@ services:
       timeout: 3s
       retries: 3
       start_period: 30s
+    labels:
+      # Traefik registration. BRANCH_SLUG is interpolated by env-up.sh.
+      # Router name is per-branch to avoid collisions across simultaneous envs.
+      - traefik.enable=true
+      - traefik.docker.network=sre_ingress
+      - traefik.http.routers.master-${BRANCH_SLUG:-default}.rule=Host(`master.${BRANCH_SLUG:-default}.dev.docker-testbed.local`)
+      - traefik.http.routers.master-${BRANCH_SLUG:-default}.entrypoints=web
+      - traefik.http.services.master-${BRANCH_SLUG:-default}.loadbalancer.server.port=8080
 
   mosquitto:
-    # Same as prod; no override needed for dev
+    # Same as prod; no override needed for dev.
+    # Stays on the project's `internal` network only — not exposed via Traefik.
+    # Access pattern: docker compose -p $PROJECT exec mosquitto mosquitto_sub ...
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$SYS/broker/uptime", "-c", "1"]
@@ -72,3 +91,10 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+
+networks:
+  # Shared external network managed by .sre/traefik-up.sh. env-up.sh ensures it
+  # exists (creating it if Traefik isn't yet up) before bringing branch services up.
+  sre_ingress:
+    external: true
+    name: sre_ingress

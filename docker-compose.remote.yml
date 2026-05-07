@@ -1,6 +1,12 @@
-# Remote development environment — no bind mounts (they don't cross SSH)
+# Remote development environment — no bind mounts (they don't cross SSH).
 # Used when DEV_DOCKER_HOST is set to a remote Docker host.
 # Relies on images being pre-built with source code.
+#
+# Routing: master is exposed via Traefik labels at
+#   master.${BRANCH_SLUG}.dev.docker-testbed.local
+# Traefik must be running on the same remote Docker host (.sre/traefik-up.sh).
+# If Traefik is not present, env-up.sh falls back to a per-branch published port.
+# See docs/sre-decisions/2026-05-07-traefik-multi-env-routing.md.
 
 services:
   master:
@@ -8,8 +14,6 @@ services:
       context: .
       dockerfile: Dockerfile
     image: codex-slack-master:runtime
-    ports:
-      - "${MASTER_PORT:-8080}:8080"
     environment:
       MASTER_PORT: 8080
       MASTER_DRY_RUN: "false"
@@ -27,6 +31,7 @@ services:
       - mosquitto
     networks:
       - internal
+      - sre_ingress
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -34,10 +39,16 @@ services:
       timeout: 3s
       retries: 3
       start_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=sre_ingress
+      - traefik.http.routers.master-${BRANCH_SLUG:-default}.rule=Host(`master.${BRANCH_SLUG:-default}.dev.docker-testbed.local`)
+      - traefik.http.routers.master-${BRANCH_SLUG:-default}.entrypoints=web
+      - traefik.http.services.master-${BRANCH_SLUG:-default}.loadbalancer.server.port=8080
 
   mosquitto:
     image: eclipse-mosquitto:2
-    # Same as prod; no override needed for remote
+    # Same as prod; not exposed via Traefik. Access via docker compose exec.
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$SYS/broker/uptime", "-c", "1"]
@@ -45,3 +56,8 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+
+networks:
+  sre_ingress:
+    external: true
+    name: sre_ingress
