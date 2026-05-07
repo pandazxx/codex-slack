@@ -675,7 +675,7 @@ class TestNotifyReply:
     # ── TC-11: dry_run=True — no HTTP call, log line emitted ──────────────
 
     def test_dry_run_no_http_call(self, tmp_path, caplog):
-        import logging
+        import logging  # noqa: PLC0415
 
         db = _make_db(tmp_path)
         settings = _make_settings(
@@ -683,14 +683,24 @@ class TestNotifyReply:
             dry_run=True,
         )
 
+        spawned: list[threading.Thread] = []
+        original_thread_start = threading.Thread.start
+
+        def capturing_start(self_thread):
+            spawned.append(self_thread)
+            original_thread_start(self_thread)
+
         with caplog.at_level(logging.INFO, logger="src.master.notify"):
             with patch("src.master.notify.request.urlopen") as mock_open:
-                notify_reply(
-                    db_path=db,
-                    settings=settings,
-                    topic_id="t1",
-                    payload={"last_response": "reply"},
-                )
+                with patch.object(threading.Thread, "start", capturing_start):
+                    notify_reply(
+                        db_path=db,
+                        settings=settings,
+                        topic_id="t1",
+                        payload={"last_response": "reply"},
+                    )
+                for t in spawned:
+                    t.join(timeout=5)
                 mock_open.assert_not_called()
 
         assert any("dry_run" in r.message for r in caplog.records)

@@ -88,8 +88,17 @@ def test_ws_endpoint_accepts_connection(ws_client):
 
 
 def test_ws_endpoint_receives_broadcast(ws_client):
+    import time
     client, app = ws_client
     with client.websocket_connect("/ws/events") as ws:
+        # ws_global runs _replay_in_progress_chunks (async, uses run_in_executor)
+        # before calling hub.connect, so the WebSocket may not yet be registered
+        # in the hub when we enter this block.  Poll until it appears.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if app.state.hub._connections.get("_global"):
+                break
+            time.sleep(0.01)
         msg = {"type": "status", "state": "thinking", "topic_id": "topic-abc"}
         asyncio.run(app.state.hub.broadcast("_global", msg))
         data = ws.receive_json()

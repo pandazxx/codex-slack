@@ -16,6 +16,7 @@ LOGGER = logging.getLogger(__name__)
 
 _RESPONSE_TOPIC = "codex-slack/workspace/+/topic/+/response"
 _STATUS_TOPIC = "codex-slack/workspace/+/topic/+/status"
+_CHUNK_TOPIC = "codex-slack/workspace/+/topic/+/chunk"
 
 # Topic pattern: codex-slack/workspace/{wid}/topic/{tid}/{type}
 _TOPIC_PARTS = 6
@@ -69,6 +70,35 @@ def _record_agent_response(db_path: str, topic_id: str) -> None:
         LOGGER.exception("mqtt.record_agent_response_error topic_id=%s", topic_id)
 
 
+def _save_chunk(db_path: str, topic_id: str, payload: dict) -> None:  # type: ignore[type-arg]
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            message_id = payload["message_id"]
+            seq = payload["seq"]
+            event = payload["event"]
+            agent_name = payload.get("agent_name")
+            is_retry = (
+                isinstance(event, dict)
+                and event.get("type") == "system"
+                and event.get("subtype") == "retry"
+            )
+            with conn:
+                if is_retry:
+                    conn.execute(
+                        "DELETE FROM chunks WHERE message_id = ?", (message_id,)
+                    )
+                conn.execute(
+                    "INSERT INTO chunks (message_id, topic_id, seq, event, agent_name)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (message_id, topic_id, seq, json.dumps(event), agent_name),
+                )
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.exception("mqtt.save_chunk_error topic_id=%s", topic_id)
+
+
 def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  # type: ignore[type-arg]
     try:
         conn = sqlite3.connect(db_path)
@@ -81,19 +111,22 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
             agent_name = payload.get("agent_name")
             message_id = payload.get("message_id") or str(uuid.uuid4())
             usage_json = _extract_usage(transcript)
-            conn.execute(
-                "INSERT OR IGNORE INTO messages"
-                " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, created_at)"
-                " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?)",
-                (message_id, topic_id, agent_name, text, transcript, usage_json, _now()),
-            )
-            if llm_session_id and agent_name:
+            with conn:
                 conn.execute(
-                    "UPDATE sessions SET llm_session_id = ?, updated_at = ?"
-                    " WHERE topic_id = ? AND agent_name = ?",
-                    (llm_session_id, _now(), topic_id, agent_name),
+                    "INSERT OR IGNORE INTO messages"
+                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, created_at)"
+                    " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?)",
+                    (message_id, topic_id, agent_name, text, transcript, usage_json, _now()),
                 )
-            conn.commit()
+                conn.execute(
+                    "DELETE FROM chunks WHERE message_id = ?", (message_id,)
+                )
+                if llm_session_id and agent_name:
+                    conn.execute(
+                        "UPDATE sessions SET llm_session_id = ?, updated_at = ?"
+                        " WHERE topic_id = ? AND agent_name = ?",
+                        (llm_session_id, _now(), topic_id, agent_name),
+                    )
         finally:
             conn.close()
     except Exception:
@@ -107,7 +140,8 @@ def _on_connect(client: mqtt.Client, userdata, flags, reason_code, properties) -
     LOGGER.info("mqtt.connected")
     client.subscribe(_RESPONSE_TOPIC, qos=1)
     client.subscribe(_STATUS_TOPIC, qos=0)
-    LOGGER.info("mqtt.subscribed topics=%s,%s", _RESPONSE_TOPIC, _STATUS_TOPIC)
+    client.subscribe(_CHUNK_TOPIC, qos=0)
+    LOGGER.info("mqtt.subscribed topics=%s,%s,%s", _RESPONSE_TOPIC, _STATUS_TOPIC, _CHUNK_TOPIC)
 
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties) -> None:  # type: ignore[type-arg]
@@ -129,7 +163,13 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
         return
 
     db_path = userdata.get("db_path")
-    if msg_type == "status":
+    if msg_type == "chunk":
+        if db_path:
+            _save_chunk(db_path, topic_id, payload)
+        if payload.get("seq") == 0:
+            LOGGER.info("ws.first_chunk topic_id=%s message_id=%s", topic_id, payload.get("message_id"))
+        message = {"type": "chunk", **payload}
+    elif msg_type == "status":
         state = payload.get("state")
         message = {"type": "status", "state": state}
         if db_path and state and topic_id:

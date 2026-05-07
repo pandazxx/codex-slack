@@ -39,6 +39,10 @@ def _response_topic(workspace_id: str, topic_id: str) -> str:
     return f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/response"
 
 
+def _chunk_topic(workspace_id: str, topic_id: str) -> str:
+    return f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/chunk"
+
+
 def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str) -> None:
     if Path(worktree_path).exists():
         return
@@ -69,7 +73,12 @@ def _fetch_attachment(master_url: str, attachment_id: str, filename: str, worktr
     LOGGER.info("agent.attachment_fetched id=%s filename=%s", attachment_id, filename)
 
 
-def _run_claude_once(
+def _stream_claude_once(
+    client: mqtt.Client,
+    workspace_id: str,
+    topic_id: str,
+    reply_message_id: str,
+    agent_name: str,
     worktree: str,
     text: str,
     session_id: str | None,
@@ -77,8 +86,12 @@ def _run_claude_once(
     subagent: str | None,
     model: str | None,
     system_prompt: str | None,
+    seq_start: int = 0,
 ) -> tuple[str, str | None, str | None, bool]:
-    """Returns (output, new_session_id, transcript, is_error)."""
+    """Stream Claude stdout line by line, publishing each event as an MQTT chunk.
+
+    Returns (output, new_session_id, transcript, is_error).
+    """
     cmd = ["claude", "--print", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions"]
     if session_id:
         if is_new_session:
@@ -92,42 +105,69 @@ def _run_claude_once(
     if subagent:
         cmd += ["--agent", subagent]
     cmd.append(text)
+    chunk_topic = _chunk_topic(workspace_id, topic_id)
+    events: list[dict] = []
+    new_session_id: str | None = None
+    output: str | None = None
+    is_error = False
+    seq = seq_start
+    outputs: list[str] = []
     try:
-        result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True, timeout=_LLM_TIMEOUT)
-        events = []
-        new_session_id = None
-        outputs: list[str] = []
-        is_error = False
-        for line in result.stdout.splitlines():
+        proc = subprocess.Popen(
+            cmd, cwd=worktree,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+        for line in proc.stdout:
             line = line.strip()
             if not line:
                 continue
             try:
                 event = json.loads(line)
-                events.append(event)
-                if event.get("type") == "result":
-                    new_session_id = event.get("session_id")
-                    result_text = event.get("result") or event.get("last_response")
-                    if result_text:
-                        outputs.append(result_text)
-                    if event.get("is_error"):
-                        is_error = True
-            except (json.JSONDecodeError, AttributeError):
+            except (json.JSONDecodeError, ValueError):
                 continue
-        transcript = json.dumps(events) if events else None
+            events.append(event)
+            client.publish(chunk_topic, json.dumps({
+                "message_id": reply_message_id,
+                "agent_name": agent_name,
+                "seq": seq,
+                "event": event,
+            }), qos=0)
+            LOGGER.debug("agent.llm_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+            seq += 1
+            if event.get("type") == "result":
+                new_session_id = event.get("session_id")
+                result_text = event.get("result") or event.get("last_response")
+                if result_text:
+                    outputs.append(result_text)
+                if event.get("is_error"):
+                    is_error = True
+        proc.wait()
         output = "\n\n---\n\n".join(outputs) if outputs else None
         if not output:
-            output = result.stderr.strip() or "(no output)"
+            err = (proc.stderr.read() or "").strip()
+            output = err or "(no output)"
+        transcript = json.dumps(events) if events else None
+        LOGGER.info(
+            "agent.llm_done topic_id=%s chunks=%d chars=%d",
+            topic_id, seq - seq_start, len(output),
+        )
         return output, new_session_id, transcript, is_error
-    except subprocess.TimeoutExpired:
-        return f"(claude timed out after {_LLM_TIMEOUT}s)", None, None, True
     except FileNotFoundError:
         return "(claude CLI not found in agent container)", None, None, True
     except Exception as exc:
-        return f"(claude error: {exc})", None, None, True
+        try:
+            proc.kill()
+        finally:
+            return f"(claude error: {exc})", None, None, True
 
 
 def _run_claude(
+    client: mqtt.Client,
+    workspace_id: str,
+    topic_id: str,
+    reply_message_id: str,
+    agent_name: str,
     worktree: str,
     text: str,
     session_id: str | None,
@@ -136,13 +176,26 @@ def _run_claude(
     model: str | None,
     system_prompt: str | None,
 ) -> tuple[str, str | None, str | None]:
-    output, new_session_id, transcript, is_error = _run_claude_once(
-        worktree, text, session_id, is_new_session, subagent, model, system_prompt
+    output, new_session_id, transcript, is_error = _stream_claude_once(
+        client, workspace_id, topic_id, reply_message_id, agent_name,
+        worktree, text, session_id, is_new_session, subagent, model, system_prompt,
+        seq_start=0,
     )
     if not is_new_session and session_id and is_error and _SESSION_NOT_FOUND in (output or ""):
         LOGGER.warning("agent.session_expired sid=%s retrying_as_new", session_id)
-        output, new_session_id, transcript, _ = _run_claude_once(
-            worktree, text, session_id, True, subagent, model, system_prompt
+        first_event_count = len(json.loads(transcript)) if transcript else 0
+        seq = first_event_count
+        client.publish(_chunk_topic(workspace_id, topic_id), json.dumps({
+            "message_id": reply_message_id,
+            "agent_name": agent_name,
+            "seq": seq,
+            "event": {"type": "system", "subtype": "retry"},
+        }), qos=0)
+        seq += 1
+        output, new_session_id, transcript, _ = _stream_claude_once(
+            client, workspace_id, topic_id, reply_message_id, agent_name,
+            worktree, text, session_id, True, subagent, model, system_prompt,
+            seq_start=seq,
         )
     return output, new_session_id, transcript
 
@@ -169,6 +222,7 @@ def _process_prompt(
     repo_dir: str,
 ) -> None:
     message_id = payload.get("message_id") or str(uuid.uuid4())
+    reply_message_id = str(uuid.uuid4())
     agent_name = payload.get("agent_name", "claude")
     worktree = payload.get("worktree", "")
     branch = payload.get("branch", "")
@@ -227,7 +281,8 @@ def _process_prompt(
             session_cwd = "/workspace/sessions/global"
             Path(session_cwd).mkdir(parents=True, exist_ok=True)
         response_text, new_session_id, transcript = _run_claude(
-            session_cwd, text, session_id, is_new_session, subagent, model, system_prompt
+            client, workspace_id, topic_id, reply_message_id, agent_name,
+            session_cwd, text, session_id, is_new_session, subagent, model, system_prompt,
         )
 
     LOGGER.info("agent.llm_done topic_id=%s chars=%d", topic_id, len(response_text))
@@ -235,7 +290,7 @@ def _process_prompt(
     client.publish(
         _response_topic(workspace_id, topic_id),
         json.dumps({
-            "message_id": str(uuid.uuid4()),
+            "message_id": reply_message_id,
             "agent_name": agent_name,
             "reply_to": message_id,
             "last_response": response_text,

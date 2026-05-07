@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -276,15 +278,59 @@ async def schema() -> dict:  # type: ignore[type-arg]
     return schema_info(app.state.db_path)
 
 
+async def _replay_in_progress_chunks(ws: WebSocket, db_path: str) -> None:
+    """Replay every in-progress chunk stream to a freshly-connected client.
+
+    Master's WS is global (single `_global` channel) so we replay across all
+    topics; the frontend filters by `topic_id` in the frame.
+    """
+    def _query() -> list[tuple[str, str, str | None, list[dict]]]:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            in_progress = [
+                (r["message_id"], r["topic_id"]) for r in conn.execute(
+                    "SELECT DISTINCT c.message_id, c.topic_id FROM chunks c"
+                    " LEFT JOIN messages m ON m.id = c.message_id"
+                    " WHERE m.id IS NULL"
+                ).fetchall()
+            ]
+            result = []
+            for mid, tid in in_progress:
+                rows = conn.execute(
+                    "SELECT event, agent_name FROM chunks WHERE message_id = ? ORDER BY seq",
+                    (mid,),
+                ).fetchall()
+                agent_name = rows[0]["agent_name"] if rows else None
+                result.append((mid, tid, agent_name, [json.loads(r["event"]) for r in rows]))
+            return result
+        finally:
+            conn.close()
+
+    streams = await asyncio.get_running_loop().run_in_executor(None, _query)
+    for message_id, topic_id, agent_name, events in streams:
+        if events:
+            await ws.send_json({
+                "type": "chunk_replay",
+                "topic_id": topic_id,
+                "message_id": message_id,
+                "agent_name": agent_name,
+                "events": events,
+            })
+    LOGGER.info("ws.chunk_replay streams=%d", len(streams))
+
+
 @app.websocket("/ws/events")
 async def ws_global(websocket: WebSocket) -> None:
     await websocket.accept()
-    app.state.hub.connect("_global", websocket)
     try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
+        await _replay_in_progress_chunks(websocket, app.state.db_path)
+        app.state.hub.connect("_global", websocket)
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
     finally:
         app.state.hub.disconnect("_global", websocket)
 

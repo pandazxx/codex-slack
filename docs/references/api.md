@@ -150,16 +150,23 @@ Valid adapters: `"claude-code"`, `"codex"`.
 
 ## WebSocket Interface
 
-The browser connects to `ws://master:8080/ws/{topic_id}` to receive real-time updates for a topic.
+The browser connects to `ws://master:8080/ws/events` — a single global channel. The frontend filters events by `topic_id` where relevant.
 
 **Messages pushed by master to browser:**
 
 ```json
 { "type": "status", "state": "thinking" | "idle" }
 { "type": "message", "sender": "agent", "last_response": "...", "transcript": "...", "agent_name": "claude", "session_id": "<sid>" }
+{ "type": "chunk", "topic_id": "<uuid>", "message_id": "<uuid>", "agent_name": "claude", "seq": 7, "event": { ...stream-json event... } }
+{ "type": "chunk_replay", "topic_id": "<uuid>", "message_id": "<uuid>", "agent_name": "claude", "events": [ ...ordered stream-json events... ] }
 ```
 
-User messages are persisted via `POST /api/.../messages` (HTTP, not WebSocket). The WebSocket is receive-only from the browser's perspective.
+- **`chunk`** — one frame per Claude stdout line published while the agent is streaming. The frontend appends to a live message bubble keyed by `message_id`.
+- **`chunk_replay`** — sent once per in-progress `message_id` immediately after a client connects (before any further live `chunk` frames). Replays all chunks the master has persisted so far for that stream, enabling browser-refresh recovery mid-stream.
+- **`message`** — the durable agent reply. Replaces the live `chunk` placeholder for the matching `message_id` and clears the `chunks` table rows for that id.
+- **`status`** — coarse agent lifecycle signal (thinking / idle).
+
+User messages are sent via `POST /api/.../messages` (HTTP, not WebSocket). The WebSocket is receive-only from the browser's perspective.
 
 ## MQTT Topic Patterns
 

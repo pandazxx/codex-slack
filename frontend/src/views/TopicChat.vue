@@ -22,7 +22,60 @@
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
         <div class="bubble">
-          <MarkdownMessage :text="m.text" />
+          <template v-if="m.sender === 'agent'">
+            <template v-if="m.streaming && m.rows?.length">
+              <div class="trace-row" v-for="(row, i) in m.rows" :key="i">
+                <details v-if="row.kind === 'tool_use'" class="tool-use-fold">
+                  <summary>{{ toolUseLabel(row.event) }}</summary>
+                  <pre class="tr-json">{{ toolUseInput(row.event) }}</pre>
+                </details>
+                <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
+                <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
+                <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                <div v-else-if="row.kind === 'thinking'" class="thinking-block">
+                  <div class="thinking-meta">💭 Thinking</div>
+                  <div class="thinking-text">{{ thinkingText(row.event) }}</div>
+                </div>
+                <div v-else-if="row.kind === 'agent_result'" class="agent-result">
+                  <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
+                  <MarkdownMessage :text="agentResultText(row.event)" />
+                </div>
+                <details v-else-if="row.kind === 'folded'">
+                  <summary>···</summary>
+                  <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
+                </details>
+              </div>
+            </template>
+            <template v-else-if="!m.streaming && m.traceRows?.length">
+              <details :open="m.traceOpen" @toggle="m.traceOpen = $event.target.open">
+                <summary>▶ Show trace ({{ m.traceRows.length }} steps)</summary>
+                <div class="trace-row" v-for="(row, i) in m.traceRows" :key="i">
+                  <details v-if="row.kind === 'tool_use'" class="tool-use-fold">
+                    <summary>{{ toolUseLabel(row.event) }}</summary>
+                    <pre class="tr-json">{{ toolUseInput(row.event) }}</pre>
+                  </details>
+                  <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
+                  <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
+                  <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                  <div v-else-if="row.kind === 'thinking'" class="thinking-block">
+                    <div class="thinking-meta">💭 Thinking</div>
+                    <div class="thinking-text">{{ thinkingText(row.event) }}</div>
+                  </div>
+                  <div v-else-if="row.kind === 'agent_result'" class="agent-result">
+                    <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
+                    <MarkdownMessage :text="agentResultText(row.event)" />
+                  </div>
+                  <details v-else-if="row.kind === 'folded'">
+                    <summary>···</summary>
+                    <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
+                  </details>
+                </div>
+              </details>
+            </template>
+            <MarkdownMessage :text="m.text" />
+            <span v-if="m.streaming" class="cursor">▍</span>
+          </template>
+          <template v-else>{{ m.text }}</template>
         </div>
         <div v-if="m.attachments && m.attachments.length" class="attachment-list">
           <template v-for="a in m.attachments" :key="a.id">
@@ -143,6 +196,8 @@ const msgBox = ref(null)
 const rawView = ref({})
 const fileInput = ref(null)
 const selectedFiles = ref([])
+const liveStreams = ref({})
+const seenSeq = new Map()
 
 const isArchived = computed(() => !!topic.value?.archived_at)
 const sendError = ref('')
@@ -171,6 +226,144 @@ async function fetchAgentStatus() {
   }
 }
 
+function classifyEvent(event) {
+  const t = event.type, s = event.subtype
+  if (t === 'assistant') {
+    const c = event.message?.content || []
+    if (c.some(b => b.type === 'text'))     return 'text'
+    if (c.some(b => b.type === 'thinking')) return 'thinking'
+    if (c.some(b => b.type === 'tool_use')) return 'tool_use'
+  }
+  if (t === 'system' && s === 'task_progress') return 'task_progress'
+  if (t === 'system' && s === 'task_started')  return 'task_started'
+  if (t === 'system' && s === 'retry')         return 'retry_notice'
+  if (t === 'user') {
+    const c = event.message?.content || []
+    if (c.some(b => b.type === 'tool_result')) {
+      // Subagent (Agent tool) results are a synthesized summary worth showing
+      // expanded; raw tool_results (Bash/Read/...) stay folded.
+      if (event.tool_use_result?.agentType) return 'agent_result'
+      return 'folded'
+    }
+  }
+  return 'hidden'
+}
+
+function agentResultText(event) {
+  const blocks = event.tool_use_result?.content || []
+  const text = blocks.find(b => b.type === 'text')?.text
+  if (text) return text
+  // Fallback: dig into the inner tool_result block.
+  const inner = event.message?.content?.find(b => b.type === 'tool_result')?.content
+  if (Array.isArray(inner)) {
+    const t = inner.find(b => b.type === 'text')?.text
+    if (t) return t
+  }
+  return ''
+}
+
+function thinkingText(event) {
+  const blk = event.message?.content?.find(b => b.type === 'thinking')
+  return blk?.thinking || ''
+}
+
+function toolUseInput(event) {
+  const blk = event.message?.content?.find(b => b.type === 'tool_use')
+  if (!blk) return ''
+  return JSON.stringify(blk.input || {}, null, 2)
+}
+
+function agentResultMeta(event) {
+  const r = event.tool_use_result || {}
+  const parts = []
+  if (r.agentType) parts.push(r.agentType)
+  if (r.totalDurationMs != null) parts.push(`${(r.totalDurationMs / 1000).toFixed(1)}s`)
+  if (r.totalTokens != null) parts.push(`${r.totalTokens.toLocaleString()} tok`)
+  if (r.totalToolUseCount != null) parts.push(`${r.totalToolUseCount} tools`)
+  return parts.join(' · ')
+}
+
+function toolUseLabel(event) {
+  const block = event.message?.content?.find(b => b.type === 'tool_use')
+  if (!block) return ''
+  const { name, input } = block
+  if (name === 'Bash')     return `⚙ Bash: ${(input.command   || '').slice(0, 80)}`
+  if (name === 'Read')     return `📄 Read: ${input.file_path  || ''}`
+  if (name === 'Write')    return `✏️ Write: ${input.file_path || ''}`
+  if (name === 'Edit')     return `✏️ Edit: ${input.file_path  || ''}`
+  if (name === 'Glob')     return `🔍 Glob: ${input.pattern    || ''}`
+  if (name === 'Grep')     return `🔍 Grep: ${input.pattern    || ''}`
+  if (name === 'Agent')    return `🤖 Agent: ${input.description || ''}`
+  if (name === 'WebFetch') return `🌐 Fetch: ${input.url       || ''}`
+  return `⚙ ${name}`
+}
+
+function transcriptToRows(transcriptJson) {
+  if (!transcriptJson) return []
+  try {
+    return JSON.parse(transcriptJson)
+      .map(event => ({ kind: classifyEvent(event), event }))
+      .filter(r => r.kind !== 'hidden')
+  } catch { return [] }
+}
+
+function handleChunk({ message_id, agent_name, seq, event }) {
+  if (seq !== undefined) {
+    const maxSeen = seenSeq.get(message_id) ?? -1
+    if (seq <= maxSeen) return
+    seenSeq.set(message_id, seq)
+  }
+
+  let live = liveStreams.value[message_id]
+  if (!live) {
+    live = { rows: [], text: '' }
+    liveStreams.value[message_id] = live
+    messages.value.push({
+      id: message_id, sender: 'agent',
+      agent_name: agent_name || null,
+      text: '', rows: live.rows,
+      streaming: true, traceOpen: false,
+      created_at: new Date().toISOString(),
+    })
+  }
+  if (event.type === 'system' && event.subtype === 'retry') {
+    live.rows.splice(0, live.rows.length, { kind: 'retry_notice', event })
+    live.text = ''
+    const msg = messages.value.find(m => m.id === message_id)
+    if (msg) msg.text = ''
+    scrollToBottom()
+    return
+  }
+  const kind = classifyEvent(event)
+  if (kind === 'text') {
+    for (const blk of event.message?.content || [])
+      if (blk.type === 'text') live.text += blk.text
+    const msg = messages.value.find(m => m.id === message_id)
+    if (msg) msg.text = live.text
+  } else if (kind !== 'hidden') {
+    live.rows.push({ kind, event })
+  }
+  scrollToBottom()
+}
+
+function finaliseMessage(data) {
+  const idx = messages.value.findIndex(m => m.id === data.message_id)
+  const finalMsg = {
+    id: data.message_id, sender: data.sender || 'agent',
+    agent_name: data.agent_name || null,
+    text: data.last_response || data.text || '',
+    transcript: data.transcript || null,
+    traceRows: transcriptToRows(data.transcript),
+    traceOpen: false, streaming: false,
+    created_at: new Date().toISOString(),
+  }
+  if (idx >= 0) messages.value.splice(idx, 1, finalMsg)
+  else messages.value.push(finalMsg)
+  delete liveStreams.value[data.message_id]
+  seenSeq.delete(data.message_id)
+  scrollToBottom()
+}
+
 async function load() {
   loading.value = true
   try {
@@ -180,7 +373,13 @@ async function load() {
       fetch(`/api/workspaces/${wsId}`),
     ])
     topic.value = await topicRes.json()
-    messages.value = await msgsRes.json()
+    const rawMsgs = await msgsRes.json()
+    messages.value = rawMsgs.map(m => ({
+      ...m,
+      traceRows: transcriptToRows(m.transcript),
+      traceOpen: false,
+      streaming: false,
+    }))
     if (wsRes.ok) workspace.value = await wsRes.json()
     scrollToBottom()
   } finally {
@@ -199,16 +398,14 @@ function connectWs() {
     if (data.topic_id !== topicId) return
     if (data.type === 'status') {
       agentStatus.value = data.state || ''
-    } else if (data.type === 'message') {
-      messages.value.push({
-        id: data.message_id || Date.now().toString(),
-        sender: data.sender || 'agent',
-        agent_name: data.agent_name || null,
-        text: data.last_response || data.text || '',
-        transcript: data.transcript || null,
-        created_at: new Date().toISOString(),
+    } else if (data.type === 'chunk') {
+      handleChunk(data)
+    } else if (data.type === 'chunk_replay') {
+      data.events.forEach((event, idx) => {
+        handleChunk({ message_id: data.message_id, agent_name: data.agent_name, seq: idx, event })
       })
-      scrollToBottom()
+    } else if (data.type === 'message') {
+      finaliseMessage(data)
     }
   }
 
@@ -452,4 +649,19 @@ onUnmounted(() => {
 .hint { font-size: 0.8em; text-align: right; margin-top: 0.25rem; }
 .muted { color: #64748b; }
 .center { text-align: center; }
+.cursor {
+  display: inline-block;
+  animation: blink 1s steps(2) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
+.trace-row { font-size: 0.85em; color: #888; padding: 1px 0; font-family: monospace; }
+.trace-row details summary { cursor: pointer; }
+.agent-result { font-family: inherit; color: inherit; margin: 0.5em 0; padding: 0.5em 0.75em; border-left: 3px solid #6c8cff; background: rgba(108, 140, 255, 0.05); border-radius: 0 4px 4px 0; }
+.agent-result-meta { font-size: 0.75em; color: #6c8cff; margin-bottom: 0.25em; font-family: monospace; }
+.thinking-block { font-family: inherit; color: #555; margin: 0.4em 0; padding: 0.4em 0.75em; border-left: 3px solid #c0a85a; background: rgba(192, 168, 90, 0.06); border-radius: 0 4px 4px 0; }
+.thinking-meta { font-size: 0.75em; color: #c0a85a; margin-bottom: 0.2em; font-family: monospace; }
+.thinking-text { font-style: italic; white-space: pre-wrap; line-height: 1.4; }
+.tool-use-fold > summary { cursor: pointer; list-style: none; }
+.tool-use-fold > summary::-webkit-details-marker { display: none; }
+.tool-use-fold[open] > summary { color: #ccc; }
 </style>

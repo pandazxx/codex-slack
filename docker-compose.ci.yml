@@ -1,0 +1,26 @@
+# CI testing configuration — runs tests in container
+# Invoked by CI workflows via `docker compose -f docker-compose.yml -f docker-compose.ci.yml`
+
+services:
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: codex-slack:test
+    working_dir: /opt/codex-slack
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "/opt/codex-slack"
+    volumes:
+      - ./src:/opt/codex-slack/src:ro
+      - ./tests:/opt/codex-slack/tests:ro
+      - ./frontend:/opt/codex-slack/frontend:ro
+      - ./config:/opt/codex-slack/config:ro
+      - ./Dockerfile.agent-minimal:/opt/codex-slack/Dockerfile.agent-minimal:ro
+      - ./docker:/opt/codex-slack/docker:ro
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    networks:
+      - internal

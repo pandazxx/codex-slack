@@ -2,17 +2,12 @@ FROM python:3.11-slim
 
 ARG CODEX_NPM_PACKAGE=@openai/codex
 ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code
-ARG APP_VERSION=dev
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    APP_VERSION=${APP_VERSION}
+    PYTHONUNBUFFERED=1
 
 # Add Docker's official apt repo so we get docker-ce-cli + compose plugin.
-# The podman package on Debian installs a podman-docker shim that shadows
-# /usr/bin/docker; real Docker CLI must come first to avoid Podman being
-# invoked when DOCKER_HOST points to a socket (CD daemon, master runtime).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl gnupg \
     && install -m 0755 -d /etc/apt/keyrings \
@@ -36,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     less \
     make \
+    mosquitto-clients \
     openssh-client \
     poppler-utils \
     tini \
@@ -48,28 +44,23 @@ RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
 RUN useradd -m -u 1000 -s /bin/bash appuser \
     && mkdir -p /workspace/home /home/appuser/.claude /opt/codex-slack/data/master \
     && chown -R appuser:appuser /workspace /home/appuser/.claude /opt/codex-slack
-USER appuser
+
 WORKDIR /opt/codex-slack
 
-COPY --chown=appuser:appuser requirements.txt ./requirements.txt
+# Install Python deps globally so they're available regardless of which user
+# the container runs as (dev override may run as root to access the docker
+# socket on macOS).
+COPY requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
+USER appuser
+
+# Pre-install Node dependencies (will be shadowed by bind-mount in dev, but speeds up first start)
 COPY --chown=appuser:appuser frontend/package.json frontend/package-lock.json* ./frontend/
-RUN cd frontend && npm ci --prefer-offline 2>/dev/null || npm install
+RUN cd frontend && npm ci --prefer-offline 2>/dev/null || npm install || true
 
-COPY --chown=appuser:appuser src ./src
-COPY --chown=appuser:appuser frontend ./frontend
-RUN cd frontend && npm run build && rm -rf node_modules
-
-COPY --chown=appuser:appuser config ./config
-COPY --chown=appuser:appuser docs ./docs
-COPY --chown=appuser:appuser docker-compose.yml ./
-COPY --chown=appuser:appuser README.md BUILD.md USAGE.md ./
-COPY --chown=appuser:appuser docker/entrypoint.sh /usr/local/bin/bot-entrypoint
-RUN chmod +x /usr/local/bin/bot-entrypoint
-
-HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=30s \
-  CMD curl -f http://localhost:8080/health || exit 1
+# Keep source dirs empty — they'll be bind-mounted
+RUN mkdir -p src config
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]

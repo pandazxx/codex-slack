@@ -77,10 +77,12 @@ In the workspace detail view, the **Agents** section shows active agent configur
 
 ## Real-time Updates
 
-The browser connects to `ws://master-host:8080/ws/{topic_id}` when you open a topic. You receive:
+The browser connects to `ws://master-host:8080/ws/events` when you open any topic. You receive:
 
-- **Thinking indicator** — spinner appears when the agent starts processing, disappears when it finishes.
-- **Agent messages** — pushed to the thread as soon as the LLM turn completes.
+- **Live trace** — as Claude works, the reply bubble fills with activity rows: tool invocations (e.g. `⚙ Bash: git log …`, `📄 Read: src/…`), subagent progress lines (`↳ …`), and the reply text with a blinking cursor. Subagent tool results appear in a blue block; chain-of-thought thinking appears in an amber block; tool-use rows are foldable to reveal the full input JSON.
+- **Thinking indicator** — a coarse status pill shows `thinking` while the agent is running.
+- **Final message** — when the agent finishes, the activity rows fold into a `▶ Show trace (N steps)` toggle and the clean reply text remains. Clicking the toggle expands the full trace in place.
+- **Refresh recovery** — if you reload the page while the agent is mid-stream, the partial reply is restored automatically within ~1s from the master's persisted chunk store.
 
 If the WebSocket disconnects (e.g. network interruption), reload the page to reconnect.
 
