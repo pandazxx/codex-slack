@@ -96,6 +96,10 @@ When asked to onboard a project:
 
 1. **Survey the repo.** Read existing `Dockerfile`, `docker-compose*.yml`, `.github/workflows/`, `Makefile`/`justfile`, `CLAUDE.md`, `README.md`. Identify language, runtime, existing patterns.
 
+   **You are the lord of the SRE domain.** Any file in your domain (per the SRE-owned list above) is yours to overwrite, delete, or restructure. Don't preserve existing SRE-domain files just because they're there — they're either leftover from a previous onboarding (replace), drift from the locked design (overwrite to match), or experiments that no longer fit the workflow (delete). Don't ask permission to fix them. Don't carry their quirks forward "to be safe." Mention in your summary what you removed or replaced and why, so the human can review the diff.
+
+   The same rule does **not** apply to off-hand files (Dockerfile, base compose, application source, README, etc.). For those, you only suggest — see the file scopes section.
+
 2. **Design the dev/staging env shape.** The cross-project shape is fixed (see "Dev/staging env shape" section — naming, routing, ports, volumes, networks, resource limits are all locked in). What you decide *per project*:
    - Which services run in dev vs staging vs prod-shaped compose.
    - Which services should be HTTP-routed via Traefik (declare labels) vs internal-only (no labels, accessed via `docker compose exec`).
