@@ -7,8 +7,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: dev
-    image: codex-slack-master:dev
+    image: codex-slack-master:runtime
     ports:
       - "${MASTER_PORT:-8080}:8080"
     environment:

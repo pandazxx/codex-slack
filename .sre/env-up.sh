@@ -115,12 +115,11 @@ set -a
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 set +a
 
-# Build the dev image on the remote if using a remote Docker host.
-# The dev image includes source code baked in since bind mounts don't work over SSH.
-# Uses --target dev to build only the dev stage from the multi-stage Dockerfile.
+# Build the runtime image on the remote if using a remote Docker host.
+# The runtime image includes source code baked in since bind mounts don't work over SSH.
 if [[ -n "$DEV_DOCKER_HOST" ]]; then
-  echo "Building dev image on remote Docker host..."
-  docker build -t codex-slack-master:dev --target dev .
+  echo "Building runtime image on remote Docker host..."
+  docker build -t codex-slack-master:runtime .
 fi
 
 # Start the stack. Pass the .env file explicitly to docker compose so it picks up

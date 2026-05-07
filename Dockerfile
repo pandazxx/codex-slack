@@ -60,25 +60,23 @@ COPY --chown=appuser:appuser frontend/package.json frontend/package-lock.json* .
 RUN cd frontend && npm ci --prefer-offline 2>/dev/null || npm install || true
 
 # ============================================================
-# Development target — bind-mounts source, no frontend build
-# ============================================================
-FROM base AS dev
-
 # Copy source code (will be bind-mounted and shadowed in local dev)
+# ============================================================
 COPY --chown=appuser:appuser src ./src
 COPY --chown=appuser:appuser config ./config
 
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
-
 # ============================================================
-# Production/runtime target — chains from dev, adds frontend build & assets
+# Runtime target — includes frontend build, docs, and bot entrypoint
 # ============================================================
-FROM dev AS runtime
+FROM base AS runtime
 
 ARG APP_VERSION=dev
 
 ENV APP_VERSION=${APP_VERSION}
+
+# Copy source (production containers run from built code, not bound mounts)
+COPY --chown=appuser:appuser src ./src
+COPY --chown=appuser:appuser config ./config
 
 COPY --chown=appuser:appuser frontend ./frontend
 RUN cd frontend && npm run build && rm -rf node_modules
@@ -89,10 +87,8 @@ COPY --chown=appuser:appuser README.md BUILD.md USAGE.md ./
 COPY --chown=appuser:appuser docker/entrypoint.sh /usr/local/bin/bot-entrypoint
 RUN chmod +x /usr/local/bin/bot-entrypoint
 
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
+
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=30s \
   CMD curl -f http://localhost:8080/health || exit 1
-
-# ============================================================
-# Default target — production runtime
-# ============================================================
-FROM runtime
