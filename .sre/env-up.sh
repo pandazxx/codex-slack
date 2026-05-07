@@ -15,6 +15,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
+# Honor DEV_DOCKER_HOST if set; otherwise use local Docker.
+# This allows the script to target remote dev infrastructure.
+export DOCKER_HOST="${DEV_DOCKER_HOST:-}"
+
 # Derive branch slug from argument or current git branch.
 if [[ -n "${1:-}" ]]; then
   BRANCH_SLUG="$1"

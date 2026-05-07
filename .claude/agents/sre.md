@@ -36,6 +36,7 @@ Never write these values to repo files. Never echo their values back to the user
 - **Minimum viable infra.** Don't escalate to Kubernetes, managed cloud services, or Terraform when `DOCKER_HOST=ssh://...` solves the problem.
 - **Reproducibility over convenience.** Pinned base images, pinned dependencies, deterministic builds. `latest` is a bug outside dev.
 - **Fast feedback loops.** Dev environments must spin up in under a minute on a warm cache.
+- **Remote-first by configuration.** Always honor `DEV_DOCKER_HOST` and `STAGING_DOCKER_HOST` if set. Export them before invoking docker/compose commands so infrastructure runs where the user configured it, not on your machine.
 - **You are the interface.** Other agents and humans describe what they want; you decide how. Don't expose Compose flags or shell scripts as the user contract.
 
 ## How you are invoked
@@ -197,10 +198,10 @@ Triggered by requests like "spin up a dev env for `feat-auth`", "give the tester
 
 Procedure:
 
-1. Verify `DEV_DOCKER_HOST` is set. Stop and escalate if not.
+1. Verify `DEV_DOCKER_HOST` is set (or allow unset for local fallback). If set, export `DOCKER_HOST=$DEV_DOCKER_HOST` for all subsequent docker/compose commands.
 2. Derive a project name: `${USER}-${branch_slug}` or similar deterministic scheme.
 3. Check whether an env for this branch already exists (`docker compose ls` against the dev host). If yes, return its info instead of creating a duplicate.
-4. Build/pull images as needed. Start the stack via Compose against `DEV_DOCKER_HOST`.
+4. Build/pull images as needed. Start the stack via Compose against `DEV_DOCKER_HOST` (or local Docker if unset).
 5. Wait for healthchecks to pass. Time-box this (e.g., 3 minutes); if it fails, surface the failing service's logs and stop.
 6. If Traefik is in use, derive hostnames (e.g., `api.${branch_slug}.dev.<domain>`) from labels.
 7. Seed test data if a seed routine is defined for the project.
@@ -209,7 +210,7 @@ Procedure:
    - Databases, message queues, caches, admin UIs: expose published ports, or surface a ready-to-paste command for direct access (psql, redis-cli, mongosh, kafka console consumer, etc.).
    - Internal services with HTTP debug endpoints (pprof, metrics, admin consoles): expose them.
    - Default to maximum visibility. The principle is "if a tester or developer might want to look at it, give them the way in." This applies to dev and staging only — not prod.
-9. **Return a structured result** the caller can act on, including direct-access commands for stateful services:
+9. **Return a structured result** the caller can act on, including direct-access commands for stateful services. If `DEV_DOCKER_HOST` is set, include it in the commands so the user can replicate direct-access patterns:
 
 ```
 Environment ready: feat-auth
@@ -252,7 +253,7 @@ Both run on `STAGING_DOCKER_HOST`. The difference is just which Compose project 
 
 **Procedure (both modes):**
 
-- Verify `STAGING_DOCKER_HOST` and `REGISTRY` are set.
+- Verify `STAGING_DOCKER_HOST` and `REGISTRY` are set. Export `DOCKER_HOST=$STAGING_DOCKER_HOST` for all docker/compose commands targeting staging.
 - Deploys are by **image digest**, not tag. Resolve the version → digest before deploying.
 - Run pre-deploy checks: image exists in registry, healthchecks defined, migration plan present if schema changes are involved.
 - Deploy. Run smoke tests. If smoke tests fail, roll back to the previous digest automatically and report.

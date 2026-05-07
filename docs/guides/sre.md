@@ -8,12 +8,17 @@ Before any SRE operation, verify these variables are set in your shell environme
 
 | Variable | Required for | Example |
 |---|---|---|
-| `DEV_DOCKER_HOST` | Dev env spin-up, local testing | `ssh://ubuntu@dev.tail-scale.ts.net` (optional for local; uses local Docker if unset) |
+| `DEV_DOCKER_HOST` | Dev env spin-up, local testing | `ssh://ubuntu@docker-testbed.local` (optional; uses local Docker if unset) |
 | `STAGING_DOCKER_HOST` | Staging deploys, UAT | `ssh://ubuntu@staging.tail-scale.ts.net` |
 | `REGISTRY` | Building/pushing images | `ghcr.io/myorg` |
 | `REGISTRY_TOKEN` | Pushing images | (from secret manager) |
 
-**Local development:** If `DEV_DOCKER_HOST` is unset, the SRE agent uses the local Docker daemon. This is fine for feature development on a personal machine.
+**Remote vs. local development:**
+
+- If `DEV_DOCKER_HOST` is set (e.g., `ssh://ubuntu@docker-testbed.local`), the SRE agent and `.sre/*.sh` scripts export `DOCKER_HOST=$DEV_DOCKER_HOST` before any `docker` or `docker compose` command. All containers run on the remote dev host.
+- If `DEV_DOCKER_HOST` is unset, containers run on the local Docker daemon. This is fine for isolated feature development on a personal machine.
+
+**Unit tests always run locally:** `.sre/test.sh` does NOT use `DEV_DOCKER_HOST`, because unit and in-process tests don't need remote infrastructure. Stack tests (integration, end-to-end) run against a dev environment spun up by SRE on the remote host.
 
 ## Supported Operations
 

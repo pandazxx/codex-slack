@@ -17,6 +17,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
+# NOTE: Tests run against LOCAL docker, not DEV_DOCKER_HOST.
+# Unit and in-process tests don't need remote infrastructure.
+# Use local Docker for fast feedback; stack tests go to dev env spun up by SRE.
+
 # Build test image if not present or stale.
 echo "Building test image..."
 docker compose -f docker-compose.yml -f docker-compose.ci.yml build master
