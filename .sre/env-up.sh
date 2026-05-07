@@ -60,6 +60,22 @@ if [[ "$CONTAINER_COUNT" -gt 0 ]]; then
   exit 0
 fi
 
+# Auto-detect DOCKER_GID from the host docker socket.
+# This is required for the master container to access the docker socket
+# via group_add without running as root.
+# For local Docker: stat the socket on the host
+# For remote Docker over SSH: stat it on the remote host via SSH
+if [[ -n "$DEV_DOCKER_HOST" ]]; then
+  # Remote Docker host — extract host and user from DEV_DOCKER_HOST (e.g., ssh://ubuntu@host)
+  DOCKER_HOST_PART="${DEV_DOCKER_HOST#ssh://}"
+  DOCKER_HOST_REMOTE="${DOCKER_HOST_PART%:*}"
+  # stat the socket on the remote host
+  DOCKER_GID=$(ssh "$DOCKER_HOST_REMOTE" "stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 999" 2>/dev/null || echo 999)
+else
+  # Local Docker — stat the socket on this machine
+  DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%Lg' /var/run/docker.sock 2>/dev/null || echo 999)
+fi
+
 # Create .env.local if it doesn't exist (allows overrides without committing).
 if [[ ! -f "$ENV_FILE" ]]; then
   cat > "$ENV_FILE" <<EOF
@@ -74,8 +90,18 @@ if [[ ! -f "$ENV_FILE" ]]; then
 MASTER_CONTAINER_NAME=${PROJECT_NAME}-master
 MOSQUITTO_CONTAINER_NAME=${PROJECT_NAME}-mosquitto
 MASTER_PORT=${MASTER_PORT}
+
+# Docker group GID for the master container to access the docker socket
+DOCKER_GID=${DOCKER_GID}
 EOF
   echo "Created $ENV_FILE — add API keys there if needed."
+else
+  # Update DOCKER_GID in existing .env.local (in case the host changed)
+  if grep -q "^DOCKER_GID=" "$ENV_FILE"; then
+    sed -i "" "s/^DOCKER_GID=.*/DOCKER_GID=${DOCKER_GID}/" "$ENV_FILE"
+  else
+    echo "DOCKER_GID=${DOCKER_GID}" >> "$ENV_FILE"
+  fi
 fi
 
 # Set container name and port overrides; export them so docker compose picks them up.
@@ -90,10 +116,11 @@ set -a
 set +a
 
 # Build the dev image on the remote if using a remote Docker host.
-# The dev image includes source code baked in since bind mounts won't work over SSH.
+# The dev image includes source code baked in since bind mounts don't work over SSH.
+# Uses --target dev to build only the dev stage from the multi-stage Dockerfile.
 if [[ -n "$DEV_DOCKER_HOST" ]]; then
   echo "Building dev image on remote Docker host..."
-  docker build -t codex-slack-master:dev -f Dockerfile.dev .
+  docker build -t codex-slack-master:dev --target dev .
 fi
 
 # Start the stack. Pass the .env file explicitly to docker compose so it picks up
