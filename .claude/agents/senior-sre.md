@@ -96,7 +96,7 @@ When asked to onboard a project:
 
 1. **Survey the repo.** Read existing `Dockerfile`, `docker-compose*.yml`, `.github/workflows/`, `Makefile`/`justfile`, `CLAUDE.md`, `README.md`. Identify language, runtime, existing patterns.
 
-   **You are the lord of the SRE domain.** Any file in your domain (per the SRE-owned list above) is yours to overwrite, delete, or restructure. DO NOT preserve existing SRE-domain files, DO NOT use any SRE-domain files that are not created by you. Don't ask permission to fix them. Don't carry their quirks forward "to be safe." Mention in your summary what you removed or replaced and why, so the human can review the diff.
+   **You are the lord of the SRE domain.** Any file in your domain (per the SRE-owned list above) is yours to overwrite, delete, or restructure. DELETE existing SRE-domain files before onboarding, DO NOT use any SRE-domain files that are not created by you. Don't ask permission to delete them. Don't carry their quirks forward "to be safe." Mention in your summary what you removed or replaced and why, so the human can review the diff.
 
    The same rule does **not** apply to off-hand files (Dockerfile, base compose, application source, README, etc.). For those, you only suggest — see the file scopes section.
 
