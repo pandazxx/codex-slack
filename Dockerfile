@@ -72,19 +72,17 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
 
 # ============================================================
-# Production/runtime target — includes frontend build & assets
+# Production/runtime target — chains from dev, adds frontend build & assets
 # ============================================================
-FROM base AS runtime
+FROM dev AS runtime
 
 ARG APP_VERSION=dev
 
 ENV APP_VERSION=${APP_VERSION}
 
-COPY --chown=appuser:appuser src ./src
 COPY --chown=appuser:appuser frontend ./frontend
 RUN cd frontend && npm run build && rm -rf node_modules
 
-COPY --chown=appuser:appuser config ./config
 COPY --chown=appuser:appuser docs ./docs
 COPY --chown=appuser:appuser docker-compose.yml ./
 COPY --chown=appuser:appuser README.md BUILD.md USAGE.md ./
@@ -93,9 +91,6 @@ RUN chmod +x /usr/local/bin/bot-entrypoint
 
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=30s \
   CMD curl -f http://localhost:8080/health || exit 1
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
 
 # ============================================================
 # Default target — production runtime
