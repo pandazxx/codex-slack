@@ -1,0 +1,47 @@
+# Remote development environment — no bind mounts (they don't cross SSH)
+# Used when DEV_DOCKER_HOST is set to a remote Docker host.
+# Relies on images being pre-built with source code.
+
+services:
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: codex-slack-master:dev
+    ports:
+      - "${MASTER_PORT:-8080}:8080"
+    environment:
+      MASTER_PORT: 8080
+      MASTER_DRY_RUN: "false"
+      CONTAINER_RUNTIME: docker
+      DOCKER_HOST: unix:///run/container.sock
+      CONTAINER_HOST: unix:///run/container.sock
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      MASTER_AGENT_NETWORK: ${COMPOSE_PROJECT_NAME:-codex-slack}_internal
+      # Optional: set these in .env.local for testing
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      - mosquitto
+    networks:
+      - internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    # Same as prod; no override needed for remote
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$SYS/broker/uptime", "-c", "1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s

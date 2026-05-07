@@ -14,7 +14,7 @@ services:
     # host's docker group GID instead.
     user: "0:0"
     ports:
-      - "8080:8080"
+      - "${MASTER_PORT:-8080}:8080"
     volumes:
       # Source code — bind-mounted for live reload
       - ./src:/opt/codex-slack/src

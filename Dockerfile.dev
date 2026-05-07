@@ -59,8 +59,10 @@ USER appuser
 COPY --chown=appuser:appuser frontend/package.json frontend/package-lock.json* ./frontend/
 RUN cd frontend && npm ci --prefer-offline 2>/dev/null || npm install || true
 
-# Keep source dirs empty — they'll be bind-mounted
-RUN mkdir -p src config
+# Copy source code if available (required for remote dev where bind mounts don't work).
+# For local dev, these directories will be bind-mounted and shadow this COPY.
+COPY --chown=appuser:appuser src ./src
+COPY --chown=appuser:appuser config ./config
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
