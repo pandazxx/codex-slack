@@ -1,7 +1,7 @@
 # Master-Agent Implementation Plan
 
 **Status:** archived historical plan  
-**Superseded by:** [`docs/design/master-agent-architecture.md`](../../design/master-agent-architecture.md), [`docs/design/master-agent-interface-design.md`](../../design/master-agent-interface-design.md), [`docs/design/frontend-master-interface-design.md`](../../design/frontend-master-interface-design.md), and the container design set under [`docs/design/containers/`](../../design/containers/)
+**Superseded by:** [`docs/design/v3-system-architecture.md`](../../design/v3-system-architecture.md), [`docs/decisions/0005-v3-system-architecture.md`](../../decisions/0005-v3-system-architecture.md), [`docs/decisions/0006-drop-slack-discord-integration.md`](../../decisions/0006-drop-slack-discord-integration.md), and the container design set under [`docs/design/containers/`](../../design/containers/). The v2 architecture and interface designs originally referenced here have themselves been archived under [`docs/archive/design/`](.).
 
 This document is preserved as historical implementation planning context for the
 initial master -> agent rollout.
@@ -38,7 +38,7 @@ For current operator-facing behavior and command surface, use [`docs/README.md`]
 - Finalize agent initialization stages and status reporting contract (no in-agent control service).
 
 Deliverables:
-- [`docs/design/master-agent-architecture.md`](../../design/master-agent-architecture.md)
+- [`docs/archive/design/master-agent-architecture.md`](master-agent-architecture.md)
 - [`docs/archive/design/master-agent-implementation-plan.md`](master-agent-implementation-plan.md)
 - sample registry JSON
 - sample project manifest (`.prj_assistant/agent.toml`)
