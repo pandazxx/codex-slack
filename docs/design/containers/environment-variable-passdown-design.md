@@ -1,6 +1,6 @@
 # Environment Variable Passdown Design
 
-**Status:** canonical design — partially out of date. The Slack/Discord rows under "Frontend and process-local settings" describe v2 frontend env vars that were removed by [ADR-0006](../../decisions/0006-drop-slack-discord-integration.md); v3 has no `SLACK_*` or `DISCORD_BOT_TOKEN` settings on `MasterSettings`. The non-frontend rows (data dirs, registry paths, agent-seed settings, CD inputs) remain accurate. Refer to [`src/master/config.py`](../../../src/master/config.py) for the authoritative current set.
+**Status:** canonical design. Frontend env vars that existed in v2 (`SLACK_*`, `DISCORD_*`, `MASTER_FRONTENDS`) were removed by [ADR-0006](../../decisions/0006-drop-slack-discord-integration.md) and are no longer documented here. Refer to [`src/master/config.py`](../../../src/master/config.py) for the authoritative current `MasterSettings` field set.
 
 **Scope:** how environment variables are loaded, renamed, persisted, and passed
 between the CD, master, and agent container runtimes
@@ -101,16 +101,10 @@ After that initial load:
   `MasterSettings`
 - `MasterService` then passes a selected subset down into agent env or mounts
 
-### Frontend and process-local settings
+### Process-local settings
 
 | Host env key | Loaded by | Stored as | Used by | Passed to agent |
 |---|---|---|---|---|
-| `MASTER_FRONTENDS` | `load_master_settings()` | `MasterSettings.frontends` | decide which frontend threads start | no |
-| `SLACK_BOT_TOKEN` | `load_master_settings()` | `MasterSettings.slack_bot_token` | Slack app and dispatcher URL access | not as agent env |
-| `SLACK_APP_TOKEN` | `load_master_settings()` | `MasterSettings.slack_app_token` | Slack Socket Mode | no |
-| `DISCORD_BOT_TOKEN` | `load_master_settings()` | `MasterSettings.discord_bot_token` | Discord frontend | no |
-| `MASTER_ADMIN_CHANNELS` | `load_master_settings()` | `MasterSettings.admin_channels` | Slack admin guard | no |
-| `DISCORD_ADMIN_CHANNELS` | `load_master_settings()` | `MasterSettings.discord_admin_channels` | Discord admin guard | no |
 | `MASTER_REGISTRY_PATH` | `load_master_settings()` | `MasterSettings.registry_path` | `AgentRegistry` | no |
 | `MASTER_THREAD_STATE_PATH` | `load_master_settings()` | `MasterSettings.thread_state_path` | `ChannelRouter` | no |
 | `MASTER_DRY_RUN` | `load_master_settings()` | `MasterSettings.dry_run` | `PodmanRuntimeAdapter` | no |
