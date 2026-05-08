@@ -29,6 +29,7 @@ from .staffs import global_router as global_staffs_router
 from .staffs import topic_router as topic_staffs_router
 from .staffs import workspace_router as workspace_staffs_router
 from .storage import LocalAttachmentStore
+from .event_dispatcher import emit_event, event_worker, worker_watchdog
 from .topics import recent_router as recent_topics_router
 from .topics import router as topics_router
 from .workspaces import router as workspaces_router
@@ -62,13 +63,22 @@ def _active_workspaces(db_path: str) -> list[dict]:  # type: ignore[type-arg]
         conn.close()
 
 
-def _background_tasks(settings, db_path: str, stop_event: threading.Event) -> None:
-    """Background loop: idle auto-stop, health-check respawn, and auth auto-refresh."""
+def _background_tasks(settings, db_path: str, stop_event: threading.Event, app_state=None) -> None:
+    """Background loop: scheduler tick, idle auto-stop, health-check respawn, and auth auto-refresh."""
     idle_timeout = settings.agent_idle_timeout_seconds
     auth_interval = settings.agent_auth_refresh_interval_seconds
 
     while not stop_event.wait(60):
         now = time.time()
+
+        # Scheduler tick — run before per-workspace work so it sees the current UTC moment.
+        if app_state is not None:
+            try:
+                from datetime import datetime, timezone as _tz
+                _scheduler_tick(db_path, app_state, datetime.now(_tz.utc))
+            except Exception:
+                LOGGER.exception("master.scheduler_tick_failed")
+
         try:
             workspaces = _active_workspaces(db_path)
             global_cfg = load_global_env(db_path)
@@ -150,6 +160,87 @@ def _background_tasks(settings, db_path: str, stop_event: threading.Event) -> No
                         LOGGER.exception("master.auto_refresh_auth_failed container=%s", cname)
 
 
+def _parse_iso_utc(value: str | None):
+    """Parse a UTC ISO-8601 string (with or without Z suffix) into an aware datetime, or None."""
+    from datetime import datetime, timezone
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S+00:00", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            dt = datetime.strptime(value, fmt)
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
+
+
+def _update_last_fired(conn, action_id: str, next_fire_utc) -> None:
+    conn.execute(
+        "UPDATE event_actions SET last_fired_at = ? WHERE id = ?",
+        (next_fire_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), action_id),
+    )
+    conn.commit()
+
+
+def _scheduler_tick(db_path: str, app_state, now_utc_aware) -> None:
+    """Scan due topic_scheduler actions and enqueue them.
+
+    Interprets cron_expr in the configured display timezone; stores next_fire
+    as UTC. Advances last_fired_at before enqueueing (optimistic watermark) so
+    a slow or crashed worker does not cause duplicate fires.
+    """
+    from datetime import timezone
+    from croniter import croniter
+    from .event_dispatcher import emit_event
+    from .runtime_config import get_configured_timezone
+
+    tz = get_configured_timezone(app_state)
+    now_local = now_utc_aware.astimezone(tz)
+
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT a.*, t.workspace_id, t.subject AS topic_name, w.name AS workspace_name"
+            " FROM event_actions a"
+            " JOIN topics t ON t.id = a.scope_id"
+            " JOIN workspaces w ON w.id = t.workspace_id"
+            " WHERE a.event_type='topic_scheduler'"
+            "   AND a.enabled=1"
+            "   AND t.archived_at IS NULL"
+        ).fetchall()
+        for row in rows:
+            anchor_utc = _parse_iso_utc(row["last_fired_at"]) or _parse_iso_utc(row["created_at"])
+            if anchor_utc is None:
+                continue
+            anchor_local = anchor_utc.astimezone(tz)
+            next_fire_local = croniter(row["cron_expr"], anchor_local).get_next(type(now_local))
+            next_fire_utc = next_fire_local.astimezone(timezone.utc)
+            if next_fire_utc > now_utc_aware:
+                continue
+            try:
+                _update_last_fired(conn, row["id"], next_fire_utc)
+            except Exception:
+                LOGGER.exception("event_action.scheduler_watermark_failed id=%s", row["id"])
+                continue
+            try:
+                emit_event(
+                    app_state=app_state,
+                    event_type="topic_scheduler",
+                    topic_id=row["scope_id"],
+                    workspace_id=row["workspace_id"],
+                    variables={
+                        "topic_name": row["topic_name"],
+                        "workspace_name": row["workspace_name"],
+                    },
+                    scheduler_slot=next_fire_utc,
+                    scheduler_action_id=row["id"],
+                )
+            except Exception:
+                LOGGER.exception("event_action.scheduler_emit_failed id=%s", row["id"])
+    finally:
+        conn.close()
+
+
 def _respawn_agents(settings, db_path: str) -> None:
     """Respawn agent containers for all workspaces on master startup."""
     import docker
@@ -222,7 +313,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     LOGGER.info("master.db_init path=%s", db_path)
     hub = ConnectionHub()
     loop = asyncio.get_event_loop()
-    mqtt = build_mqtt_client(settings, hub=hub, loop=loop, db_path=db_path)
+    mqtt = build_mqtt_client(settings, hub=hub, loop=loop, db_path=db_path, app_state=app.state)
     mqtt.loop_start()
     LOGGER.info("master.mqtt_loop_start host=%s port=%s", settings.mqtt_host, settings.mqtt_port)
     attachment_dir = settings.effective_attachment_data_dir()
@@ -233,11 +324,20 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     app.state.hub = hub
     app.state.mqtt = mqtt
     app.state.attachment_store = attachment_store
+
+    # Event dispatch infrastructure — must be set up before any request handler runs.
+    app.state.event_queue = asyncio.Queue()
+    app.state.event_loop = asyncio.get_running_loop()
+    app.state.event_worker_last_progress = None
+    event_worker_task = asyncio.create_task(event_worker(app.state))
+    watchdog_task = asyncio.create_task(worker_watchdog(app.state))
+    LOGGER.info("master.event_worker_start")
+
     _respawn_agents(settings, db_path)
 
     stop_event = threading.Event()
     bg_thread = threading.Thread(
-        target=_background_tasks, args=(settings, db_path, stop_event), daemon=True, name="master-bg"
+        target=_background_tasks, args=(settings, db_path, stop_event, app.state), daemon=True, name="master-bg"
     )
     bg_thread.start()
     LOGGER.info("master.bg_task_start idle_timeout=%ds auth_refresh=%ds",
@@ -247,6 +347,8 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
 
     stop_event.set()
     bg_thread.join(timeout=5)
+    event_worker_task.cancel()
+    watchdog_task.cancel()
     mqtt.loop_stop()
     mqtt.disconnect()
     LOGGER.info("master.shutdown")

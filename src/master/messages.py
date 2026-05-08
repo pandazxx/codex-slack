@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import json
-import re
 import uuid
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
-from .agent_runner import container_name as _agent_container_name, start_agent_if_stopped
 from .db import get_connection
+from .dispatch import dispatch_to_staff, _make_session_uuid  # re-exported for backwards compat
 from .staffs import resolve_staff, resolve_default_staff
 
 _MENTION_RE = re.compile(r"^@(\S+)\s*(.*)", re.DOTALL)
@@ -18,12 +17,6 @@ router = APIRouter(
     prefix="/workspaces/{workspace_id}/topics/{topic_id}/messages",
     tags=["messages"],
 )
-
-_PROMPT_TOPIC = "codex-slack/workspace/{workspace_id}/topic/{topic_id}/prompt"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _parse_mention(text: str) -> tuple[str | None, str]:
@@ -34,37 +27,17 @@ def _parse_mention(text: str) -> tuple[str | None, str]:
     return None, text.strip()
 
 
-def _make_session_uuid(scope_type: str, scope_id: str, staff_name: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_OID, f"{scope_type}:{scope_id}:{staff_name}"))
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _get_staff_session(conn, scope_type: str, scope_id: str, staff_name: str) -> tuple[str, bool]:
-    """Return (session_uuid, is_new_session). Creates staff_sessions row on first use."""
-    row = conn.execute(
-        "SELECT session_id FROM staff_sessions"
-        " WHERE scope_type=? AND scope_id=? AND staff_name=?",
-        (scope_type, scope_id, staff_name),
-    ).fetchone()
-    if row:
-        return row["session_id"], False
-    session_uuid = _make_session_uuid(scope_type, scope_id, staff_name)
-    conn.execute(
-        "INSERT INTO staff_sessions (scope_type, scope_id, staff_name, session_id, started_at)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (scope_type, scope_id, staff_name, session_uuid, _now()),
-    )
-    return session_uuid, True
-
-
-def _staff_session_key(staff, workspace_id: str, topic_id: str) -> tuple[str, str]:
-    """Map staff.session_scope to (scope_type, scope_id) for staff_sessions."""
-    ss = (staff["session_scope"] or "topic")
-    if ss == "workspace":
-        return "workspace", workspace_id
-    elif ss == "global":
-        return "global", ""
-    else:
-        return "topic", topic_id
+def _topic_subject(db_path: str, topic_id: str) -> str:
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT subject FROM topics WHERE id = ?", (topic_id,)).fetchone()
+        return row["subject"] if row else ""
+    finally:
+        conn.close()
 
 
 class AttachmentMeta(BaseModel):
@@ -103,7 +76,7 @@ async def send_message(
         if ws_row is None:
             raise HTTPException(404, "workspace not found")
         topic = conn.execute(
-            "SELECT id, worktree_path, branch_name, repo_ref FROM topics"
+            "SELECT id FROM topics"
             " WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
             (topic_id, workspace_id),
         ).fetchone()
@@ -120,31 +93,18 @@ async def send_message(
             staff = resolve_default_staff(conn, workspace_id, topic_id)
             if staff is None:
                 raise HTTPException(422, "no default staff configured for this workspace")
-
-        ss_scope_type, ss_scope_id = _staff_session_key(staff, workspace_id, topic_id)
-        session_uuid, is_new_session = _get_staff_session(conn, ss_scope_type, ss_scope_id, staff["name"])
-
-        message_id = str(uuid.uuid4())
-        now = _now()
-        conn.execute(
-            "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, created_at)"
-            " VALUES (?, ?, 'user', NULL, ?, NULL, NULL, NULL, ?)",
-            (message_id, topic_id, text.strip(), now),
-        )
-        conn.execute(
-            "UPDATE workspaces SET last_message_at = ?, last_dispatched_at = ? WHERE id = ?",
-            (now, now, workspace_id),
-        )
-        conn.commit()
     finally:
         conn.close()
 
-    # Process file attachments
-    attachment_metas: list[dict] = []  # type: ignore[type-arg]
+    # Read file data into memory and build attachment metadata list.
+    # Attachment DB rows are inserted after dispatch_to_staff creates the message row
+    # so the FK message_id → messages.id is satisfied.
     settings = request.app.state.settings
     store = request.app.state.attachment_store
     max_bytes: int = settings.attachment_max_size_bytes
+
+    attachment_uploads: list[tuple[str, str, str, int, str, bytes]] = []  # (id, fname, mime, size, storage_uri, data)
+    attachment_metas: list[dict] = []  # type: ignore[type-arg]
 
     for f in files:
         data = await f.read()
@@ -154,68 +114,80 @@ async def send_message(
         fname = f.filename or "upload"
         mime = f.content_type or "application/octet-stream"
         storage_uri = store.put(attachment_id, fname, data)
+        attachment_uploads.append((attachment_id, fname, mime, len(data), storage_uri, data))
+        attachment_metas.append({
+            "id": attachment_id,
+            "filename": fname,
+            "mime_type": mime,
+            "size_bytes": len(data),
+        })
 
+    # Emit topic_message_sent (before) — returns immediately, handled by the event worker.
+    from .event_dispatcher import emit_event
+    topic_name = _topic_subject(request.app.state.db_path, topic_id)
+    emit_event(
+        app_state=request.app.state,
+        event_type="topic_message_sent",
+        topic_id=topic_id,
+        workspace_id=workspace_id,
+        timing="before",
+        variables={"msgbody": prompt_text, "topic_name": topic_name},
+    )
+
+    message_id = await dispatch_to_staff(
+        app_state=request.app.state,
+        workspace_id=workspace_id,
+        topic_id=topic_id,
+        staff=staff,
+        prompt_text=prompt_text,
+        sender="user",
+        raw_text=text.strip(),
+        attachments=attachment_metas,
+    )
+
+    # Insert attachment rows now that the message row exists.
+    if attachment_uploads:
+        now = _now()
         att_conn = get_connection(request.app.state.db_path)
         try:
-            att_conn.execute(
-                "INSERT INTO attachments"
-                " (id, message_id, topic_id, filename, mime_type, size_bytes, storage_uri, created_at, direction)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inbound')",
-                (attachment_id, message_id, topic_id, fname, mime, len(data), storage_uri, _now()),
-            )
+            for att_id, fname, mime, size, storage_uri, _ in attachment_uploads:
+                att_conn.execute(
+                    "INSERT INTO attachments"
+                    " (id, message_id, topic_id, filename, mime_type, size_bytes, storage_uri, created_at, direction)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inbound')",
+                    (att_id, message_id, topic_id, fname, mime, size, storage_uri, now),
+                )
             att_conn.commit()
         finally:
             att_conn.close()
 
-        attachment_metas.append({"id": attachment_id, "filename": fname, "mime_type": mime, "size_bytes": len(data)})
+    # Emit topic_message_sent (after).
+    emit_event(
+        app_state=request.app.state,
+        event_type="topic_message_sent",
+        topic_id=topic_id,
+        workspace_id=workspace_id,
+        timing="after",
+        variables={"msgbody": prompt_text, "topic_name": topic_name},
+    )
 
-    payload = json.dumps({
+    dispatch_payload = _read_transcript(request.app.state.db_path, message_id)
+
+    return {
         "message_id": message_id,
-        "agent_name": staff["name"],
-        "adapter": staff["adapter"],
-        "subagent": staff["agent"],
-        "worktree": topic["worktree_path"],
-        "branch": topic["branch_name"],
-        "repo_ref": topic["repo_ref"] or "",
-        "session_id": session_uuid,
-        "is_new_session": is_new_session,
-        "session_scope": staff["session_scope"] or "topic",
-        "model": staff["model"],
-        "system_prompt": staff["system_prompt"],
-        "text": prompt_text,
+        "status": "queued",
         "attachments": attachment_metas,
-    })
+        "dispatch": dispatch_payload,
+    }
 
-    # Store dispatch payload as user message transcript so the frontend can show the full command.
-    disp_conn = get_connection(request.app.state.db_path)
+
+def _read_transcript(db_path: str, message_id: str) -> str | None:
+    conn = get_connection(db_path)
     try:
-        disp_conn.execute("UPDATE messages SET transcript = ? WHERE id = ?", (payload, message_id))
-        disp_conn.commit()
+        row = conn.execute("SELECT transcript FROM messages WHERE id = ?", (message_id,)).fetchone()
+        return row["transcript"] if row else None
     finally:
-        disp_conn.close()
-
-    await request.app.state.hub.broadcast("_global", {
-        "type": "message",
-        "topic_id": topic_id,
-        "message_id": message_id,
-        "sender": "user",
-    })
-
-    mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
-    mqtt = request.app.state.mqtt
-
-    # Auto-start agent container if it was stopped (e.g. idle timeout or crash).
-    # The agent uses a persistent MQTT session (fixed client_id, clean_session=False)
-    # so Mosquitto queues this QoS-1 message and delivers it once the agent subscribes.
-    cname = ws_row["container_name"] or _agent_container_name(workspace_id)
-    try:
-        start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
-    except Exception:
-        pass  # don't block the message if Docker is unavailable
-
-    mqtt.publish(mqtt_topic, payload, qos=1)
-
-    return {"message_id": message_id, "status": "queued", "attachments": attachment_metas, "dispatch": payload}
+        conn.close()
 
 
 @router.get("", response_model=list[MessageOut])
