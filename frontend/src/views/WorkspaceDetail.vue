@@ -73,7 +73,7 @@
               {{ t.repo_ref }}<template v-if="t.base_sha"> · {{ t.base_sha.substring(0, 7) }}</template>
             </span>
           </span>
-          <RouterLink v-if="!isArchived" :to="`/workspaces/${id}/topics/${t.id}/settings`" class="topic-settings-btn" title="Topic settings">&#9881;</RouterLink>
+          <RouterLink v-if="!isArchived && !t.archived_at" :to="`/workspaces/${id}/topics/${t.id}/settings`" class="topic-settings-btn" title="Topic settings">&#9881;</RouterLink>
           <button v-if="!isArchived" class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Archive topic">Archive</button>
         </li>
       </ul>

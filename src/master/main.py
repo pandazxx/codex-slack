@@ -313,7 +313,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     init_db(db_path)
     LOGGER.info("master.db_init path=%s", db_path)
     hub = ConnectionHub()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     mqtt = build_mqtt_client(settings, hub=hub, loop=loop, db_path=db_path, app_state=app.state)
     mqtt.loop_start()
     LOGGER.info("master.mqtt_loop_start host=%s port=%s", settings.mqtt_host, settings.mqtt_port)
