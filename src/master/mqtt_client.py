@@ -133,6 +133,32 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
         LOGGER.exception("mqtt.save_agent_response_error topic_id=%s", topic_id)
 
 
+def _get_workspace_id(db_path: str, topic_id: str) -> str | None:
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT workspace_id FROM topics WHERE id = ?", (topic_id,)).fetchone()
+            return row["workspace_id"] if row else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def _get_topic_name(db_path: str, topic_id: str) -> str:
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT subject FROM topics WHERE id = ?", (topic_id,)).fetchone()
+            return row["subject"] if row else ""
+        finally:
+            conn.close()
+    except Exception:
+        return ""
+
+
 def _on_connect(client: mqtt.Client, userdata, flags, reason_code, properties) -> None:  # type: ignore[type-arg]
     if reason_code.is_failure:
         LOGGER.error("mqtt.connect_failed reason=%s", reason_code)
@@ -197,6 +223,25 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
                 topic_id=topic_id,
                 payload=payload,
             )
+            app_state = userdata.get("app_state")
+            # emit_event self-guards if event infrastructure isn't up; the only thing
+            # we need to check here is that we have the app_state to pass through.
+            if app_state is not None:
+                workspace_id = _get_workspace_id(db_path, topic_id)
+                topic_name = _get_topic_name(db_path, topic_id)
+                if workspace_id:
+                    from .event_dispatcher import emit_event
+                    emit_event(
+                        app_state=app_state,
+                        event_type="topic_message_received",
+                        topic_id=topic_id,
+                        workspace_id=workspace_id,
+                        timing="after",
+                        variables={
+                            "msgbody": payload.get("last_response", ""),
+                            "topic_name": topic_name,
+                        },
+                    )
     else:
         return
 
@@ -211,8 +256,9 @@ def build_client(
     hub=None,
     loop: asyncio.AbstractEventLoop | None = None,
     db_path: str | None = None,
+    app_state=None,
 ) -> mqtt.Client:
-    userdata = {"hub": hub, "loop": loop, "db_path": db_path, "settings": settings}
+    userdata = {"hub": hub, "loop": loop, "db_path": db_path, "settings": settings, "app_state": app_state}
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, userdata=userdata)
     client.on_connect = _on_connect
     client.on_disconnect = _on_disconnect
