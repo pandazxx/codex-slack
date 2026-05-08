@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from .db import get_connection
 
@@ -36,6 +36,8 @@ def _now() -> str:
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 class EventActionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     event_type: Literal[
         "topic_message_sent",
         "topic_message_received",
@@ -89,6 +91,8 @@ class EventActionOut(BaseModel):
 
 
 class EventActionPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     staff_name: str | None = None
     prompt_template: str | None = None
     timing: Literal["before", "after"] | None = None
@@ -100,6 +104,11 @@ class EventActionPatch(BaseModel):
 
 def _validate_cron(cron_expr: str) -> None:
     from croniter import croniter
+    if len(cron_expr.split()) != 5:
+        raise HTTPException(
+            422,
+            f"cron expression must have exactly 5 fields (minute hour day month weekday): {cron_expr!r}",
+        )
     if not croniter.is_valid(cron_expr):
         raise HTTPException(422, f"invalid cron expression: {cron_expr!r}")
 

@@ -216,18 +216,27 @@ def _record_run(app_state, action_id: str, *, status: str, output: str) -> None:
 
 # ── Stall watchdog ────────────────────────────────────────────────────────────
 
-async def worker_watchdog(app_state) -> None:
-    """Observation-only: log when the worker has made no progress for >60 s while the queue is
-    non-empty. Never cancels or restarts the worker. The non-empty gate avoids spurious
-    warnings during normal idle periods."""
+async def worker_watchdog(
+    app_state,
+    *,
+    check_interval: float = 30.0,
+    idle_threshold: float = 60.0,
+) -> None:
+    """Observation-only: log when the worker has made no progress for more than
+    `idle_threshold` seconds while the queue is non-empty. Never cancels or restarts the
+    worker. The non-empty gate avoids spurious warnings during normal idle periods.
+
+    Production callers leave the defaults (30 s / 60 s); tests override both to keep
+    watchdog assertions sub-second.
+    """
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(check_interval)
         last = getattr(app_state, "event_worker_last_progress", None)
         if last is None:
             continue
         idle = (_now_utc() - last).total_seconds()
         qsize = app_state.event_queue.qsize()
-        if idle > 60 and qsize > 0:
+        if idle > idle_threshold and qsize > 0:
             LOGGER.warning(
                 "event_worker.stalled idle_for=%ds qsize=%d",
                 int(idle),
