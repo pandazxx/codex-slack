@@ -2,6 +2,9 @@
 # env-down.sh — tear down a dev environment
 # Called by the SRE subagent; called by humans to clean up when done.
 #
+# Environment variables:
+#   DOCKER_HOST (optional) — remote Docker host (e.g., ssh://ubuntu@10.10.10.238)
+#
 # Usage:
 #   env-down.sh [BRANCH_SLUG]
 #

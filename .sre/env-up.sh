@@ -2,6 +2,10 @@
 # env-up.sh — spin up a dev environment for a branch
 # Called by the SRE subagent; called by humans only to resume a stopped env.
 #
+# Environment variables:
+#   DOCKER_HOST (optional) — remote Docker host (e.g., ssh://ubuntu@10.10.10.238)
+#   DOCKER_GID (optional) — group ID of Docker daemon on remote host (required if DOCKER_HOST is set)
+#
 # Usage:
 #   env-up.sh [BRANCH_SLUG]
 #
