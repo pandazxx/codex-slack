@@ -163,7 +163,7 @@
           placeholder="Type a message…"
           rows="3"
           :disabled="sending"
-          @keydown.enter.exact.prevent="sendMessage"
+          @keydown.enter.shift.exact.prevent="sendMessage"
           @paste="onPaste"
         />
         <button type="submit" :disabled="sending || !text.trim()">
@@ -171,7 +171,7 @@
         </button>
       </form>
       <p v-if="sendError" class="send-error">{{ sendError }}</p>
-      <p class="hint muted">Enter to send · Shift+Enter for new line · Use <code>@name</code> to address a specific staff</p>
+      <p class="hint muted">Shift+Enter to send · Enter for new line · Use <code>@name</code> to address a specific staff</p>
     </template>
   </div>
 </template>
@@ -348,14 +348,16 @@ function handleChunk({ message_id, agent_name, seq, event }) {
 
 function finaliseMessage(data) {
   const idx = messages.value.findIndex(m => m.id === data.message_id)
+  const existing = idx >= 0 ? messages.value[idx] : null
   const finalMsg = {
     id: data.message_id, sender: data.sender || 'agent',
     agent_name: data.agent_name || null,
-    text: data.last_response || data.text || '',
-    transcript: data.transcript || null,
-    traceRows: transcriptToRows(data.transcript),
+    text: data.last_response || data.text || existing?.text || '',
+    transcript: data.transcript || existing?.transcript || null,
+    traceRows: transcriptToRows(data.transcript) || existing?.traceRows || [],
+    attachments: data.attachments ?? existing?.attachments ?? [],
     traceOpen: false, streaming: false,
-    created_at: new Date().toISOString(),
+    created_at: existing?.created_at || new Date().toISOString(),
   }
   if (idx >= 0) messages.value.splice(idx, 1, finalMsg)
   else messages.value.push(finalMsg)
@@ -600,7 +602,7 @@ onUnmounted(() => {
 .message.agent { align-self: flex-start; align-items: flex-start; }
 .label { font-size: 0.75em; color: #64748b; margin-bottom: 2px; }
 .bubble { padding: 0.6rem 0.9rem; border-radius: 12px; line-height: 1.45; }
-.message.user .bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 3px; white-space: pre-wrap; }
+.message.user .bubble { background: #fff; color: #1e293b; border: 1px solid #2563eb; border-bottom-right-radius: 3px; white-space: pre-wrap; }
 .message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; max-width: 100%; overflow: hidden; }
 .ts { font-size: 0.7em; color: #94a3b8; margin-top: 2px; }
 .detail-panel { margin-top: 4px; max-width: 100%; }

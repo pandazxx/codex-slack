@@ -272,6 +272,14 @@ async function fetchBranches() {
     if (r.ok) {
       branches.value = await r.json()
       branchesFetched.value = true
+      if (!selectedBranch.value) {
+        const fallback = branches.value.find(b => b === 'master')
+          || branches.value.find(b => b === 'main')
+        if (fallback) {
+          selectedBranch.value = fallback
+          branchFilter.value = fallback
+        }
+      }
     }
   } catch { /* ignore */ } finally {
     branchesLoading.value = false
@@ -429,6 +437,7 @@ onMounted(async () => {
   if (!isArchived.value) {
     await fetchAgentStatus()
     statusTimer = setInterval(fetchAgentStatus, 10000)
+    fetchBranches()
   }
 })
 
