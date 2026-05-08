@@ -186,17 +186,30 @@ def delete_topic(workspace_id: str, topic_id: str, request: Request) -> None:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id FROM topics WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
+            "SELECT id, subject FROM topics WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
             (topic_id, workspace_id),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="topic not found")
+        topic_name = row["subject"]
         conn.execute(
             "UPDATE topics SET archived_at = ? WHERE id = ?", (_now(), topic_id)
         )
         conn.commit()
     finally:
         conn.close()
+
+    app_state = request.app.state
+    if hasattr(app_state, "event_queue"):
+        from .event_dispatcher import emit_event
+        emit_event(
+            app_state=app_state,
+            event_type="topic_archived",
+            topic_id=topic_id,
+            workspace_id=workspace_id,
+            timing=None,
+            variables={"topic_name": topic_name},
+        )
 
 
 class RecentTopicOut(BaseModel):
