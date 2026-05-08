@@ -26,7 +26,8 @@
 
     <p v-if="loading" class="muted">Loading…</p>
     <p v-else-if="!rows.length" class="muted">No env vars set for this workspace.</p>
-    <table v-else class="config-table">
+    <div v-else class="table-wrap">
+      <table class="config-table">
       <thead>
         <tr><th>Key</th><th>Value</th><th>Source</th><th></th></tr>
       </thead>
@@ -60,7 +61,8 @@
           </td>
         </tr>
       </tbody>
-    </table>
+      </table>
+    </div>
   </section>
 </template>
 
@@ -265,4 +267,14 @@ h2 { margin: 0; }
 
 .btn-add { padding: 0.35rem 0.85rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
 .btn-add:disabled { opacity: 0.6; cursor: default; }
+
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+@media (max-width: 768px) {
+  .config-key-input { width: 100%; }
+  .config-val-input { width: 100%; flex: 1 1 100%; }
+  .config-add-form .btn-add { width: 100%; }
+  .restart-banner { flex-wrap: wrap; }
+  .config-val { max-width: none; white-space: normal; word-break: break-word; }
+}
 </style>

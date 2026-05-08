@@ -136,31 +136,33 @@
       </div>
 
       <p v-if="!staffs.length" class="muted">No staff configured.</p>
-      <table v-else class="staff-table">
-        <thead>
-          <tr><th>@Name</th><th>Adapter</th><th>Model</th><th>Session</th><th>Default</th><th>Source</th><th v-if="!isArchived"></th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="s in staffs" :key="s.name" :class="{ inherited: s.inherited_from }">
-            <td><code>@{{ s.name }}</code></td>
-            <td>{{ s.adapter }}</td>
-            <td>{{ s.model || '—' }}</td>
-            <td>{{ s.session_scope }}</td>
-            <td>{{ s.is_default ? '✓' : '' }}</td>
-            <td>
-              <span v-if="s.inherited_from" class="badge-global">{{ s.inherited_from }}</span>
-              <span v-else class="badge-local">workspace</span>
-            </td>
-            <td v-if="!isArchived" class="actions">
-              <template v-if="!s.inherited_from">
-                <button class="action-btn" @click="startEditStaff(s)">Edit</button>
-                <button class="action-btn remove-btn" @click="deleteStaff(s.name)">✕</button>
-              </template>
-              <span v-else class="muted small">manage in <RouterLink to="/settings">Settings</RouterLink></span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-else class="table-wrap">
+        <table class="staff-table">
+          <thead>
+            <tr><th>@Name</th><th>Adapter</th><th>Model</th><th>Session</th><th>Default</th><th>Source</th><th v-if="!isArchived"></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="s in staffs" :key="s.name" :class="{ inherited: s.inherited_from }">
+              <td><code>@{{ s.name }}</code></td>
+              <td>{{ s.adapter }}</td>
+              <td>{{ s.model || '—' }}</td>
+              <td>{{ s.session_scope }}</td>
+              <td>{{ s.is_default ? '✓' : '' }}</td>
+              <td>
+                <span v-if="s.inherited_from" class="badge-global">{{ s.inherited_from }}</span>
+                <span v-else class="badge-local">workspace</span>
+              </td>
+              <td v-if="!isArchived" class="actions">
+                <template v-if="!s.inherited_from">
+                  <button class="action-btn" @click="startEditStaff(s)">Edit</button>
+                  <button class="action-btn remove-btn" @click="deleteStaff(s.name)">✕</button>
+                </template>
+                <span v-else class="muted small">manage in <RouterLink to="/settings">Settings</RouterLink></span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </div>
 </template>
@@ -450,7 +452,8 @@ onUnmounted(() => {
 <style scoped>
 .breadcrumb { font-size: 0.9em; color: #64748b; margin-bottom: 1rem; }
 .archived-banner { background: #fef9c3; border: 1px solid #fde047; border-radius: 6px; padding: 0.5rem 1rem; margin-bottom: 1rem; font-size: 0.9em; color: #713f12; }
-.agent-status-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; font-size: 0.85em; }
+.agent-status-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; font-size: 0.85em; flex-wrap: wrap; }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .agent-status-label { color: #64748b; }
 .status-badge { padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.85em; }
 .status-running { background: #dcfce7; color: #15803d; }
@@ -527,4 +530,25 @@ section { margin-bottom: 2rem; }
 .branch-hint { color: #94a3b8; cursor: default !important; font-size: 0.85em; }
 .branch-hint:hover { background: none !important; }
 .repo-ref-badge { background: #dbeafe; color: #1d4ed8; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 500; margin-left: 0.25rem; }
+
+@media (max-width: 768px) {
+  h2 { font-size: 1.15rem; }
+  .breadcrumb { font-size: 0.85em; word-break: break-word; }
+  .header-row { flex-wrap: wrap; gap: 0.5rem; }
+  .agent-status-bar { gap: 0.4rem 0.5rem; }
+  .btn-refresh-auth { margin-left: 0; }
+  .create-form input { flex: 1 1 100%; min-width: 0; }
+  .branch-picker { flex: 1 1 100%; max-width: none; }
+  .create-form button { width: 100%; }
+  .list li { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+  .topic-row { flex-wrap: wrap; }
+  .card { padding: 1rem; }
+  .form-grid { grid-template-columns: 1fr; gap: 0.25rem 0; }
+  .form-grid label { padding-top: 0.25rem; font-weight: 500; }
+  .form-grid label + input,
+  .form-grid label + select,
+  .form-grid label + textarea,
+  .form-grid label + .checkbox-label { margin-bottom: 0.5rem; }
+  .form-actions { flex-wrap: wrap; }
+}
 </style>

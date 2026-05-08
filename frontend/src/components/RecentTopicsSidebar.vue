@@ -1,12 +1,12 @@
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :class="{ 'is-open': open }" :aria-hidden="!open && isMobile">
     <div class="sidebar-title">Recent Topics</div>
     <RouterLink
       v-for="topic in topics"
       :key="topic.topic_id"
       :to="`/workspaces/${topic.workspace_id}/topics/${topic.topic_id}`"
       active-class="active"
-      @click="markSeen(topic.topic_id)"
+      @click="onTopicClick(topic.topic_id)"
     >
       <span class="topic-name">{{ topicLabel(topic) }}</span>
       <span v-if="isNew(topic)" class="new-badge">new</span>
@@ -19,11 +19,21 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
+const props = defineProps({
+  open: { type: Boolean, default: false },
+})
+const emit = defineEmits(['close'])
+
 let ws = null
 let wsTimer = null
 
 const route = useRoute()
 const topics = ref([])
+const isMobile = ref(false)
+
+function syncIsMobile() {
+  isMobile.value = window.matchMedia('(max-width: 768px)').matches
+}
 
 async function load() {
   try {
@@ -42,6 +52,11 @@ function getLastSeen(topicId) {
 
 function markSeen(topicId) {
   localStorage.setItem(`topic-last-seen:${topicId}`, nowTs())
+}
+
+function onTopicClick(topicId) {
+  markSeen(topicId)
+  emit('close')
 }
 
 function midTrunc(str, max) {
@@ -88,11 +103,14 @@ onMounted(() => {
   load()
   connectWs()
   interval = setInterval(load, 60_000)
+  syncIsMobile()
+  window.addEventListener('resize', syncIsMobile)
 })
 onUnmounted(() => {
   clearInterval(interval)
   clearTimeout(wsTimer)
   if (ws) { ws.onclose = null; ws.close() }
+  window.removeEventListener('resize', syncIsMobile)
 })
 </script>
 
@@ -162,5 +180,26 @@ onUnmounted(() => {
   font-size: 0.8rem;
   color: #475569;
   font-style: italic;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    top: 3rem;
+    bottom: 0;
+    left: 0;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.25);
+    width: 80vw;
+    max-width: 280px;
+    min-width: 0;
+  }
+  .sidebar.is-open {
+    transform: translateX(0);
+  }
+  .sidebar a { font-size: 0.95rem; padding: 0.6rem 1rem; }
+  .sidebar-title { font-size: 0.75rem; padding: 0 1rem 0.75rem; }
 }
 </style>
