@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+import tempfile
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -215,15 +217,24 @@ def _stream_codex_once(
 
     Returns (output, transcript, is_error).
     """
-    cmd = ["codex", "--approval-mode", "full-auto", "--output-format", "stream-json"]
+    fd, output_file = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    cmd = [
+        "codex", "exec",
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-s", "danger-full-access",
+        "--ephemeral",
+        "-o", output_file,
+    ]
     if model:
-        cmd += ["--model", model]
+        cmd += ["-m", model]
     cmd.append(text)
     chunk_topic = _chunk_topic(workspace_id, topic_id)
     events: list[dict] = []
     is_error = False
     seq = seq_start
-    outputs: list[str] = []
+    fallback_outputs: list[str] = []
     try:
         proc = subprocess.Popen(
             cmd, cwd=worktree,
@@ -248,16 +259,32 @@ def _stream_codex_once(
             LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
             seq += 1
             ev_type = event.get("type", "")
-            if ev_type in ("result", "done"):
-                final = event.get("output") or event.get("result") or event.get("answer")
+            if ev_type == "turn.completed":
+                final = event.get("output_text") or event.get("last_message")
                 if final:
-                    outputs.append(str(final))
-                if event.get("is_error") or event.get("exit_code", 0) not in (0, None):
-                    is_error = True
+                    fallback_outputs.append(str(final))
+            elif ev_type == "turn.failed":
+                is_error = True
+                err_msg = (event.get("error") or {}).get("message", "")
+                if err_msg:
+                    fallback_outputs.append(f"(codex error: {err_msg})")
         proc.wait()
         if proc.returncode and proc.returncode != 0 and not is_error:
             is_error = True
-        output = "\n\n---\n\n".join(outputs) if outputs else None
+        output = None
+        try:
+            content = Path(output_file).read_text(encoding="utf-8").strip()
+            if content:
+                output = content
+        except Exception:
+            pass
+        finally:
+            try:
+                Path(output_file).unlink()
+            except Exception:
+                pass
+        if not output:
+            output = "\n\n---\n\n".join(fallback_outputs) if fallback_outputs else None
         if not output:
             err = (proc.stderr.read() or "").strip()
             output = err or "(no output)"
@@ -268,10 +295,18 @@ def _stream_codex_once(
         )
         return output, transcript, is_error
     except FileNotFoundError:
+        try:
+            Path(output_file).unlink()
+        except Exception:
+            pass
         return "(codex CLI not found in agent container)", None, True
     except Exception as exc:
         try:
             proc.kill()
+        except Exception:
+            pass
+        try:
+            Path(output_file).unlink()
         except Exception:
             pass
         return f"(codex error: {exc})", None, True

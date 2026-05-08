@@ -141,6 +141,21 @@
                   </template>
                 </div>
               </template>
+              <template v-else-if="evt.type === 'turn.completed'">
+                <div class="tr-meta">
+                  <span class="tr-badge tr-badge-done">done</span>
+                  <template v-if="evt.token_usage">
+                    <span class="tr-stat tr-tokens">{{ (evt.token_usage.input_tokens ?? 0).toLocaleString() }}↑</span>
+                    <span class="tr-stat tr-tokens">{{ (evt.token_usage.output_tokens ?? 0).toLocaleString() }}↓</span>
+                  </template>
+                </div>
+              </template>
+              <template v-else-if="evt.type === 'turn.failed'">
+                <div class="tr-meta">
+                  <span class="tr-badge tr-badge-error">failed</span>
+                  <span class="tr-stat">{{ evt.error?.message || 'unknown error' }}</span>
+                </div>
+              </template>
             </template>
           </div>
         </details>
@@ -240,12 +255,18 @@ function classifyEvent(event) {
   if (t === 'user') {
     const c = event.message?.content || []
     if (c.some(b => b.type === 'tool_result')) {
-      // Subagent (Agent tool) results are a synthesized summary worth showing
-      // expanded; raw tool_results (Bash/Read/...) stay folded.
       if (event.tool_use_result?.agentType) return 'agent_result'
       return 'folded'
     }
   }
+  // Codex event types
+  if (t === 'turn.completed')        return 'codex_done'
+  if (t === 'turn.failed')           return 'folded'
+  if (t === 'thread.started')        return 'hidden'
+  if (t === 'turn.started')          return 'hidden'
+  if (t === 'turn.token_usage')      return 'hidden'
+  if (t === 'turn.context_compacted') return 'hidden'
+  if (t === 'error')                 return 'folded'
   return 'hidden'
 }
 
@@ -340,6 +361,13 @@ function handleChunk({ message_id, agent_name, seq, event }) {
       if (blk.type === 'text') live.text += blk.text
     const msg = messages.value.find(m => m.id === message_id)
     if (msg) msg.text = live.text
+  } else if (kind === 'codex_done') {
+    const outText = event.output_text || event.last_message || ''
+    if (outText) {
+      live.text += outText
+      const msg = messages.value.find(m => m.id === message_id)
+      if (msg) msg.text = live.text
+    }
   } else if (kind !== 'hidden') {
     live.rows.push({ kind, event })
   }
@@ -531,7 +559,13 @@ function buildDispatchCommand(transcript) {
   try {
     const p = JSON.parse(transcript)
     if (!p.adapter) return ''
-    if (p.adapter === 'codex') return `codex --full-auto -q ${JSON.stringify(p.text)}`
+    if (p.adapter === 'codex') {
+      const parts = ['codex', 'exec', '--json',
+        '--dangerously-bypass-approvals-and-sandbox', '-s', 'danger-full-access']
+      if (p.model) parts.push('-m', JSON.stringify(p.model))
+      parts.push(JSON.stringify(p.text))
+      return parts.join(' \\\n  ')
+    }
     const parts = ['claude', '--print', '--verbose', '--output-format', 'stream-json', '--dangerously-skip-permissions']
     if (p.session_id) parts.push(p.is_new_session ? `--session-id ${p.session_id}` : `--resume ${p.session_id}`)
     if (p.model) parts.push(`--model ${p.model}`)
