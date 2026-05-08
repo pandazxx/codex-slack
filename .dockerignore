@@ -1,8 +1,56 @@
+# Version control
 .git
+.gitignore
+
+# Python
 .venv
+.env
+.env.*
+*.egg-info
+dist/
+build/
 .pytest_cache
 __pycache__
 *.pyc
 *.pyo
 *.pyd
-logs
+.python-version
+
+# IDE & editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs & temp
+logs/
+*.log
+tmp/
+temp/
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Frontend
+frontend/dist/
+frontend/build/
+
+# Docker
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Documentation (not needed in image)
+docs/
+README.md
+BUILD.md
+USAGE.md
+LICENSE

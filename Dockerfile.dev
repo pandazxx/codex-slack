@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11.9-slim
 
 ARG CODEX_NPM_PACKAGE=@openai/codex
 ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code

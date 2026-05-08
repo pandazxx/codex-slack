@@ -8,7 +8,7 @@
 # and is intentionally kept separate from the master image so it can be
 # pinned independently and changes rarely.
 
-FROM python:3.11-slim
+FROM python:3.11.9-slim
 
 ARG APP_VERSION=dev
 
