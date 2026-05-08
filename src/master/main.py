@@ -29,6 +29,7 @@ from .staffs import global_router as global_staffs_router
 from .staffs import topic_router as topic_staffs_router
 from .staffs import workspace_router as workspace_staffs_router
 from .storage import LocalAttachmentStore
+from .event_actions import router as event_actions_router
 from .event_dispatcher import emit_event, event_worker, worker_watchdog
 from .topics import recent_router as recent_topics_router
 from .topics import router as topics_router
@@ -365,6 +366,7 @@ app.include_router(topic_staffs_router, prefix="/api")
 app.include_router(global_config_router, prefix="/api")
 app.include_router(workspace_config_router, prefix="/api")
 app.include_router(attachments_router, prefix="/api")
+app.include_router(event_actions_router, prefix="/api")
 
 if (_STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="static-assets")
