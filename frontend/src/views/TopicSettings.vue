@@ -184,8 +184,8 @@ function startEdit(a) {
     event_type: a.event_type,
     staff_name: a.staff_name,
     prompt_template: a.prompt_template,
-    timing: a.timing || 'after',
-    cron_expr: a.cron_expr || '',
+    timing: a.timing ?? null,
+    cron_expr: a.cron_expr ?? '',
     enabled: a.enabled,
   }
   showForm.value = true

@@ -266,12 +266,19 @@ def patch_event_action(
         if existing is None:
             raise HTTPException(404, "event action not found")
 
-        # Merge patch fields onto the existing values.
-        new_staff = body.staff_name if body.staff_name is not None else existing["staff_name"]
-        new_template = body.prompt_template if body.prompt_template is not None else existing["prompt_template"]
-        new_timing = body.timing if body.timing is not None else existing["timing"]
-        new_cron = body.cron_expr if body.cron_expr is not None else existing["cron_expr"]
-        new_enabled = (1 if body.enabled else 0) if body.enabled is not None else existing["enabled"]
+        # Use exclude_unset to distinguish "field omitted" from "field explicitly null".
+        # Explicit null on timing/cron_expr is meaningful for event types that allow NULL
+        # (e.g. patching a topic_archived row's timing back to null). The non-nullable
+        # fields (staff_name, prompt_template, enabled) reject explicit null with 422.
+        sent = body.model_dump(exclude_unset=True)
+        for field in ("staff_name", "prompt_template", "enabled"):
+            if field in sent and sent[field] is None:
+                raise HTTPException(422, f"{field} cannot be null")
+        new_staff = sent["staff_name"] if "staff_name" in sent else existing["staff_name"]
+        new_template = sent["prompt_template"] if "prompt_template" in sent else existing["prompt_template"]
+        new_timing = sent["timing"] if "timing" in sent else existing["timing"]
+        new_cron = sent["cron_expr"] if "cron_expr" in sent else existing["cron_expr"]
+        new_enabled = (1 if sent["enabled"] else 0) if "enabled" in sent else existing["enabled"]
 
         _validate_merged_state(
             event_type=existing["event_type"],
