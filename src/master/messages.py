@@ -199,6 +199,9 @@ async def send_message(
         "topic_id": topic_id,
         "message_id": message_id,
         "sender": "user",
+        "text": text.strip(),
+        "transcript": payload,
+        "attachments": attachment_metas,
     })
 
     mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
