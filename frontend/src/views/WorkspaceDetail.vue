@@ -73,6 +73,7 @@
               {{ t.repo_ref }}<template v-if="t.base_sha"> · {{ t.base_sha.substring(0, 7) }}</template>
             </span>
           </span>
+          <RouterLink v-if="!isArchived" :to="`/workspaces/${id}/topics/${t.id}/settings`" class="topic-settings-btn" title="Topic settings">&#9881;</RouterLink>
           <button v-if="!isArchived" class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Archive topic">Archive</button>
         </li>
       </ul>
@@ -515,6 +516,8 @@ section { margin-bottom: 2rem; }
 .small { font-size: 0.82em; }
 .remove-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.9em; padding: 0.15rem 0.4rem; border-radius: 3px; }
 .remove-btn:hover { background: #fee2e2; color: #dc2626; }
+.topic-settings-btn { color: #94a3b8; text-decoration: none; font-size: 1em; padding: 0.15rem 0.4rem; border-radius: 3px; }
+.topic-settings-btn:hover { background: #f1f5f9; color: #475569; }
 
 .branch-picker { position: relative; min-width: 180px; flex: 1; max-width: 260px; }
 .branch-input-wrap { display: flex; align-items: center; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; overflow: visible; }
