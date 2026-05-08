@@ -4,6 +4,12 @@
       <RouterLink to="/">Workspaces</RouterLink> /
       <RouterLink :to="`/workspaces/${wsId}`" :title="workspace?.name">{{ displayWorkspaceName }}</RouterLink> /
       {{ topic?.subject || topicId }}
+      <RouterLink
+        v-if="!isArchived"
+        :to="`/workspaces/${wsId}/topics/${topicId}/settings`"
+        class="topic-settings-link"
+        title="Topic settings"
+      >&#9881;</RouterLink>
     </p>
 
     <div v-if="isArchived" class="archived-banner">This topic is archived — read only</div>
@@ -596,6 +602,8 @@ onUnmounted(() => {
 <style scoped>
 .chat-layout { display: flex; flex-direction: column; height: calc(100vh - 110px); }
 .breadcrumb { font-size: 0.9em; color: #64748b; margin-bottom: 0.5rem; }
+.topic-settings-link { color: #94a3b8; text-decoration: none; margin-left: 0.5rem; font-size: 1em; }
+.topic-settings-link:hover { color: #475569; }
 .archived-banner { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; color: #713f12; }
 .status-bar { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; }
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding: 0.5rem 0; }
