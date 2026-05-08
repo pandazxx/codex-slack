@@ -669,4 +669,15 @@ onUnmounted(() => {
 .tool-use-fold > summary { cursor: pointer; list-style: none; }
 .tool-use-fold > summary::-webkit-details-marker { display: none; }
 .tool-use-fold[open] > summary { color: #ccc; }
+
+@media (max-width: 768px) {
+  .chat-layout { height: calc(100vh - 90px); }
+  .message { max-width: 90%; }
+  .message.agent { max-width: 96%; }
+  .bubble { padding: 0.5rem 0.75rem; }
+  .send-form { gap: 0.35rem; }
+  .send-form textarea { font-size: 16px; padding: 0.5rem 0.6rem; }
+  .send-form button { padding: 0.5rem 0.85rem; }
+  .breadcrumb { font-size: 0.8em; word-break: break-word; }
+}
 </style>
