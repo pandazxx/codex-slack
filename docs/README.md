@@ -14,7 +14,6 @@ This directory is the canonical home for repository documentation.
 - [`docs/guides/runbooks/cd-daemon.md`](guides/runbooks/cd-daemon.md) — CD daemon operational runbook
 - [`docs/guides/container-runtime.md`](guides/container-runtime.md) — container runtime, Podman socket, and mounts (v3)
 - [`docs/guides/project-agent-image.md`](guides/project-agent-image.md) — project-specific agent images
-- [`docs/guides/multi-agent-setup.md`](guides/multi-agent-setup.md) — multi-agent compose example
 - [`docs/guides/sre.md`](guides/sre.md) — SRE-managed dev/staging workflow
 - [`docs/guides/sre-onboarding-summary.md`](guides/sre-onboarding-summary.md) — SRE onboarding summary
 - [`docs/guides/repo-harness.md`](guides/repo-harness.md) — repository harness reference
@@ -69,19 +68,6 @@ This directory is the canonical home for repository documentation.
 - [`docs/decisions/0011-system-vs-user-config-panel.md`](decisions/0011-system-vs-user-config-panel.md) — system vs user config panel
 - [`docs/decisions/0011-version-display.md`](decisions/0011-version-display.md) — version display
 - [`docs/decisions/0012-streaming-agent-reply.md`](decisions/0012-streaming-agent-reply.md) — streaming agent reply
-
-## Archive
-
-Historical design and setup documents kept for context. Do not read these as a description of the current system; they describe v2-era behavior that was superseded by [ADR-0006](decisions/0006-drop-slack-discord-integration.md) and [ADR-0005](decisions/0005-v3-system-architecture.md).
-
-- [`docs/archive/design/frontend-master-interface-design.md`](archive/design/frontend-master-interface-design.md) — v2 Slack/Discord-to-master interface
-- [`docs/archive/design/master-agent-interface-design.md`](archive/design/master-agent-interface-design.md) — v2 master/agent slash-command interface
-- [`docs/archive/design/master-agent-architecture.md`](archive/design/master-agent-architecture.md) — v2 architecture background
-- [`docs/archive/design/message-split-hint-detailed-design.md`](archive/design/message-split-hint-detailed-design.md) — v2 chat-platform message split hints
-- [`docs/archive/design/master-agent-implementation-plan.md`](archive/design/master-agent-implementation-plan.md) — historical implementation plan
-- [`docs/archive/design/v3-0-multi-adapter-frontend-plan.md`](archive/design/v3-0-multi-adapter-frontend-plan.md) — historical v3.0 adapter/frontend plan
-- [`docs/archive/guides/slack-setup.md`](archive/guides/slack-setup.md) — v2 Slack app setup guide
-- [`docs/archive/guides/discord-setup.md`](archive/guides/discord-setup.md) — v2 Discord app setup guide
 
 ## Test Plans
 
