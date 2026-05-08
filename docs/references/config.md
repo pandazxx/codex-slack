@@ -31,6 +31,14 @@ The master service (`src/master/`) reads these environment variables on startup.
 | `MASTER_NOTIFY_TELEGRAM_CHAT_ID` | No | unset | Telegram chat or channel ID (numeric or `@channelusername`). Required together with `MASTER_NOTIFY_TELEGRAM_BOT_TOKEN`. |
 | `MASTER_NOTIFY_PREVIEW_CHARS` | No | `200` | Max characters of the agent reply included as a preview in notifications. Set to `0` to omit the preview entirely. |
 
+### System settings (runtime config table)
+
+System settings are stored in the `config` table with `scope_type='global'` and are managed via `GET/PATCH /api/config/system-settings`. They are not environment variables.
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `system.timezone` | OS local TZ via `tzlocal.get_localzone()` | IANA timezone string used to interpret cron expressions in `topic_scheduler` event actions and to display scheduled times in the UI. All datetimes are stored as UTC; this setting only affects cron evaluation and display. Set via the system settings page in the web UI or via the API. Validated with `zoneinfo.ZoneInfo(value)` at write time — invalid values are rejected with 422. |
+
 ### Workspace config keys (notification overrides)
 
 Per-workspace notification settings are stored in the `config` table and can be
@@ -50,7 +58,7 @@ global default.
 
 SQLite database file: `{MASTER_DATA_DIR}/master_data.db` (default `/opt/codex-slack/data/master/master_data.db`).
 
-Tables: `workspaces`, `workspace_agents`, `topics`, `sessions`, `messages`, `chunks`.
+Tables: `workspaces`, `workspace_agents`, `topics`, `sessions`, `messages`, `chunks`, `staffs`, `staff_sessions`, `event_actions`, `config`.
 
 Soft-delete columns: `workspaces.archived_at TEXT` and `topics.archived_at TEXT`. Active records have `archived_at IS NULL`.
 

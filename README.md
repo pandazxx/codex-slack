@@ -95,5 +95,6 @@ For Codex contributors, repository workflow instructions live in `AGENTS.md` and
 - [`docs/guides/runbooks/master-agent.md`](docs/guides/runbooks/master-agent.md) — master-agent operational runbook
 - [`docs/guides/runbooks/cd-daemon.md`](docs/guides/runbooks/cd-daemon.md) — CD daemon operational runbook
 - [`docs/guides/tutorials.md`](docs/guides/tutorials.md) — step-by-step tutorials and checklists
+- [`docs/guides/event-actions.md`](docs/guides/event-actions.md) — event-based staff actions (scheduler, message hooks, archive hooks)
 - [`docs/references/api.md`](docs/references/api.md) — implemented command surface
 - [`docs/references/config.md`](docs/references/config.md) — configuration keys and defaults
