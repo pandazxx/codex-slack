@@ -75,7 +75,7 @@
             <MarkdownMessage :text="m.text" />
             <span v-if="m.streaming" class="cursor">▍</span>
           </template>
-          <template v-else>{{ m.text }}</template>
+          <template v-else><MarkdownMessage :text="m.text" /></template>
         </div>
         <div v-if="m.attachments && m.attachments.length" class="attachment-list">
           <template v-for="a in m.attachments" :key="a.id">
@@ -602,7 +602,7 @@ onUnmounted(() => {
 .message.agent { align-self: flex-start; align-items: flex-start; }
 .label { font-size: 0.75em; color: #64748b; margin-bottom: 2px; }
 .bubble { padding: 0.6rem 0.9rem; border-radius: 12px; line-height: 1.45; }
-.message.user .bubble { background: #fff; color: #1e293b; border: 1px solid #2563eb; border-bottom-right-radius: 3px; white-space: pre-wrap; }
+.message.user .bubble { background: #fff; color: #1e293b; border: 1px solid #2563eb; border-bottom-right-radius: 3px; max-width: 100%; overflow: hidden; }
 .message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; max-width: 100%; overflow: hidden; }
 .ts { font-size: 0.7em; color: #94a3b8; margin-top: 2px; }
 .detail-panel { margin-top: 4px; max-width: 100%; }
