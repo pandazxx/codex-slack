@@ -2,12 +2,12 @@
 
 This file is a compatibility entry point.
 
-The canonical setup and operations documentation now lives under `docs/`:
+The canonical setup and operations documentation lives under `docs/`:
 
-- [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md)
-- [`docs/guides/slack-setup.md`](docs/guides/slack-setup.md)
-- [`docs/guides/discord-setup.md`](docs/guides/discord-setup.md)
-- [`docs/guides/container-runtime.md`](docs/guides/container-runtime.md)
-- [`docs/guides/runbooks/master-agent.md`](docs/guides/runbooks/master-agent.md)
+- [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) — setup, deployment, and operations entry point
+- [`docs/guides/onboarding.md`](docs/guides/onboarding.md) — contributor onboarding
+- [`docs/guides/container-runtime.md`](docs/guides/container-runtime.md) — container runtime, Podman, and mounts
+- [`docs/guides/runbooks/master-agent.md`](docs/guides/runbooks/master-agent.md) — master/agent operational runbook
+- [`docs/guides/runbooks/cd-daemon.md`](docs/guides/runbooks/cd-daemon.md) — CD daemon runbook
 
 Start with [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) for the current setup path.

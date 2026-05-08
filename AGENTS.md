@@ -29,7 +29,8 @@ When working in Codex, treat this file as the primary repo-level contract and us
 
 ## Project Structure & Module Organization
 
-- `src/` application source code, organized by subdomain: `bot/`, `master/`, `agent/`, `cd/`.
+- `src/` application source code, organized by subdomain: `master/`, `agent/`, `cd/`.
+- `frontend/` Vue 3 SPA; `npm run build` in this directory emits assets that are bundled into the master image.
 - `tests/` automated tests mirroring `src/` paths.
 - `docs/` all documentation — operational runbooks, setup guides, and knowledge-base entries.
 - `.claude/` Claude Code agent framework: project CLAUDE.md, subagent definitions, and slash-command skills.
