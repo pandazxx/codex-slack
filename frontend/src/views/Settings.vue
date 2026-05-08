@@ -52,24 +52,26 @@
       </div>
 
       <p v-if="!staffs.length && !showStaffForm" class="muted">No global staff configured.</p>
-      <table v-else-if="staffs.length" class="staff-table">
-        <thead>
-          <tr><th>@Name</th><th>Adapter</th><th>Model</th><th>Session</th><th>Default</th><th></th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="s in staffs" :key="s.name">
-            <td><code>@{{ s.name }}</code></td>
-            <td>{{ s.adapter }}</td>
-            <td>{{ s.model || '—' }}</td>
-            <td>{{ s.session_scope }}</td>
-            <td>{{ s.is_default ? '✓' : '' }}</td>
-            <td class="actions">
-              <button class="action-btn" @click="startEditStaff(s)">Edit</button>
-              <button class="action-btn remove-btn" @click="deleteStaff(s.name)">✕</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-else-if="staffs.length" class="table-wrap">
+        <table class="staff-table">
+          <thead>
+            <tr><th>@Name</th><th>Adapter</th><th>Model</th><th>Session</th><th>Default</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="s in staffs" :key="s.name">
+              <td><code>@{{ s.name }}</code></td>
+              <td>{{ s.adapter }}</td>
+              <td>{{ s.model || '—' }}</td>
+              <td>{{ s.session_scope }}</td>
+              <td>{{ s.is_default ? '✓' : '' }}</td>
+              <td class="actions">
+                <button class="action-btn" @click="startEditStaff(s)">Edit</button>
+                <button class="action-btn remove-btn" @click="deleteStaff(s.name)">✕</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- ── System Variables ──────────────────────────────────────────── -->
@@ -80,37 +82,39 @@
       <p class="muted hint">Credentials injected into every agent container. Set these to enable the corresponding features.</p>
       <p class="warn hint">⚠ Values are stored as plain text. Treat this database file as a sensitive asset.</p>
 
-      <table class="config-table">
-        <thead>
-          <tr><th>Key</th><th>Value</th><th></th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="sv in systemVars" :key="sv.name">
-            <td><code>{{ sv.name }}</code></td>
-            <td class="config-val">
-              <template v-if="editingSysVar === sv.name">
-                <input v-model="sysVarEditValue" class="config-inline-input" @keydown.enter="saveSysVar(sv.name)" @keydown.escape="editingSysVar = null" />
-              </template>
-              <template v-else-if="config[sv.name] !== undefined">
-                <span v-if="sv.sensitive && !revealedKeys[sv.name]">••••••••</span>
-                <span v-else>{{ config[sv.name] }}</span>
-                <button v-if="sv.sensitive" class="reveal-btn" @click="toggleReveal(sv.name)">{{ revealedKeys[sv.name] ? 'hide' : 'show' }}</button>
-              </template>
-              <span v-else class="unset-label">— unset —</span>
-            </td>
-            <td class="sysvar-actions">
-              <template v-if="editingSysVar === sv.name">
-                <button class="action-btn" @click="saveSysVar(sv.name)">Save</button>
-                <button class="action-btn" @click="editingSysVar = null">Cancel</button>
-              </template>
-              <template v-else>
-                <button class="action-btn" @click="startEditSysVar(sv.name)">{{ config[sv.name] !== undefined ? 'Update' : 'Set' }}</button>
-                <button v-if="config[sv.name] !== undefined" class="action-btn remove-btn" @click="deleteConfigKey(sv.name)">Unset</button>
-              </template>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table class="config-table">
+          <thead>
+            <tr><th>Key</th><th>Value</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="sv in systemVars" :key="sv.name">
+              <td><code>{{ sv.name }}</code></td>
+              <td class="config-val">
+                <template v-if="editingSysVar === sv.name">
+                  <input v-model="sysVarEditValue" class="config-inline-input" @keydown.enter="saveSysVar(sv.name)" @keydown.escape="editingSysVar = null" />
+                </template>
+                <template v-else-if="config[sv.name] !== undefined">
+                  <span v-if="sv.sensitive && !revealedKeys[sv.name]">••••••••</span>
+                  <span v-else>{{ config[sv.name] }}</span>
+                  <button v-if="sv.sensitive" class="reveal-btn" @click="toggleReveal(sv.name)">{{ revealedKeys[sv.name] ? 'hide' : 'show' }}</button>
+                </template>
+                <span v-else class="unset-label">— unset —</span>
+              </td>
+              <td class="sysvar-actions">
+                <template v-if="editingSysVar === sv.name">
+                  <button class="action-btn" @click="saveSysVar(sv.name)">Save</button>
+                  <button class="action-btn" @click="editingSysVar = null">Cancel</button>
+                </template>
+                <template v-else>
+                  <button class="action-btn" @click="startEditSysVar(sv.name)">{{ config[sv.name] !== undefined ? 'Update' : 'Set' }}</button>
+                  <button v-if="config[sv.name] !== undefined" class="action-btn remove-btn" @click="deleteConfigKey(sv.name)">Unset</button>
+                </template>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- ── User-defined Config ────────────────────────────────────────── -->
@@ -128,18 +132,20 @@
       <p v-if="sysVarWarning" class="sysvar-warning">⚠ {{ sysVarWarning }}</p>
 
       <p v-if="!userConfigKeys.length" class="muted">No user-defined config keys set.</p>
-      <table v-else class="config-table">
-        <thead>
-          <tr><th>Key</th><th>Value</th><th></th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="key in userConfigKeys" :key="key">
-            <td><code>{{ key }}</code></td>
-            <td class="config-val">{{ isSensitive(key) ? '••••••••' : config[key] }}</td>
-            <td><button class="action-btn remove-btn" @click="deleteConfigKey(key)">✕</button></td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-else class="table-wrap">
+        <table class="config-table">
+          <thead>
+            <tr><th>Key</th><th>Value</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="key in userConfigKeys" :key="key">
+              <td><code>{{ key }}</code></td>
+              <td class="config-val">{{ isSensitive(key) ? '••••••••' : config[key] }}</td>
+              <td><button class="action-btn remove-btn" @click="deleteConfigKey(key)">✕</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </div>
 </template>
@@ -327,6 +333,7 @@ section { margin-bottom: 3rem; border-top: 1px solid #e2e8f0; padding-top: 1.5re
 .checkbox-label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9em; padding-top: 0.2rem; }
 .form-actions { display: flex; gap: 0.75rem; align-items: center; }
 
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .staff-table, .config-table { width: 100%; border-collapse: collapse; font-size: 0.9em; margin-top: 0.5rem; }
 .staff-table th, .config-table th { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 2px solid #e2e8f0; color: #64748b; font-weight: 600; }
 .staff-table td, .config-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; }
@@ -349,4 +356,24 @@ section { margin-bottom: 3rem; border-top: 1px solid #e2e8f0; padding-top: 1.5re
 .action-btn:hover { background: #eff6ff; }
 .remove-btn { color: #94a3b8; text-decoration: none; }
 .remove-btn:hover { background: #fee2e2; color: #dc2626; }
+
+@media (max-width: 768px) {
+  h1 { font-size: 1.5rem; margin-bottom: 1.25rem; }
+  section { margin-bottom: 2rem; padding-top: 1rem; }
+  .section-header { flex-wrap: wrap; gap: 0.5rem; }
+  .section-header h2 { font-size: 1.15rem; }
+  .card { padding: 1rem; }
+  .form-grid { grid-template-columns: 1fr; gap: 0.25rem 0; }
+  .form-grid label { padding-top: 0.25rem; font-weight: 500; }
+  .form-grid label + input,
+  .form-grid label + select,
+  .form-grid label + textarea,
+  .form-grid label + .checkbox-label { margin-bottom: 0.5rem; }
+  .form-actions { flex-wrap: wrap; }
+  .config-add-form { flex-wrap: wrap; }
+  .config-key-input { width: 100%; }
+  .config-val-input { width: 100%; flex: 1 1 100%; }
+  .config-add-form .btn-primary { width: 100%; }
+  .config-val { max-width: none; white-space: normal; word-break: break-word; }
+}
 </style>

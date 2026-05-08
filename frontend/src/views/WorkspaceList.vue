@@ -20,8 +20,10 @@
     <ul v-else class="list">
       <li v-for="ws in workspaces" :key="ws.id">
         <div class="list-row">
-          <RouterLink :to="`/workspaces/${ws.id}`">{{ ws.name }}</RouterLink>
-          <span class="muted small"> — {{ ws.repo_url }}</span>
+          <div class="ws-info">
+            <RouterLink :to="`/workspaces/${ws.id}`">{{ ws.name }}</RouterLink>
+            <span class="muted small ws-repo">{{ ws.repo_url }}</span>
+          </div>
           <button class="remove-btn" @click.prevent="deleteWorkspace(ws.id, ws.name)" title="Archive workspace">Archive</button>
         </div>
       </li>
@@ -92,11 +94,21 @@ h2 { margin: 0; }
 .list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
 .list li { background: #fff; padding: 0.75rem 1rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
 .list-row { display: flex; align-items: center; gap: 0.5rem; }
-.list-row a { font-weight: 500; }
-.list-row .muted { flex: 1; }
-.remove-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.9em; padding: 0.15rem 0.4rem; border-radius: 3px; }
+.ws-info { display: flex; align-items: baseline; gap: 0.5rem; flex: 1; min-width: 0; flex-wrap: wrap; }
+.ws-info a { font-weight: 500; }
+.ws-repo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.remove-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.9em; padding: 0.15rem 0.4rem; border-radius: 3px; flex-shrink: 0; }
 .remove-btn:hover { background: #fee2e2; color: #dc2626; }
 .muted { color: #64748b; }
 .small { font-size: 0.85em; }
 .error { color: #dc2626; font-size: 0.9em; }
+
+@media (max-width: 768px) {
+  .header-row { flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+  h2 { font-size: 1.15rem; }
+  .create-form input { flex: 1 1 100%; min-width: 0; }
+  .create-form button { width: 100%; }
+  .ws-info { flex-direction: column; gap: 0.15rem; align-items: flex-start; }
+  .ws-repo { font-size: 0.8em; word-break: break-all; white-space: normal; }
+}
 </style>
