@@ -176,12 +176,6 @@ def frozen_utc_65s_ago():
     return base - timedelta(seconds=65)
 
 
-@pytest.fixture()
-def frozen_utc_5s_ago():
-    base = datetime(2026, 5, 8, 9, 0, 0, tzinfo=timezone.utc)
-    return base - timedelta(seconds=5)
-
-
 # ---------------------------------------------------------------------------
 # Mock MQTT publish recorder
 # ---------------------------------------------------------------------------
@@ -427,6 +421,19 @@ class TestCRUD:
         # PATCH with 'created_at' → 422
         r = client.patch(f"{ea_base_url}/{action_id}", json={"created_at": "2020-01-01T00:00:00Z"})
         assert r.status_code == 422
+
+    def test_patch_cross_field_violation_returns_422(self, client, ea_base_url):
+        # Regression: PATCH that produces an invalid merged state (e.g. setting
+        # timing='before' on a topic_scheduler row) must return 422, not 500.
+        # Previously the merged-state went straight to the DB CHECK and surfaced
+        # as an unhandled IntegrityError.
+        create_r = client.post(ea_base_url, json=_make_scheduler_action())
+        assert create_r.status_code == 201
+        action_id = create_r.json()["id"]
+
+        r = client.patch(f"{ea_base_url}/{action_id}", json={"timing": "before"})
+        assert r.status_code == 422
+        assert "timing" in r.text.lower()
 
     def test_delete(self, client, ea_base_url):
         # CRUD-10
@@ -1601,6 +1608,52 @@ class TestLoopPrevention:
         src = inspect.getsource(topics_mod)
         assert "topic_archived" in src
 
+    def test_archived_action_with_timing_after_actually_dispatches(self, tmp_path):
+        # Regression: topics.py emits topic_archived with timing='after'; an action
+        # row with timing='after' must be selected by _handle_event. Earlier code
+        # emitted timing=None, which silently failed to match timing='after' rows
+        # because SQL `timing = NULL` is never true.
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="summariser", scope_type="global")
+        action_id = _insert_event_action(
+            db_path, topic_id=tp_id, event_type="topic_archived",
+            staff_name="summariser", prompt_template="Topic {topic_name} archived",
+            timing="after",
+        )
+
+        dispatched = []
+
+        async def run():
+            from src.master.event_dispatcher import _handle_event
+            app_state = _make_app_state(db_path=db_path)
+            app_state.event_loop = asyncio.get_running_loop()
+
+            async def fake_dispatch_to_staff(*, app_state, workspace_id, topic_id,
+                                              staff, prompt_text, sender, **kw):
+                dispatched.append((staff["name"], prompt_text, sender))
+                return str(uuid.uuid4())
+
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch_to_staff):
+                event = {
+                    "event_type": "topic_archived",
+                    "topic_id": tp_id,
+                    "workspace_id": ws_id,
+                    "timing": "after",  # what topics.py emits post-fix
+                    "variables": {"topic_name": "design-doc"},
+                    "scheduler_slot": None,
+                    "scheduler_action_id": None,
+                }
+                await _handle_event(app_state, event)
+
+        asyncio.run(run())
+
+        assert len(dispatched) == 1, "topic_archived action with timing='after' must dispatch"
+        assert dispatched[0][0] == "summariser"
+        assert "design-doc" in dispatched[0][1]
+        assert dispatched[0][2] == "event"
+
     def test_scheduler_hook_fires_regardless_of_sender(self, tmp_path):
         # LOOP-04 — topic_scheduler emit is in _scheduler_tick (main.py)
         from src.master import main as main_mod
@@ -2124,10 +2177,11 @@ class TestScheduler:
                 cap(ev)
             app_state.event_queue.put_nowait = capture
 
-            # First tick at 09:00:00 — fires (next_fire=08:59:00 <= now), advances last_fired_at to 08:59:00
+            # First tick at 09:00:00 — fires (next_fire=08:59:00 <= now); advances watermark to 08:59:00.
             self._run_tick(db_path, app_state, datetime(2026, 5, 8, 9, 0, 0, tzinfo=timezone.utc))
-            # Second tick at 09:00:30 — watermark now=08:59:00, next_fire=09:00:00 <= 09:00:30 → fires again
-            # To avoid second fire, use 08:59:30 as second tick time (next_fire=09:00:00 > 08:59:30)
+            # Second tick at 08:59:30 — watermark=08:59:00, next_fire=09:00:00, 09:00:00 > 08:59:30
+            # so the slot is NOT yet due and the action does NOT fire again. Demonstrates that the
+            # advanced watermark prevents duplicate fires.
             self._run_tick(db_path, app_state, datetime(2026, 5, 8, 8, 59, 30, tzinfo=timezone.utc))
 
         asyncio.run(run())
