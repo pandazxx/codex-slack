@@ -2,7 +2,29 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-05-05 -->
+<!-- last updated: 2026-05-08 -->
+
+---
+
+## 2026-05-08 — SRE workflow fully onboarded and validated
+
+*Summary:* The SRE subagent completed end-to-end onboarding of the containerized dev/test/staging workflow. All infrastructure files are in place, documented, and validated. Remote Docker support verified with DOCKER_HOST and DOCKER_GID environment variable handling. No blocking issues found.
+
+*Root cause:* N/A — this is a successful validation of existing infrastructure set up in prior audit.
+
+*Fix applied:* Enhanced three SRE scripts (env-up.sh, env-down.sh, test.sh) with explicit documentation of required environment variables (DOCKER_HOST, DOCKER_GID). Added defensive warning in test.sh when remote Docker is used without DOCKER_GID.
+
+*Prevention:* The enhanced script documentation ensures operators understand the dependency chain: when DOCKER_HOST is set to an SSH URL, DOCKER_GID must also be set so the compose file can map permissions correctly via the docker group. The warning prevents silent failures and permission errors in container startup.
+
+**Validated components:**
+- All .sre/ scripts present and executable (env-up.sh, env-down.sh, test.sh, setup-repo-protection.sh)
+- Production Dockerfile hardened (non-root user, HEALTHCHECK, pinned base image)
+- Dev/test Dockerfiles configured for live-reload and containerized testing
+- Three compose files (base, override, ci) with correct topology and no :latest tags in prod
+- Complete documentation: guides, onboarding summary, decision records, lessons-learned
+- Remote Docker support with proper group_add and fallback defaults
+- Secrets handling via .env.local (per-branch, gitignored)
+- Test infrastructure ready (docker-compose.ci.yml + Dockerfile.test)
 
 ---
 
