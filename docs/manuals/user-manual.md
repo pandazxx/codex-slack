@@ -19,6 +19,7 @@ codex-slack v3 is a self-hosted chat interface for LLM coding agents. You intera
 | `/` | Workspace list — create and browse active workspaces |
 | `/workspaces/:id` | Workspace detail — topic list, agent configuration |
 | `/workspaces/:wsId/topics/:topicId` | Topic chat — message thread, real-time agent output |
+| `/workspaces/:wsId/topics/:topicId/settings` | Topic Settings — event actions for the topic |
 | `/archived` | Archived workspaces (read-only) |
 | `/workspaces/:id/archived-topics` | Archived topics for a workspace (read-only) |
 
@@ -74,6 +75,31 @@ Archived items are viewable at `/archived` and `/workspaces/:id/archived-topics`
 In the workspace detail view, the **Agents** section shows active agent configurations. You can:
 - Add a new agent (name, adapter, optional subagent flag)
 - Remove an agent (soft-delete — historical sessions are preserved)
+
+### Configure event actions
+
+Event actions automatically invoke a staff when something happens in a topic — a user message arrives, an agent replies, a cron schedule fires, or the topic is archived. Use them for recurring tasks like daily summaries, automatic translation of replies, or archival wrap-ups.
+
+1. Open a topic and click the **gear icon** in the topic header (or in the topic row on the workspace page) to open **Topic Settings**.
+2. Under **Event Actions**, click **+ Add action** and fill in the form:
+   - **Event type** — what triggers the action.
+   - **Staff** — the name of the staff to invoke (without `@`).
+   - **Prompt template** — the text sent to the staff; use `{variable}` placeholders listed in the form hint.
+   - For `topic_message_sent`: choose **timing** (`before` or `after` the user message is dispatched).
+   - For `topic_scheduler`: enter a **cron expression** (5 fields; interpreted in the configured system timezone shown next to the field).
+3. Save. The action appears in the list with a status card showing the last run time and outcome.
+
+Use the checkbox on each action card to enable or disable it without deleting it. Click **Edit** to update the prompt or staff name. Click **✕** to delete permanently.
+
+Each action card shows `last_run_status` — `ok` (green), or an error state (`staff_missing`, `render_error`, `dispatch_error`) in red. Click **details** to expand the full output for diagnosis.
+
+For a full reference including template variables, cron rules, session sharing semantics, and troubleshooting, see [`docs/guides/event-actions.md`](../guides/event-actions.md).
+
+Also navigate to:
+
+| Route | View |
+|-------|------|
+| `/workspaces/:wsId/topics/:topicId/settings` | Topic Settings — event actions for the topic |
 
 ## Real-time Updates
 

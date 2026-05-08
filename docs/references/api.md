@@ -99,7 +99,7 @@ The master service exposes a REST API at `http://master:8080`. All data endpoint
 ```json
 {
   "id": "<uuid>",
-  "sender": "user" | "agent" | "system",
+  "sender": "user" | "agent" | "event",
   "agent_name": "claude",
   "text": "...",
   "transcript": "...",
@@ -108,6 +108,128 @@ The master service exposes a REST API at `http://master:8080`. All data endpoint
 ```
 
 `transcript` is a JSON-encoded array of stream-json events (set on agent messages only).
+
+`sender` values: `"user"` for human-typed messages, `"agent"` for agent replies, `"event"` for messages dispatched by an event action (scheduler, archive hook, message hooks).
+
+### Event Actions
+
+Event actions bind in-system events to staff invocations for a specific topic. All five endpoints are scoped under the topic path. Returns `404` if the workspace or topic is not found.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/workspaces/{wid}/topics/{tid}/event-actions` | List all event actions for the topic, ordered by `created_at`. |
+| `POST` | `/api/workspaces/{wid}/topics/{tid}/event-actions` | Create an event action. Returns `201` with the new action object. |
+| `GET` | `/api/workspaces/{wid}/topics/{tid}/event-actions/{id}` | Get a single event action by ID. |
+| `PATCH` | `/api/workspaces/{wid}/topics/{tid}/event-actions/{id}` | Update one or more fields. Only fields present in the request body are changed. Returns the updated action. |
+| `DELETE` | `/api/workspaces/{wid}/topics/{tid}/event-actions/{id}` | Delete an event action permanently. Returns `204`. |
+
+**POST …/event-actions — request body (`EventActionIn`):**
+
+```json
+{
+  "event_type": "topic_message_sent",
+  "staff_name": "reviewer",
+  "prompt_template": "Review the following message: {msgbody}",
+  "timing": "after",
+  "cron_expr": null,
+  "enabled": true
+}
+```
+
+The `EventActionIn` model uses `extra='forbid'` — unknown fields are rejected with 422.
+
+**PATCH …/event-actions/{id} — request body (`EventActionPatch`):**
+
+```json
+{
+  "enabled": false
+}
+```
+
+Only the fields you include are changed; omitted fields are left as-is. Sending `null` for `timing` or `cron_expr` explicitly sets those fields to null (valid for event types that allow null values). Sending `null` for `staff_name`, `prompt_template`, or `enabled` is rejected with 422. `event_type` cannot be changed after creation — it is not accepted in PATCH bodies (rejected with 422 by `extra='forbid'`).
+
+**Event action response shape (`EventActionOut`):**
+
+```json
+{
+  "id": "<uuid>",
+  "event_type": "topic_message_sent",
+  "scope_type": "topic",
+  "scope_id": "<topic-uuid>",
+  "staff_name": "reviewer",
+  "prompt_template": "Review the following message: {msgbody}",
+  "timing": "after",
+  "cron_expr": null,
+  "last_fired_at": null,
+  "last_run_at": "2026-05-08T09:01:00Z",
+  "last_run_status": "ok",
+  "last_run_output": "message_id=<uuid> prompt='Review the following…'",
+  "enabled": true,
+  "created_at": "2026-05-08T09:00:00Z",
+  "updated_at": "2026-05-08T09:00:00Z"
+}
+```
+
+**Observability fields:**
+
+| Field | Writer | Meaning |
+|---|---|---|
+| `last_fired_at` | Scheduler tick only | UTC ISO-8601 watermark of the last cron slot the scheduler accounted for. Advanced *before* dispatch. Null for non-scheduler event types. |
+| `last_run_at` | Event worker | UTC ISO-8601 timestamp of the most recent dispatch attempt (success or failure). Updated regardless of outcome. |
+| `last_run_status` | Event worker | Outcome of the most recent dispatch: `ok`, `staff_missing`, `render_error`, or `dispatch_error`. |
+| `last_run_output` | Event worker | On `ok`: rendered prompt prefix and dispatched `message_id`. On error: the error message or timeout marker. Truncated to 4096 characters. |
+
+**Event types and timing/cron_expr rules:**
+
+| `event_type` | When it fires | `timing` | `cron_expr` |
+|---|---|---|---|
+| `topic_message_sent` | A user sends a message in the topic | Required: `"before"` or `"after"` | Must be null |
+| `topic_message_received` | An agent reply lands in the topic | Null or `"after"` | Must be null |
+| `topic_scheduler` | A cron expression matches the current time | Must be null | Required; 5-field only |
+| `topic_archived` | The topic is archived | Null or `"after"` | Must be null |
+
+For `topic_message_sent`, `"before"` fires before the user's message is dispatched to MQTT; `"after"` fires after. Both observe only — neither can modify or veto the original message.
+
+**Cron expression rules:**
+
+- Must be a valid 5-field cron expression (minute hour day month weekday). 6-field and `@`-shorthand expressions are rejected with 422.
+- Validated using `croniter.is_valid()` at write time.
+- Interpreted in the configured display timezone (`system.timezone` system setting, default OS local TZ). Cron strings are not UTC. See `/api/config/system-settings`.
+- Scheduler fires at minute-level resolution (60 s background loop). Sub-minute expressions pass validation but the effective minimum interval is 1 minute.
+
+**Template variables:**
+
+| `event_type` | Available variables |
+|---|---|
+| `topic_message_sent` | `{msgbody}`, `{topic_name}` |
+| `topic_message_received` | `{msgbody}`, `{topic_name}` |
+| `topic_scheduler` | `{topic_name}`, `{workspace_name}` |
+| `topic_archived` | `{topic_name}` |
+
+`msgbody` is the raw text of the triggering message (user input for `topic_message_sent`; the agent's reply text for `topic_message_received`). Unknown placeholders are left as the literal `{name}` string and a warning is logged. Escape a literal brace with `{{` or `}}`.
+
+**Validation errors returned as 422:** invalid cron expression; wrong `timing`/`cron_expr` combination for the `event_type`; null value for a non-nullable patch field; extra fields in the request body.
+
+**Enable/disable:** PATCH `{"enabled": false}` to disable without deleting. There is no dedicated toggle endpoint.
+
+### System Settings
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/config/system-settings` | Return the current system-level settings. |
+| `PATCH` | `/api/config/system-settings` | Update system-level settings. |
+
+**Request and response shape (`SystemSettings`):**
+
+```json
+{
+  "timezone": "Asia/Shanghai"
+}
+```
+
+`timezone` must be a valid IANA timezone string (validated with `zoneinfo.ZoneInfo(value)`). Invalid values are rejected with 422. If `system.timezone` has never been set, `GET` returns the OS local timezone detected via `tzlocal.get_localzone()`.
+
+This setting controls how cron expressions in `topic_scheduler` event actions are interpreted. It also controls how cron times are displayed in the UI (next to the cron input field and in action cards). All datetimes are stored as UTC; this setting only affects interpretation and display at the edges.
 
 ### Workspace Agents
 

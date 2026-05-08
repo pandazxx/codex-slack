@@ -222,6 +222,30 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-05-08 — SQLite `column = NULL` never matches; must use `IS NULL`
+
+*Summary:* Event actions with `timing=None` (i.e. `topic_archived` and `topic_message_received` rows stored with `timing` as SQL NULL) were silently never dispatched when those events fired. No error was logged; the worker simply found zero matching rows for every event of those types.
+
+*Root cause:* The `_handle_event` worker query used `AND timing=?` with a Python `None` value bound as the parameter. In SQLite, `NULL = NULL` evaluates to NULL (not TRUE), so the predicate `timing = NULL` never matches any row, even when the column value is NULL. The query returned an empty result set for all actions where `timing IS NULL`, regardless of whether the event type was correct.
+
+*Fix applied:* Changed the WHERE clause to `AND (timing IS NULL OR timing=?)`. This correctly matches rows where `timing` is NULL (scheduler, archived, received actions) and rows where `timing` equals the event's timing value (before/after for `topic_message_sent`). The fix is in `src/master/event_dispatcher.py:_handle_event`.
+
+*Prevention:* Never use `= NULL` or `!= NULL` in SQL. SQL NULL comparisons require `IS NULL` or `IS NOT NULL`. When a column is legitimately nullable and you need to match rows where it is null, always write `column IS NULL` or `(column IS NULL OR column = ?)`. Code review for any query that binds a Python `None` as a SQL parameter for a non-primary-key column should check whether the intent is an equality test (wrong for NULL) or an IS NULL test (correct).
+
+---
+
+## 2026-05-08 — Pydantic v2 default `None` collapses "omitted" and "explicit null" in PATCH bodies
+
+*Summary:* The PATCH handler for event actions could not distinguish between a client omitting the `timing` field and a client explicitly sending `"timing": null`. Both appeared as `None` in the model, so a PATCH that only updated `staff_name` would silently reset `timing` to null, invalidating `topic_message_sent` rows that require a non-null `timing`.
+
+*Root cause:* In Pydantic v2, a field declared as `timing: Literal["before","after"] | None = None` initialises to `None` whether the field is absent from the JSON body or present with a null value. The handler was reading `body.timing` directly, making it impossible to distinguish "client did not send this field" from "client explicitly nulled it".
+
+*Fix applied:* Changed the PATCH handler to use `body.model_dump(exclude_unset=True)` to obtain only the fields actually present in the request body. The merged state is then constructed by layering the sent fields over the existing database row values, and the combined state is validated for field-combination consistency before the UPDATE. This ensures that omitted fields are never mutated and explicit nulls are applied only when the field was actually sent.
+
+*Prevention:* In any Pydantic v2 PATCH endpoint where field omission and explicit null carry different semantics, always use `model_dump(exclude_unset=True)` to extract the sent fields. Do not read model attributes directly — they collapse the distinction. This pattern applies broadly to any partial-update endpoint.
+
+---
+
 ## 2026-03-24 — docs/knowledge-base directory initialised
 
 *Summary:* The project `CLAUDE.md` references [`docs/knowledge-base/lessons-learned.md`](lessons-learned.md) and [`docs/knowledge-base/faq.md`](faq.md) as required knowledge-persistence targets, but neither file nor the directory existed.
