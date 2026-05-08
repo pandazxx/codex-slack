@@ -165,6 +165,7 @@ For the full list with types and defaults, see [`docs/references/config.md`](doc
 - [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) — setup, deployment, and operations
 - [`docs/manuals/user-manual.md`](docs/manuals/user-manual.md) — day-to-day usage of the web UI
 - [`docs/guides/onboarding.md`](docs/guides/onboarding.md) — contributor onboarding
+- [`docs/guides/event-actions.md`](docs/guides/event-actions.md) — event-based staff actions (scheduler, message hooks, archive hooks)
 - [`docs/guides/runbooks/master-agent.md`](docs/guides/runbooks/master-agent.md) — master/agent operational runbook
 - [`docs/guides/runbooks/cd-daemon.md`](docs/guides/runbooks/cd-daemon.md) — CD daemon runbook
 - [`docs/references/api.md`](docs/references/api.md) — REST API, WebSocket, and MQTT reference
