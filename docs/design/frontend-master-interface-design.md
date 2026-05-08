@@ -1,7 +1,8 @@
 # Frontend-Master Interface Design
 
-**Status:** canonical design  
-**Scope:** interface contract between Slack/Discord frontends and the master runtime
+**Status:** superseded — Slack and Discord frontends were removed by [ADR-0006](../decisions/0006-drop-slack-discord-integration.md). v3 uses the Vue 3 SPA + REST API + WebSocket described in [`docs/decisions/0005-v3-system-architecture.md`](../decisions/0005-v3-system-architecture.md). This document is retained for historical reference only.
+
+**Scope (historical):** interface contract between Slack/Discord frontends and the master runtime
 
 ## Goal
 

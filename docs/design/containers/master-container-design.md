@@ -65,15 +65,16 @@ flowchart TD
     B --> C[load_dotenv + configure_logging]
     C --> D[install_sigterm_handler]
     D --> E[load_master_settings]
-    E --> F[init AgentRegistry]
-    F --> G[migrate schema if needed]
-    G --> H[construct runtime/service/router/dispatchers]
-    H --> I{frontends enabled}
-    I -->|slack| J[start Slack Socket Mode thread]
-    I -->|discord| K[start Discord thread]
-    J --> L[join threads]
-    K --> L
+    E --> F[init db schema and AgentRegistry]
+    F --> G[construct runtime/service/router/dispatchers]
+    G --> H[respawn active workspace agents]
+    H --> I[start MQTT client loop]
+    I --> J[uvicorn serves FastAPI: REST API + WebSocket + SPA on :8080]
 ```
+
+> Historical note: prior to ADR-0006, the startup flow forked into a Slack
+> Socket Mode thread and a Discord thread. v3 replaces both with the FastAPI
+> service hosting the Vue 3 SPA, REST API, and WebSocket hub.
 
 ## Runtime Components
 
@@ -131,7 +132,8 @@ The master is the only control plane for agents. It injects:
 
 Before dispatching a routed prompt, the dispatcher calls back into
 `MasterService.prepare_agent_for_message()`. That prepare step uses the same
-agent startup path as `/master-agent-start` when the container is absent or not
+agent startup path as workspace-create or explicit start (formerly the
+`/master-agent-start` slash command) when the container is absent or not
 running, and refreshes Codex auth if the registry timestamp is stale.
 
 Detailed agent-side semantics belong in:

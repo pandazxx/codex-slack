@@ -1,50 +1,62 @@
-# Logging Configuration
+# Logging Reference
 
-This bot uses Python standard logging (`logging.basicConfig`) and can write logs to both console and file.
+The v3 stack writes structured logs to stderr from each container. There is no built-in file rotation; collect logs through the container runtime (`docker logs`, `journalctl`, log driver, etc.).
 
-## Logging Destination
-Default destination:
-- Console (`stderr`) via `StreamHandler`
-- Optional file via `FileHandler` when `BOT_LOG_FILE` is set
+## Format
 
-Enable file logging with environment variable:
-```dotenv
-BOT_LOG_FILE=./logs/bot.log
+All processes use a shared formatter (`src/logging_utils.py:LocalTimeFormatter`) that emits:
+
+```
+YYYY-MM-DD HH:MM:SS +OFFSET LEVEL logger.name: message
 ```
 
-Then run the bot normally:
+Timestamps respect the container `TZ` environment variable.
+
+## Levels
+
+| Process | How to set | Default |
+|---|---|---|
+| **agent** (`python -m src.agent.main`) | `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` CLI flag | `INFO` |
+| **master** (`python -m src.master.main`) | Hardcoded to `INFO` at `basicConfig` time. Override per-logger via standard Python config if needed. | `INFO` |
+| **cd daemon** (`python -m src.cd.main`) | Hardcoded to `INFO`. | `INFO` |
+
+## Conventions
+
+The first line each process writes on startup carries the build version:
+
+- `master.startup version=<version>` — master service
+- `agent.startup version=<version>` — agent worker
+- `cd.daemon_start version=<version>` — CD daemon
+
+`<version>` comes from the `APP_VERSION` env var baked at image build time (or `dev` for unsigned local builds). See [`docs/manuals/ops-manual.md`](../manuals/ops-manual.md) for how RC vs release version strings flow through promotion.
+
+## Reading logs
+
 ```bash
-python -m src.bot.main --session-id <SESSION_ID>
+# Master
+docker logs -f codex-slack-master
+
+# A specific agent
+docker logs -f codex-agent-<workspace_id>
+
+# CD daemon (if deployed)
+docker logs -f codex-slack-cd
 ```
 
-If `CODEX_SESSION_ID` is set in `.env`, you can omit `--session-id`.
+## Sensitive content
 
-The bot writes to both console and file when `BOT_LOG_FILE` is configured.
+Agent logs include the prompt body and the LLM response in full. Treat container logs as sensitive — do not commit them, do not paste them into bug reports without redaction.
 
-You can still use shell redirection if preferred:
-```bash
-python -m src.bot.main --session-id <SESSION_ID> 2>&1 | tee bot.log
-```
+## Useful loggers
 
-## Logging Level
-Set log verbosity with CLI option `--log-level`.
-
-Examples:
-```bash
-python -m src.bot.main --session-id <SESSION_ID> --log-level INFO
-python -m src.bot.main --session-id <SESSION_ID> --log-level DEBUG
-python -m src.bot.main --session-id <SESSION_ID> --log-level ERROR
-```
-
-Supported values include common Python levels: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
-
-## What Gets Logged
-Current logging includes:
-- Slack command activity (`/codex-status`, `/codex-attach`, `/codex-detach`, `/codex-conv-cancel`, `/codex-help`)
-- Conversation lifecycle events (received/completed/failed)
-- Conversation content logs (prompt and response text)
-- Error stack traces on failures
-
-Important:
-- Conversation content logging includes full prompt/response text.
-- Treat log files as sensitive data and avoid committing them.
+| Logger | What it covers |
+|---|---|
+| `src.master.main` | Service startup, db init, MQTT loop start |
+| `src.master.mqtt_client` | MQTT publish/subscribe events |
+| `src.master.ws_hub` | WebSocket connect/disconnect, broadcast |
+| `src.master.workspaces` / `topics` / `messages` | REST request handling |
+| `src.master.agent_runner` | Agent container spawn/stop/respawn |
+| `src.agent.mqtt_loop` | Agent-side MQTT subscribe/dispatch |
+| `src.agent.worker` | Per-prompt CLI invocation, session resume |
+| `src.cd.daemon` | Polling loop and digest changes |
+| `src.cd.deploy` | Image pull, container recreate, rollback |

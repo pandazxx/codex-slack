@@ -1,7 +1,8 @@
 # Master-Agent Architecture
 
-**Status:** canonical design  
-**Scope:** system-level architecture for the master control plane, agent worker
+**Status:** historical — describes the v2-era architecture with Slack/Discord frontends. The v3 architecture (web UI + REST API + MQTT, no chat-platform frontends) is documented in [`docs/decisions/0005-v3-system-architecture.md`](../decisions/0005-v3-system-architecture.md) and [ADR-0006](../decisions/0006-drop-slack-discord-integration.md). This document is retained for context on how the system evolved.
+
+**Scope (historical):** system-level architecture for the master control plane, agent worker
 containers, frontends, and CD daemon
 
 ## Goal

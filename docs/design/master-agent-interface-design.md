@@ -1,7 +1,8 @@
 # Master-Agent Interface Design
 
-**Status:** canonical design  
-**Scope:** interface contract between the master runtime and agent containers
+**Status:** partially superseded — the v2 slash-command surface and Slack/Discord-driven routing described here were removed by [ADR-0006](../decisions/0006-drop-slack-discord-integration.md). The current master/agent contract uses MQTT topics and REST API endpoints; see [`docs/decisions/0005-v3-system-architecture.md`](../decisions/0005-v3-system-architecture.md) and [`docs/design/containers/master-container-design.md`](containers/master-container-design.md) for the current behavior. This document is retained for historical context.
+
+**Scope (historical):** interface contract between the master runtime and agent containers
 
 ## Goal
 

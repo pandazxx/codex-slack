@@ -1,6 +1,12 @@
-# Multi-Agent Setup (Same Slack Workspace)
+# Multi-Agent Setup (archived)
 
-> **Historical reference.** This document describes the manual multi-agent setup approach predating the master-agent system. For current multi-agent deployments use the master-agent commands (`/master-agent-load`, `/master-agent-start`, etc.) documented in [`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md).
+> **Archived.** This document describes the v2 manual multi-agent setup, which mapped one Slack channel per repo to one container. The Slack frontend was removed in v3 (see [`docs/decisions/0006-drop-slack-discord-integration.md`](../decisions/0006-drop-slack-discord-integration.md)). The v3 master orchestrates one agent container per workspace automatically — there is no manual multi-container compose path. To run multiple repositories, create one workspace per repository in the web UI; master spawns the agent containers for you.
+>
+> For deployment specifics, see [`docs/manuals/ops-manual.md`](../manuals/ops-manual.md) and [`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md). The compose example file `docker-compose.multi-agent.example.yml` is retained as a reference for hand-rolled multi-container setups but is not part of the supported v3 deployment path.
+
+The original v2 content follows for historical reference only.
+
+---
 
 This guide runs multiple Codex agents in separate containers, each mapped to a different repository, while sharing one Slack workspace.
 

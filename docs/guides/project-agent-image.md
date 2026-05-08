@@ -18,7 +18,7 @@ The supported customization path is:
 
 - `.prj_assistant/image/Dockerfile`
 
-That file is the project-specific agent image manifest. When master loads a repo and sees this file, it records a dockerfile image plan and builds the repo-local image on `/master-agent-start`.
+That file is the project-specific agent image manifest. When master clones the repo for a workspace and sees this file, it records a dockerfile image plan and builds the repo-local image before starting the agent container.
 
 ## Base Image
 
@@ -141,36 +141,28 @@ podman run --rm local-project-agent rg --version
 
 ## Master Behavior
 
-When master sees `.prj_assistant/image/Dockerfile` in the repo:
+When master sees `.prj_assistant/image/Dockerfile` in a workspace repo:
 
-1. `/master-agent-load` records an image plan of type `dockerfile`
-2. `/master-agent-start` builds the repo-local image
-3. the built image is used for that agent instead of `MASTER_AGENT_BASE_IMAGE`
+1. On workspace creation, master records an image plan of type `dockerfile`.
+2. Before spawning the agent container, master builds the repo-local image.
+3. The built image is used for that workspace's agent container instead of `MASTER_AGENT_BASE_IMAGE`.
 
 So:
-- `MASTER_AGENT_BASE_IMAGE` applies to default-image agents
-- `.prj_assistant/image/Dockerfile` overrides it for that specific repo
+- `MASTER_AGENT_BASE_IMAGE` applies to workspaces without a project Dockerfile.
+- `.prj_assistant/image/Dockerfile` overrides it for that specific workspace.
 
-## Verification In Master
+## Verification
 
-After loading and starting the agent:
-
-```text
-/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter ...]
-/master-agent-start <name>
-/master-agent-status <name>
-```
-
-Expected result:
-- status shows a dockerfile-based image plan
-- the built image is used for that agent
+After creating the workspace in the UI:
+- Master logs include the dockerfile-based image plan and the build output.
+- `docker inspect codex-agent-<workspace_id>` shows the image used.
 
 ## Troubleshooting
 
 If build fails:
-- inspect master logs around `/master-agent-start`
-- verify the Dockerfile path is exactly `.prj_assistant/image/Dockerfile`
-- verify the base image tag exists in GHCR
+- Inspect master logs around the workspace's agent spawn.
+- Verify the Dockerfile path is exactly `.prj_assistant/image/Dockerfile`.
+- Verify the base image tag exists in GHCR.
 
 If the image builds but the agent fails at runtime:
 - confirm you did not break `/workspace` path assumptions

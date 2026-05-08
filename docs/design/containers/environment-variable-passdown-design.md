@@ -1,6 +1,7 @@
 # Environment Variable Passdown Design
 
-**Status:** canonical design  
+**Status:** canonical design — partially out of date. The Slack/Discord rows under "Frontend and process-local settings" describe v2 frontend env vars that were removed by [ADR-0006](../../decisions/0006-drop-slack-discord-integration.md); v3 has no `SLACK_*` or `DISCORD_BOT_TOKEN` settings on `MasterSettings`. The non-frontend rows (data dirs, registry paths, agent-seed settings, CD inputs) remain accurate. Refer to [`src/master/config.py`](../../../src/master/config.py) for the authoritative current set.
+
 **Scope:** how environment variables are loaded, renamed, persisted, and passed
 between the CD, master, and agent container runtimes
 
