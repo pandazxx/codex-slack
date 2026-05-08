@@ -172,62 +172,76 @@ async def dispatch_to_staff(
 2. Parse `@mention`, resolve Staff.
 3. Handle file uploads (writes to `attachments` table — stays in
    `send_message` because it is request-bound).
-4. **Emit `topic_message_sent` (before).**
+4. **Emit `topic_message_sent` (before)** — `emit_event(...)` returns
+   immediately; handling happens in the worker.
 5. Call `dispatch_to_staff(..., sender='user', raw_text=text, attachments=...)`.
-6. **Emit `topic_message_sent` (after).**
+6. **Emit `topic_message_sent` (after)** — same as step 4.
 
-The event emitter (see §4) calls `dispatch_to_staff` directly with
-`sender='event'` for each matching action. Session sharing falls out: both
-paths feed the same `staff` row into `_staff_session_key()` and
-`_get_staff_session()`, so an event-triggered call and a user-triggered call
-land on the same `staff_sessions` row and the same `--resume <uuid>` flag.
+The event-handling side (see §4) is a single async worker that calls
+`dispatch_to_staff` with `sender='event'` for each matching action. Session
+sharing falls out: both paths feed the same `staff` row into
+`_staff_session_key()` and `_get_staff_session()`, so an event-triggered call
+and a user-triggered call land on the same `staff_sessions` row and the same
+`--resume <uuid>` flag. The user-message dispatch in step 5 happens directly
+on the request thread (unchanged today behaviour); event-triggered dispatches
+go through the queue + worker.
 
 ### 4. Event emission points
+
+The four emit sites push events onto a shared `asyncio.Queue` via a single
+`emit_event(...)` call. A single async worker task drains the queue and does
+the lookup → resolve → render → dispatch sequence per event.
 
 ```mermaid
 sequenceDiagram
     participant U as User
     participant API as POST /messages
-    participant E as event emitter
-    participant D as dispatch_to_staff
-    participant MQTT
-    participant Agent
     participant MC as mqtt_client._on_message
     participant T as DELETE /topics/{id}
     participant BG as 60s background loop
+    participant EM as emit_event
+    participant Q as asyncio.Queue
+    participant W as event_worker
+    participant D as dispatch_to_staff
+    participant MQTT
 
     U->>API: text="..."
-    API->>E: emit topic_message_sent (before)
-    E-->>D: matching actions × N (sender=event)
+    API->>EM: emit topic_message_sent (before)
+    EM->>Q: put_nowait(event)
     API->>D: user dispatch (sender=user)
     D->>MQTT: publish prompt
-    API->>E: emit topic_message_sent (after)
-    Agent->>MQTT: response
-    MQTT->>MC: _on_message
-    MC->>MC: _save_agent_response
-    MC->>E: emit topic_message_received (after)
-    E-->>D: matching actions × N (sender=event)
+    API->>EM: emit topic_message_sent (after)
+    EM->>Q: put_nowait(event)
 
-    T->>T: archive topic
-    T->>E: emit topic_archive (after)
-    E-->>D: matching actions × N
+    MC->>EM: emit topic_message_received (call_soon_threadsafe)
+    EM->>Q: put_nowait(event)
 
-    BG->>BG: each minute
-    BG->>E: scan scheduler actions
-    E-->>D: due actions × N
+    T->>EM: emit topic_archive (after)
+    EM->>Q: put_nowait(event)
+
+    BG->>BG: scan due scheduler actions
+    BG->>EM: emit topic_scheduler (call_soon_threadsafe)
+    EM->>Q: put_nowait(event)
+
+    loop one event at a time
+        Q-->>W: await get()
+        W->>W: select matching actions, resolve staff, render template
+        W->>D: dispatch_to_staff (sender=event)
+        D->>MQTT: publish prompt
+    end
 ```
 
-Concrete sites:
+Concrete emit sites:
 
 | Hook | File | Insertion point |
 |---|---|---|
-| `topic_message_sent` (before) | `messages.py:send_message` | After staff resolution, **before** `mqtt.publish` |
-| `topic_message_sent` (after)  | `messages.py:send_message` | After `mqtt.publish` returns |
+| `topic_message_sent` (before) | `messages.py:send_message` | After staff resolution, **before** the user's `dispatch_to_staff` call |
+| `topic_message_sent` (after)  | `messages.py:send_message` | After the user's `dispatch_to_staff` returns |
 | `topic_message_received`      | `mqtt_client.py:_on_message` (`msg_type == "response"` branch) | After `_save_agent_response` and `_record_agent_response`, alongside the existing `notify.notify_reply` call |
 | `topic_archive`               | `topics.py:delete_topic` | After the `UPDATE topics SET archived_at = ?` commit |
 | `topic_scheduler`             | `main.py:_background_tasks` | New per-minute pass over scheduler actions, see §6 |
 
-The emitter is a single function:
+#### `emit_event` — single threadsafe entry point
 
 ```python
 def emit_event(
@@ -236,33 +250,120 @@ def emit_event(
     event_type: str,
     topic_id: str,
     workspace_id: str,
-    timing: str | None = None,   # 'before'|'after'|None
+    timing: str | None = None,           # 'before'|'after'|None
     variables: dict[str, str],
+    # Scheduler-only: identifies the cron slot this event represents.
+    # Carried through purely so the worker can log it; the watermark itself
+    # has already been advanced by the scheduler tick (see §6).
+    scheduler_slot: datetime | None = None,
+    scheduler_action_id: str | None = None,
 ) -> None:
-    """Look up matching event_actions and dispatch each. Errors are logged
-    per-action and never propagate to the caller."""
+    """Push an event onto the global event queue. Safe to call from any
+    thread (FastAPI handler, MQTT thread, scheduler thread). Returns
+    immediately; handling happens later in event_worker."""
+    event = {
+        'event_type': event_type,
+        'topic_id': topic_id,
+        'workspace_id': workspace_id,
+        'timing': timing,
+        'variables': variables,
+        'scheduler_slot': scheduler_slot,
+        'scheduler_action_id': scheduler_action_id,
+    }
+    queue = app_state.event_queue
+    loop = app_state.event_loop  # captured at lifespan startup
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is loop:
+        queue.put_nowait(event)
+    else:
+        loop.call_soon_threadsafe(queue.put_nowait, event)
 ```
 
-Emitter behaviour:
-- Selects rows: `scope_type='topic' AND scope_id=topic_id AND event_type=?
-  AND enabled=1 AND (timing IS NULL OR timing=?)`.
-- For each row, in DB-row order:
-  1. Resolve the staff via `resolve_staff(conn, staff_name, workspace_id, topic_id)`.
-  2. If staff is `None` → log `event_action.staff_missing` and skip.
-  3. Render the prompt with `render_template(template, variables)`.
-  4. Call `dispatch_to_staff(..., sender='event', raw_text=rendered)`.
-  5. Wrap each iteration in `try/except` — one bad action does not skip the
-     others.
+`app_state.event_loop` is the asyncio loop captured at FastAPI lifespan
+startup; `app_state.event_queue` is the `asyncio.Queue()` created at the
+same point. Both are stable for the process lifetime.
 
-`emit_event` is called synchronously from request paths (FastAPI handlers run
-on the asyncio loop, so `dispatch_to_staff` is async-callable from
-`send_message` and `topics.delete_topic`). From the MQTT thread
-(`_on_message`) and the background scheduler thread, the emitter is called
-synchronously and uses `hub.broadcast_threadsafe` plus `mqtt.publish` (both
-already documented as thread-safe in this codebase). Concretely the helper
-will have two flavours, `emit_event_async` and `emit_event_threadsafe`,
-sharing the same DB-and-render core; the names match the existing
-`hub.broadcast` / `hub.broadcast_threadsafe` pattern in `ws_hub.py`.
+Queue is unbounded (`asyncio.Queue()` with default `maxsize=0`). Acceptable
+because emission is human-driven (max ~1/s) and events are tiny dicts. If
+abuse appears, bound it later — that's a one-line change with no caller
+impact.
+
+#### `event_worker` — single consumer
+
+```python
+async def event_worker(app_state) -> None:
+    queue: asyncio.Queue = app_state.event_queue
+    while True:
+        event = await queue.get()
+        try:
+            await _handle_event(app_state, event)
+        except Exception:
+            LOGGER.exception(
+                "event_worker.handle_failed type=%s",
+                event.get('event_type'),
+            )
+        finally:
+            queue.task_done()
+
+
+async def _handle_event(app_state, event: dict) -> None:
+    conn = get_connection(app_state.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM event_actions"
+            " WHERE scope_type='topic'"
+            "   AND scope_id=?"
+            "   AND event_type=?"
+            "   AND enabled=1"
+            "   AND (timing IS NULL OR timing=?)",
+            (event['topic_id'], event['event_type'], event['timing']),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for row in rows:
+        try:
+            staff = resolve_staff(
+                conn, row['staff_name'],
+                event['workspace_id'], event['topic_id'],
+            )
+            if staff is None:
+                LOGGER.warning("event_action.staff_missing id=%s", row['id'])
+                continue
+            prompt = render_template(row['prompt_template'], event['variables'])
+            await dispatch_to_staff(
+                app_state=app_state,
+                workspace_id=event['workspace_id'],
+                topic_id=event['topic_id'],
+                staff=staff,
+                prompt_text=prompt,
+                sender='event',
+                raw_text=prompt,
+            )
+        except Exception:
+            LOGGER.exception("event_action.dispatch_failed id=%s", row['id'])
+```
+
+Worker properties:
+
+- **Concurrency is exactly 1.** One worker task, one event at a time. This
+  removes races between MQTT-thread, request-thread, and scheduler-thread
+  emissions firing against the same `event_actions` row without needing
+  explicit locking. The `dispatch_to_staff` call inside `_handle_event` is
+  awaited, so the next event waits behind it.
+- **Per-event error isolation.** Each iteration of the worker loop is wrapped
+  in `try/except`. One bad event logs `event_worker.handle_failed` and the
+  worker continues. Inside `_handle_event`, each per-action iteration is
+  *also* wrapped — one bad action does not skip its siblings.
+- **Lifecycle.** Started from FastAPI's lifespan startup
+  (`asyncio.create_task(event_worker(app.state))`), cancelled on shutdown.
+  Pending events still in the queue at shutdown are lost — accepted, see
+  ADR-0013 Consequences.
+- **No backpressure on emitters.** The queue is unbounded; `emit_event`
+  always returns immediately. Emitter call sites never block.
 
 ### 5. Loop prevention
 
@@ -292,56 +393,117 @@ ADR-0013 alternative Z — a depth counter — is the lift.)
 ### 6. Scheduler
 
 Hooked into the existing 60 s loop in `main.py:_background_tasks` (currently
-~lines 65–150). New pass at the top of each tick, before per-workspace work:
+~lines 65–150). New pass at the top of each tick, before per-workspace work.
+The tick is responsible for *deciding due-ness and advancing the watermark*;
+all actual handling (resolve staff, render, dispatch) happens later in the
+worker.
 
 ```python
 def _scheduler_tick(db_path: str, app_state, now: datetime) -> None:
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            "SELECT * FROM event_actions"
-            " WHERE event_type='topic_scheduler' AND enabled=1"
+            "SELECT a.*, t.workspace_id, t.name AS topic_name, w.name AS workspace_name"
+            " FROM event_actions a"
+            " JOIN topics t ON t.id = a.scope_id"
+            " JOIN workspaces w ON w.id = t.workspace_id"
+            " WHERE a.event_type='topic_scheduler'"
+            "   AND a.enabled=1"
+            "   AND t.archived_at IS NULL"
         ).fetchall()
-        # Pre-filter archived topics in SQL to avoid per-row Python work:
-        # JOIN topics WHERE archived_at IS NULL (see "Archived topics" below)
-        ...
+        for row in rows:
+            anchor = _parse_iso(row['last_fired_at']) or _parse_iso(row['created_at'])
+            next_fire = croniter(row['cron_expr'], anchor).get_next(datetime)
+            if next_fire > now:
+                continue
+            # Optimistic watermark: advance BEFORE enqueueing. If the worker
+            # never gets to it (cancelled / process crash), the slot is lost.
+            # Chosen because duplicate fires are worse than missed fires for
+            # the dominant summary/digest use case (ADR-0013).
+            try:
+                _update_last_fired(conn, row['id'], next_fire)
+            except Exception:
+                LOGGER.exception(
+                    "event_action.scheduler_watermark_failed id=%s",
+                    row['id'],
+                )
+                continue
+            try:
+                emit_event(
+                    app_state=app_state,
+                    event_type='topic_scheduler',
+                    topic_id=row['scope_id'],
+                    workspace_id=row['workspace_id'],
+                    variables={
+                        'topic_name': row['topic_name'],
+                        'workspace_name': row['workspace_name'],
+                    },
+                    scheduler_slot=next_fire,
+                    scheduler_action_id=row['id'],
+                )
+            except Exception:
+                LOGGER.exception(
+                    "event_action.scheduler_emit_failed id=%s",
+                    row['id'],
+                )
     finally:
         conn.close()
-
-    for row in due_rows:
-        try:
-            variables = {"topic_name": ..., "workspace_name": ...}
-            emit_event_threadsafe(
-                app_state=app_state,
-                event_type='topic_scheduler',
-                topic_id=row['scope_id'],
-                workspace_id=...,    # JOIN through topics
-                variables=variables,
-            )
-            _update_last_fired(conn, row['id'], now)
-        except Exception:
-            LOGGER.exception("event_action.scheduler_fire_failed id=%s", row['id'])
 ```
+
+The tick does **not** call `dispatch_to_staff` — it only advances the
+watermark and enqueues. That's the entire point of the queue + worker
+split: the 60 s background thread stays cheap and predictable, and slow
+agent dispatches do not block the next tick.
 
 #### "Is this action due?" — exact rule
 
-Let `now` = the moment the tick reads its clock. Let `last_fired_at` be the
-stored watermark (or the action's `created_at` if `last_fired_at IS NULL`).
-Compute `next_fire = croniter(cron_expr, last_fired_at).get_next(datetime)`.
+Let `now` = the moment the tick reads its clock. Let `anchor` be the stored
+`last_fired_at` (or the action's `created_at` if `last_fired_at IS NULL`).
+Compute `next_fire = croniter(cron_expr, anchor).get_next(datetime)`.
 
-Rule: **fire iff `next_fire <= now`**. After a successful fire, set
-`last_fired_at = next_fire` (not `now`) — this prevents drift and ensures
-that a tick delayed beyond a single cron interval still advances the
-watermark by exactly one slot.
+Rule: **enqueue iff `next_fire <= now`**, and atomically set
+`last_fired_at = next_fire` (not `now`) before the enqueue. Setting to
+`next_fire` rather than `now` prevents drift and ensures that a tick delayed
+beyond a single cron interval still advances the watermark by exactly one
+slot.
+
+#### Watermark policy — optimistic, tick-side
+
+The scheduler tick advances `last_fired_at` *before* it calls `emit_event`.
+The worker does not touch `last_fired_at` for scheduler events. Trade-offs:
+
+- **Loss on failure.** If the worker is cancelled at shutdown, the process
+  crashes after the watermark write, or `emit_event` fails to enqueue, the
+  slot is silently dropped. The next tick computes `next_fire` from the
+  already-advanced `last_fired_at` and waits for the *following* slot.
+- **No duplicates from slow workers.** Even if the worker lags by minutes,
+  the next tick sees the advanced watermark and does not re-enqueue the
+  same slot.
+- **No in-memory dedup state needed.** All bookkeeping lives in SQLite,
+  visible to operators and survives restarts cleanly.
+
+Alternative considered: worker writes the watermark on success, tick keeps
+an in-memory `(action_id, slot)` set of in-flight enqueues to suppress
+duplicates within the process. Rejected — it adds a code path that doesn't
+help across process restarts (the set is ephemeral) and trades a known
+failure mode (silent missed fire on crash) for a more complex one
+(duplicate fire if the in-memory set is dropped). For the dominant
+summary/digest use case, missed fires are recoverable by manual re-trigger;
+duplicate fires generate an extra agent run and an extra message in the
+topic that the user has to clean up.
+
+`scheduler_slot` and `scheduler_action_id` are passed through to the worker
+purely so it can log them (`event_worker scheduler_action=… slot=…`) — no
+state-mutation responsibility on the worker side for scheduler events.
 
 #### Catch-up policy
 
 If the loop has been paused for `K` minutes and `cron_expr='* * * * *'`,
-the rule above will fire the action *once* this tick (advancing
+the rule above will enqueue the action *once* this tick (advancing
 `last_fired_at` by exactly one minute) and again next tick, and so on. We
-deliberately **do not** burst-fire all `K` missed slots in the same tick —
-that would flood the agent and is rarely what operators want for an "every
-minute reminder".
+deliberately **do not** burst-enqueue all `K` missed slots in the same tick
+— that would flood the queue (and ultimately the agent) and is rarely what
+operators want for an "every minute reminder".
 
 If the operator wants strict "fire for every missed slot", they get it by
 running the master without long pauses; sub-minute precision and lossless
@@ -350,27 +512,26 @@ catch-up are out of scope (ADR-0013).
 #### Archived topics
 
 `topic_scheduler` actions whose `scope_id` references an archived topic
-**must not fire**. The query JOINs `topics` and filters on
-`topics.archived_at IS NULL`. The action row is *not* deleted on archive —
+**must not fire**. The tick query JOINs `topics` and filters on
+`archived_at IS NULL`. The action row is *not* deleted on archive —
 unarchiving (if/when that surfaces) restores firing. `topic_archive` itself
 fires once on the archive transition, before the JOIN gate takes effect; this
 is the design (the archive event is the last meaningful moment for the
 topic).
 
-#### Concurrent firings (the failure mode you asked about)
+#### Concurrent firings
 
 The 60 s loop is single-threaded (one Python thread per master process,
 fronted by `threading.Event.wait(60)`). Two `_scheduler_tick` calls cannot
 overlap. The watermark-update is `UPDATE event_actions SET last_fired_at=?
-WHERE id=?` inside the same tick that read the row; SQLite serialises that
-trivially. So the only way an action could fire twice for the same minute is
-if the tick body itself loops — which it does not.
+WHERE id=?` and runs inside the same tick that read the row; SQLite
+serialises that trivially. The worker is also single-threaded (concurrency
+1), so no two events for the same action are in flight at once.
 
-The remaining edge case is *master restart*: if the master crashes after
-publishing to MQTT but before updating `last_fired_at`, the action will fire
-again on the next tick after restart. Acceptance: cron actions are
-informational/idempotent in spirit (summaries, digests). Operators who need
-exactly-once should use a stronger trigger (manual or `topic_archive`).
+The remaining edge case is *worker starvation*: if a single event takes
+many minutes to dispatch (an agent that hangs), the queue grows but the
+scheduler tick keeps advancing watermarks and enqueueing new slots. There
+is no per-action backpressure. See Open Questions.
 
 ### 7. API surface
 
@@ -469,7 +630,37 @@ register as one subscriber among many.
 
 Rejected for v1. We have four hard-coded emit sites and one consumer
 (`event_actions`). Adding the bus introduces ordering, error-handling, and
-discoverability questions for zero benefit at this scale.
+discoverability questions for zero benefit at this scale. The chosen
+queue-plus-worker is a degenerate case of a bus with exactly one consumer;
+the rejection rationale is about *making subscription pluggable*, not about
+queueing.
+
+### Two-flavour helper (`emit_event_async` + `emit_event_threadsafe`)
+
+An earlier draft of this design proposed two emitter functions sharing a
+DB-and-render core: `emit_event_async` for the asyncio loop thread (request
+handlers, `topics.delete_topic`) and `emit_event_threadsafe` for the MQTT
+and scheduler threads. Each call site picked the flavour matching its
+thread context, and both flavours did the lookup → resolve → render →
+dispatch synchronously inline. The naming followed the existing
+`hub.broadcast` / `hub.broadcast_threadsafe` pattern.
+
+Rejected. Three problems:
+
+1. **Emission and handling are intermixed at every site.** Each emit site
+   ends up paying for the full DB query and dispatch chain on its own
+   thread. A slow agent dispatch on the MQTT thread blocks MQTT message
+   processing; on the request thread it blocks the HTTP response.
+2. **No single point for cross-cutting concerns.** Adding observability
+   (queue depth, handler latency), retry, dedup, or rate limiting means
+   patching both flavours in lockstep.
+3. **Two parallel code paths.** The two flavours sharing a "core" still
+   means two different async-vs-sync transcripts to keep correct as the
+   handler grows.
+
+The queue-plus-worker design replaces both flavours with a single
+threadsafe `emit_event` that is always non-blocking and always returns
+immediately, and centralises handling in one async worker.
 
 ### One table per event type
 
@@ -519,9 +710,16 @@ This is a feature addition with no behaviour change for existing deployments.
      identically.
    - Add `src/master/event_actions.py` with the `event_actions` CRUD router
      (mounted under `/api/workspaces/{wid}/topics/{tid}/event-actions`),
-     `EventActionIn`/`EventActionOut`, and the `emit_event_async` /
-     `emit_event_threadsafe` helpers.
-   - Wire `emit_event_*` calls into the four emit sites listed in §4.
+     `EventActionIn`/`EventActionOut`, and the single `emit_event` helper.
+   - Add `src/master/event_worker.py` (or extend `event_actions.py`) with
+     `event_worker(app_state)` and `_handle_event(app_state, event)`.
+   - Create `app.state.event_queue = asyncio.Queue()` and
+     `app.state.event_loop = asyncio.get_running_loop()` in the FastAPI
+     lifespan startup, and start the worker via
+     `asyncio.create_task(event_worker(app.state))`. Cancel the task on
+     lifespan shutdown.
+   - Wire `emit_event(...)` calls into the four emit sites listed in §4
+     and into `_scheduler_tick` (§6).
    - Add `croniter` to `requirements.txt`.
 3. **Frontend:** add the event-actions card under the topic settings panel
    (entry point added to `TopicChat.vue` if no topic-settings page exists yet
@@ -566,6 +764,22 @@ to today's `send_message` and is safe to revert independently.
 - [ ] **`enabled` toggle endpoint.** Should there be a dedicated
       `POST /api/.../event-actions/{id}/disable` path, or is `PATCH {enabled:
       false}` sufficient? Recommend the latter — fewer endpoints, same effect.
+- [ ] **Worker starvation under a stuck dispatch.** Concurrency is 1, the
+      queue is unbounded, and the scheduler tick keeps advancing watermarks
+      and enqueueing new slots independent of the worker's progress. If a
+      single `dispatch_to_staff` call hangs (agent container wedged, MQTT
+      backpressure), the queue grows without bound and every other event in
+      the system stalls behind it. Owner: engineer to add (a) a watchdog
+      timeout around `dispatch_to_staff` inside `_handle_event` (kill the
+      handler after N seconds, log, move on) and (b) a `WARN` log when
+      `queue.qsize()` crosses a threshold (e.g. 50). Both can ship with v1;
+      a bounded queue with a drop-oldest policy is a follow-up if abuse
+      appears. Recommend timeout = 60 s, qsize warn = 50.
+- [ ] **Worker observability surface.** Should the worker expose its queue
+      depth and last-handled-event timestamp via an admin endpoint
+      (`GET /api/admin/event-worker/status`), or is a periodic log line
+      enough? Recommend log-only for v1; add the endpoint when there is a
+      diagnosis flow that needs it.
 
 ## Test plan key cases
 
@@ -592,6 +806,25 @@ goes in `docs/test-plans/event-based-staff-action.md` (tester's deliverable).
   if cron matches.
 - Scheduler watermark: after a 5 s pause, action is not fire-eligible; after
   a 65 s pause and `* * * * *`, action fires once and `last_fired_at`
-  advances by exactly one minute.
-- Master restart in-flight: scheduler that fired but didn't update watermark
-  fires once more — assert this is the documented behaviour, not a bug.
+  advances by exactly one minute (the watermark is advanced by the tick
+  before enqueueing, so the assertion holds even if the worker has not yet
+  picked up the event).
+- Scheduler optimistic-watermark loss: if the worker is cancelled between
+  enqueue and dispatch, `last_fired_at` is still advanced and the *next*
+  cron slot is the one that fires — assert this is the documented
+  behaviour. No duplicate fire of the lost slot.
+- `emit_event` thread-safety: emitting from a synthesised non-loop thread
+  (simulating MQTT-thread or scheduler-thread context) places the event on
+  the queue and the worker handles it; emitting from the loop thread does
+  not deadlock and does not require `call_soon_threadsafe` to be a no-op.
+- Worker error isolation: an event whose handler raises (e.g. forced
+  exception in the resolve step) is logged at `event_worker.handle_failed`
+  and the worker keeps draining; the next queued event is handled
+  normally.
+- Per-action error isolation inside an event: two enabled actions on the
+  same event, the first raises during render — the second still dispatches.
+- Worker shutdown loss: events queued but not yet handled at lifespan
+  shutdown are dropped without raising; the test asserts the worker task
+  is cancelled cleanly and no exceptions propagate.
+- Single-worker ordering: emit events A then B from the same thread; the
+  worker handles A before B (FIFO).
