@@ -1,7 +1,7 @@
 # v3.0 Plan: Multi-Adapter + Multi-Frontend Master Runtime
 
 **Status:** archived historical plan  
-**Superseded by:** [`docs/design/frontend-master-interface-design.md`](../../design/frontend-master-interface-design.md), [`docs/design/master-agent-architecture.md`](../../design/master-agent-architecture.md), and the container design set under [`docs/design/containers/`](../../design/containers/)
+**Superseded by:** [`docs/decisions/0006-drop-slack-discord-integration.md`](../../decisions/0006-drop-slack-discord-integration.md) (which dropped the multi-frontend design altogether), [`docs/design/v3-system-architecture.md`](../../design/v3-system-architecture.md), and the container design set under [`docs/design/containers/`](../../design/containers/). The v2 frontend and architecture designs originally referenced here have themselves been archived under [`docs/archive/design/`](.).
 
 This document is preserved as historical planning context for the v3.0
 multi-adapter frontend rollout.

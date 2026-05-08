@@ -49,14 +49,7 @@ This directory is the canonical home for repository documentation.
 - [`docs/design/agent-runtime-cleanup-detailed-design.md`](design/agent-runtime-cleanup-detailed-design.md) — cleanup of transitional agent runtime startup behavior
 - [`docs/design/agent-provisioning-detailed-design.md`](design/agent-provisioning-detailed-design.md) — detailed design for agent/channel/repo provisioning
 - [`docs/design/separate-base-agent-image-detailed-design.md`](design/separate-base-agent-image-detailed-design.md) — base agent image publishing and consumption
-
-The following design documents describe v2-era architecture that was superseded by ADR-0006 (drop Slack/Discord). They are kept for historical context and should not be read as a description of the current system:
-
-- [`docs/design/frontend-master-interface-design.md`](design/frontend-master-interface-design.md) — v2 Slack/Discord-to-master interface (superseded)
-- [`docs/design/master-agent-interface-design.md`](design/master-agent-interface-design.md) — v2 master/agent slash-command interface (partially superseded)
-- [`docs/design/master-agent-architecture.md`](design/master-agent-architecture.md) — v2 architecture background (historical)
-- [`docs/design/message-split-hint-detailed-design.md`](design/message-split-hint-detailed-design.md) — v2 chat-platform message split hints (superseded)
-- [`docs/design/agent-message-notification.md`](design/agent-message-notification.md) — v2 chat-platform notification design (partially superseded)
+- [`docs/design/agent-message-notification.md`](design/agent-message-notification.md) — agent reply notification design (Discord/Telegram webhook destinations, not a frontend)
 
 ## Decisions
 
@@ -79,10 +72,16 @@ The following design documents describe v2-era architecture that was superseded 
 
 ## Archive
 
-- [`docs/archive/design/master-agent-implementation-plan.md`](archive/design/master-agent-implementation-plan.md) — archived historical implementation plan
-- [`docs/archive/design/v3-0-multi-adapter-frontend-plan.md`](archive/design/v3-0-multi-adapter-frontend-plan.md) — archived historical v3.0 adapter/frontend plan
-- [`docs/archive/guides/slack-setup.md`](archive/guides/slack-setup.md) — archived v2 Slack app setup guide
-- [`docs/archive/guides/discord-setup.md`](archive/guides/discord-setup.md) — archived v2 Discord app setup guide
+Historical design and setup documents kept for context. Do not read these as a description of the current system; they describe v2-era behavior that was superseded by [ADR-0006](decisions/0006-drop-slack-discord-integration.md) and [ADR-0005](decisions/0005-v3-system-architecture.md).
+
+- [`docs/archive/design/frontend-master-interface-design.md`](archive/design/frontend-master-interface-design.md) — v2 Slack/Discord-to-master interface
+- [`docs/archive/design/master-agent-interface-design.md`](archive/design/master-agent-interface-design.md) — v2 master/agent slash-command interface
+- [`docs/archive/design/master-agent-architecture.md`](archive/design/master-agent-architecture.md) — v2 architecture background
+- [`docs/archive/design/message-split-hint-detailed-design.md`](archive/design/message-split-hint-detailed-design.md) — v2 chat-platform message split hints
+- [`docs/archive/design/master-agent-implementation-plan.md`](archive/design/master-agent-implementation-plan.md) — historical implementation plan
+- [`docs/archive/design/v3-0-multi-adapter-frontend-plan.md`](archive/design/v3-0-multi-adapter-frontend-plan.md) — historical v3.0 adapter/frontend plan
+- [`docs/archive/guides/slack-setup.md`](archive/guides/slack-setup.md) — v2 Slack app setup guide
+- [`docs/archive/guides/discord-setup.md`](archive/guides/discord-setup.md) — v2 Discord app setup guide
 
 ## Test Plans
 

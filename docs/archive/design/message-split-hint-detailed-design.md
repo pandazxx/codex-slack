@@ -1,6 +1,6 @@
 # Message Split Hint Detailed Design
 
-**Status:** superseded — the split-hint protocol existed to chunk replies for Slack/Discord, both removed by [ADR-0006](../decisions/0006-drop-slack-discord-integration.md). The v3 web UI streams replies in full and does not require split hints. Retained for historical context.
+**Status:** archived / superseded — the split-hint protocol existed to chunk replies for Slack/Discord, both removed by [ADR-0006](../../decisions/0006-drop-slack-discord-integration.md). The v3 web UI streams replies in full and does not require split hints. Retained for historical context.
 
 **Issue:** [#39](https://github.com/pandazxx/codex-slack/issues/39)  
 **ADR:** [`docs/decisions/0003-message-split-hint-protocol.md`](../decisions/0003-message-split-hint-protocol.md)
