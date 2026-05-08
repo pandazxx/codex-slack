@@ -13,9 +13,11 @@
     <section>
       <div class="section-header">
         <h2>Event Actions</h2>
-        <button v-if="!showForm" class="btn-add" @click="startCreate">+ Add action</button>
+        <button v-if="!showForm && !loading" class="btn-add" @click="startCreate">+ Add action</button>
       </div>
       <p class="muted hint">Trigger configured staff when something happens in this topic.</p>
+
+      <p v-if="loading" class="muted">Loading…</p>
 
       <!-- Create / Edit form -->
       <div v-if="showForm" class="card">
@@ -72,8 +74,8 @@
       </div>
 
       <!-- Action list -->
-      <p v-if="!actions.length && !showForm" class="muted">No event actions configured.</p>
-      <div v-else-if="actions.length" class="action-list">
+      <p v-if="!loading && !actions.length && !showForm" class="muted">No event actions configured.</p>
+      <div v-else-if="!loading && actions.length" class="action-list">
         <div v-for="a in actions" :key="a.id" class="action-card">
           <div class="action-header">
             <span class="action-toggle">
@@ -200,11 +202,16 @@ async function saveAction() {
   saving.value = true
   formError.value = ''
   try {
+    const isEdit = !!editingId.value
+    // event_type is immutable; only include it on POST.
+    // EventActionPatch uses extra='forbid', so sending event_type on PATCH would 422.
     const body = {
-      event_type: form.value.event_type,
       staff_name: form.value.staff_name.trim(),
       prompt_template: form.value.prompt_template,
       enabled: form.value.enabled,
+    }
+    if (!isEdit) {
+      body.event_type = form.value.event_type
     }
     if (form.value.event_type === 'topic_message_sent') {
       body.timing = form.value.timing
@@ -216,10 +223,10 @@ async function saveAction() {
       body.timing = 'after'
     }
 
-    const url = editingId.value
+    const url = isEdit
       ? `/api/workspaces/${wsId}/topics/${topicId}/event-actions/${editingId.value}`
       : `/api/workspaces/${wsId}/topics/${topicId}/event-actions`
-    const method = editingId.value ? 'PATCH' : 'POST'
+    const method = isEdit ? 'PATCH' : 'POST'
     const r = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },

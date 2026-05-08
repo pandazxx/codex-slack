@@ -207,7 +207,7 @@ def delete_topic(workspace_id: str, topic_id: str, request: Request) -> None:
             event_type="topic_archived",
             topic_id=topic_id,
             workspace_id=workspace_id,
-            timing=None,
+            timing="after",
             variables={"topic_name": topic_name},
         )
 

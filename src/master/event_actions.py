@@ -113,6 +113,36 @@ def _validate_cron(cron_expr: str) -> None:
         raise HTTPException(422, f"invalid cron expression: {cron_expr!r}")
 
 
+def _validate_merged_state(
+    *,
+    event_type: str,
+    timing: str | None,
+    cron_expr: str | None,
+) -> None:
+    """Mirror EventActionIn.validate_event_type_fields against a merged PATCH result.
+
+    Pydantic only sees the patch body, so a PATCH on a topic_scheduler row that sets
+    timing='before' (a valid Pydantic value) would otherwise hit the DB CHECK and surface
+    as a 500. This runs the same field-combination rules against the merged state.
+    """
+    if event_type == "topic_scheduler":
+        if not cron_expr:
+            raise HTTPException(422, "cron_expr is required for topic_scheduler")
+        if timing is not None:
+            raise HTTPException(422, "timing must be null for topic_scheduler")
+        _validate_cron(cron_expr)
+    elif event_type == "topic_message_sent":
+        if timing not in ("before", "after"):
+            raise HTTPException(422, "timing must be 'before' or 'after' for topic_message_sent")
+        if cron_expr is not None:
+            raise HTTPException(422, "cron_expr must be null for topic_message_sent")
+    elif event_type in ("topic_message_received", "topic_archived"):
+        if timing not in (None, "after"):
+            raise HTTPException(422, f"timing must be null or 'after' for {event_type}")
+        if cron_expr is not None:
+            raise HTTPException(422, f"cron_expr must be null for {event_type}")
+
+
 def _require_topic(conn, workspace_id: str, topic_id: str) -> None:
     if conn.execute(
         "SELECT 1 FROM topics WHERE id = ? AND workspace_id = ?",
@@ -164,8 +194,6 @@ def create_event_action(
     body: EventActionIn,
     request: Request,
 ) -> EventActionOut:
-    if body.cron_expr:
-        _validate_cron(body.cron_expr)
     conn = get_connection(request.app.state.db_path)
     try:
         _require_topic(conn, workspace_id, topic_id)
@@ -245,8 +273,11 @@ def patch_event_action(
         new_cron = body.cron_expr if body.cron_expr is not None else existing["cron_expr"]
         new_enabled = (1 if body.enabled else 0) if body.enabled is not None else existing["enabled"]
 
-        if new_cron:
-            _validate_cron(new_cron)
+        _validate_merged_state(
+            event_type=existing["event_type"],
+            timing=new_timing,
+            cron_expr=new_cron,
+        )
 
         now = _now()
         conn.execute(
