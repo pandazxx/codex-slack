@@ -2,11 +2,38 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .db import get_connection
+
+_SYSTEM_TIMEZONE_KEY = "system.timezone"
+
+
+def get_configured_timezone(app_state) -> ZoneInfo:
+    """Return the configured display timezone as a ZoneInfo object.
+
+    Reads the 'system.timezone' key from the global config table.  Falls back
+    to the OS local timezone (via tzlocal) when the key is absent or invalid.
+    """
+    import tzlocal
+    conn = get_connection(app_state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT value FROM config WHERE scope_type='global' AND scope_id='' AND key=?",
+            (_SYSTEM_TIMEZONE_KEY,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row:
+        try:
+            return ZoneInfo(row["value"])
+        except (ZoneInfoNotFoundError, Exception):
+            pass
+    return tzlocal.get_localzone()
 
 
 def load_agent_env(db_path: str, workspace_id: str) -> dict[str, str]:
@@ -98,11 +125,55 @@ def _apply_patch(conn, scope_type: str, scope_id: str, patch: ConfigPatch) -> No
     conn.commit()
 
 
+class SystemSettings(BaseModel):
+    timezone: str
+
+
 # ── Global config ─────────────────────────────────────────────────────────────
 
 @global_router.get("/system-variables", response_model=list[dict])
 def get_system_variables() -> list[dict]:
     return _SYSTEM_VARIABLES
+
+
+@global_router.get("/system-settings", response_model=SystemSettings)
+def get_system_settings(request: Request) -> SystemSettings:
+    """Return system-level settings (e.g. the configured display timezone)."""
+    import tzlocal
+    conn = get_connection(request.app.state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT value FROM config WHERE scope_type='global' AND scope_id='' AND key=?",
+            (_SYSTEM_TIMEZONE_KEY,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row:
+        tz = row["value"]
+    else:
+        tz = str(tzlocal.get_localzone())
+    return SystemSettings(timezone=tz)
+
+
+@global_router.patch("/system-settings", response_model=SystemSettings)
+def patch_system_settings(body: SystemSettings, request: Request) -> SystemSettings:
+    """Update system-level settings. Validates timezone using zoneinfo."""
+    try:
+        ZoneInfo(body.timezone)
+    except (ZoneInfoNotFoundError, Exception):
+        raise HTTPException(422, f"invalid timezone: {body.timezone!r}")
+    conn = get_connection(request.app.state.db_path)
+    try:
+        conn.execute(
+            "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
+            " VALUES ('global', '', ?, ?, ?)"
+            " ON CONFLICT(scope_type, scope_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (_SYSTEM_TIMEZONE_KEY, body.timezone, _now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return SystemSettings(timezone=body.timezone)
 
 
 @global_router.get("", response_model=dict[str, str])
