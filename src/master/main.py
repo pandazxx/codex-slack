@@ -166,13 +166,21 @@ def _parse_iso_utc(value: str | None):
     from datetime import datetime, timezone
     if not value:
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S+00:00", "%Y-%m-%dT%H:%M:%S"):
+    aware_formats = ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S+00:00")
+    for fmt in aware_formats:
         try:
             dt = datetime.strptime(value, fmt)
             return dt.replace(tzinfo=timezone.utc)
         except ValueError:
             pass
-    return None
+    # Defensive fallback: naïve string (no Z, no offset). Storage convention is always
+    # UTC-with-Z, so a naïve string suggests bad data. Log and treat as UTC.
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+    LOGGER.warning("event_actions.naive_timestamp value=%s — assuming UTC", value)
+    return dt.replace(tzinfo=timezone.utc)
 
 
 def _update_last_fired(conn, action_id: str, next_fire_utc) -> None:

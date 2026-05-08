@@ -435,6 +435,33 @@ class TestCRUD:
         assert r.status_code == 422
         assert "timing" in r.text.lower()
 
+    def test_patch_explicit_null_clears_timing_on_archived(self, client, ea_base_url):
+        # Regression: PATCH {"timing": null} on a topic_archived row whose timing is
+        # 'after' must actually clear the field (and persist as NULL). Earlier code
+        # used `body.timing if body.timing is not None else existing` which collapsed
+        # explicit null and omitted into the same branch; the field could not be cleared.
+        body = _make_archived_action()
+        body["timing"] = "after"
+        create_r = client.post(ea_base_url, json=body)
+        assert create_r.status_code == 201
+        action_id = create_r.json()["id"]
+        assert create_r.json()["timing"] == "after"
+
+        r = client.patch(f"{ea_base_url}/{action_id}", json={"timing": None})
+        assert r.status_code == 200
+        assert r.json()["timing"] is None
+
+    def test_patch_explicit_null_on_required_field_returns_422(self, client, ea_base_url):
+        # Regression: PATCH {"staff_name": null} must return 422; staff_name is
+        # NOT NULL in the schema and cannot be cleared via PATCH.
+        create_r = client.post(ea_base_url, json=_make_action())
+        assert create_r.status_code == 201
+        action_id = create_r.json()["id"]
+
+        r = client.patch(f"{ea_base_url}/{action_id}", json={"staff_name": None})
+        assert r.status_code == 422
+        assert "staff_name" in r.text
+
     def test_delete(self, client, ea_base_url):
         # CRUD-10
         create_r = client.post(ea_base_url, json=_make_action())

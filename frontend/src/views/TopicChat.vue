@@ -5,7 +5,7 @@
       <RouterLink :to="`/workspaces/${wsId}`" :title="workspace?.name">{{ displayWorkspaceName }}</RouterLink> /
       {{ topic?.subject || topicId }}
       <RouterLink
-        v-if="!isArchived"
+        v-if="!isArchived && !isWorkspaceArchived"
         :to="`/workspaces/${wsId}/topics/${topicId}/settings`"
         class="topic-settings-link"
         title="Topic settings"
@@ -206,6 +206,7 @@ const liveStreams = ref({})
 const seenSeq = new Map()
 
 const isArchived = computed(() => !!topic.value?.archived_at)
+const isWorkspaceArchived = computed(() => !!workspace.value?.archived_at)
 const sendError = ref('')
 
 const _MAX_WS_NAME = 64
