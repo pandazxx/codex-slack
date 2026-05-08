@@ -186,12 +186,15 @@ def delete_topic(workspace_id: str, topic_id: str, request: Request) -> None:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id, subject FROM topics WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
+            "SELECT t.id, t.subject, w.name AS workspace_name"
+            " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
+            " WHERE t.id = ? AND t.workspace_id = ? AND t.archived_at IS NULL",
             (topic_id, workspace_id),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="topic not found")
         topic_name = row["subject"]
+        workspace_name = row["workspace_name"]
         conn.execute(
             "UPDATE topics SET archived_at = ? WHERE id = ?", (_now(), topic_id)
         )
@@ -206,7 +209,15 @@ def delete_topic(workspace_id: str, topic_id: str, request: Request) -> None:
         topic_id=topic_id,
         workspace_id=workspace_id,
         timing="after",
-        variables={"topic_name": topic_name},
+        variables={
+            "topic_name": topic_name,
+            "topic_json": json.dumps({
+                "id": topic_id,
+                "subject": topic_name,
+                "workspace_id": workspace_id,
+                "workspace_name": workspace_name,
+            }),
+        },
     )
 
 

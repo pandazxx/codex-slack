@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 import re
 from datetime import datetime, timezone
@@ -125,13 +126,14 @@ async def send_message(
     # Emit topic_message_sent (before) — returns immediately, handled by the event worker.
     from .event_dispatcher import emit_event
     topic_name = _topic_subject(request.app.state.db_path, topic_id)
+    _msg_json = json.dumps({"text": prompt_text, "sender": "user"})
     emit_event(
         app_state=request.app.state,
         event_type="topic_message_sent",
         topic_id=topic_id,
         workspace_id=workspace_id,
         timing="before",
-        variables={"msgbody": prompt_text, "topic_name": topic_name},
+        variables={"msgbody": prompt_text, "topic_name": topic_name, "message_json": _msg_json},
     )
 
     message_id = await dispatch_to_staff(
@@ -168,7 +170,7 @@ async def send_message(
         topic_id=topic_id,
         workspace_id=workspace_id,
         timing="after",
-        variables={"msgbody": prompt_text, "topic_name": topic_name},
+        variables={"msgbody": prompt_text, "topic_name": topic_name, "message_json": _msg_json},
     )
 
     dispatch_payload = _read_transcript(request.app.state.db_path, message_id)
