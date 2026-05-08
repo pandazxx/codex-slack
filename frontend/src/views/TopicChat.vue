@@ -496,7 +496,7 @@ async function sendMessage() {
       text.value = ''
       selectedFiles.value = []
       const data = await r.json()
-      messages.value.push({
+      const localMsg = {
         id: data.message_id,
         sender: 'user',
         agent_name: null,
@@ -504,7 +504,10 @@ async function sendMessage() {
         transcript: data.dispatch || null,
         attachments: data.attachments || [],
         created_at: new Date().toISOString(),
-      })
+      }
+      const idx = messages.value.findIndex(m => m.id === localMsg.id)
+      if (idx >= 0) messages.value.splice(idx, 1, localMsg)
+      else messages.value.push(localMsg)
       scrollToBottom()
     } else {
       const err = await r.json().catch(() => ({}))
