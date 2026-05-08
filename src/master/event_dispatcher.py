@@ -12,6 +12,7 @@ See ADR-0013 and design doc §4 for the full rationale.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -145,8 +146,10 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
     """Dispatch a single matching action, recording last_run_* on completion."""
     from .dispatch import dispatch_to_staff  # local import avoids circular deps at module load
 
+    db_path: str = app_state.db_path
+
     try:
-        conn = get_connection(app_state.db_path)
+        conn = get_connection(db_path)
         try:
             staff = resolve_staff(
                 conn,
@@ -154,26 +157,43 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
                 event["workspace_id"],
                 event["topic_id"],
             )
+            topic_row = conn.execute(
+                "SELECT t.id, t.subject, t.workspace_id, w.name AS workspace_name"
+                " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
+                " WHERE t.id = ?",
+                (event["topic_id"],),
+            ).fetchone()
         finally:
             conn.close()
 
         if staff is None:
             LOGGER.warning("event_action.staff_missing id=%s staff=%s", row["id"], row["staff_name"])
             _record_run(
-                app_state,
+                db_path,
                 row["id"],
                 status="staff_missing",
                 output=f"staff_name={row['staff_name']!r} not resolvable at fire time",
             )
             return
 
+        # Build variables: merge caller-supplied vars with standard structural vars.
+        variables = dict(event["variables"])
+        if topic_row:
+            variables.setdefault("topic_json", json.dumps({
+                "id": topic_row["id"],
+                "subject": topic_row["subject"],
+                "workspace_id": topic_row["workspace_id"],
+                "workspace_name": topic_row["workspace_name"],
+            }))
+
         try:
-            prompt = render_template(row["prompt_template"], event["variables"])
+            prompt = render_template(row["prompt_template"], variables)
         except Exception as exc:
             LOGGER.exception("event_action.render_failed id=%s", row["id"])
-            _record_run(app_state, row["id"], status="render_error", output=str(exc))
+            _record_run(db_path, row["id"], status="render_error", output=str(exc))
             return
 
+        structured_output = bool(row["structured_output"])
         try:
             message_id = await asyncio.wait_for(
                 dispatch_to_staff(
@@ -184,32 +204,37 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
                     prompt_text=prompt,
                     sender="event",
                     raw_text=prompt,
+                    event_action_id=row["id"] if structured_output else None,
                 ),
                 timeout=DISPATCH_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
             _record_run(
-                app_state,
+                db_path,
                 row["id"],
                 status="dispatch_error",
                 output=f"timeout after {DISPATCH_TIMEOUT_S:.0f}s",
             )
             return
 
-        _record_run(
-            app_state,
-            row["id"],
-            status="ok",
-            output=f"message_id={message_id} prompt={prompt[:120]!r}",
-        )
+        if structured_output:
+            # last_run is written by the MQTT handler when the response arrives.
+            LOGGER.info("event_action.structured_output_dispatched id=%s message_id=%s", row["id"], message_id)
+        else:
+            _record_run(
+                db_path,
+                row["id"],
+                status="ok",
+                output=f"message_id={message_id} prompt={prompt[:120]!r}",
+            )
     except Exception as exc:
         LOGGER.exception("event_action.dispatch_failed id=%s", row["id"])
-        _record_run(app_state, row["id"], status="dispatch_error", output=str(exc))
+        _record_run(db_path, row["id"], status="dispatch_error", output=str(exc))
 
 
-def _record_run(app_state, action_id: str, *, status: str, output: str) -> None:
+def _record_run(db_path: str, action_id: str, *, status: str, output: str) -> None:
     """Write last_run_at / last_run_status / last_run_output for a dispatch attempt."""
-    conn = get_connection(app_state.db_path)
+    conn = get_connection(db_path)
     try:
         conn.execute(
             "UPDATE event_actions"

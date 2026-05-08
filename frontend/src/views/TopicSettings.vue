@@ -65,6 +65,20 @@
             <input type="checkbox" v-model="form.enabled" />
             Fire this action when the event occurs
           </label>
+
+          <label>Structured output</label>
+          <div>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="form.structured_output" />
+              Expect JSON response from staff
+            </label>
+            <p v-if="form.structured_output" class="form-hint">
+              Staff must reply with one of:<br>
+              <code>{"message": "text to post in topic"}</code><br>
+              <code>{"break": true, "message": "reason"}</code><br>
+              <code>{"silent": true, "log": "optional log"}</code>
+            </p>
+          </div>
         </div>
         <div class="form-actions">
           <button class="btn-primary" @click="saveAction" :disabled="saving">{{ saving ? 'Saving…' : 'Save' }}</button>
@@ -83,6 +97,7 @@
             </span>
             <span class="action-type-badge" :class="typeBadgeClass(a.event_type)">{{ a.event_type }}</span>
             <span v-if="a.timing" class="timing-badge">{{ a.timing }}</span>
+            <span v-if="a.structured_output" class="structured-badge" title="Expects JSON response">JSON</span>
             <span class="action-staff">@{{ a.staff_name }}</span>
             <span class="action-preview muted">{{ a.prompt_template.slice(0, 60) }}{{ a.prompt_template.length > 60 ? '…' : '' }}</span>
             <div class="action-btns">
@@ -136,15 +151,16 @@ const emptyForm = () => ({
   timing: 'after',
   cron_expr: '',
   enabled: true,
+  structured_output: false,
 })
 const form = ref(emptyForm())
 
 const variableHint = computed(() => {
   const m = {
-    topic_message_sent: '{msgbody}, {topic_name}',
-    topic_message_received: '{msgbody}, {topic_name}',
-    topic_scheduler: '{topic_name}, {workspace_name}',
-    topic_archived: '{topic_name}',
+    topic_message_sent: '{msgbody}, {message_json}, {topic_name}, {topic_json}',
+    topic_message_received: '{msgbody}, {response_json}, {topic_name}, {topic_json}',
+    topic_scheduler: '{topic_name}, {workspace_name}, {topic_json}',
+    topic_archived: '{topic_name}, {topic_json}',
   }
   return m[form.value.event_type] || ''
 })
@@ -187,6 +203,7 @@ function startEdit(a) {
     timing: a.timing ?? null,
     cron_expr: a.cron_expr ?? '',
     enabled: a.enabled,
+    structured_output: a.structured_output,
   }
   showForm.value = true
   formError.value = ''
@@ -209,6 +226,7 @@ async function saveAction() {
       staff_name: form.value.staff_name.trim(),
       prompt_template: form.value.prompt_template,
       enabled: form.value.enabled,
+      structured_output: form.value.structured_output,
     }
     if (!isEdit) {
       body.event_type = form.value.event_type
@@ -335,6 +353,7 @@ onMounted(load)
 .badge-scheduler { background: #f3e8ff; color: #7c3aed; }
 .badge-archived { background: #fef9c3; color: #713f12; }
 .timing-badge { background: #f1f5f9; color: #475569; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; }
+.structured-badge { background: #ecfdf5; color: #065f46; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 600; }
 .action-staff { font-weight: 600; font-size: 0.9em; }
 .action-preview { font-size: 0.82em; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .action-btns { margin-left: auto; display: flex; gap: 0.25rem; white-space: nowrap; }
