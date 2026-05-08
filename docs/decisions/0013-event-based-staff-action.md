@@ -1,7 +1,7 @@
 ---
 title: "ADR-0013: Event-based staff actions"
-status: proposed
-date: 2026-05-07
+status: accepted
+date: 2026-05-08
 decision-makers: [architect, engineer]
 consulted: [tester, sre]
 informed: [doc-writer, users]
@@ -102,9 +102,30 @@ W1. **Defer.** Ship topic scope only; schema admits `scope_type='workspace'`
 W2. **Ship now.** Define a workspace-level output channel (which topic does
     the reply go to? a synthetic "system" topic? a dead-letter?).
 
+### Fanout concurrency (within a single event, across matching actions)
+
+F1. **Sequential `for` loop** over matching rows; each `dispatch_to_staff`
+    awaited in series.
+F2. **Parallel `asyncio.gather`** over matching rows with
+    `return_exceptions=True`; siblings dispatch concurrently and a slow or
+    failing sibling does not block the others.
+
+### Watchdog scope
+
+WD1. **Per-dispatch hard timeout** wrapping every `dispatch_to_staff` call in
+     `asyncio.wait_for(..., timeout=10.0)`; on expiry the dispatch is
+     abandoned, recorded as `dispatch_error`, and the worker moves on.
+WD2. **Observation-only stall log** — a separate task wakes every 30 s and
+     logs `WARN` if the worker has made no progress for >60 s while
+     `queue.qsize() > 0`; never cancels the worker.
+WD3. **Both** — hard timeout per dispatch (bounds blast radius of a single
+     bad dispatch) plus an observation-only stall log (catches the
+     pathological "worker still alive but stuck somewhere not covered by
+     `wait_for`" case without false positives on an idle queue).
+
 ## Decision Outcome
 
-**Chosen:** **A + P + H1 + X + S1 + W1.** Concretely:
+**Chosen:** **A + P + H1 + X + S1 + W1 + F2 + WD3.** Concretely:
 
 1. **A new `event_actions` table** with narrow columns (`event_type`,
    `scope_type`, `scope_id`, `staff_name`, `prompt_template`, `timing`,
@@ -117,7 +138,7 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
    |---|---|---|
    | `topic_message_sent` | `messages.py:send_message` | `before` and `after` MQTT publish |
    | `topic_message_received` | `mqtt_client.py:_on_message` after `_save_agent_response` | `after` only |
-   | `topic_archive` | `topics.py:delete_topic` after `archived_at` is set | `after` only |
+   | `topic_archived` | `topics.py:delete_topic` after `archived_at` is set | `after` only |
    | `topic_scheduler` | `main.py:_background_tasks` 60 s loop | N/A |
 
    Each site builds a tiny event dict (event_type, scope ids, variables,
@@ -128,9 +149,32 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
    drains the queue: for each event it loads matching `event_actions` rows,
    resolves staff, renders the template, and calls `dispatch_to_staff`
    (extracted from `send_message`). The worker is the only consumer — exactly
-   one event is handled at a time across the whole process. Per-action errors
-   inside one event are caught and logged so other actions in the same event,
-   and subsequent events, are unaffected.
+   one event is handled at a time across the whole process (sequential across
+   events, FIFO). **Within a single event, dispatches to matching actions run
+   in parallel** via `asyncio.gather(..., return_exceptions=True)` (option F2).
+   Each individual `dispatch_to_staff` call is wrapped in
+   `asyncio.wait_for(..., timeout=10.0)` (option WD1 part of WD3); on expiry
+   the dispatch is recorded as `dispatch_error` and siblings are unaffected.
+   The effective worker block per event is therefore ~10 s regardless of the
+   number of matching actions — the worker waits at most as long as the
+   slowest single dispatch in the fanout. Per-action errors are isolated
+   structurally by `gather(return_exceptions=True)`; subsequent events are
+   unaffected.
+
+   Alongside the worker, an **observation-only stall watchdog** task (option
+   WD2 part of WD3) wakes every 30 s and logs `WARN` if the worker has made
+   no progress for more than 60 s *while the queue is non-empty*. The
+   watchdog never cancels or restarts the worker; it exists purely to make a
+   stuck worker visible in logs. The non-empty gate avoids spurious "stalled"
+   warnings during normal idle periods.
+
+   Per-action observability is recorded by the worker on every dispatch
+   attempt via three new columns on `event_actions` (`last_run_at`,
+   `last_run_status`, `last_run_output`). These are distinct from
+   `last_fired_at`: `last_fired_at` is the scheduler watermark advanced by
+   the tick *before* enqueue (used for cron arithmetic); `last_run_*` are
+   written by the worker *after* each dispatch attempt and surface in the UI
+   as "what happened last time".
 3. **Loop prevention via `sender="event"`.** Event-triggered messages are
    inserted into `messages` with `sender="event"`. Hooks gate strictly:
    - `topic_message_sent` fires only when `sender="user"`.
@@ -144,19 +188,37 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
    literal `{name}` string — a misconfigured template logs a warning but does
    not crash dispatch. Variables per event type are listed in the design doc.
 5. **Scheduler reuses the 60 s background loop, watermark advanced
-   optimistically by the tick.** Add `croniter` to `requirements.txt`.
-   Per-action `last_fired_at` is the bookkeeping anchor; "due" is defined as
-   *the cron's next match strictly after `last_fired_at` has already passed
-   (relative to now)*. The scheduler tick updates `last_fired_at = next_fire`
-   *before* enqueueing the event — it does not wait for the worker to
-   acknowledge. Trade-off: if the worker is cancelled or the process crashes
-   between enqueue and dispatch, the slot is silently lost; in exchange we
-   avoid duplicate fires when the worker is slow and we keep the tick
-   self-contained. Chosen because the dominant scheduler use cases are
-   summaries and digests, where a missed fire is annoying and a duplicate
-   fire is materially worse (operators see the agent run twice and an extra
-   message land in the topic). See the design doc §6 for the exact rule and
-   edge cases.
+   optimistically by the tick.** Add `croniter` and `tzlocal` to
+   `requirements.txt`. Per-action `last_fired_at` is the bookkeeping anchor
+   stored as UTC ISO-8601; "due" is defined as *the cron's next match (in the
+   configured display TZ) strictly after `last_fired_at` has already passed
+   (relative to now)*. The scheduler tick converts `now` to the configured
+   TZ, runs `croniter` against the TZ-aware datetime, and converts the
+   resulting `next_fire` back to UTC before storing in `last_fired_at`. The
+   tick updates `last_fired_at = next_fire` *before* enqueueing the event —
+   it does not wait for the worker to acknowledge. Trade-off: if the worker
+   is cancelled or the process crashes between enqueue and dispatch, the slot
+   is silently lost; in exchange we avoid duplicate fires when the worker is
+   slow and we keep the tick self-contained. Chosen because the dominant
+   scheduler use cases are summaries and digests, where a missed fire is
+   annoying and a duplicate fire is materially worse (operators see the
+   agent run twice and an extra message land in the topic). See the design
+   doc §6 for the exact rule and edge cases.
+
+   **Project-wide TZ policy** (introduced by this ADR; applies to all new
+   code touched here and is the target end-state for existing code in a
+   separate cross-cutting effort, see issue [#158](https://github.com/pandazxx/codex-slack/issues/158)):
+   - All datetimes are stored as **UTC** (ISO-8601 with `Z` suffix).
+   - All datetimes are rendered/edited in the UI in a **configured display
+     timezone**.
+   - `cron_expr` is interpreted in the configured display TZ, not UTC.
+   - The configured TZ comes from a new system setting `system.timezone`.
+     Default is the OS local TZ via `tzlocal.get_localzone()`; operators can
+     override in `/settings`. The setting must land either as a precursor PR
+     or as the first step of this feature's implementation — the scheduler
+     code depends on it.
+   - The UI surfaces the configured TZ next to cron input fields (e.g.
+     `0 9 * * *` — fires daily at 09:00 in `Asia/Shanghai`).
 6. **Workspace-scope events are deferred.** The schema admits `scope_type` so
    we do not need a future migration, but only `scope_type='topic'` is
    implemented in v1. Workspace-scope events require an output-channel
@@ -192,21 +254,35 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
     site plus one row in a `_VALID_EVENT_TYPES` set; the table and API need
     no schema work as long as the new event fits the existing column shape.
   - Operators can disable an action without deleting it (`enabled=0`) and see
-    last-fire times (`last_fired_at`) for diagnosis.
+    last-fire times (`last_fired_at`) plus per-action run status
+    (`last_run_at`, `last_run_status`, `last_run_output`) for diagnosis.
   - One worker, one queue: emission is the same one-line call from all three
     thread contexts; logging, retry, dedup, or rate-limit can be added in
     exactly one place (`event_worker`) when needed.
-  - Sequential handling (concurrency=1) eliminates races between the
-    MQTT thread, request thread, and scheduler thread firing simultaneously
-    against the same `event_actions` row, with no explicit locks required.
+  - Sequential cross-event handling (worker concurrency=1, FIFO) eliminates
+    races between the MQTT thread, request thread, and scheduler thread
+    firing simultaneously against the same `event_actions` row, with no
+    explicit locks required.
+  - Within-event parallel fanout (`asyncio.gather`) means the worker block
+    per event is bounded by the slowest single dispatch (~10 s ceiling from
+    `wait_for`), not by N × per-dispatch latency. A topic with 10 matching
+    actions on the same trigger does not pay 10× the latency for the next
+    queued event.
+  - Per-dispatch hard timeout (10 s) plus observation-only stall watchdog
+    bounds the blast radius of a wedged dispatch without ever cancelling
+    legitimate work. The watchdog is gated on a non-empty queue, so idle
+    deployments produce no false-positive logs.
+  - TZ policy is explicit and consistent: UTC at rest, configured TZ at the
+    edges. Cron expressions read naturally in the operator's local time.
 - **Bad / accepted tradeoffs**
   - Hard-wired emit sites mean adding an event type is a code change. Worth
     it for v1 — a generic bus would over-engineer the surface for four call
     sites.
   - Scheduler resolution is minute-level. Sub-minute cron expressions are
     rejected at API write time, not silently ignored.
-  - `croniter` is a new runtime dependency. It is small (single-package, no
-    transitive deps) and the canonical Python cron parser; rolling our own
+  - `croniter` and `tzlocal` are new runtime dependencies. Both are small
+    (single-package, no transitive deps) and canonical for their roles
+    (cron parsing and OS-local-TZ detection respectively); rolling our own
     saves nothing.
   - Workspace-scope events are deferred. Schema is forward-compatible
     (`scope_type` already admits `'workspace'`), so the follow-up will not
@@ -227,11 +303,22 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
     because duplicates are worse than missed fires for the dominant
     summary/digest use case, and the dedup set adds complexity without
     helping across process restarts.
-  - **Single-worker throughput cap.** With one worker, slow agent dispatches
-    serialise the whole event queue. Under v1's human-rate emission this is
-    fine; if the cap becomes visible (rare-but-possible during a flood),
-    raise concurrency or shard the worker — both are local changes inside
-    `event_worker` that don't affect emission sites.
+  - **Single-worker cross-event throughput cap.** Across events the worker
+    is still serial, so a steady flood of events with 10 s dispatches each
+    backs the queue up. Under v1's human-rate emission this is fine; if the
+    cap becomes visible, raise the worker count or shard by topic — both
+    are local changes inside `event_worker` that don't affect emission
+    sites.
+  - **Per-dispatch 10 s timeout is a hard cap.** Agents that legitimately
+    take >10 s to *acknowledge the dispatch* (note: this is the publish-side
+    timeout, not the agent's reply latency) get logged as `dispatch_error`
+    and the next event proceeds. If real workloads need a higher ceiling,
+    raise it in one place (`_dispatch_one`); we picked 10 s because the
+    publish path is local MQTT and anything beyond that is genuinely stuck.
+  - **TZ-awareness audit deferred.** Existing date columns and date-rendering
+    sites across the codebase are not yet TZ-clean. Tracked as a
+    cross-cutting effort (see issue [#158](https://github.com/pandazxx/codex-slack/issues/158)); this ADR codifies the policy that
+    audit will enforce.
 
 ### Confirmation
 
@@ -247,21 +334,49 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
   - Topic with two enabled `topic_message_sent` actions → both fire on a user
     message, MQTT receives two prompt publishes, both share the user's session
     when the staffs are configured for `session_scope='topic'`.
+  - **Parallel fanout:** two enabled actions on the same event whose dispatch
+    is artificially slowed (e.g. 5 s sleep each) complete in ~5 s wall-clock,
+    not ~10 s. The worker advances to the next event after the slower of the
+    two siblings completes.
   - One bad action (e.g. references a deleted staff, or template render
     raises) does not block sibling actions in the same event, and the worker
     keeps draining subsequent events.
+  - **10 s per-dispatch timeout:** a dispatch that hangs is abandoned at 10 s,
+    `last_run_status='dispatch_error'` is recorded for that action,
+    `last_run_output` contains a "timeout after 10s" marker, and siblings in
+    the same event are unaffected.
+  - **Stall watchdog:** with the worker artificially blocked and the queue
+    non-empty, a `WARN` log appears within ~30 s containing
+    `event_worker.stalled` and the queue size. With the queue empty, no such
+    log appears even after several minutes of idle.
   - `emit_event` called from a non-loop thread (simulated MQTT-thread
     context) is observed in the queue and handled by the worker.
+- Per-action observability test:
+  - On a successful dispatch the worker writes `last_run_status='ok'` and
+    `last_run_output` containing the dispatched message id.
+  - On a missing staff the worker writes `last_run_status='staff_missing'`.
+  - On a template render failure the worker writes
+    `last_run_status='render_error'`.
+  - On a dispatch exception the worker writes
+    `last_run_status='dispatch_error'` with the error message.
+  - `last_run_at` is updated in all four cases and is distinct from
+    `last_fired_at` (the latter is only mutated by the scheduler tick).
 - Scheduler test:
+  - **Cron TZ evaluation:** with `system.timezone='Asia/Shanghai'`, a
+    `cron_expr='0 9 * * *'` action's `next_fire` is 09:00 Shanghai time
+    (01:00 UTC), not 09:00 UTC. `last_fired_at` is stored as UTC ISO-8601.
   - With `last_fired_at` 65 s ago and `cron_expr='* * * * *'`, action is due.
   - With `last_fired_at` 5 s ago, action is not due.
   - Archived topic does not fire scheduler actions even if cron matches.
 - UAT (in feature-branch staging):
-  - Configure a `topic_archive` action invoking `@summariser`; archive a topic;
+  - Configure a `topic_archived` action invoking `@summariser`; archive a topic;
     observe the summary message land in the topic before it is hidden from
     the active list. `automated`.
   - Configure a `topic_scheduler` action with `cron_expr='*/2 * * * *'`;
     wait 5 minutes; observe two or three fires. `needs-human` (wall-clock).
+  - Set `system.timezone='Asia/Shanghai'`; configure a
+    `cron_expr='0 9 * * *'` action; verify the UI displays "fires daily at
+    09:00 in `Asia/Shanghai`" next to the cron input. `needs-human` (visual).
 
 ## Pros and Cons of the Options
 
@@ -310,3 +425,18 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
 |---|---|---|
 | W1 — defer (chosen) | Ships v1 without inventing an output channel | Users wanting workspace-level cron must wait |
 | W2 — ship now | Feature-complete | Forces a synthetic-topic / dead-letter design that has no clear answer yet |
+
+### Fanout concurrency
+
+| Option | Pro | Con |
+|---|---|---|
+| F1 — sequential `for` loop | Simplest control flow; trivial to reason about ordering of side effects | Worker block per event = N × dispatch latency; one slow dispatch makes every sibling and every queued event wait behind it |
+| F2 — parallel `asyncio.gather` (chosen) | Worker block per event = max single-dispatch latency; one slow sibling does not delay the others or the next queued event; failure isolation via `return_exceptions=True` | Concurrent writes per event — but each dispatch hits a *different* `staff_sessions` row (staff_name varies) and a *different* `messages` row, so SQLite's row-level serialisation is sufficient |
+
+### Watchdog scope
+
+| Option | Pro | Con |
+|---|---|---|
+| WD1 — per-dispatch hard timeout only | Bounds the cost of a single bad dispatch; trivially testable | Misses "worker alive but stuck somewhere `wait_for` doesn't cover" (e.g. lock contention, infinite loop in renderer) |
+| WD2 — observation-only stall log only | Sees stalls anywhere in the worker, not just inside `dispatch_to_staff` | A wedged dispatch still blocks the queue indefinitely; we only learn after the fact |
+| WD3 — both (chosen) | Per-dispatch timeout caps blast radius for the common failure mode; stall log catches the long-tail "still alive but not progressing" cases without ever cancelling legitimate work | Two pieces of code, two thresholds to keep in sync (10 s and 60 s) — accepted, both are short and live in the same module |
