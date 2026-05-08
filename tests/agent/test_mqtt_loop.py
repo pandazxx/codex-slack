@@ -182,18 +182,62 @@ def test_run_claude_timeout(tmp_path):
 # --- _run_codex ---
 
 def test_run_codex_returns_stdout(tmp_path):
-    with patch("src.agent.mqtt_loop.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="codex output\n", stderr="", returncode=0)
-        text, session, transcript = _run_codex(str(tmp_path), "do it")
+    events = [
+        {"type": "agent_reasoning", "content": "Let me do it"},
+        {"type": "done", "output": "codex output", "exit_code": 0},
+    ]
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)):
+        text, session, transcript = _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "do it", None)
     assert text == "codex output"
     assert session is None
-    assert transcript is None
+    assert transcript is not None
+
+
+def test_run_codex_streams_chunks(tmp_path):
+    events = [
+        {"type": "agent_reasoning", "content": "Thinking..."},
+        {"type": "done", "output": "finished", "exit_code": 0},
+    ]
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)):
+        _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "do it", None)
+    chunk_calls = [c for c in client.publish.call_args_list if "chunk" in c.args[0]]
+    assert len(chunk_calls) == 2
+
+
+def test_run_codex_falls_back_to_stderr(tmp_path):
+    client = MagicMock()
+    proc = _make_popen_mock([], stderr="something went wrong")
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=proc):
+        text, _, _ = _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "hi", None)
+    assert "something went wrong" in text
 
 
 def test_run_codex_not_found(tmp_path):
-    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=FileNotFoundError()):
-        text, _, _t = _run_codex(str(tmp_path), "hi")
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", side_effect=FileNotFoundError()):
+        text, _, _t = _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "hi", None)
     assert "not found" in text
+
+
+def test_run_codex_passes_model(tmp_path):
+    events = [{"type": "done", "output": "ok", "exit_code": 0}]
+    client = MagicMock()
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)) as mock_popen:
+        _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "hi", "o4-mini")
+    cmd = mock_popen.call_args.args[0]
+    assert "--model" in cmd and "o4-mini" in cmd
+
+
+def test_run_codex_nonzero_exit_is_error(tmp_path):
+    events = [{"type": "done", "output": "partial", "exit_code": 1}]
+    client = MagicMock()
+    proc = _make_popen_mock(events)
+    proc.returncode = 1
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=proc):
+        text, _, _ = _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "hi", None)
+    assert text == "partial"
 
 
 # --- _ensure_worktree ---

@@ -200,18 +200,98 @@ def _run_claude(
     return output, new_session_id, transcript
 
 
-def _run_codex(worktree: str, text: str) -> tuple[str, str | None, str | None]:
-    cmd = ["codex", "--full-auto", "-q", text]
+def _stream_codex_once(
+    client: mqtt.Client,
+    workspace_id: str,
+    topic_id: str,
+    reply_message_id: str,
+    agent_name: str,
+    worktree: str,
+    text: str,
+    model: str | None,
+    seq_start: int = 0,
+) -> tuple[str, str | None, bool]:
+    """Stream Codex stdout line by line, publishing each event as an MQTT chunk.
+
+    Returns (output, transcript, is_error).
+    """
+    cmd = ["codex", "--approval-mode", "full-auto", "--output-format", "stream-json"]
+    if model:
+        cmd += ["--model", model]
+    cmd.append(text)
+    chunk_topic = _chunk_topic(workspace_id, topic_id)
+    events: list[dict] = []
+    is_error = False
+    seq = seq_start
+    outputs: list[str] = []
     try:
-        result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True, timeout=_LLM_TIMEOUT)
-        output = result.stdout.strip() or result.stderr.strip() or "(no output)"
-        return output, None, None
-    except subprocess.TimeoutExpired:
-        return f"(codex timed out after {_LLM_TIMEOUT}s)", None, None
+        proc = subprocess.Popen(
+            cmd, cwd=worktree,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                event = {"type": "output", "content": line}
+            events.append(event)
+            client.publish(chunk_topic, json.dumps({
+                "message_id": reply_message_id,
+                "agent_name": agent_name,
+                "seq": seq,
+                "event": event,
+            }), qos=0)
+            LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+            seq += 1
+            ev_type = event.get("type", "")
+            if ev_type in ("result", "done"):
+                final = event.get("output") or event.get("result") or event.get("answer")
+                if final:
+                    outputs.append(str(final))
+                if event.get("is_error") or event.get("exit_code", 0) not in (0, None):
+                    is_error = True
+        proc.wait()
+        if proc.returncode and proc.returncode != 0 and not is_error:
+            is_error = True
+        output = "\n\n---\n\n".join(outputs) if outputs else None
+        if not output:
+            err = (proc.stderr.read() or "").strip()
+            output = err or "(no output)"
+        transcript = json.dumps(events) if events else None
+        LOGGER.info(
+            "agent.codex_done topic_id=%s chunks=%d chars=%d",
+            topic_id, seq - seq_start, len(output),
+        )
+        return output, transcript, is_error
     except FileNotFoundError:
-        return "(codex CLI not found in agent container)", None, None
+        return "(codex CLI not found in agent container)", None, True
     except Exception as exc:
-        return f"(codex error: {exc})", None, None
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return f"(codex error: {exc})", None, True
+
+
+def _run_codex(
+    client: mqtt.Client,
+    workspace_id: str,
+    topic_id: str,
+    reply_message_id: str,
+    agent_name: str,
+    worktree: str,
+    text: str,
+    model: str | None,
+) -> tuple[str, str | None, str | None]:
+    output, transcript, _ = _stream_codex_once(
+        client, workspace_id, topic_id, reply_message_id, agent_name,
+        worktree, text, model,
+    )
+    return output, None, transcript
 
 
 def _process_prompt(
@@ -268,7 +348,10 @@ def _process_prompt(
         text = f"{note_lines}\n{text}"
 
     if adapter == "codex":
-        response_text, new_session_id, transcript = _run_codex(cwd, text)
+        response_text, new_session_id, transcript = _run_codex(
+            client, workspace_id, topic_id, reply_message_id, agent_name,
+            cwd, text, model,
+        )
     else:
         # Claude sessions are scoped to the CWD (project directory).
         # For workspace/global scope we use a stable shared directory so
