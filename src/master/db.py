@@ -110,9 +110,50 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_message ON chunks (message_id, seq);
 CREATE INDEX IF NOT EXISTS idx_chunks_topic   ON chunks (topic_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_created ON chunks (created_at);
+
+CREATE TABLE IF NOT EXISTS event_actions (
+    id              TEXT PRIMARY KEY,
+    event_type      TEXT NOT NULL CHECK (event_type IN (
+                        'topic_message_sent',
+                        'topic_message_received',
+                        'topic_scheduler',
+                        'topic_archived'
+                    )),
+    scope_type      TEXT NOT NULL CHECK (scope_type IN ('topic')),
+    scope_id        TEXT NOT NULL,
+    staff_name      TEXT NOT NULL,
+    prompt_template TEXT NOT NULL,
+    timing          TEXT CHECK (timing IN ('before', 'after')),
+    cron_expr       TEXT,
+    last_fired_at   TEXT,
+    last_run_at     TEXT,
+    last_run_status TEXT CHECK (last_run_status IN (
+                        'ok',
+                        'staff_missing',
+                        'render_error',
+                        'dispatch_error'
+                    )),
+    last_run_output TEXT,
+    enabled         INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+
+    CHECK (
+        (event_type = 'topic_scheduler'      AND cron_expr IS NOT NULL AND timing IS NULL)
+        OR
+        (event_type = 'topic_message_sent'   AND cron_expr IS NULL     AND timing IN ('before','after'))
+        OR
+        (event_type IN ('topic_message_received','topic_archived')
+                                              AND cron_expr IS NULL     AND (timing IS NULL OR timing = 'after'))
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_event_actions_scope_event
+    ON event_actions (scope_type, scope_id, event_type, enabled);
+CREATE INDEX IF NOT EXISTS idx_event_actions_scheduler
+    ON event_actions (event_type, enabled) WHERE event_type = 'topic_scheduler';
 """
 
-TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks"]
+TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks", "event_actions"]
 
 
 _MIGRATIONS = [
