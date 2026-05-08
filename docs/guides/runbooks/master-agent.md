@@ -7,7 +7,7 @@ Operational guide for the v3 codex-slack stack:
 - `mosquitto` container: MQTT broker
 - Agent containers: one per workspace, runs `src/agent/mqtt_loop.py`
 
-See [`docs/test-plans/master-agent-uat.md`](../../test-plans/master-agent-uat.md) for user acceptance test cases.
+See [`docs/test-plans/v3-core-uat.md`](../../test-plans/v3-core-uat.md) for user acceptance test cases.
 
 ## Prerequisites
 

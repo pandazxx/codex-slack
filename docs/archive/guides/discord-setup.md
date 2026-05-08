@@ -1,4 +1,6 @@
-# Discord Integration Setup
+# Discord Integration Setup (archived)
+
+> **Archived.** This guide describes the v3.0 Discord frontend, which was removed in v3 — see [`docs/decisions/0006-drop-slack-discord-integration.md`](../../decisions/0006-drop-slack-discord-integration.md). Kept for historical reference only; current v3 has no Discord integration.
 
 This guide configures Discord for the v3.0 master-agent frontend.
 

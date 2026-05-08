@@ -1,256 +1,154 @@
 # Tutorials
 
-## v3.0 Delivery Scope
-This cycle introduces dual frontend and dual adapter support for master-agent runtime.
+Step-by-step walkthroughs for the v3 stack. Each tutorial assumes the master container is reachable at `http://localhost:8080`; substitute your host where appropriate.
 
-## Tutorial 1: Boot a Single Bot Session
-1. Export required env vars: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_CHANNELS`, `CODEX_SESSION_ID`.
-2. Use this sample Compose baseline (`docker-compose.yml`):
+If you need a deeper reference, follow the link at the end of each tutorial.
 
-```yaml
-services:
-  codex-bot:
-    build: .
-    image: codex-slack-bot:latest
-    environment:
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
-      SLACK_ALLOWED_CHANNELS: ${SLACK_ALLOWED_CHANNELS}
-      CODEX_SESSION_ID: ${CODEX_SESSION_ID}
-      GH_TOKEN: ${GH_TOKEN:-}
-      GIT_USER_NAME: ${GIT_USER_NAME:-}
-      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
-    volumes:
-      - ./:/workspace
-      - ./logs:/workspace/logs
-      - ${HOME}/.codex/auth.json:/run/secrets/codex_auth.json:ro
-      - ${HOME}/.codex/sessions:/run/secrets/codex_sessions:ro
-```
+## Tutorial 1: Bring up the stack
 
-3. For Podman, add override (`docker-compose.podman.yml`):
-
-```yaml
-services:
-  codex-bot:
-    user: "${UID}:${GID}"
-    userns_mode: keep-id
-    security_opt:
-      - label=disable
-    x-podman:
-      in_pod: false
-```
-
-4. Start bot with Compose (containerized runtime):
+Goal: get `master` and `mosquitto` running locally with Docker Compose.
 
 ```bash
+git clone https://github.com/<org>/codex-slack.git
+cd codex-slack
+
+cat > .env <<'EOF'
+ANTHROPIC_API_KEY=sk-ant-...
+GH_TOKEN=ghp_...
+MASTER_GIT_USER_NAME=Your Name
+MASTER_GIT_USER_EMAIL=you@example.com
+CONTAINER_RUNTIME=docker
+CONTAINER_SOCKET_PATH=/var/run/docker.sock
+EOF
+
 docker compose up --build -d
-docker compose logs -f
+docker compose logs -f master
 ```
 
-   For Podman:
+Verify:
 
 ```bash
-export UID="$(id -u)"
-export GID="$(id -g)"
-podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build -d
-podman compose -f docker-compose.yml -f docker-compose.podman.yml logs -f
+curl -s http://localhost:8080/health
+# {"status":"ok","version":"dev"}
 ```
 
-5. In Slack, mention the bot in an allowlisted channel.
-6. Confirm response and run `/codex-status`.
+Open `http://localhost:8080` in a browser; you should see the empty workspace list.
 
-## Tutorial 2: Master Agent Command Flow
-1. Start master: `python -m src.master.main` with `MASTER_ADMIN_CHANNELS` configured.
-2. Load an agent:
-   - `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
-3. Start agent:
-   - `/master-agent-start <name>`
-4. In the mapped channel, mention the master bot with a prompt.
-5. Validate runtime state:
-   - `/master-agent-status <name>`
-6. Optional:
-   - Attach images in the thread; image `url_private` references are appended to the routed prompt.
-   - Check usage counters with `/master-agent-usage <name>`.
+Reference: [`docs/manuals/ops-manual.md`](../manuals/ops-manual.md).
 
-## Tutorial 3: Safe Auth Refresh
-Use `/master-agent-refresh-auth <name>` when rotating Codex auth.
+## Tutorial 2: Create a workspace and send a message
 
-Expected behavior:
-- Updates `CODEX_HOME/auth.json` in the agent workspace.
-- Preserves existing Codex session state files under `.codex`.
+Goal: clone a repo into an agent container and exchange messages with `claude`.
 
-## Tutorial 4: Day-2 Troubleshooting
-1. Check command output payload (`ok`, `code`, `message`, `data`).
-2. Verify agent status and runtime inspection.
-3. Tail container logs when needed.
-4. Re-run auth refresh or restart agent if auth/runtime drift is detected.
-5. For SSH clone failures:
-   - Ensure `MASTER_SSH_AUTH_SOCK_PATH` points to a live socket (`test -S ...`).
-   - In debug container, `/run/secrets/ssh-auth.sock` must be socket type (`s...`), not regular file (`-...`).
-6. For custom Dockerfiles:
-   - If you switch to `USER root` for package install, switch back to `USER appuser` before image end.
-7. If you remove an agent and still need to clear workspace state:
-   - Delete named volume manually: `podman volume rm agent-workspace-<name>`.
+1. In the UI, click **New Workspace**.
+2. Enter a display name and the HTTPS or SSH URL of a Git repository the agent can read with the credentials provided in `.env`.
+3. Submit. Master clones the repo and starts an agent container `codex-agent-<workspace_id>`. Two default agents are registered: `claude` (claude-code adapter) and `codex` (codex adapter).
+4. Open the workspace, click **New Topic**, give it a subject.
+5. In the topic, type `@claude summarise the README` and submit. A thinking spinner appears; activity rows stream in (`⚙ Bash`, `📄 Read`, etc.) while the agent works; the final reply replaces them when done.
 
-## Tutorial 5: Member Onboarding for Personal GitHub Projects
-Use this flow after master runtime is already deployed and healthy.
+Reference: [`docs/manuals/user-manual.md`](../manuals/user-manual.md).
 
-1. Prepare repository access for the agent identity.
-   - If your workspace uses SSH forwarding, ensure the forwarded SSH key has access to your repo (deploy key or machine user).
-   - If token-based auth is used, ensure token owner can read/write your repo.
-2. Apply safe repo policy before first agent run.
-   - Protect `main`/`master`.
-   - Prefer PR-only merges with required checks.
-3. Make your project automation-ready.
-   - Include build/test/lint commands in repo docs.
-   - Ensure tests can run non-interactively.
-4. Send mapping request to master admin.
-   - Provide agent name, repo URL, target Slack channel ID, and default branch.
-   - Example request payload:
-     - name: `alice-api`
-     - repo: `git@github.com:teammate-org/alice-api.git`
-     - channel: `C_ALICE_WORK`
-     - branch: `master`
-5. After admin starts the agent, work only in your mapped Slack channel.
-   - Ask for feature branch workflow and PR creation.
-   - Keep one logical task per thread to retain clean session context.
-6. If access/auth fails, ask admin to run diagnostics.
-   - `/master-agent-status <name>`
-   - `/master-agent-refresh-auth <name>` (non-destructive to Codex session state)
+## Tutorial 3: Driving the system over HTTP
 
-## Tutorial 6: Project-Specific Image While Preserving Base Agent Setup
-Use this when your project needs extra OS packages, CLI tools, or language runtimes.
-
-1. Use the published minimal base image from registry (default path).
-   - Base image:
-     - `ghcr.io/<owner>/codex-slack-agent-minimal:latest`
-   - Tag guidance:
-     - `latest` for testing against current default branch
-     - `vX.Y-rcN` for release-candidate validation
-     - `sha-<commit>` for immutable pinning
-   - Reason: no local base-image bootstrap is required for normal customization flow.
-
-2. Optional fallback for local-only development:
-   - If registry access is unavailable, build/tag locally from this repository root:
+Goal: do everything tutorial 2 does, but via the REST API.
 
 ```bash
-cd /workspace/repo
-podman build -t codex-slack-agent-minimal:latest -f Dockerfile.agent-minimal .
-podman tag codex-slack-agent-minimal:latest localhost/codex-slack-agent-minimal:latest
+BASE=http://localhost:8080/api
+
+# Create a workspace
+curl -s -XPOST $BASE/workspaces \
+  -H 'content-type: application/json' \
+  -d '{"name":"my-repo","repo_url":"https://github.com/<owner>/<repo>.git"}'
+
+# List workspaces
+curl -s $BASE/workspaces
+
+# Create a topic in workspace WID
+curl -s -XPOST $BASE/workspaces/$WID/topics \
+  -H 'content-type: application/json' \
+  -d '{"subject":"hello"}'
+
+# Post a message to topic TID
+curl -s -XPOST $BASE/workspaces/$WID/topics/$TID/messages \
+  -H 'content-type: application/json' \
+  -d '{"body":"@claude what does this repo do?"}'
 ```
 
-3. Add project image files in your repo:
-   - `.prj_assistant/image/Dockerfile`
-4. Keep base agent behavior by extending, not replacing.
-   - Start with:
-     - `FROM ghcr.io/<owner>/codex-slack-agent-minimal:latest`
-   - Local fallback:
-     - `FROM localhost/codex-slack-agent-minimal:latest`
-   - Install only project dependencies on top.
-   - Do not override `ENTRYPOINT`, container mode env flow, or workspace mount assumptions unless required.
-5. Example Dockerfile:
+To stream agent output in real time, open a WebSocket to `/ws/events`. See [`docs/references/api.md`](../references/api.md) for the full surface.
 
-```dockerfile
-FROM ghcr.io/<owner>/codex-slack-agent-minimal:latest
+## Tutorial 4: Resume sessions across restarts
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    jq ripgrep && \
-    rm -rf /var/lib/apt/lists/*
-```
+Each agent maintains a separate Claude session per `(workspace, topic)` pair. Session state is stored both in the master's SQLite (`sessions` table) and in the per-workspace volume `codex-claude-{workspace_id}` mounted at `/home/appuser/.claude` inside the agent container. This means:
 
-6. Build locally in project repo before asking admin to start the agent:
+- A topic resumes its conversation automatically across master and agent restarts.
+- If a session expires server-side, the agent transparently retries the prompt with a fresh session ID and persists the new ID.
+
+To wipe a workspace's Claude history, archive the workspace, then delete the volume:
 
 ```bash
-podman build -t local-<project>-agent -f .prj_assistant/image/Dockerfile .prj_assistant/image
+docker volume rm codex-claude-<workspace_id>
 ```
 
-7. Run a smoke test for base behavior compatibility:
-   - Container starts successfully.
-   - `codex --version` and `claude --version` both work in the image.
-   - `python -m src.agent.main` is still runnable in image context.
-   - Required project tools are present (`jq`, `rg`, language runtime, etc.).
+## Tutorial 5: Use a project-specific agent image
 
-8. Hand off to admin for framework usage:
-   - Admin runs `/master-agent-load ...` and `/master-agent-start ...`.
-   - Master auto-detects `.prj_assistant/image/Dockerfile` and builds `codex-agent-<name>:latest`.
-   - Verify `/master-agent-status <name>` shows dockerfile-based image plan.
+Most projects work with the default agent image. If your project needs extra tools (`jq`, `ripgrep`, language runtimes), provide a project-specific Dockerfile.
 
-## Tutorial 7: Global Codex and Claude Defaults with Repo-Level Overrides
-Use this when you want master to provide shared default agent configuration while still allowing individual repos to override it with `.codex/` or `.claude/`.
+1. In your project repo, add `.prj_assistant/image/Dockerfile`:
 
-1. Prepare global default directories on the master host.
-   - Example layout:
+   ```dockerfile
+   FROM ghcr.io/<owner>/codex-slack-agent-minimal:latest
 
-```text
-/opt/codex-slack/config/codex/
-  config.toml
-  AGENTS.md
+   RUN apt-get update && apt-get install -y --no-install-recommends \
+       jq ripgrep && \
+       rm -rf /var/lib/apt/lists/*
+   ```
 
-/opt/codex-slack/config/claude/
-  settings.json
-  hooks/
-```
+2. Push to the branch the workspace will track. On the next workspace-agent rebuild, master detects the Dockerfile and builds `codex-agent-<workspace>:latest` from it before starting the agent container.
 
-2. Export master env vars for those directories.
+3. Keep these invariants:
+   - Do not change `WORKDIR` away from `/workspace`.
+   - Do not replace `docker/entrypoint.sh`.
+   - Do not switch the container `USER` away from `appuser` at image end.
 
-```bash
-export MASTER_CODEX_CONFIG_DIR_PATH=/opt/codex-slack/config/codex
-export MASTER_CLAUDE_CONFIG_DIR_PATH=/opt/codex-slack/config/claude
-```
+Reference: [`docs/guides/project-agent-image.md`](project-agent-image.md).
 
-3. Start or restart master with those env vars applied.
-   - Master mounts both directories read-only into each agent container.
-   - Worker seeds them into writable agent locations during startup.
+## Tutorial 6: Share global Claude/Codex defaults
 
-4. Understand the precedence model.
-   - Codex:
-     - master global defaults seed into agent runtime `CODEX_HOME`
-     - repo `.codex/` overlays on top and wins for conflicting files
-   - Claude:
-     - master global defaults seed into agent home `~/.claude`
-     - repo `.claude/` remains the project-level override source
+Mount per-host default config directories that all agent containers seed from at startup.
 
-5. Add repo-level overrides only where needed.
-   - Example repo layout:
+1. On the master host, lay out the defaults:
 
-```text
-my-project/
-  .codex/
-    config.toml
-  .claude/
-    settings.json
-```
+   ```
+   /opt/codex-slack/config/codex/
+     config.toml
+     AGENTS.md
 
-6. Expected runtime behavior.
-   - If repo `.codex/config.toml` exists, it overrides the global Codex `config.toml`.
-   - If repo has no `.codex/`, the global Codex defaults still apply.
-   - Global Claude defaults always seed into agent home.
-   - Repo `.claude/` provides project-specific Claude behavior without removing the global defaults.
+   /opt/codex-slack/config/claude/
+     settings.json
+     hooks/
+   ```
 
-7. Start the agent normally.
-   - `/master-agent-load <name> <repo_path> <channel_id> [branch] [--adapter codex|claude-code]`
-   - `/master-agent-start <name>`
+2. Set master env vars (in `.env` or compose):
 
-8. Validate the effective config inside the running agent if needed.
-   - Codex runtime config:
-     - `podman exec -it agent-<name> sh -lc 'ls -la /workspace/home/.codex'`
-   - Claude home config:
-     - `podman exec -it agent-<name> sh -lc 'ls -la /workspace/home/.claude'`
-   - Repo overrides:
-     - `podman exec -it agent-<name> sh -lc 'ls -la /workspace/repo/.codex /workspace/repo/.claude 2>/dev/null || true'`
+   ```bash
+   MASTER_CODEX_CONFIG_DIR_PATH=/opt/codex-slack/config/codex
+   MASTER_CLAUDE_CONFIG_DIR_PATH=/opt/codex-slack/config/claude
+   ```
 
-9. Keep the ownership model clear.
-   - Master-owned directories:
-     - `MASTER_CODEX_CONFIG_DIR_PATH`
-     - `MASTER_CLAUDE_CONFIG_DIR_PATH`
-   - Project-owned overrides:
-     - repo `.codex/`
-     - repo `.claude/`
-   - Project repos should override only what they need, not duplicate the full global config tree.
+3. Restart master. Both directories are mounted read-only into each agent container and seeded into writable agent locations on startup.
 
-## Release Wrap-Up Checklist (v3.0)
-- [ ] Dual frontend flows validated (Slack + Discord).
-- [ ] Dual adapter flows validated (`codex` + `claude-code`).
-- [ ] README and USAGE reflect current command behavior.
-- [ ] Tutorials validated against current `master`.
-- [ ] Release candidate notes drafted.
+4. Repos can override on top:
+   - `repo/.codex/config.toml` overrides the global Codex `config.toml`.
+   - `repo/.claude/` is treated as project-scope Claude config and layered on top of the global defaults.
+
+Reference: [`docs/references/config.md`](../references/config.md).
+
+## Tutorial 7: Day-2 troubleshooting
+
+| Symptom | First check | Reference |
+|---|---|---|
+| Agent container won't start | `docker logs codex-agent-<wsid>` for stage failure (preflight, repo_sync, workspace_prepare) | [`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md) |
+| `ssh-auth.sock` errors | Confirm `MASTER_SSH_AUTH_SOCK_PATH` points to a live socket on the host | [`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md) |
+| Claude session expired | Self-healing — agent retries without `--resume` and stores the new session ID | [`docs/manuals/user-manual.md`](../manuals/user-manual.md) |
+| MQTT not delivering prompts | Tail `mosquitto` logs; check that master logs `master.mqtt_loop_start host=mosquitto port=1883` | [`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md) |
+| Production reports `version: vX.Y-rcN` | Expected — promotion retags the RC image without rebuilding | [`docs/manuals/ops-manual.md`](../manuals/ops-manual.md) |

@@ -192,7 +192,7 @@ Rules:
 
 ### Codex auth refresh
 
-`/master-agent-refresh-auth <name>` copies the current host Codex auth seed into:
+The auth-refresh operation (formerly the `/master-agent-refresh-auth` slash command, now invoked via the master REST API or auto-triggered by the dispatch path) copies the current host Codex auth seed into:
 
 - `/workspace/home/.codex/auth.json`
 
@@ -206,8 +206,7 @@ prompt is executed inside the agent.
 
 ### Claude config refresh
 
-`/master-agent-refresh-config <name>` copies the current shared Claude config
-directory into:
+The config-refresh operation (formerly the `/master-agent-refresh-config` slash command, now invoked via the master REST API) copies the current shared Claude config directory into:
 
 - `/workspace/home/.claude/`
 

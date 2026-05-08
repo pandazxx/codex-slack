@@ -1,99 +1,106 @@
-# Codex Slack Bridge
+# codex-slack
 
-A Python service that connects a local Codex or Claude Code session to Slack and Discord, and optionally orchestrates multiple containerised AI agent workers from a single master process.
+A self-hosted web platform for orchestrating LLM coding agents (Claude Code, Codex) against your own Git repositories. Each workspace maps to a repository and is served by a dedicated agent container; topics are independent chat threads that get their own git worktree and LLM session.
 
-Built for teams that want AI coding assistance directly inside their chat workspace, without exposing credentials or running cloud-side inference proxies.
-
-## Vision
-
-The project is evolving from a single-session Slack bridge into a full multi-agent orchestration platform. The master runtime will manage any number of agent containers — each targeting a different repository and channel — from a single control plane reachable via Slack or Discord admin commands. Structured Claude Code (`.claude/`) and Codex (`AGENTS.md`, `.agents/skills/`) workflows govern how features are designed, built, tested, reviewed, and documented within this repository itself.
+The project name reflects its v2 origin as a Slack/Discord bridge. v3 dropped chat-platform integration in favour of a Vue 3 SPA + REST API; the name was kept to avoid breaking image tags, volume names, and external references. See [`docs/decisions/0006-drop-slack-discord-integration.md`](docs/decisions/0006-drop-slack-discord-integration.md) for the rationale.
 
 ## What this project is not
 
-- Not a hosted SaaS or cloud service — the bot and all agents run on infrastructure you control.
-- Not a general-purpose LLM proxy — it bridges exactly one chat workspace to one or more local AI sessions.
-- Not a replacement for your local Codex or Claude Code CLI — it wraps and exposes those tools; they must be installed and authenticated separately.
-- Not a multi-tenant platform — access is restricted to allowlisted channel IDs and a fixed admin channel list.
+- Not a hosted SaaS — the master and all agent containers run on infrastructure you control.
+- Not a multi-tenant platform — there is no per-user authentication; access control is whatever you put in front of the master HTTP port.
+- Not a replacement for the local `claude` or `codex` CLI — agent containers wrap and invoke those tools; they must be available inside the agent image and authenticated via env vars.
+- No longer a Slack or Discord bridge — chat-platform adapters were removed in v3. If you need one, build it as an external service that calls the REST API.
 
-## Bootstrap demo
+## Architecture at a glance
 
-Minimal path to get a single bot session running with Docker Compose:
+| Component | What it is | Port |
+|---|---|---|
+| `master` | FastAPI app: REST API + Vue 3 SPA + WebSocket hub + MQTT client | 8080 |
+| `mosquitto` | MQTT broker (Eclipse Mosquitto 2) | 1883 (internal only) |
+| agent containers | One per workspace; runs `src/agent/mqtt_loop.py`, invokes `claude` / `codex` CLI | none |
+| `cd` daemon (optional) | Polls a registry tag and redeploys master/agent images on change | none |
+
+State lives in two places:
+- `master_data` Docker volume (SQLite at `/opt/codex-slack/data/master/master_data.db`) — workspaces, topics, messages, sessions, agent configs.
+- `codex-claude-{workspace_id}` Docker volumes — per-workspace Claude Code session state.
+
+## Quick start
 
 ```bash
-# 1. Copy and fill in credentials
-cp docker-compose.yml docker-compose.local.yml   # or edit in place
+# 1. Clone
+git clone https://github.com/<org>/codex-slack.git
+cd codex-slack
 
-# 2. Set required environment variables
-export SLACK_BOT_TOKEN=xoxb-...
-export SLACK_APP_TOKEN=xapp-...
-export SLACK_ALLOWED_CHANNELS=C01234567
-export CODEX_SESSION_ID=<your-local-codex-session-id>
+# 2. Configure secrets
+cat > .env <<'EOF'
+ANTHROPIC_API_KEY=sk-ant-...
+GH_TOKEN=ghp_...
+MASTER_GIT_USER_NAME=Your Name
+MASTER_GIT_USER_EMAIL=you@example.com
+CONTAINER_RUNTIME=docker
+CONTAINER_SOCKET_PATH=/var/run/docker.sock
+EOF
 
 # 3. Build and start
 docker compose up --build -d
-docker compose logs -f
+
+# 4. Open the UI
+open http://localhost:8080
 ```
 
-Verify in Slack: run `/codex-status` in an allowlisted channel, then send `@codex say hello`.
+`docker compose up` starts `master` and `mosquitto`. Agent containers are spawned by master when you create a workspace in the UI.
 
-For Podman, add the override file:
-
-```bash
-export UID="$(id -u)" GID="$(id -g)"
-podman compose -f docker-compose.yml -f docker-compose.podman.yml up --build -d
-```
-
-Full setup and runtime guides live under `docs/`; use [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) as the primary entry point.
-For Codex contributors, repository workflow instructions live in `AGENTS.md` and repo-local skills live under `.agents/skills/`.
+For rootless Podman, set `CONTAINER_SOCKET_PATH=/run/user/$(id -u)/podman/podman.sock` and the `DOCKER_GID` of the socket owner. Full setup details live in [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md).
 
 ## Project structure
 
 ```
 .
-├── src/                          # Application source code
-│   ├── bot/                      #   Single-session Slack bot (attach mode)
-│   ├── master/                   #   Master orchestration runtime (multi-agent)
-│   ├── agent/                    #   Agent worker entrypoint and lifecycle
-│   └── cd/                       #   CD daemon for automated deployments
+├── src/                          # Application source
+│   ├── master/                   #   FastAPI app, MQTT hub, container orchestration
+│   ├── agent/                    #   Agent worker (MQTT loop, CLI adapter)
+│   └── cd/                       #   CD daemon for image-tag-driven redeploys
+├── frontend/                     # Vue 3 SPA (built into src/master/static/ during image build)
 ├── tests/                        # Automated tests (mirrors src/ structure)
-├── scripts/                      # Build, bootstrap, and utility scripts
-├── config/                       # Environment and service configuration
-├── docs/                         # All documentation
+├── scripts/                      # Bootstrap and utility scripts
+├── config/                       # Mosquitto, claude-global, codex-global config baked into images
+├── docs/                         # All documentation (see docs/README.md for the map)
 │   ├── manuals/                  #   User and operator entry points
-│   ├── guides/                   #   Setup guides, tutorials, and runbooks
-│   ├── references/               #   Commands, config, logging, schemas
+│   ├── guides/                   #   Setup guides, tutorials, runbooks
+│   ├── references/               #   API, config, logging, schemas
 │   ├── design/                   #   Design and planning artifacts
 │   ├── decisions/                #   Architecture Decision Records
-│   ├── test-plans/               #   Acceptance plans and UAT checklists
+│   ├── test-plans/               #   UAT checklists
 │   ├── releases/                 #   Release notes
 │   └── knowledge-base/           #   FAQ and lessons learned
-├── .agents/                      # Codex repo-local workflow skills
-│   └── skills/                   #   Workflow, role, and git helper skills
-├── .claude/                      # Claude Code agent framework
-│   ├── CLAUDE.md                 #   Project-scope agent instructions
-│   ├── agents/                   #   Subagent definitions (architect, engineer, tester, reviewer, doc-writer)
-│   └── commands/                 #   Slash-command skills (commit, pr, tag)
-├── .github/workflows/            # CI/CD pipelines (image publish)
-├── Dockerfile                    # Standard bot/master image
-├── Dockerfile.agent-minimal      # Lean agent worker image
-├── docker-compose.yml            # Single-bot Compose baseline
-├── docker-compose.master-agent.example.yml  # Master runtime Compose example
-├── docker-compose.multi-agent.example.yml   # Multi-agent Compose example
-├── docker-compose.podman.yml     # Podman rootless override
-├── BUILD.md                      # Compatibility pointer to setup and ops docs
-└── USAGE.md                      # Compatibility pointer to usage docs
+├── .claude/                      # Claude Code agent framework (CLAUDE.md, subagents, slash commands)
+├── .agents/                      # Codex repo-local skills
+├── .github/workflows/            # CI: image build, RC promotion, on-demand builds
+├── Dockerfile                    # Master image (FastAPI + frontend)
+├── Dockerfile.agent-minimal      # Lean base image for agent containers
+├── Dockerfile.cd-daemon          # CD daemon image
+├── Dockerfile.dev                # Dev image (bind-mount source, live reload)
+├── Dockerfile.test               # Test runner image (CI pytest)
+├── docker-compose.yml            # Master + mosquitto baseline
+├── docker-compose.override.yml   # Dev override: bind-mount source, live reload
+├── docker-compose.ssh.yml        # SSH agent forwarding override
+├── docker-compose.ci.yml         # CI compose for the test image
+├── docker-compose.cd-daemon.example.yml      # CD daemon example
+├── docker-compose.master-agent.example.yml   # Master+agent example
+├── docker-compose.multi-agent.example.yml    # Multi-agent example
+├── BUILD.md                      # Compatibility pointer to the ops manual
+└── USAGE.md                      # Compatibility pointer to the user manual
 ```
 
 ## Further reading
 
-- [`docs/README.md`](docs/README.md) — documentation map and category index
-- [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) — setup, deployment, and operations entry point
-- [`docs/manuals/user-manual.md`](docs/manuals/user-manual.md) — day-to-day usage entry point
-- [`docs/guides/slack-setup.md`](docs/guides/slack-setup.md) — detailed Slack app configuration
-- [`docs/guides/discord-setup.md`](docs/guides/discord-setup.md) — Discord app setup for master mode
-- [`docs/guides/container-runtime.md`](docs/guides/container-runtime.md) — container runtime, Podman socket, and mounts
-- [`docs/guides/runbooks/master-agent.md`](docs/guides/runbooks/master-agent.md) — master-agent operational runbook
-- [`docs/guides/runbooks/cd-daemon.md`](docs/guides/runbooks/cd-daemon.md) — CD daemon operational runbook
-- [`docs/guides/tutorials.md`](docs/guides/tutorials.md) — step-by-step tutorials and checklists
-- [`docs/references/api.md`](docs/references/api.md) — implemented command surface
+- [`docs/README.md`](docs/README.md) — documentation map
+- [`docs/manuals/ops-manual.md`](docs/manuals/ops-manual.md) — setup, deployment, and operations
+- [`docs/manuals/user-manual.md`](docs/manuals/user-manual.md) — day-to-day usage of the web UI
+- [`docs/guides/onboarding.md`](docs/guides/onboarding.md) — contributor onboarding
+- [`docs/guides/runbooks/master-agent.md`](docs/guides/runbooks/master-agent.md) — master/agent operational runbook
+- [`docs/guides/runbooks/cd-daemon.md`](docs/guides/runbooks/cd-daemon.md) — CD daemon runbook
+- [`docs/references/api.md`](docs/references/api.md) — REST API, WebSocket, and MQTT reference
 - [`docs/references/config.md`](docs/references/config.md) — configuration keys and defaults
+- [`docs/decisions/0005-v3-system-architecture.md`](docs/decisions/0005-v3-system-architecture.md) — v3 architecture ADR
+- [`docs/decisions/0006-drop-slack-discord-integration.md`](docs/decisions/0006-drop-slack-discord-integration.md) — chat-platform removal ADR

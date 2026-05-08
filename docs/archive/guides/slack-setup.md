@@ -1,4 +1,6 @@
-# Slack Integration Setup
+# Slack Integration Setup (archived)
+
+> **Archived.** This guide describes the v1/v2 Slack frontend, which was removed in v3 — see [`docs/decisions/0006-drop-slack-discord-integration.md`](../../decisions/0006-drop-slack-discord-integration.md). Kept for historical reference only; v3 has no Slack integration.
 
 This guide configures Slack for the v1 master-agent solution.
 
