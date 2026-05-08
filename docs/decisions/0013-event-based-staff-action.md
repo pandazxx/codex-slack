@@ -35,6 +35,11 @@ the session model.
   back into the same trigger.
 - **Composable / observable.** Multiple actions on the same event should fire
   independently. Failure of one must not block the others.
+- **Single point for cross-cutting concerns.** Event emission happens from
+  three different thread contexts (FastAPI loop, MQTT thread, scheduler
+  thread). Whatever shape we pick must give us *one* place to add logging,
+  retry, dedup, or rate limiting later — not three or four parallel code
+  paths to keep in sync.
 - **Minimum surface.** Ship one mechanism that covers the common cases
   (message hooks, scheduler, archive); leave workspace-scope events for a
   follow-up once the output channel is designed.
@@ -59,6 +64,18 @@ P. **Event-emission points hard-wired in code paths.** Each known emit site
    and dispatches. No event bus, no subscribers.
 Q. **Internal pub/sub bus.** Code emits semantic events; subscribers register
    handlers. `event_actions` is one such subscriber.
+
+### Handler concurrency model
+
+H1. **Single-point queue + one async worker.** All emit sites call one
+    `emit_event(...)` that enqueues onto a shared `asyncio.Queue`. A single
+    long-running worker task drains the queue, looks up matching actions,
+    resolves staff, renders templates, and calls `dispatch_to_staff`.
+H2. **Two-flavour helper (`emit_event_async` + `emit_event_threadsafe`).**
+    Each emit site calls the flavour matching its thread context; both flavours
+    do the lookup → resolve → render → dispatch synchronously inline.
+H3. **Per-emit-site direct dispatch.** Each emit site iterates rows and calls
+    `dispatch_to_staff` directly with its own thread-context glue.
 
 ### Loop prevention
 
@@ -87,13 +104,14 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
 
 ## Decision Outcome
 
-**Chosen:** **A + P + X + S1 + W1.** Concretely:
+**Chosen:** **A + P + H1 + X + S1 + W1.** Concretely:
 
 1. **A new `event_actions` table** with narrow columns (`event_type`,
    `scope_type`, `scope_id`, `staff_name`, `prompt_template`, `timing`,
    `cron_expr`, `last_fired_at`, `enabled`). CHECK constraints enforce
    field/event-type validity. No JSON blob; no per-event-type table.
-2. **Hard-wired emission points.** No bus. The four sites are:
+2. **Hard-wired emission points, queue + single async worker for handling.**
+   No bus. The four sites are:
 
    | event_type | emit site (file:func) | timing |
    |---|---|---|
@@ -102,11 +120,17 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
    | `topic_archive` | `topics.py:delete_topic` after `archived_at` is set | `after` only |
    | `topic_scheduler` | `main.py:_background_tasks` 60 s loop | N/A |
 
-   At each site, master loads matching `event_actions` rows
-   (scope+event_type+enabled) and calls a shared `_dispatch_to_staff()` helper
-   (extracted from `send_message`) for each one in turn. Fanout is sequential
-   from the emit site's perspective but produces independent MQTT publishes
-   and independent dispatch records, so the agent sees them as parallel.
+   Each site builds a tiny event dict (event_type, scope ids, variables,
+   optional timing) and calls a single `emit_event(...)` that pushes onto an
+   `asyncio.Queue`. `emit_event` is safe to call from any thread (FastAPI loop,
+   MQTT thread, scheduler thread) and returns immediately. A single
+   long-running async worker (`event_worker`, started from FastAPI lifespan)
+   drains the queue: for each event it loads matching `event_actions` rows,
+   resolves staff, renders the template, and calls `dispatch_to_staff`
+   (extracted from `send_message`). The worker is the only consumer — exactly
+   one event is handled at a time across the whole process. Per-action errors
+   inside one event are caught and logged so other actions in the same event,
+   and subsequent events, are unaffected.
 3. **Loop prevention via `sender="event"`.** Event-triggered messages are
    inserted into `messages` with `sender="event"`. Hooks gate strictly:
    - `topic_message_sent` fires only when `sender="user"`.
@@ -119,11 +143,20 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
    Templates use `{variable}` syntax. Unknown placeholders are left as the
    literal `{name}` string — a misconfigured template logs a warning but does
    not crash dispatch. Variables per event type are listed in the design doc.
-5. **Scheduler reuses the 60 s background loop.** Add `croniter` to
-   `requirements.txt`. Per-action `last_fired_at` is the bookkeeping anchor;
-   "due" is defined as *the cron's next match strictly after `last_fired_at`
-   has already passed (relative to now)*. See "Concurrent firings" in the
-   design doc for the exact rule and edge cases.
+5. **Scheduler reuses the 60 s background loop, watermark advanced
+   optimistically by the tick.** Add `croniter` to `requirements.txt`.
+   Per-action `last_fired_at` is the bookkeeping anchor; "due" is defined as
+   *the cron's next match strictly after `last_fired_at` has already passed
+   (relative to now)*. The scheduler tick updates `last_fired_at = next_fire`
+   *before* enqueueing the event — it does not wait for the worker to
+   acknowledge. Trade-off: if the worker is cancelled or the process crashes
+   between enqueue and dispatch, the slot is silently lost; in exchange we
+   avoid duplicate fires when the worker is slow and we keep the tick
+   self-contained. Chosen because the dominant scheduler use cases are
+   summaries and digests, where a missed fire is annoying and a duplicate
+   fire is materially worse (operators see the agent run twice and an extra
+   message land in the topic). See the design doc §6 for the exact rule and
+   edge cases.
 6. **Workspace-scope events are deferred.** The schema admits `scope_type` so
    we do not need a future migration, but only `scope_type='topic'` is
    implemented in v1. Workspace-scope events require an output-channel
@@ -160,6 +193,12 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
     no schema work as long as the new event fits the existing column shape.
   - Operators can disable an action without deleting it (`enabled=0`) and see
     last-fire times (`last_fired_at`) for diagnosis.
+  - One worker, one queue: emission is the same one-line call from all three
+    thread contexts; logging, retry, dedup, or rate-limit can be added in
+    exactly one place (`event_worker`) when needed.
+  - Sequential handling (concurrency=1) eliminates races between the
+    MQTT thread, request thread, and scheduler thread firing simultaneously
+    against the same `event_actions` row, with no explicit locks required.
 - **Bad / accepted tradeoffs**
   - Hard-wired emit sites mean adding an event type is a code change. Worth
     it for v1 — a generic bus would over-engineer the surface for four call
@@ -175,6 +214,24 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
   - A long-paused scheduler can fire missed-cron actions late but only once
     per "missed window" — see the catch-up rule in the design doc. Operators
     who want strict at-most-once-per-real-minute semantics will not get them.
+  - **Worker shutdown is best-effort.** Events queued but not yet handled at
+    process shutdown are dropped. The queue is in-memory, no persistence.
+    Acceptable: emission is human-rate (~1/s), and a missed event-triggered
+    summary is recoverable by re-firing manually. Out of scope to add a
+    durable outbox for v1.
+  - **Scheduler optimistic watermark loses fires on worker failure.** The
+    tick advances `last_fired_at` before enqueue, so a worker exception or
+    process crash between enqueue and dispatch silently drops that slot.
+    Chosen over the alternative (worker writes watermark on success, tick
+    keeps an in-memory dedup set of pending `(action_id, slot)` pairs)
+    because duplicates are worse than missed fires for the dominant
+    summary/digest use case, and the dedup set adds complexity without
+    helping across process restarts.
+  - **Single-worker throughput cap.** With one worker, slow agent dispatches
+    serialise the whole event queue. Under v1's human-rate emission this is
+    fine; if the cap becomes visible (rare-but-possible during a flood),
+    raise concurrency or shard the worker — both are local changes inside
+    `event_worker` that don't affect emission sites.
 
 ### Confirmation
 
@@ -190,6 +247,11 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
   - Topic with two enabled `topic_message_sent` actions → both fire on a user
     message, MQTT receives two prompt publishes, both share the user's session
     when the staffs are configured for `session_scope='topic'`.
+  - One bad action (e.g. references a deleted staff, or template render
+    raises) does not block sibling actions in the same event, and the worker
+    keeps draining subsequent events.
+  - `emit_event` called from a non-loop thread (simulated MQTT-thread
+    context) is observed in the queue and handled by the worker.
 - Scheduler test:
   - With `last_fired_at` 65 s ago and `cron_expr='* * * * *'`, action is due.
   - With `last_fired_at` 5 s ago, action is not due.
@@ -217,6 +279,14 @@ W2. **Ship now.** Define a workspace-level output channel (which topic does
 |---|---|---|
 | P — hard-wired emit sites (chosen) | Trivial code path; explicit; no ordering surprises | Adding a new event type is a code change |
 | Q — internal pub/sub bus | Extensible | Adds a layer without v1 demand; ordering and error semantics need design |
+
+### Handler concurrency model
+
+| Option | Pro | Con |
+|---|---|---|
+| H1 — queue + single async worker (chosen) | One emission API across all threads; one place for cross-cutting concerns; sequential handling eliminates races without locks | In-memory queue → shutdown lossiness; single worker caps throughput |
+| H2 — two-flavour helper (`emit_event_async` + `emit_event_threadsafe`) | No background task; emission completes synchronously per site | Emission and handling intermixed at every site; no single point to add observability/retry/dedup; two parallel code paths to keep in sync |
+| H3 — per-site direct dispatch | Simplest possible call sites | Duplicates the lookup→resolve→render→dispatch sequence at every site; thread-context glue scattered |
 
 ### Loop prevention
 
