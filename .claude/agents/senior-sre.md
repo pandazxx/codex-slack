@@ -148,9 +148,11 @@ The advisory comment is the only write senior makes to a Dockerfile. The enginee
 
 Override files state only what *differs* from `docker-compose.yml`. Do not re-declare image, command, environment, or any field Compose merges automatically.
 
-Target size: 10–20 lines. Typical contents: build target, bind mounts, Traefik labels, `sre-traefik-public` network attachment.
+Target size: 10–20 lines. Typical contents: build target, Traefik labels, `sre-traefik-public` network attachment, dev-specific environment variables.
 
-If the base `docker-compose.yml` contains dev-specific fields (build sections, bind mounts, debug ports), add a suggestion to the summary recommending their removal. Do not edit the base file.
+**No source bind mounts.** Dev runs against `DEV_DOCKER_HOST` (typically remote). Bind mounts of local source paths are meaningless on a remote host and forbidden. Source code is delivered into the image at build time. Edit-rebuild-restart is the dev cycle.
+
+If the base `docker-compose.yml` contains dev-specific fields (`build:` sections, bind-mounted source paths, debug ports, dev-only services), add a suggestion to the summary recommending their removal. Do not edit the base file.
 
 ## Onboarding procedure
 
@@ -167,7 +169,7 @@ Pre-flight gate must be complete before this section.
 
 3. **Examine the Dockerfile.** Verify `prod`, `dev`, `test` stages exist with adequate tooling. If not, apply the Dockerfile advisory mechanism.
 
-4. **Examine base `docker-compose.yml`.** Verify it is production-shaped (`image:` not `build:`, no bind mounts, no published ports, runs as non-root). If not, add suggestion.
+4. **Examine base `docker-compose.yml`.** Verify it is production-shaped (`image:` not `build:`, no source bind mounts, no published ports, runs as non-root). If not, add suggestion.
 
 5. **Write SRE-owned files:** override/CI/staging compose, `.sre/` scripts, GitHub Actions, `.github/rulesets/`, `docs/sre.md`, `docs/deploy-prod.md`, `docs/repo-harness.md`. Create `.sre/host-infra/` if this is the first project on a host.
 
@@ -251,10 +253,12 @@ Locked across all projects. Implement in `.sre/env-up.sh` and the compose files.
 **Differences between dev and staging:**
 
 - Docker host: `DEV_DOCKER_HOST` vs `STAGING_DOCKER_HOST`.
-- Image source: dev uses bind-mounted source via `docker-compose.override.yml`; staging uses image-by-digest via `docker-compose.staging.yml`.
+- Image source: dev builds from local source via `docker-compose.override.yml` `build:` section (target: `dev` stage); staging pulls a versioned image by digest via `docker-compose.staging.yml`.
 - Lifecycle: dev envs torn down by the developer; `main` staging env refreshed on every merge to main (by the `post-merge-cleanup` runbook).
 
-Everything else is identical:
+Dev does not bind-mount source. The `dev` stage of the project Dockerfile copies source into the image at build time. Source changes require `docker compose build && docker compose up -d` against `DEV_DOCKER_HOST`. The operator's `env-up` runbook handles this cycle.
+
+Everything else below is identical across dev and staging:
 
 1. **Compose project naming:** `${branch_slug}`.
    `branch_slug` = branch name, lowercased, with `/` and `_` replaced by `-`.
