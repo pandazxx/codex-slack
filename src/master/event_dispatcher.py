@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
 from datetime import datetime, timezone
 
 from .db import get_connection
@@ -21,6 +20,9 @@ from .staffs import resolve_staff
 
 LOGGER = logging.getLogger(__name__)
 
+# Wraps only the dispatch_to_staff call in _dispatch_one — i.e. the time to insert the
+# message row, broadcast on the WS hub, and publish to MQTT. NOT a budget for the agent's
+# LLM response, which is fully async (the agent reply arrives via MQTT minutes later).
 DISPATCH_TIMEOUT_S = 10.0
 
 
@@ -59,6 +61,14 @@ def emit_event(
     Safe to call from any thread (FastAPI handler, MQTT thread, scheduler thread).
     Returns immediately; handling happens later in event_worker.
     """
+    queue: asyncio.Queue | None = getattr(app_state, "event_queue", None)
+    loop: asyncio.AbstractEventLoop | None = getattr(app_state, "event_loop", None)
+    if queue is None or loop is None:
+        # Event infrastructure not yet (or no longer) up — accept the loss and log.
+        # Lifespan startup creates both before the FastAPI app accepts requests, so
+        # this branch is reachable only during shutdown or in stripped-down test setups.
+        LOGGER.debug("emit_event.dropped event_type=%s reason=infrastructure_absent", event_type)
+        return
     event = {
         "event_type": event_type,
         "topic_id": topic_id,
@@ -68,8 +78,6 @@ def emit_event(
         "scheduler_slot": scheduler_slot,
         "scheduler_action_id": scheduler_action_id,
     }
-    queue: asyncio.Queue = app_state.event_queue
-    loop: asyncio.AbstractEventLoop = app_state.event_loop
     try:
         running = asyncio.get_running_loop()
     except RuntimeError:

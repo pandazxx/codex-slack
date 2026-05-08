@@ -224,7 +224,9 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
                 payload=payload,
             )
             app_state = userdata.get("app_state")
-            if app_state is not None and hasattr(app_state, "event_queue"):
+            # emit_event self-guards if event infrastructure isn't up; the only thing
+            # we need to check here is that we have the app_state to pass through.
+            if app_state is not None:
                 workspace_id = _get_workspace_id(db_path, topic_id)
                 topic_name = _get_topic_name(db_path, topic_id)
                 if workspace_id:
