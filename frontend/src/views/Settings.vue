@@ -2,6 +2,35 @@
   <div>
     <h1>Settings</h1>
 
+    <!-- ── System Settings ──────────────────────────────────────────── -->
+    <section>
+      <div class="section-header">
+        <h2>System Settings</h2>
+      </div>
+      <p class="muted hint">System-wide settings. The configured timezone is used for cron schedule evaluation in event actions.</p>
+
+      <div class="form-grid">
+        <label>Display Timezone</label>
+        <div>
+          <input
+            v-model="timezoneInput"
+            list="tz-suggestions"
+            placeholder="e.g. America/New_York"
+            class="tz-input"
+          />
+          <datalist id="tz-suggestions">
+            <option v-for="tz in commonTimezones" :key="tz" :value="tz" />
+          </datalist>
+          <span class="tz-current muted small">Currently: {{ systemSettings.timezone || '…' }}</span>
+        </div>
+        <div></div>
+        <div class="form-actions">
+          <button class="btn-primary" @click="saveTimezone" :disabled="savingTimezone">{{ savingTimezone ? 'Saving…' : 'Save Timezone' }}</button>
+          <span v-if="timezoneError" class="error">{{ timezoneError }}</span>
+        </div>
+      </div>
+    </section>
+
     <!-- ── Global Staff ───────────────────────────────────────────────── -->
     <section>
       <div class="section-header">
@@ -153,6 +182,18 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 
+const systemSettings = ref({ timezone: '' })
+const timezoneInput = ref('')
+const savingTimezone = ref(false)
+const timezoneError = ref('')
+
+const commonTimezones = [
+  'UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+  'America/Sao_Paulo', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Moscow',
+  'Asia/Dubai', 'Asia/Kolkata', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul',
+  'Australia/Sydney', 'Pacific/Auckland',
+]
+
 const staffs = ref([])
 const showStaffForm = ref(false)
 const editingStaff = ref(null)
@@ -203,6 +244,34 @@ async function saveSysVar(name) {
   editingSysVar.value = null
   sysVarEditValue.value = ''
   await loadConfig()
+}
+
+async function loadSystemSettings() {
+  const r = await fetch('/api/config/system-settings')
+  if (r.ok) {
+    systemSettings.value = await r.json()
+    timezoneInput.value = systemSettings.value.timezone || ''
+  }
+}
+
+async function saveTimezone() {
+  savingTimezone.value = true
+  timezoneError.value = ''
+  try {
+    const r = await fetch('/api/config/system-settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timezone: timezoneInput.value.trim() }),
+    })
+    if (!r.ok) {
+      const err = await r.json()
+      timezoneError.value = err.detail || 'Error saving timezone'
+      return
+    }
+    systemSettings.value = await r.json()
+  } finally {
+    savingTimezone.value = false
+  }
 }
 
 async function loadStaffs() {
@@ -308,7 +377,7 @@ async function deleteConfigKey(key) {
 }
 
 onMounted(async () => {
-  await Promise.all([loadStaffs(), loadConfig(), loadSystemVars()])
+  await Promise.all([loadSystemSettings(), loadStaffs(), loadConfig(), loadSystemVars()])
 })
 </script>
 
@@ -348,6 +417,8 @@ section { margin-bottom: 3rem; border-top: 1px solid #e2e8f0; padding-top: 1.5re
 .reveal-btn { background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.8em; margin-left: 0.5rem; text-decoration: underline; padding: 0; }
 .sysvar-actions { white-space: nowrap; }
 .sysvar-warning { color: #92400e; background: #fef9c3; padding: 0.3rem 0.75rem; border-radius: 4px; font-size: 0.85em; margin-bottom: 0.5rem; }
+.tz-input { width: 280px; padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.9em; }
+.tz-current { display: block; margin-top: 0.25rem; }
 
 .btn-primary { padding: 0.4rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
