@@ -240,6 +240,7 @@ def _stream_codex_once(
     is_error = False
     seq = seq_start
     fallback_outputs: list[str] = []
+    proc = None
     try:
         proc = subprocess.Popen(
             cmd, cwd=worktree,
@@ -307,7 +308,8 @@ def _stream_codex_once(
         return "(codex CLI not found in agent container)", None, True
     except Exception as exc:
         try:
-            proc.kill()
+            if proc is not None:
+                proc.kill()
         except Exception:
             pass
         try:

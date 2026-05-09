@@ -46,6 +46,11 @@
                   <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
                   <MarkdownMessage :text="agentResultText(row.event)" />
                 </div>
+                <div v-else-if="row.kind === 'codex_text'" class="tr-text">{{ row.event.item?.text }}</div>
+                <div v-else-if="row.kind === 'codex_error'" class="tr-meta">
+                  <span class="tr-badge tr-badge-error">failed</span>
+                  <span class="tr-stat">{{ row.event.error?.message || 'unknown error' }}</span>
+                </div>
                 <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
                   <summary>{{ codexCmdLabel(row.event) }}</summary>
                   <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
@@ -74,6 +79,11 @@
                   <div v-else-if="row.kind === 'agent_result'" class="agent-result">
                     <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
                     <MarkdownMessage :text="agentResultText(row.event)" />
+                  </div>
+                  <div v-else-if="row.kind === 'codex_text'" class="tr-text">{{ row.event.item?.text }}</div>
+                  <div v-else-if="row.kind === 'codex_error'" class="tr-meta">
+                    <span class="tr-badge tr-badge-error">failed</span>
+                    <span class="tr-stat">{{ row.event.error?.message || 'unknown error' }}</span>
                   </div>
                   <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
                     <summary>{{ codexCmdLabel(row.event) }}</summary>
@@ -288,7 +298,7 @@ function classifyEvent(event) {
   }
   // Codex event types
   if (t === 'turn.completed')         return 'codex_done'
-  if (t === 'turn.failed')            return 'folded'
+  if (t === 'turn.failed')            return 'codex_error'
   if (t === 'thread.started')         return 'hidden'
   if (t === 'turn.started')           return 'hidden'
   if (t === 'turn.token_usage')       return 'hidden'
@@ -615,7 +625,7 @@ function buildDispatchCommand(transcript) {
     if (!p.adapter) return ''
     if (p.adapter === 'codex') {
       const parts = ['codex', 'exec', '--json',
-        '--dangerously-bypass-approvals-and-sandbox', '-s', 'danger-full-access']
+        '--dangerously-bypass-approvals-and-sandbox', '-s', 'danger-full-access', '--ephemeral']
       if (p.model) parts.push('-m', JSON.stringify(p.model))
       parts.push(JSON.stringify(p.text))
       return parts.join(' \\\n  ')
