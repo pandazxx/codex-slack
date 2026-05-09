@@ -32,6 +32,9 @@ export BRANCH_SLUG
 export HOST_IP_DASHED
 export DOCKER_GID
 export MASTER_SSH_AUTH_SOCK_PATH
+# Branch-scoped image name so agent containers never pick up a stale
+# cross-branch :latest tag from a different dev build on the same host.
+export MASTER_RUNTIME_IMAGE="${BRANCH_SLUG}-master:dev"
 
 echo "==> env-up: branch=${BRANCH} slug=${BRANCH_SLUG} host=${DEV_DOCKER_HOST}"
 echo "==> Building image (target: dev)..."
