@@ -8,6 +8,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: dev
+    environment:
+      MASTER_AGENT_NETWORK: "${BRANCH_SLUG:-dev}_internal"
     deploy:
       resources:
         limits:
