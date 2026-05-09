@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS prod
 
 ARG CODEX_NPM_PACKAGE=@openai/codex
 ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code
@@ -74,27 +74,16 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=30s \
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
 
-# SRE-ADVISORY: Dev/test stages required by SRE workflow.
-# The single stage above is treated as `prod`. Add the following stages so
-# docker-compose.override.yml (target: dev) and docker-compose.ci.yml
-# (target: test) can select the right image variant.
-#
-# Suggested addition:
-#
-#   FROM python:3.11-slim AS prod
-#   # ... (move all current content here, rename stage to `prod`) ...
-#
-#   FROM prod AS dev
-#   USER root
-#   RUN apt-get update && apt-get install -y --no-install-recommends \
-#       postgresql-client redis-tools strace procps less vim \
-#       && rm -rf /var/lib/apt/lists/*
-#   USER appuser
-#
-#   FROM prod AS test
-#   USER root
-#   RUN pip install --no-cache-dir pytest pytest-cov pytest-asyncio
-#   USER appuser
-#
-# See docs/sre.md for the full rationale.
-# Remove this comment once the stages are added (or explicitly rejected).
+FROM prod AS dev
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    strace procps vim \
+    && rm -rf /var/lib/apt/lists/*
+USER appuser
+CMD ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+
+FROM prod AS test
+USER root
+RUN pip install --no-cache-dir pytest pytest-cov pytest-asyncio httpx
+USER appuser
+CMD ["python", "-m", "pytest"]
