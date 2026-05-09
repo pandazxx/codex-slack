@@ -28,13 +28,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     docker-ce-cli \
+    docker-compose-plugin \
     gh \
     git \
     openssh-client \
     poppler-utils \
+    silversearcher-ag \
     tini \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
+    && printf '#!/bin/sh\nexec docker compose "$@"\n' > /usr/local/bin/docker-compose \
+    && chmod +x /usr/local/bin/docker-compose \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}

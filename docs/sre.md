@@ -10,7 +10,7 @@ This document is the authoritative reference for infrastructure operations on th
 | `DOCKER_GID` | Docker socket group on host | `988` | Set |
 | `STAGING_DOCKER_HOST` | Staging deploys, UAT, post-merge cleanup | `ssh://ubuntu@<staging-ip>` | **Requires human to set** |
 | `REGISTRY` | Building and pushing images | `ghcr.io/pandazxx` | **Requires human to set** |
-| `REGISTRY_TOKEN` | Pushing images (CI secret) | (from secret manager) | **Requires human to set** |
+| `REGISTRY_TOKEN` | Pushing images to non-GHCR registries | (from secret manager) | Optional — GHCR uses `GITHUB_TOKEN` |
 
 No fallback to local Docker. `DEV_DOCKER_HOST` must always be set. For local Docker, set `DEV_DOCKER_HOST=unix:///var/run/docker.sock` explicitly.
 
@@ -103,7 +103,7 @@ All runbooks are in `.sre/operations/`. Operators read the runbook for the reque
 
 1. Set `STAGING_DOCKER_HOST` in dotenv/direnv.
 2. Set `REGISTRY` in dotenv/direnv and as a GitHub Actions variable (`vars.REGISTRY`).
-3. Set `REGISTRY_TOKEN` as a GitHub Actions secret (`secrets.REGISTRY_TOKEN`).
+3. Set `REGISTRY_TOKEN` as a GitHub Actions secret only if `REGISTRY` is not GHCR. For GHCR, `build-push.yml` uses the workflow's auto-provided `GITHUB_TOKEN` (the job already declares `packages: write`).
 4. Bootstrap `sre-host-infra` on `STAGING_DOCKER_HOST` (same command as dev bootstrap above, with `STAGING_DOCKER_HOST`).
 5. Verify `Dockerfile` has `prod`, `dev`, and `test` stages — all three are present; confirm they have adequate tooling for your workload.
 6. Verify Traefik digest in `.sre/host-infra/docker-compose.yml` before first bootstrap.
