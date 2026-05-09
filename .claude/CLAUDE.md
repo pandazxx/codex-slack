@@ -2,72 +2,64 @@
 
 ## SRE Workflow
 
-**All infrastructure tasks are delegated to the SRE subagent.** Do not run `docker`, `docker compose`, or deploy commands directly — ask SRE instead.
+Two agents share infrastructure responsibilities. Never run `docker`, `docker compose`, or deploy commands directly — delegate to the right agent.
+
+| Agent | Invoke when… |
+|---|---|
+| `senior-sre` | Onboarding, re-onboarding, infra design review, first-time env provisioning on a new host |
+| `sre` | Routine ops on an already-onboarded project: spin up env, run tests, tail logs, open shell, deploy to staging, tear down, post-merge cleanup |
 
 ### Required Environment Variables
 
-Before spinning up dev/staging environments or running tests, ensure these are set in your shell (e.g., `~/.config/dev-env` or via direnv):
+Full details in `docs/sre.md`. Summary:
 
-| Variable | Required for | Example |
-|---|---|---|
-| `DEV_DOCKER_HOST` | Dev env spin-up (optional; uses local Docker if unset) | `ssh://ubuntu@dev.tail-scale.ts.net` |
-| `STAGING_DOCKER_HOST` | Staging deploys, UAT | `ssh://ubuntu@staging.tail-scale.ts.net` |
-| `REGISTRY` | Building/pushing images | `ghcr.io/myorg` |
-| `REGISTRY_TOKEN` | Pushing images | (from secret manager) |
+| Variable | Required for | Example | Status |
+|---|---|---|---|
+| `DEV_DOCKER_HOST` | Dev env operations | `ssh://ubuntu@10.10.10.238` | Set |
+| `DOCKER_GID` | Docker socket group on dev host | `988` | Set |
+| `STAGING_DOCKER_HOST` | Staging deploys, UAT | `ssh://ubuntu@<staging-ip>` | Requires human to set |
+| `REGISTRY` | Building/pushing images | `ghcr.io/pandazxx` | Requires human to set |
+| `REGISTRY_TOKEN` | Pushing images | (from secret manager) | Requires human to set |
 
-### How to Invoke SRE
+No fallback to local Docker — `DEV_DOCKER_HOST` must always be set explicitly.
+Never run `docker`, `docker compose`, or deploy commands directly — always delegate to `sre` or `senior-sre`.
+Runbooks are in `.sre/operations/`. The `sre` operator reads and follows them exactly; no improvisation.
 
-**Natural language examples:**
+### How to Invoke
 
-- "Spin up a dev env for branch `feat-auth`" → SRE creates an isolated stack with bind-mounted source, live reload, and returns HTTP endpoints.
-- "Run the tests" or "Run tests matching `test_image_contract`" → SRE runs pytest in a container, returns pass/fail.
-- "Deploy `v1.2.3` to staging" → SRE deploys by image digest, runs smoke tests, auto-rollback if failed.
-- "Tear down the staging env for `feat-billing`" → SRE removes containers/volumes.
+**Routine ops (delegate to `sre`):**
 
-**Full details:** See `docs/guides/sre.md` for all supported operations, access methods, troubleshooting.
+- "Spin up a dev env for branch `feat-auth`"
+- "Run the tests" / "Run tests matching `test_image_contract`"
+- "Tail logs for `feat-auth`"
+- "Open a shell in the `master` service on `feat-auth`"
+- "Deploy `v1.2.3` to staging for `feat-auth`"
+- "Tear down dev env for `feat-billing`"
+- "Post-merge cleanup for `feat-auth`"
 
-### Dev Environment Structure
+The `sre` operator reads per-operation runbooks from `.sre/operations/` and follows them exactly.
 
-Dev environments run from `docker-compose.override.yml`, which bind-mounts source code:
+**Design and onboarding (delegate to `senior-sre`):**
 
-- Changes to `src/`, `frontend/`, `config/` are **live** — no rebuild needed.
-- Python uvicorn watches for changes and reloads.
-- Frontend build runs in the container and watches `frontend/src/`.
-- API docs at `http://localhost:8080/docs`.
+- "Onboard SRE workflow to this project"
+- "Review our Dockerfile structure"
+- "Set up CI/CD for this project"
+- "First-time staging env on a new host"
 
-To access the running dev env:
+### Dev Environment
 
-```bash
-# Logs:
-docker compose -p $USER-<branch-slug> logs -f master
-
-# Shell into the service:
-docker compose -p $USER-<branch-slug> exec -it master bash
-
-# MQTT messages:
-docker compose -p $USER-<branch-slug> exec mosquitto mosquitto_sub -h localhost -t '#' -v
-```
+Dev envs run on `DEV_DOCKER_HOST`. The `dev` stage of `Dockerfile` is built and deployed there — no source bind-mounts. The dev cycle is build → push → restart via the `env-up` runbook. Access via `docker compose exec` on the remote host (see `.sre/operations/shell.md`).
 
 ### Test Execution
 
-**Fast loop (unit/in-process tests — no env needed):**
-
-```bash
-.sre/test.sh                    # Run all tests
-.sre/test.sh -k test_image      # Run tests matching pattern
-.sre/test.sh tests/test_foo.py  # Run a single file
-```
-
-**Stack tests (against a running dev env):**
-
-Ask SRE to spin up a dev env (see above), then run integration tests from your shell.
+Ask `sre` to run tests: "Run the tests" or "Run tests matching `<pattern>`". The operator follows `.sre/operations/test.md`.
 
 ### Staging & UAT
 
-- **Canonical staging** — lives on `STAGING_DOCKER_HOST`, always reflects `main`, used for final sign-off before prod.
-- **Feature-branch staging** — parallel environments for high-risk features that need UAT before merge.
+- **Canonical staging** — tracks `main` on `STAGING_DOCKER_HOST`, refreshed by the `post-merge-cleanup` runbook after every merge.
+- **Feature-branch staging** — parallel env for high-risk features; ask `sre` to spin it up.
 
-Ask SRE to spin up either one; they're deployed by image digest and have identical topology.
+Both are image-based (deployed by digest). See `.sre/operations/staging-up.md`.
 
 ## Git Workflow
 
@@ -146,7 +138,7 @@ docs/
 
 ## Common Workflows
  
-The agents that appear below — `explore`, `architect`, `engineer`, `tester`, `reviewer`, `doc-writer`, `SRE` — are each defined in their own subagent files. Workflows below describe how they cooperate; each agent's own definition governs *how* it does its work.
+The agents that appear below — `explore`, `architect`, `engineer`, `tester`, `reviewer`, `doc-writer`, `sre`, `senior-sre` — are each defined in their own subagent files. Workflows below describe how they cooperate; each agent's own definition governs *how* it does its work.
  
 Slash commands referenced: `/commit` (incremental commit on the current branch), `/pr` (open a pull request against the default branch). See `.claude/commands/` for the full list.
  
@@ -161,7 +153,7 @@ Slash commands referenced: `/commit` (incremental commit on the current branch),
 5. *Implementation.* `engineer` implements the feature on the branch, committing incrementally with `/commit`. Public interfaces (function signatures, API shapes, schema) should stabilize early so tester can fill in test bodies in parallel.
 6. *Test bodies fill in.* Once public interfaces have stabilized, `tester` writes the actual test bodies against the implementation. This may overlap with the tail end of step 5.
 7. *Fast test loop.* `tester` runs unit and in-process tests (no dev env needed). Failures go to `engineer`; loop until green or the same test has failed across more than 5 fix attempts — escalate to user at that point.
-8. *Dev env spin-up.* `tester` asks `SRE` to spin up a dev env for this branch (idempotent — returns the existing env if already up). The env runs from bind-mounted source via `docker-compose.override.yml`, so changes are reflected immediately without rebuilds. `engineer` and `tester` both use the env for troubleshooting.
+8. *Dev env spin-up.* `tester` asks `sre` to spin up a dev env for this branch (idempotent — returns the existing env if already up). The env builds from source at `DEV_DOCKER_HOST`; source changes require a rebuild (the operator's `env-up` runbook handles this). `engineer` and `tester` both use the env for troubleshooting.
 9. *Stack test loop.* `tester` runs end-to-end and integration tests against the dev env. `engineer` troubleshoots in-env. Loop until green or the same test has failed across more than 3 fix attempts — escalate to user.
 10. *Review.* Spawn `reviewer`. `engineer` fixes review issues. After fixes:
     - Style/structure/naming changes only → re-run step 7.
@@ -171,7 +163,7 @@ Slash commands referenced: `/commit` (incremental commit on the current branch),
 13. *CI gate.* Wait for CI to pass (`gh run view`). Two failure modes:
     - *Normal failure* (test, lint, build) → `engineer` fixes and pushes; CI re-runs.
     - *`SRE-BLOCK` failure* → not a bug fix. `engineer` reads the block's decision record, then either resolves the underlying issue or explicitly removes the block in the diff with rationale. The block's removal is itself reviewable in the PR.
-14. *Feature-branch staging spin-up.* `tester` asks `SRE` to spin up a feature-branch staging env from the latest CI-built image. Staging is image-based (digests), not code-mounted — it mirrors what would actually deploy. This catches "works in dev, fails when built" issues before UAT.
+14. *Feature-branch staging spin-up.* `tester` asks `sre` to spin up a feature-branch staging env from the latest CI-built image. Staging is image-based (digests), not code-mounted — it mirrors what would actually deploy. This catches "works in dev, fails when built" issues before UAT.
 15. *UAT execution.* `tester` runs all UAT cases against the feature-branch staging env (not the dev env). Posts a signoff table as a PR comment:
     - `✅ pass` — executed and verified automatically.
     - `⏭ needs-human` — requires human interaction (real Slack message, visual check, external credential); described clearly so the user knows exactly what to do.
@@ -182,7 +174,7 @@ Slash commands referenced: `/commit` (incremental commit on the current branch),
     - Design-level change (scope, contract, new tradeoff) → loop to step 3; `architect` updates the design and ADR before any further implementation.
 17. *Human UAT signoff.* User reviews `⏭ needs-human` cases in the PR and replies with ✅ or ❌ per row. UAT is complete when all cases are signed off.
 18. *Merge.* User reviews and merges. No squashing without explicit instruction — preserve commit history.
-19. *Post-merge cleanup.* `SRE` refreshes canonical staging from `main` and tears down the feature-branch staging env. The branch's dev env teardown is up to the developer (ask `SRE` to "tear down dev env for `feat/<short-desc>`" when done).
+19. *Post-merge cleanup.* `sre` refreshes canonical staging from `main` and tears down the feature-branch staging env. The branch's dev env teardown is up to the developer (ask `sre` to "tear down dev env for `feat/<short-desc>`" when done).
 ---
  
 ### Bug / issue fix
@@ -194,7 +186,7 @@ The bug-fix workflow is shorter than feature development because (a) the design 
 1. *Branch hygiene.* If on `main`/`master`, fork `fix/<issue-id-or-short-desc>`. Same dirty-workspace rule as feature workflow.
 2. *Reproduce first.* Spawn `explore` if needed to locate the relevant code. Reproduce the bug, ideally in a failing test. Two paths:
     - *Reproducible in a unit test* → write the failing test now. This becomes the regression test. Skip step 4.
-    - *Requires the running stack to reproduce* → ask `SRE` to spin up a dev env (idempotent). Reproduce in-env, capture the exact steps and observed vs. expected behavior in `docs/bug-reports/<issue-id>.md`.
+    - *Requires the running stack to reproduce* → ask `sre` to spin up a dev env (idempotent). Reproduce in-env, capture the exact steps and observed vs. expected behavior in `docs/bug-reports/<issue-id>.md`.
 3. *Root cause.* `engineer` investigates and identifies the cause. **Do not patch symptoms.** If the root cause crosses module boundaries, has architectural implications, or the fix is non-obvious, escalate to step 3a; otherwise proceed to step 4.
 3a. *Design when warranted.* For non-trivial fixes — refactors, contract changes, anything affecting more than one module — spawn `architect`, write a short ADR (one paragraph: cause, fix, alternatives considered) in `docs/decisions/`, and get user signoff before proceeding. Most bug fixes skip this step. The judgment call is: would another engineer understand *why* the fix looks the way it does just from reading the diff? If yes, skip 3a. If no, do it.
  
@@ -207,11 +199,11 @@ The bug-fix workflow is shorter than feature development because (a) the design 
 10. *Open PR.* Use `/pr`. Link the GitHub issue. PR description should include: brief root cause, the fix in one or two sentences, link to the regression test, and a note if the fix changes any documented behavior.
 11. *CI gate.* Same as feature workflow — normal failures get fixed and pushed; `SRE-BLOCK` failures get the architectural-decision treatment.
 12. *UAT (proportional to risk).* The default for bug fixes is *no full UAT cycle*. The regression test is the primary verification. Two exceptions:
-    - *Fix touches a critical path* (auth, payments, data integrity) → spin up feature-branch staging via `SRE`, run focused UAT on the affected paths only, post signoff in the PR.
+    - *Fix touches a critical path* (auth, payments, data integrity) → spin up feature-branch staging via `sre`, run focused UAT on the affected paths only, post signoff in the PR.
     - *Fix changes user-visible behavior* → user sanity-checks in feature-branch staging before merge.
     - Otherwise the regression test plus standard CI is sufficient.
 13. *Merge.* User reviews and merges. Preserve commit history.
-14. *Post-merge cleanup.* If a feature-branch staging env was spun up in step 12, `SRE` tears it down. Canonical staging refreshes from `main`. Dev env teardown is up to the developer.
+14. *Post-merge cleanup.* If a feature-branch staging env was spun up in step 12, `sre` tears it down. Canonical staging refreshes from `main`. Dev env teardown is up to the developer.
 15. *Close the issue.* Reference the merged PR in the GitHub issue and close it. If the bug surfaced gaps in test coverage or monitoring, file follow-up issues rather than expanding the scope of this fix.
 ---
  
