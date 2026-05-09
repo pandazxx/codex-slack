@@ -2,7 +2,29 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-05-08 -->
+<!-- last updated: 2026-05-09 -->
+
+---
+
+## 2026-05-09 — Codex CLI API is not documented; must be inferred from the binary
+
+*Summary:* The `@openai/codex` CLI surface changed between the npm-published JS wrapper and the actual Rust binary it vendors. Documentation online (and model training data) describes the old JS-era flags (`--approval-mode full-auto`, `--output-format stream-json`) that no longer exist in the Rust binary shipped with v0.128.0. Using those flags causes silent failure with no output.
+
+*Root cause:* The npm package (`@openai/codex`) is a thin JS launcher that spawns a vendored platform-specific Rust binary. The Rust binary has its own subcommand structure (`codex exec`) and flag set that is not published in any README or man page. The `--help` output is the only authoritative source.
+
+*Fix applied:* Determined correct flags by running `codex exec --help` inside the container, then confirmed event type names by extracting strings from the Rust binary with `grep -oaE '[a-z]+\.[a-z_]+' <binary>`. Final correct invocation:
+```
+codex exec --json \
+  --dangerously-bypass-approvals-and-sandbox \
+  -s danger-full-access \
+  --ephemeral \
+  -o <tempfile> \
+  [-m <model>] \
+  <prompt>
+```
+Output events are JSONL on stdout. The canonical final-output field is `turn.completed.output_text` (with `last_message` as fallback). The `-o <tempfile>` flag writes the final answer to a file, which is more reliable than parsing stdout when the process exits quickly.
+
+*Prevention:* When integrating any CLI tool whose npm package is a wrapper around a native binary, always run `<binary> --help` directly rather than reading the npm README. Check flag existence before writing code — assume nothing is backward-compatible across major rewrites.
 
 ---
 
