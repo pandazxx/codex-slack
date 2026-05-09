@@ -26,6 +26,7 @@ _VALID_EVENT_TYPES = {
     "topic_message_received",
     "topic_scheduler",
     "topic_archived",
+    "topic_archiving",
 }
 
 
@@ -43,6 +44,7 @@ class EventActionIn(BaseModel):
         "topic_message_received",
         "topic_scheduler",
         "topic_archived",
+        "topic_archiving",
     ]
     staff_name: str
     prompt_template: str
@@ -65,7 +67,7 @@ class EventActionIn(BaseModel):
                 raise ValueError("timing must be 'before' or 'after' for topic_message_sent")
             if self.cron_expr is not None:
                 raise ValueError("cron_expr must be null for topic_message_sent")
-        elif et in ("topic_message_received", "topic_archived"):
+        elif et in ("topic_message_received", "topic_archived", "topic_archiving"):
             if self.timing not in (None, "after"):
                 raise ValueError(f"timing must be null or 'after' for {et}")
             if self.cron_expr is not None:
@@ -139,7 +141,7 @@ def _validate_merged_state(
             raise HTTPException(422, "timing must be 'before' or 'after' for topic_message_sent")
         if cron_expr is not None:
             raise HTTPException(422, "cron_expr must be null for topic_message_sent")
-    elif event_type in ("topic_message_received", "topic_archived"):
+    elif event_type in ("topic_message_received", "topic_archived", "topic_archiving"):
         if timing not in (None, "after"):
             raise HTTPException(422, f"timing must be null or 'after' for {event_type}")
         if cron_expr is not None:

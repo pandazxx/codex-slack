@@ -182,7 +182,12 @@ def get_topic(workspace_id: str, topic_id: str, request: Request) -> TopicOut:
 
 
 @router.delete("/{topic_id}", status_code=204)
-def delete_topic(workspace_id: str, topic_id: str, request: Request) -> None:
+async def delete_topic(
+    workspace_id: str,
+    topic_id: str,
+    request: Request,
+    override: bool = False,
+) -> None:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
@@ -195,6 +200,30 @@ def delete_topic(workspace_id: str, topic_id: str, request: Request) -> None:
             raise HTTPException(status_code=404, detail="topic not found")
         topic_name = row["subject"]
         workspace_name = row["workspace_name"]
+    finally:
+        conn.close()
+
+    if not override:
+        from .event_dispatcher import veto_dispatch
+        result = await veto_dispatch(
+            app_state=request.app.state,
+            workspace_id=workspace_id,
+            topic_id=topic_id,
+            variables={"topic_name": topic_name},
+        )
+        if result.timed_out:
+            raise HTTPException(
+                status_code=504,
+                detail={"reason": "veto staff did not respond in time"},
+            )
+        if not result.allowed:
+            raise HTTPException(
+                status_code=423,
+                detail={"reason": result.reason},
+            )
+
+    conn = get_connection(request.app.state.db_path)
+    try:
         conn.execute(
             "UPDATE topics SET archived_at = ? WHERE id = ?", (_now(), topic_id)
         )
