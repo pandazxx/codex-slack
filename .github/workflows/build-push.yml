@@ -1,58 +1,152 @@
-name: Build and push image
+name: Build and push images
+
+# Triggers and behavior:
+#
+#   push to master            → build master image only, tag :master
+#   push tag v*-rc*           → build all 3 images in parallel (master, cd-daemon,
+#                               agent-minimal); each tagged :vX.Y.Z-rcN (immutable)
+#                               and :rc (mutable, consumed by staging CD daemon).
+#                               agent-minimal is smoke-tested before push.
+#   push tag v* (non-rc)      → no rebuild; retag :rc → :vX.Y.Z for master and
+#                               agent-minimal (bit-identical promotion).
+#
+# Each build job has its own GHA cache scope so parallel builds don't fight.
 
 on:
   push:
     branches: [master]
     tags: ["v*"]
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  build-push:
-    name: Build and push to registry
+  build-master:
+    name: master ${{ github.ref_name }}
+    if: github.ref_type == 'branch' || (github.ref_type == 'tag' && contains(github.ref_name, '-rc'))
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    outputs:
-      image-digest: ${{ steps.build.outputs.digest }}
-      image-ref: ${{ steps.meta.outputs.tags }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to registry
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/codex-slack-master
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=sha,prefix=,format=short
-
-      - name: Build and push (prod stage)
-        id: build
+      - name: Compute tags
+        id: tags
+        run: |
+          IMG=ghcr.io/${{ github.repository_owner }}/codex-slack-master
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "tags=${IMG}:${{ github.ref_name }},${IMG}:rc" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${IMG}:${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          file: ./Dockerfile
           target: prod
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=master
+          cache-to: type=gha,mode=max,scope=master
 
-      - name: Output digest
-        run: echo "Image digest ${{ steps.build.outputs.digest }}"
+  build-cd-daemon:
+    name: cd-daemon ${{ github.ref_name }}
+    if: github.ref_type == 'tag' && contains(github.ref_name, '-rc')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.cd-daemon
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/codex-slack-cd-daemon:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/codex-slack-cd-daemon:rc
+          cache-from: type=gha,scope=cd-daemon
+          cache-to: type=gha,mode=max,scope=cd-daemon
+
+  build-agent-minimal:
+    name: agent-minimal ${{ github.ref_name }}
+    if: github.ref_type == 'tag' && contains(github.ref_name, '-rc')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build, load and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.agent-minimal
+          load: true
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:rc
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=agent-minimal
+          cache-to: type=gha,mode=max,scope=agent-minimal
+      - name: Smoke test runtime contract
+        run: |
+          docker run --rm \
+            ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:${{ github.ref_name }} \
+            sh -lc '
+              codex --version &&
+              claude --version &&
+              gh --version &&
+              python -m src.agent.main --help >/dev/null
+            '
+
+  promote:
+    name: Promote :rc → ${{ github.ref_name }}
+    if: github.ref_type == 'tag' && !contains(github.ref_name, '-rc')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Retag master image
+        run: |
+          docker pull ghcr.io/${{ github.repository_owner }}/codex-slack-master:rc
+          docker tag  ghcr.io/${{ github.repository_owner }}/codex-slack-master:rc \
+                      ghcr.io/${{ github.repository_owner }}/codex-slack-master:${{ github.ref_name }}
+          docker push ghcr.io/${{ github.repository_owner }}/codex-slack-master:${{ github.ref_name }}
+      - name: Retag agent-minimal image
+        run: |
+          docker pull ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:rc
+          docker tag  ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:rc \
+                      ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:${{ github.ref_name }}
+          docker push ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:${{ github.ref_name }}
+      - name: Verify digest match
+        run: |
+          RC=$(docker inspect --format='{{index .RepoDigests 0}}' \
+            ghcr.io/${{ github.repository_owner }}/codex-slack-master:rc)
+          REL=$(docker inspect --format='{{index .RepoDigests 0}}' \
+            ghcr.io/${{ github.repository_owner }}/codex-slack-master:${{ github.ref_name }})
+          if [[ "$RC" != "$REL" ]]; then
+            echo "::error::Digest mismatch — :rc=$RC, :${{ github.ref_name }}=$REL"
+            exit 1
+          fi
+          echo "Digest match confirmed: $REL"
