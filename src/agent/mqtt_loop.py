@@ -43,16 +43,17 @@ def _chunk_topic(workspace_id: str, topic_id: str) -> str:
     return f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/chunk"
 
 
-def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str) -> None:
+def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str, repo_ref: str = "") -> None:
     if Path(worktree_path).exists():
         return
     Path(worktree_path).parent.mkdir(parents=True, exist_ok=True)
+    base = [repo_ref] if repo_ref else []
     try:
         subprocess.run(
-            ["git", "-C", repo_dir, "worktree", "add", worktree_path, "-b", branch],
+            ["git", "-C", repo_dir, "worktree", "add", worktree_path, "-b", branch] + base,
             capture_output=True, text=True, check=True,
         )
-        LOGGER.info("agent.worktree_created path=%s branch=%s", worktree_path, branch)
+        LOGGER.info("agent.worktree_created path=%s branch=%s base=%s", worktree_path, branch, repo_ref or "HEAD")
     except subprocess.CalledProcessError:
         # Branch already exists — check out without -b
         subprocess.run(
@@ -226,6 +227,7 @@ def _process_prompt(
     agent_name = payload.get("agent_name", "claude")
     worktree = payload.get("worktree", "")
     branch = payload.get("branch", "")
+    repo_ref = payload.get("repo_ref", "")
     text = payload.get("text", "")
     session_id = payload.get("session_id")
     is_new_session = bool(payload.get("is_new_session", False))
@@ -246,7 +248,7 @@ def _process_prompt(
 
     try:
         if worktree and branch and repo_dir:
-            _ensure_worktree(repo_dir, worktree, branch)
+            _ensure_worktree(repo_dir, worktree, branch, repo_ref)
     except Exception:
         LOGGER.exception("agent.worktree_create_failed worktree=%s branch=%s", worktree, branch)
 
