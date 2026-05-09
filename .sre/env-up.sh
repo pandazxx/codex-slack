@@ -1,95 +1,74 @@
 #!/usr/bin/env bash
-# env-up.sh — spin up a dev environment for a branch
-# Called by the SRE subagent; called by humans only to resume a stopped env.
-#
-# Usage:
-#   env-up.sh [BRANCH_SLUG]
-#
-# If BRANCH_SLUG is omitted, uses current git branch (sanitized).
-# Environment is idempotent: called twice on the same branch returns the
-# existing env instead of creating a duplicate.
-
+# env-up.sh <branch>
+# Spin up or refresh a dev environment for the given branch on DEV_DOCKER_HOST.
+# No source bind-mounts. Source is baked into the image at build time.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-cd "$REPO_ROOT"
+: "${DEV_DOCKER_HOST:?DEV_DOCKER_HOST must be set}"
 
-# Derive branch slug from argument or current git branch.
-if [[ -n "${1:-}" ]]; then
-  BRANCH_SLUG="$1"
-else
-  BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
-  # Sanitize: replace non-alphanumeric with hyphen, lowercase, max 32 chars.
-  BRANCH_SLUG=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-*$//' | cut -c1-32)
+BRANCH="${1:?Usage: env-up.sh <branch>}"
+BRANCH_SLUG="$(echo "$BRANCH" | tr '/_' '-' | tr '[:upper:]' '[:lower:]')"
+
+# Derive SSH target and host IP from DEV_DOCKER_HOST (ssh://[user@]host).
+HOST_ADDR="${DEV_DOCKER_HOST#ssh://}"
+HOST_IP="$(getent hosts "${HOST_ADDR##*@}" 2>/dev/null | awk '{print $1}' || echo "${HOST_ADDR##*@}")"
+HOST_IP_DASHED="${HOST_IP//./-}"
+
+# Auto-detect docker socket GID from the remote host unless overridden.
+if [ -z "${DOCKER_GID:-}" ]; then
+  DOCKER_GID="$(DOCKER_HOST="$DEV_DOCKER_HOST" docker run --rm \
+    -v /var/run/docker.sock:/sock alpine stat -c '%g' /sock 2>/dev/null)"
+  echo "==> DOCKER_GID=${DOCKER_GID} (detected from ${HOST_ADDR})"
 fi
 
-# Derive project name and env file path.
-PROJECT_NAME="${USER}-${BRANCH_SLUG}"
-ENV_FILE="${REPO_ROOT}/.env.local.${BRANCH_SLUG}"
+# SSH agent socket on the *remote* host to forward into master container.
+# Default covers the standard systemd user socket for uid 1000.
+MASTER_SSH_AUTH_SOCK_PATH="${MASTER_SSH_AUTH_SOCK_PATH:-/run/user/1000/ssh-agent.sock}"
 
-echo "Setting up dev environment: $PROJECT_NAME"
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Check if environment already exists.
-if docker compose -p "$PROJECT_NAME" ls &>/dev/null; then
-  echo "Environment already running. Bringing it up..."
-  COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml \
-    docker compose -p "$PROJECT_NAME" up -d
-  docker compose -p "$PROJECT_NAME" ps
-  exit 0
-fi
+export DOCKER_HOST="$DEV_DOCKER_HOST"
+export BRANCH_SLUG
+export HOST_IP_DASHED
+export DOCKER_GID
+export MASTER_SSH_AUTH_SOCK_PATH
 
-# Create .env.local if it doesn't exist (allows overrides without committing).
-if [[ ! -f "$ENV_FILE" ]]; then
-  cat > "$ENV_FILE" <<'EOF'
-# Local overrides for this branch — never commit.
-# Uncomment and set API keys if testing integrations:
-# ANTHROPIC_API_KEY=sk-...
-# GH_TOKEN=ghp_...
-# OPENAI_API_KEY=sk-...
-EOF
-  echo "Created $ENV_FILE — add API keys there if needed."
-fi
+echo "==> env-up: branch=${BRANCH} slug=${BRANCH_SLUG} host=${DEV_DOCKER_HOST}"
+echo "==> Building image (target: dev)..."
+docker compose \
+  -p "${BRANCH_SLUG}" \
+  -f "${PROJECT_ROOT}/docker-compose.yml" \
+  -f "${PROJECT_ROOT}/docker-compose.override.yml" \
+  build master
 
-# Start the stack.
-echo "Starting services for $PROJECT_NAME..."
-COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml \
-  docker compose -p "$PROJECT_NAME" up -d
+echo "==> Bringing up services..."
+docker compose \
+  -p "${BRANCH_SLUG}" \
+  -f "${PROJECT_ROOT}/docker-compose.yml" \
+  -f "${PROJECT_ROOT}/docker-compose.override.yml" \
+  up -d --remove-orphans
 
-# Wait for health checks.
-echo "Waiting for services to be healthy..."
-max_retries=30
-attempt=0
-while (( attempt < max_retries )); do
-  if docker compose -p "$PROJECT_NAME" ps master | grep -q "healthy\|running"; then
-    break
+echo "==> Waiting for master healthcheck..."
+RETRIES=18
+until docker compose \
+  -p "${BRANCH_SLUG}" \
+  -f "${PROJECT_ROOT}/docker-compose.yml" \
+  -f "${PROJECT_ROOT}/docker-compose.override.yml" \
+  exec master curl -sf http://localhost:8080/health > /dev/null 2>&1; do
+  RETRIES=$((RETRIES - 1))
+  if [ "$RETRIES" -eq 0 ]; then
+    echo "ERROR: master failed healthcheck after 90s" >&2
+    docker compose -p "${BRANCH_SLUG}" -f "${PROJECT_ROOT}/docker-compose.yml" \
+      -f "${PROJECT_ROOT}/docker-compose.override.yml" logs --tail=50 master >&2
+    exit 1
   fi
-  attempt=$((attempt + 1))
-  sleep 1
+  sleep 5
 done
 
-if ! docker compose -p "$PROJECT_NAME" ps master | grep -q "healthy\|running"; then
-  echo "ERROR: master service failed to start. Logs:"
-  docker compose -p "$PROJECT_NAME" logs master
-  exit 1
-fi
-
-echo "Environment ready: $PROJECT_NAME"
-docker compose -p "$PROJECT_NAME" ps
-
-# Print access information.
-cat <<EOF
-
-Access the environment:
-  Web UI:       http://localhost:8080
-  API docs:     http://localhost:8080/docs
-  Health:       http://localhost:8080/health
-  Logs:         docker compose -p $PROJECT_NAME logs -f master
-
-Direct access:
-  Mosquitto:    docker compose -p $PROJECT_NAME exec mosquitto mosquitto_sub -h localhost -t '#' -v
-  Master shell: docker compose -p $PROJECT_NAME exec -it master bash
-
-To stop:     .sre/env-down.sh $BRANCH_SLUG
-To see logs: docker compose -p $PROJECT_NAME logs -f [SERVICE]
-EOF
+echo ""
+echo "Dev env ready:"
+echo "  master: http://master.${BRANCH_SLUG}.${HOST_IP_DASHED}.nip.io"
+echo ""
+echo "Exec into services:"
+echo "  DOCKER_HOST=${DEV_DOCKER_HOST} docker compose -p ${BRANCH_SLUG} exec master bash"
+echo "  DOCKER_HOST=${DEV_DOCKER_HOST} docker compose -p ${BRANCH_SLUG} exec mosquitto sh"
