@@ -199,6 +199,13 @@ def stage_workspace_prepare(settings: WorkerSettings) -> None:
         (repo_codex_dir / "AGENTS.md").exists(),
         (repo_codex_dir / "config.toml").exists(),
     )
+    codex_auth_json = os.getenv("CODEX_AUTH_JSON", "").strip()
+    if codex_auth_json:
+        auth_path = codex_home / "auth.json"
+        auth_path.write_text(codex_auth_json, encoding="utf-8")
+        auth_path.chmod(0o600)
+        LOGGER.info("agent.codex_auth_json_written path=%s", auth_path)
+
     git_user_name = os.getenv("AGENT_GIT_USER_NAME", "").strip()
     git_user_email = os.getenv("AGENT_GIT_USER_EMAIL", "").strip()
 

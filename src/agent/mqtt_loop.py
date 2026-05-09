@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+import tempfile
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -205,18 +207,133 @@ def _run_claude(
     return output, new_session_id, transcript
 
 
-def _run_codex(worktree: str, text: str) -> tuple[str, str | None, str | None]:
-    cmd = ["codex", "--full-auto", "-q", text]
+def _stream_codex_once(
+    client: mqtt.Client,
+    workspace_id: str,
+    topic_id: str,
+    reply_message_id: str,
+    agent_name: str,
+    worktree: str,
+    text: str,
+    model: str | None,
+    seq_start: int = 0,
+) -> tuple[str, str | None, bool]:
+    """Stream Codex stdout line by line, publishing each event as an MQTT chunk.
+
+    Returns (output, transcript, is_error).
+    """
+    fd, output_file = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    cmd = [
+        "codex", "exec",
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-s", "danger-full-access",
+        "--ephemeral",
+        "-o", output_file,
+    ]
+    if model:
+        cmd += ["-m", model]
+    cmd.append(text)
+    chunk_topic = _chunk_topic(workspace_id, topic_id)
+    events: list[dict] = []
+    is_error = False
+    seq = seq_start
+    fallback_outputs: list[str] = []
+    proc = None
     try:
-        result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True, timeout=_LLM_TIMEOUT)
-        output = result.stdout.strip() or result.stderr.strip() or "(no output)"
-        return output, None, None
-    except subprocess.TimeoutExpired:
-        return f"(codex timed out after {_LLM_TIMEOUT}s)", None, None
+        proc = subprocess.Popen(
+            cmd, cwd=worktree,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                event = {"type": "output", "content": line}
+            events.append(event)
+            client.publish(chunk_topic, json.dumps({
+                "message_id": reply_message_id,
+                "agent_name": agent_name,
+                "seq": seq,
+                "event": event,
+            }), qos=0)
+            LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+            seq += 1
+            ev_type = event.get("type", "")
+            if ev_type == "turn.completed":
+                final = event.get("output_text") or event.get("last_message")
+                if final:
+                    fallback_outputs.append(str(final))
+            elif ev_type == "turn.failed":
+                is_error = True
+                err_msg = (event.get("error") or {}).get("message", "")
+                if err_msg:
+                    fallback_outputs.append(f"(codex error: {err_msg})")
+        proc.wait()
+        if proc.returncode and proc.returncode != 0 and not is_error:
+            is_error = True
+        output = None
+        try:
+            content = Path(output_file).read_text(encoding="utf-8").strip()
+            if content:
+                output = content
+        except Exception:
+            pass
+        finally:
+            try:
+                Path(output_file).unlink()
+            except Exception:
+                pass
+        if not output:
+            output = "\n\n---\n\n".join(fallback_outputs) if fallback_outputs else None
+        if not output:
+            err = (proc.stderr.read() or "").strip()
+            output = err or "(no output)"
+        transcript = json.dumps(events) if events else None
+        LOGGER.info(
+            "agent.codex_done topic_id=%s chunks=%d chars=%d",
+            topic_id, seq - seq_start, len(output),
+        )
+        return output, transcript, is_error
     except FileNotFoundError:
-        return "(codex CLI not found in agent container)", None, None
+        try:
+            Path(output_file).unlink()
+        except Exception:
+            pass
+        return "(codex CLI not found in agent container)", None, True
     except Exception as exc:
-        return f"(codex error: {exc})", None, None
+        try:
+            if proc is not None:
+                proc.kill()
+        except Exception:
+            pass
+        try:
+            Path(output_file).unlink()
+        except Exception:
+            pass
+        return f"(codex error: {exc})", None, True
+
+
+def _run_codex(
+    client: mqtt.Client,
+    workspace_id: str,
+    topic_id: str,
+    reply_message_id: str,
+    agent_name: str,
+    worktree: str,
+    text: str,
+    model: str | None,
+) -> tuple[str, str | None, str | None]:
+    output, transcript, _ = _stream_codex_once(
+        client, workspace_id, topic_id, reply_message_id, agent_name,
+        worktree, text, model,
+    )
+    return output, None, transcript
 
 
 def _process_prompt(
@@ -275,7 +392,10 @@ def _process_prompt(
         text = f"{note_lines}\n{text}"
 
     if adapter == "codex":
-        response_text, new_session_id, transcript = _run_codex(cwd, text)
+        response_text, new_session_id, transcript = _run_codex(
+            client, workspace_id, topic_id, reply_message_id, agent_name,
+            cwd, text, model,
+        )
     else:
         # Claude sessions are scoped to the CWD (project directory).
         # For workspace/global scope we use a stable shared directory so

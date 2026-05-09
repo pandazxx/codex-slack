@@ -19,4 +19,6 @@ Status flow: `proposed` → `accepted` → `deprecated` / `superseded`
 | 0009 | [Runtime configuration and staff system](0009-runtime-configuration-and-staff-system.md) | accepted |
 | 0010 | [Workspace-level environment variable overrides](0010-workspace-env-var-overrides.md) | accepted |
 | 0011 | [Separate system and user-defined variables in the config panel](0011-system-vs-user-config-panel.md) | accepted |
-| 0012 | [Stream agent reply incrementally](0012-streaming-agent-reply.md) | proposed |
+| 0012 | [Stream agent reply incrementally](0012-streaming-agent-reply.md) | accepted |
+| 0013 | [Event-based staff actions](0013-event-based-staff-action.md) | accepted |
+| 0014 | [Codex agent adapter](0014-codex-agent-adapter.md) | accepted |

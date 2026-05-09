@@ -18,13 +18,13 @@ Two: `master` (FastAPI app on port 8080) and `mosquitto` (MQTT broker, internal 
 
 **Q: Where is my data stored?**
 
-All workspace, topic, message, session, and agent configuration data is in a SQLite database at `/opt/codex-slack/data/master/master_data.db` inside the master container. This path is mounted from the `master_data` Docker volume. Claude session state for each workspace lives in a named volume `codex-claude-{workspace_id}` mounted at `/home/appuser/.claude` inside the agent container.
+All workspace, topic, message, session, and agent configuration data is in a SQLite database at `/opt/codex-slack/data/master/master_data.db` inside the master container. This path is mounted from the `master_data` Docker volume. Each agent container has two persistent named volumes: `codex-claude-{workspace_id}` mounted at `/home/appuser/.claude` (Claude session state) and `codex-codex-{workspace_id}` mounted at `/home/appuser/.codex` (Codex config and auth).
 
 ---
 
 **Q: How do I choose between the `claude` and `codex` agents?**
 
-Both are created by default for each workspace. Use `@claude` for Claude Code (resumable sessions, stream-json output, supports `subagent` flag). Use `@codex` for Codex (`codex --full-auto -q`). You can add custom named agents via the Agents section in the workspace UI.
+Both are created by default for each workspace. Use `@claude` for Claude Code (resumable sessions, stream-json output, supports `subagent` flag). Use `@codex` for Codex (`codex exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access --ephemeral`). You can add custom named agents via the Agents section in the workspace UI.
 
 ---
 
