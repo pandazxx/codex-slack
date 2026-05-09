@@ -46,8 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
 
 RUN useradd -m -u 1000 -s /bin/bash appuser \
-    && mkdir -p /workspace/home /home/appuser/.claude /opt/codex-slack/data/master \
-    && chown -R appuser:appuser /workspace /home/appuser/.claude /opt/codex-slack
+    && mkdir -p /workspace/home /home/appuser/.claude /home/appuser/.codex /opt/codex-slack/data/master \
+    && chown -R appuser:appuser /workspace /home/appuser/.claude /home/appuser/.codex /opt/codex-slack
 USER appuser
 WORKDIR /opt/codex-slack
 
