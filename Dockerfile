@@ -86,4 +86,5 @@ FROM prod AS test
 USER root
 RUN pip install --no-cache-dir pytest pytest-cov pytest-asyncio httpx
 USER appuser
+COPY --chown=appuser:appuser tests ./tests
 CMD ["python", "-m", "pytest"]
