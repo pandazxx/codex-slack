@@ -5,18 +5,25 @@
 set -euo pipefail
 
 : "${DEV_DOCKER_HOST:?DEV_DOCKER_HOST must be set}"
-: "${DOCKER_GID:?DOCKER_GID must be set (docker socket group GID on DEV_DOCKER_HOST)}"
-# SSH agent socket on the *remote* host to forward into master container.
-# Default covers the standard systemd user socket for uid 1000.
-MASTER_SSH_AUTH_SOCK_PATH="${MASTER_SSH_AUTH_SOCK_PATH:-/run/user/1000/ssh-agent.sock}"
 
 BRANCH="${1:?Usage: env-up.sh <branch>}"
 BRANCH_SLUG="$(echo "$BRANCH" | tr '/_' '-' | tr '[:upper:]' '[:lower:]')"
 
-# Derive host IP for nip.io routing.
+# Derive SSH target and host IP from DEV_DOCKER_HOST (ssh://[user@]host).
 HOST_ADDR="${DEV_DOCKER_HOST#ssh://}"
-HOST_IP="$(getent hosts "${HOST_ADDR%%@*}" 2>/dev/null | awk '{print $1}' || echo "${HOST_ADDR##*@}")"
+HOST_IP="$(getent hosts "${HOST_ADDR##*@}" 2>/dev/null | awk '{print $1}' || echo "${HOST_ADDR##*@}")"
 HOST_IP_DASHED="${HOST_IP//./-}"
+
+# Auto-detect docker socket GID from the remote host unless overridden.
+if [ -z "${DOCKER_GID:-}" ]; then
+  DOCKER_GID="$(DOCKER_HOST="$DEV_DOCKER_HOST" docker run --rm \
+    -v /var/run/docker.sock:/sock alpine stat -c '%g' /sock 2>/dev/null)"
+  echo "==> DOCKER_GID=${DOCKER_GID} (detected from ${HOST_ADDR})"
+fi
+
+# SSH agent socket on the *remote* host to forward into master container.
+# Default covers the standard systemd user socket for uid 1000.
+MASTER_SSH_AUTH_SOCK_PATH="${MASTER_SSH_AUTH_SOCK_PATH:-/run/user/1000/ssh-agent.sock}"
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
