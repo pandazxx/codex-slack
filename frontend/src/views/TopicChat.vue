@@ -46,6 +46,10 @@
                   <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
                   <MarkdownMessage :text="agentResultText(row.event)" />
                 </div>
+                <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
+                  <summary>{{ codexCmdLabel(row.event) }}</summary>
+                  <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
+                </details>
                 <details v-else-if="row.kind === 'folded'">
                   <summary>···</summary>
                   <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
@@ -71,6 +75,10 @@
                     <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
                     <MarkdownMessage :text="agentResultText(row.event)" />
                   </div>
+                  <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
+                    <summary>{{ codexCmdLabel(row.event) }}</summary>
+                    <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
+                  </details>
                   <details v-else-if="row.kind === 'folded'">
                     <summary>···</summary>
                     <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
@@ -150,9 +158,10 @@
               <template v-else-if="evt.type === 'turn.completed'">
                 <div class="tr-meta">
                   <span class="tr-badge tr-badge-done">done</span>
-                  <template v-if="evt.token_usage">
-                    <span class="tr-stat tr-tokens">{{ (evt.token_usage.input_tokens ?? 0).toLocaleString() }}↑</span>
-                    <span class="tr-stat tr-tokens">{{ (evt.token_usage.output_tokens ?? 0).toLocaleString() }}↓</span>
+                  <template v-if="evt.usage">
+                    <span class="tr-stat tr-tokens">{{ (evt.usage.input_tokens ?? 0).toLocaleString() }}↑</span>
+                    <span class="tr-stat tr-tokens">{{ (evt.usage.output_tokens ?? 0).toLocaleString() }}↓</span>
+                    <span v-if="evt.usage.cached_input_tokens" class="tr-stat tr-cache">{{ evt.usage.cached_input_tokens.toLocaleString() }} cached</span>
                   </template>
                 </div>
               </template>
@@ -160,6 +169,17 @@
                 <div class="tr-meta">
                   <span class="tr-badge tr-badge-error">failed</span>
                   <span class="tr-stat">{{ evt.error?.message || 'unknown error' }}</span>
+                </div>
+              </template>
+              <template v-else-if="evt.type === 'item.completed' && evt.item?.type === 'agent_message'">
+                <div class="tr-text">{{ evt.item.text }}</div>
+              </template>
+              <template v-else-if="evt.type === 'item.completed' && evt.item?.type === 'command_execution'">
+                <div class="tr-tool-call">
+                  <details class="tool-use-fold">
+                    <summary :class="evt.item.status === 'failed' ? 'tr-cmd-failed' : ''">{{ codexCmdLabel(evt) }}</summary>
+                    <pre v-if="evt.item.aggregated_output" class="tr-json tr-result-body">{{ evt.item.aggregated_output }}</pre>
+                  </details>
                 </div>
               </template>
             </template>
@@ -267,13 +287,19 @@ function classifyEvent(event) {
     }
   }
   // Codex event types
-  if (t === 'turn.completed')        return 'codex_done'
-  if (t === 'turn.failed')           return 'folded'
-  if (t === 'thread.started')        return 'hidden'
-  if (t === 'turn.started')          return 'hidden'
-  if (t === 'turn.token_usage')      return 'hidden'
+  if (t === 'turn.completed')         return 'codex_done'
+  if (t === 'turn.failed')            return 'folded'
+  if (t === 'thread.started')         return 'hidden'
+  if (t === 'turn.started')           return 'hidden'
+  if (t === 'turn.token_usage')       return 'hidden'
   if (t === 'turn.context_compacted') return 'hidden'
-  if (t === 'error')                 return 'folded'
+  if (t === 'error')                  return 'folded'
+  // Codex item events (command executions + agent messages)
+  if (t === 'item.completed' && event.item?.type === 'agent_message')      return 'codex_text'
+  if (t === 'item.started'   && event.item?.type === 'command_execution')   return 'codex_cmd'
+  if (t === 'item.completed' && event.item?.type === 'command_execution')   return 'codex_cmd'
+  if (t === 'item.started')   return 'hidden'
+  if (t === 'item.completed') return 'hidden'
   return 'hidden'
 }
 
@@ -326,6 +352,14 @@ function toolUseLabel(event) {
   return `⚙ ${name}`
 }
 
+function codexCmdLabel(event) {
+  const item = event.item || event
+  const cmd = (item.command || '').slice(0, 80)
+  if (item.status === 'in_progress') return `⟳ ${cmd}`
+  if (item.status === 'failed')      return `✗ ${cmd}`
+  return `⚙ ${cmd}`
+}
+
 function transcriptToRows(transcriptJson) {
   if (!transcriptJson) return []
   try {
@@ -368,13 +402,21 @@ function handleChunk({ message_id, agent_name, seq, event }) {
       if (blk.type === 'text') live.text += blk.text
     const msg = messages.value.find(m => m.id === message_id)
     if (msg) msg.text = live.text
+  } else if (kind === 'codex_text') {
+    // item.completed agent_message: replace bubble with latest agent thought
+    live.text = event.item?.text || ''
+    const msg = messages.value.find(m => m.id === message_id)
+    if (msg) msg.text = live.text
+  } else if (kind === 'codex_cmd') {
+    // Replace in-progress item.started row when item.completed arrives (same item id)
+    const itemId = event.item?.id
+    const existingIdx = itemId !== undefined
+      ? live.rows.findIndex(r => r.kind === 'codex_cmd' && r.event.item?.id === itemId)
+      : -1
+    if (existingIdx >= 0) live.rows.splice(existingIdx, 1, { kind, event })
+    else live.rows.push({ kind, event })
   } else if (kind === 'codex_done') {
-    const outText = event.output_text || event.last_message || ''
-    if (outText) {
-      live.text += outText
-      const msg = messages.value.find(m => m.id === message_id)
-      if (msg) msg.text = live.text
-    }
+    // turn.completed: bubble already up to date from codex_text events; no row needed
   } else if (kind !== 'hidden') {
     live.rows.push({ kind, event })
   }
@@ -712,6 +754,7 @@ onUnmounted(() => {
 .tool-use-fold > summary { cursor: pointer; list-style: none; }
 .tool-use-fold > summary::-webkit-details-marker { display: none; }
 .tool-use-fold[open] > summary { color: #ccc; }
+.tr-cmd-failed { color: #dc2626; }
 
 @media (max-width: 768px) {
   .chat-layout { height: calc(100vh - 90px); }
