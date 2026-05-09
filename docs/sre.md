@@ -9,7 +9,7 @@ This document is the authoritative reference for infrastructure operations on th
 | `DEV_DOCKER_HOST` | All dev env operations | `ssh://ubuntu@10.10.10.238` | Set |
 | `DOCKER_GID` | Docker socket group on host | `988` | Set |
 | `STAGING_DOCKER_HOST` | Staging deploys, UAT, post-merge cleanup | `ssh://ubuntu@<staging-ip>` | **Requires human to set** |
-| `REGISTRY` | Building and pushing images | `ghcr.io/pandazxx` | **Requires human to set** |
+| `REGISTRY` | Image namespace (locally for staging-up.sh) | `ghcr.io/pandazxx` | Required only for local staging deploys; CI hardcodes `ghcr.io/<repo-owner>` |
 | `REGISTRY_TOKEN` | Pushing images to non-GHCR registries | (from secret manager) | Optional — GHCR uses `GITHUB_TOKEN` |
 
 No fallback to local Docker. `DEV_DOCKER_HOST` must always be set. For local Docker, set `DEV_DOCKER_HOST=unix:///var/run/docker.sock` explicitly.
@@ -96,13 +96,13 @@ All runbooks are in `.sre/operations/`. Operators read the runbook for the reque
 ## CI/CD
 
 - `ci.yml`: runs on every PR and push to master. Builds `test` stage, runs `pytest`.
-- `build-push.yml`: runs on push to master and version tags. Builds `prod` stage, pushes to `$REGISTRY`.
+- `build-push.yml`: runs on push to master and version tags. Builds `prod` stage, pushes to `ghcr.io/<repo-owner>/codex-slack-master`.
 - Branch protection: CI must pass before merge. Code owner review required for SRE-domain files.
 
 ## Items Requiring Human Action Before Production
 
 1. Set `STAGING_DOCKER_HOST` in dotenv/direnv.
-2. Set `REGISTRY` in dotenv/direnv and as a GitHub Actions variable (`vars.REGISTRY`).
+2. Set `REGISTRY` in dotenv/direnv (used by `.sre/staging-up.sh`). CI does not need it — `build-push.yml` hardcodes `ghcr.io/<repo-owner>`.
 3. Set `REGISTRY_TOKEN` as a GitHub Actions secret only if `REGISTRY` is not GHCR. For GHCR, `build-push.yml` uses the workflow's auto-provided `GITHUB_TOKEN` (the job already declares `packages: write`).
 4. Bootstrap `sre-host-infra` on `STAGING_DOCKER_HOST` (same command as dev bootstrap above, with `STAGING_DOCKER_HOST`).
 5. Verify `Dockerfile` has `prod`, `dev`, and `test` stages — all three are present; confirm they have adequate tooling for your workload.
