@@ -496,6 +496,8 @@ function connectWs() {
     } else if (data.type === 'message') {
       finaliseMessage(data)
     } else if (data.type === 'chunk_retract') {
+      const retractIdx = messages.value.findIndex(m => m.id === data.message_id)
+      if (retractIdx >= 0) messages.value.splice(retractIdx, 1)
       delete liveStreams.value[data.message_id]
       seenSeq.delete(data.message_id)
     }
