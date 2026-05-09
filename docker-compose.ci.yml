@@ -1,20 +1,23 @@
-# CI override — used by GitHub Actions for test runs.
-# Builds the test stage of Dockerfile. No Traefik labels; no published ports.
+# CI testing configuration — runs tests in container
+# Invoked by CI workflows and .sre/test.sh via:
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml ...
+#
+# Dockerfile.test bakes src+tests into the image so no volume mounts are needed,
+# enabling use with remote Docker hosts (DOCKER_HOST=ssh://...) as well as CI runners.
+
 services:
   master:
     build:
       context: .
-      dockerfile: Dockerfile
-      target: test
-    deploy:
-      resources:
-        limits:
-          memory: 1g
-          cpus: "1.0"
-
-  mosquitto:
-    deploy:
-      resources:
-        limits:
-          memory: 128m
-          cpus: "0.25"
+      dockerfile: Dockerfile.test
+    image: codex-slack:test
+    working_dir: /opt/codex-slack
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "/opt/codex-slack"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    networks:
+      - internal
