@@ -105,6 +105,6 @@ All runbooks are in `.sre/operations/`. Operators read the runbook for the reque
 2. Set `REGISTRY` in dotenv/direnv and as a GitHub Actions variable (`vars.REGISTRY`).
 3. Set `REGISTRY_TOKEN` as a GitHub Actions secret (`secrets.REGISTRY_TOKEN`).
 4. Bootstrap `sre-host-infra` on `STAGING_DOCKER_HOST` (same command as dev bootstrap above, with `STAGING_DOCKER_HOST`).
-5. Add `dev` and `test` Dockerfile stages (see `SRE-ADVISORY` comment in `Dockerfile`).
+5. Verify `Dockerfile` has `prod`, `dev`, and `test` stages — all three are present; confirm they have adequate tooling for your workload.
 6. Verify Traefik digest in `.sre/host-infra/docker-compose.yml` before first bootstrap.
 7. Update `CODEOWNERS` with the correct GitHub usernames for SRE reviewers.

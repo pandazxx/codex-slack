@@ -19,8 +19,9 @@
    `.sre/staging-up.sh master <image-ref> <image-digest>`
    - This updates the running `master` slug staging env in-place.
 2. Tear down the merged feature-branch staging env:
-   `.sre/staging-down.sh <merged-branch>`
-   - If no staging env exists for the branch, skip silently.
+   `.sre/staging-down.sh <feature-image-ref>`
+   where `<feature-image-ref>` is the image reference used when the feature-branch staging env was spun up (same value passed to `staging-up.sh` at spin-up time — the script derives the project name from the image tag).
+   - If no staging env exists for that version slug, skip silently.
 3. Report dev env teardown note:
    "Dev env for `<merged-branch>` is the developer's responsibility to tear down.
     Run: `.sre/env-down.sh <merged-branch>` when ready."

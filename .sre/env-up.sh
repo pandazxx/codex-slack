@@ -58,7 +58,7 @@ until docker compose \
   RETRIES=$((RETRIES - 1))
   if [ "$RETRIES" -eq 0 ]; then
     echo "ERROR: master failed healthcheck after 90s" >&2
-    docker-compose -p "${BRANCH_SLUG}" -f "${PROJECT_ROOT}/docker-compose.yml" \
+    docker compose -p "${BRANCH_SLUG}" -f "${PROJECT_ROOT}/docker-compose.yml" \
       -f "${PROJECT_ROOT}/docker-compose.override.yml" logs --tail=50 master >&2
     exit 1
   fi
@@ -70,5 +70,5 @@ echo "Dev env ready:"
 echo "  master: http://master.${BRANCH_SLUG}.${HOST_IP_DASHED}.nip.io"
 echo ""
 echo "Exec into services:"
-echo "  DOCKER_HOST=${DEV_DOCKER_HOST} docker-compose -p ${BRANCH_SLUG} exec master bash"
-echo "  DOCKER_HOST=${DEV_DOCKER_HOST} docker-compose -p ${BRANCH_SLUG} exec mosquitto sh"
+echo "  DOCKER_HOST=${DEV_DOCKER_HOST} docker compose -p ${BRANCH_SLUG} exec master bash"
+echo "  DOCKER_HOST=${DEV_DOCKER_HOST} docker compose -p ${BRANCH_SLUG} exec mosquitto sh"

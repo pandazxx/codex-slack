@@ -7,6 +7,8 @@
 services:
   master:
     image: ${MASTER_RUNTIME_IMAGE:?MASTER_RUNTIME_IMAGE must be set}@${IMAGE_DIGEST:?IMAGE_DIGEST must be set}
+    environment:
+      MASTER_AGENT_NETWORK: "${VERSION_SLUG:-main}_internal"
     deploy:
       resources:
         limits:

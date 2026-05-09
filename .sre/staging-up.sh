@@ -22,7 +22,7 @@ IMAGE_TAG="${IMAGE_REF##*:}"
 VERSION_SLUG="$(echo "$IMAGE_TAG" | tr './_' '-' | tr '[:upper:]' '[:lower:]')"
 
 HOST_ADDR="${STAGING_DOCKER_HOST#ssh://}"
-HOST_IP="$(getent hosts "${HOST_ADDR%%@*}" 2>/dev/null | awk '{print $1}' || echo "${HOST_ADDR##*@}")"
+HOST_IP="$(getent hosts "${HOST_ADDR##*@}" 2>/dev/null | awk '{print $1}' || echo "${HOST_ADDR##*@}")"
 HOST_IP_DASHED="${HOST_IP//./-}"
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
