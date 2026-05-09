@@ -88,6 +88,20 @@ Use structured output to have `@archivist` post a closing summary through the co
 
 When the event fires, `@archivist`'s reply is intercepted. If it is valid JSON containing a `"message"` key, that text is posted in the topic as an agent message. If the reply is not valid JSON, `last_run_output` records the first 200 characters prefixed with `invalid_json:` and no message is posted.
 
+### Gating user messages via `topic_message_sent`
+
+Use structured output with `timing=before` to have `@screener` decide whether a user message should reach the agent at all:
+
+- Event type: `topic_message_sent`
+- Timing: `before`
+- Staff: `screener`
+- Prompt template: `A user sent the following message:\n\n{message_json}\n\nReply with a JSON object. To allow it: {{"silent": true}}. To block it: {{"break": true}}.`
+- Structured output: enabled
+
+When the user submits a message, `@screener` is dispatched first. The system waits up to 60 seconds for the structured reply. If `@screener` responds with `{"break": true}`, the message is discarded and never reaches the default agent. If it responds with `{"silent": true}` (or any non-break shape), dispatch continues normally.
+
+This pattern is useful for content filtering, rate limiting by message content, or any scenario where you need a second agent to approve messages before they reach the primary agent.
+
 ## Template variables and escaping
 
 Templates use Python `str.format_map` syntax: `{variable_name}`. The available variables depend on the event type (see the table above).
@@ -150,7 +164,9 @@ The value of `"message"` is posted in the topic as an agent message, exactly as 
 {"break": true, "message": "reason for not responding"}
 ```
 
-The veto intent is logged. Note: actual archive blocking is not yet implemented (tracked in [issue #156](https://github.com/pandazxx/codex-slack/issues/156)). For now, `break` is acknowledged and logged, `last_run_status` is set to `ok`, and no message is posted.
+For `topic_message_sent` actions with `timing=before`, `break` **actively blocks the user's message** from being dispatched to the default agent. The HTTP handler waits for the gate action's structured reply (up to 60 seconds) before deciding whether to proceed. If any gate action returns `{"break": true}`, the dispatch is aborted and the API returns `{"status": "blocked"}`. The frontend shows no new message bubble.
+
+For all other event types (`topic_message_received`, `topic_archived`, `topic_scheduler`) the veto intent is logged and `last_run_status` is set to `ok`, but no blocking occurs — those event types do not gate an in-flight action. Vetoable archiving (blocking a `topic_archived` transition) is tracked in [issue #156](https://github.com/pandazxx/codex-slack/issues/156).
 
 **Suppress silently:**
 
@@ -214,7 +230,7 @@ Each event action card shows three observability fields:
 The following capabilities are not implemented in v1:
 
 - **Backpressure and rate limiting** for high-frequency event types. Tracked in [issue #154](https://github.com/pandazxx/codex-slack/issues/154).
-- **Vetoable archiving** (`topic_archiving` pre-commit interceptor that can block the archive). Tracked in [issue #156](https://github.com/pandazxx/codex-slack/issues/156). The `break` response shape in structured output acknowledges the intent but does not yet enforce blocking.
+- **Vetoable archiving** (`topic_archiving` pre-commit interceptor that can block the archive). Tracked in [issue #156](https://github.com/pandazxx/codex-slack/issues/156). The `break` response shape is already enforced for `topic_message_sent before` gate actions, but archive-level veto is not yet wired up.
 - **Workspace-scope events**. Only topic-scope (`scope_type='topic'`) is implemented. The schema is forward-compatible; a follow-up ADR will define the output channel.
 - **TZ-awareness audit** of existing date columns across the codebase. Tracked in [issue #158](https://github.com/pandazxx/codex-slack/issues/158).
 - **Sub-minute scheduler precision**. The minimum effective interval is 1 minute.
