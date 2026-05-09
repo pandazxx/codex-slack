@@ -132,7 +132,8 @@ Event actions bind in-system events to staff invocations for a specific topic. A
   "prompt_template": "Review the following message: {msgbody}",
   "timing": "after",
   "cron_expr": null,
-  "enabled": true
+  "enabled": true,
+  "structured_output": false
 }
 ```
 
@@ -142,11 +143,11 @@ The `EventActionIn` model uses `extra='forbid'` — unknown fields are rejected 
 
 ```json
 {
-  "enabled": false
+  "structured_output": true
 }
 ```
 
-Only the fields you include are changed; omitted fields are left as-is. Sending `null` for `timing` or `cron_expr` explicitly sets those fields to null (valid for event types that allow null values). Sending `null` for `staff_name`, `prompt_template`, or `enabled` is rejected with 422. `event_type` cannot be changed after creation — it is not accepted in PATCH bodies (rejected with 422 by `extra='forbid'`).
+Only the fields you include are changed; omitted fields are left as-is. Sending `null` for `timing` or `cron_expr` explicitly sets those fields to null (valid for event types that allow null values). Sending `null` for `staff_name`, `prompt_template`, `enabled`, or `structured_output` is rejected with 422. `event_type` cannot be changed after creation — it is not accepted in PATCH bodies (rejected with 422 by `extra='forbid'`).
 
 **Event action response shape (`EventActionOut`):**
 
@@ -165,6 +166,7 @@ Only the fields you include are changed; omitted fields are left as-is. Sending 
   "last_run_status": "ok",
   "last_run_output": "message_id=<uuid> prompt='Review the following…'",
   "enabled": true,
+  "structured_output": false,
   "created_at": "2026-05-08T09:00:00Z",
   "updated_at": "2026-05-08T09:00:00Z"
 }
@@ -175,9 +177,10 @@ Only the fields you include are changed; omitted fields are left as-is. Sending 
 | Field | Writer | Meaning |
 |---|---|---|
 | `last_fired_at` | Scheduler tick only | UTC ISO-8601 watermark of the last cron slot the scheduler accounted for. Advanced *before* dispatch. Null for non-scheduler event types. |
-| `last_run_at` | Event worker | UTC ISO-8601 timestamp of the most recent dispatch attempt (success or failure). Updated regardless of outcome. |
-| `last_run_status` | Event worker | Outcome of the most recent dispatch: `ok`, `staff_missing`, `render_error`, or `dispatch_error`. |
-| `last_run_output` | Event worker | On `ok`: rendered prompt prefix and dispatched `message_id`. On error: the error message or timeout marker. Truncated to 4096 characters. |
+| `last_run_at` | Event worker (standard) or MQTT reply handler (`structured_output=true`) | UTC ISO-8601 timestamp of the most recent dispatch attempt (success or failure). When `structured_output=true`, written when the agent reply arrives via MQTT, not at dispatch time. |
+| `last_run_status` | Event worker (standard) or MQTT reply handler (`structured_output=true`) | Outcome of the most recent dispatch: `ok`, `staff_missing`, `render_error`, or `dispatch_error`. |
+| `last_run_output` | Event worker (standard) or MQTT reply handler (`structured_output=true`) | On `ok` (standard): rendered prompt prefix and dispatched `message_id`. On `ok` (structured): the log field from a `silent` response, or empty. On `ok` with invalid JSON reply: `invalid_json: <first 200 chars>`. On error: the error message or timeout marker. Truncated to 4096 characters. |
+| `structured_output` | Set at create/patch time | Boolean (default `false`). When `true`, the staff's reply is intercepted and parsed as JSON instead of being broadcast as an agent message. |
 
 **Event types and timing/cron_expr rules:**
 
@@ -201,12 +204,34 @@ For `topic_message_sent`, `"before"` fires before the user's message is dispatch
 
 | `event_type` | Available variables |
 |---|---|
-| `topic_message_sent` | `{msgbody}`, `{topic_name}` |
-| `topic_message_received` | `{msgbody}`, `{topic_name}` |
-| `topic_scheduler` | `{topic_name}`, `{workspace_name}` |
-| `topic_archived` | `{topic_name}` |
+| `topic_message_sent` | `{msgbody}`, `{topic_name}`, `{message_json}`, `{topic_json}` |
+| `topic_message_received` | `{msgbody}`, `{topic_name}`, `{response_json}`, `{topic_json}` |
+| `topic_scheduler` | `{topic_name}`, `{workspace_name}`, `{topic_json}` |
+| `topic_archived` | `{topic_name}`, `{topic_json}` |
 
-`msgbody` is the raw text of the triggering message (user input for `topic_message_sent`; the agent's reply text for `topic_message_received`). Unknown placeholders are left as the literal `{name}` string and a warning is logged. Escape a literal brace with `{{` or `}}`.
+`{msgbody}` is the raw text of the triggering message (user input for `topic_message_sent`; the agent's reply text for `topic_message_received`).
+
+`{message_json}` (`topic_message_sent` only) — the triggering user message as a JSON string: `{"text": "...", "sender": "user"}`.
+
+`{response_json}` (`topic_message_received` only) — the agent reply as a JSON string: `{"text": "...", "agent_name": "...", "sender": "agent"}`.
+
+`{topic_json}` (all event types) — topic and workspace identifiers as a JSON string: `{"id": "...", "subject": "...", "workspace_id": "...", "workspace_name": "..."}`. Injected automatically by the dispatcher; the operator does not need to construct it.
+
+Unknown placeholders are left as the literal `{name}` string and a warning is logged. Escape a literal brace with `{{` or `}}`.
+
+**Structured output response shapes:**
+
+When `structured_output=true`, the staff's LLM reply is intercepted and parsed as JSON rather than broadcast as an agent message. The following shapes are handled:
+
+| Shape | Effect |
+|---|---|
+| `{"message": "<text>"}` | Posts `<text>` as an agent message in the topic (no further LLM call). `last_run_status` = `ok`. |
+| `{"break": true, "message": "<reason>"}` | Logs the veto intent. Archive blocking is not yet implemented ([#156](https://github.com/pandazxx/codex-slack/issues/156)); `break` is acknowledged and logged. `last_run_status` = `ok`. No message posted. |
+| `{"silent": true, "log": "<optional text>"}` | Suppresses any reply. `last_run_status` = `ok`. `log` text (if present) appears in `last_run_output`. |
+
+If the reply is not valid JSON, `last_run_status` = `ok` and `last_run_output` = `invalid_json: <first 200 chars of reply>`. No message is posted.
+
+When `structured_output=true`, `last_run_at`, `last_run_status`, and `last_run_output` are written when the agent reply arrives via MQTT, not at dispatch time. There is a delay equal to the agent's response latency before the status appears on the action.
 
 **Validation errors returned as 422:** invalid cron expression; wrong `timing`/`cron_expr` combination for the `event_type`; null value for a non-nullable patch field; extra fields in the request body.
 

@@ -222,6 +222,7 @@ def _make_app_state(*, db_path: str) -> MagicMock:
     state.mqtt = MagicMock()
     state.settings = MagicMock()
     state.settings.dry_run = True
+    state.gate_futures = {}
     return state
 
 
@@ -2609,3 +2610,874 @@ class TestSessionSharing:
         assert len(rows) == 1
         expected = _make_session_uuid("workspace", ws_id, "ws-reviewer")
         assert rows[0]["session_id"] == expected
+
+
+# ---------------------------------------------------------------------------
+# Area 11: Structural Input Variables
+# ---------------------------------------------------------------------------
+
+
+class TestStructuralInput:
+    """Tests for message_json, response_json, and topic_json template variables."""
+
+    def _run_dispatch_one_capture_prompt(self, db_path, ws_id, tp_id, action_id, variables):
+        """Run _dispatch_one and return the prompt text passed to dispatch_to_staff."""
+        from src.master.db import get_connection
+
+        captured = {}
+
+        async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text,
+                                sender, raw_text=None, event_action_id=None, **kw):
+            captured["prompt"] = prompt_text
+            return str(uuid.uuid4())
+
+        async def run():
+            from src.master.event_dispatcher import _dispatch_one
+            app_state = _make_app_state(db_path=db_path)
+            app_state.event_loop = asyncio.get_running_loop()
+
+            conn = get_connection(db_path)
+            row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
+            conn.close()
+
+            event = {
+                "event_type": row["event_type"],
+                "topic_id": tp_id,
+                "workspace_id": ws_id,
+                "timing": row["timing"],
+                "variables": variables,
+                "scheduler_slot": None,
+                "scheduler_action_id": None,
+            }
+
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch):
+                await _dispatch_one(app_state, row, event)
+
+        asyncio.run(run())
+        return captured.get("prompt", "")
+
+    def test_topic_json_injected_automatically(self, tmp_path):
+        # SI-01 — {topic_json} is added by _dispatch_one from the DB
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(
+            db_path, workspace_name="ws-alpha", topic_subject="My Topic"
+        )
+        _insert_staff(db_path, name="reviewer", scope_type="global")
+        action_id = _insert_event_action(
+            db_path, topic_id=tp_id, staff_name="reviewer",
+            prompt_template="topic={topic_json}",
+            timing="before",
+        )
+
+        prompt = self._run_dispatch_one_capture_prompt(
+            db_path, ws_id, tp_id, action_id,
+            variables={"msgbody": "hi", "topic_name": "My Topic"},
+        )
+
+        import json
+        assert "{topic_json}" not in prompt, "placeholder was not substituted"
+        # prompt is "topic=<json>"; extract the JSON part
+        raw = prompt[len("topic="):]
+        parsed = json.loads(raw)
+        assert parsed["subject"] == "My Topic"
+        assert parsed["workspace_name"] == "ws-alpha"
+        assert parsed["id"] == tp_id
+        assert parsed["workspace_id"] == ws_id
+
+    def test_topic_json_caller_supplied_takes_precedence(self, tmp_path):
+        # SI-02 — if caller already sets topic_json in variables, _dispatch_one does not override it
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path, topic_subject="Real Topic")
+        _insert_staff(db_path, name="reviewer", scope_type="global")
+        action_id = _insert_event_action(
+            db_path, topic_id=tp_id, staff_name="reviewer",
+            prompt_template="{topic_json}",
+            timing="before",
+        )
+
+        import json
+        caller_json = json.dumps({"id": "override", "subject": "Custom"})
+        prompt = self._run_dispatch_one_capture_prompt(
+            db_path, ws_id, tp_id, action_id,
+            variables={"topic_json": caller_json},
+        )
+        parsed = json.loads(prompt)
+        assert parsed["id"] == "override"
+
+    def test_message_json_in_topic_message_sent(self, client_mqtt):
+        # SI-03 — {message_json} contains user message JSON when topic_message_sent fires
+        client, mock_mqtt = client_mqtt
+
+        ws_r = client.post(
+            "/api/workspaces",
+            json={"name": "si03-ws", "repo_url": "https://github.com/x/y"},
+        )
+        ws_id = ws_r.json()["id"]
+        tp_r = client.post(
+            f"/api/workspaces/{ws_id}/topics",
+            json={"subject": "si topic", "repo_ref": "main"},
+        )
+        tp_id = tp_r.json()["id"]
+        client.post(
+            f"/api/workspaces/{ws_id}/staffs",
+            json={"name": "claude", "adapter": "claude-code", "is_default": True},
+        )
+
+        captured_variables = {}
+
+        original_emit = None
+
+        def capturing_emit(*, app_state, event_type, topic_id, workspace_id,
+                           timing=None, variables, **kw):
+            if event_type == "topic_message_sent":
+                captured_variables.update(variables)
+
+        with patch("src.master.event_dispatcher.emit_event", side_effect=capturing_emit):
+            client.post(
+                f"/api/workspaces/{ws_id}/topics/{tp_id}/messages",
+                data={"text": "hello world"},
+            )
+
+        assert "message_json" in captured_variables
+        import json
+        parsed = json.loads(captured_variables["message_json"])
+        assert parsed["text"] == "hello world"
+        assert parsed["sender"] == "user"
+
+    def test_response_json_in_topic_message_received(self, tmp_path):
+        # SI-04 — {response_json} is passed in variables for topic_message_received events
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="reviewer", scope_type="global")
+
+        # We test by capturing what emit_event receives in the MQTT on_message handler
+        import json
+        from src.master import mqtt_client
+
+        captured = {}
+
+        def fake_emit(*, app_state, event_type, topic_id, workspace_id,
+                      timing=None, variables, **kw):
+            if event_type == "topic_message_received":
+                captured.update(variables)
+
+        # Simulate an agent response MQTT message
+        message_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO messages (id, topic_id, sender, text, created_at) VALUES (?, ?, 'event', 'prompt', ?)",
+            (message_id, tp_id, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        payload = json.dumps({
+            "message_id": message_id,
+            "last_response": "Agent reply text",
+            "agent_name": "reviewer",
+            "transcript": None,
+        })
+
+        app_state = _make_app_state(db_path=db_path)
+        loop = asyncio.new_event_loop()
+        app_state.event_loop = loop
+
+        userdata = {
+            "db_path": db_path,
+            "hub": app_state.hub,
+            "loop": loop,
+            "app_state": app_state,
+            "settings": MagicMock(),
+        }
+
+        with patch("src.master.event_dispatcher.emit_event", side_effect=fake_emit):
+            from src.master.mqtt_client import _on_message as on_msg
+            msg = MagicMock()
+            msg.topic = f"codex-slack/workspace/{ws_id}/topic/{tp_id}/response"
+            msg.payload = payload.encode()
+            on_msg(None, userdata, msg)
+
+        loop.close()
+
+        assert "response_json" in captured
+        parsed = json.loads(captured["response_json"])
+        assert parsed["text"] == "Agent reply text"
+        assert parsed["sender"] == "agent"
+        assert parsed["agent_name"] == "reviewer"
+
+
+# ---------------------------------------------------------------------------
+# Area 12: Structural Output
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredOutput:
+    """Tests for the structured_output flag and JSON-response handling."""
+
+    def test_crud_structured_output_defaults_false(self, client, ea_base_url):
+        # SOUT-01 — structured_output defaults to False on create
+        body = _make_action(event_type="topic_message_sent", timing="before")
+        r = client.post(ea_base_url, json=body)
+        assert r.status_code == 201
+        assert r.json()["structured_output"] is False
+
+    def test_crud_create_with_structured_output_true(self, client, ea_base_url):
+        # SOUT-02 — creating with structured_output=true round-trips correctly
+        body = {**_make_action(timing="before"), "structured_output": True}
+        r = client.post(ea_base_url, json=body)
+        assert r.status_code == 201
+        assert r.json()["structured_output"] is True
+
+    def test_crud_patch_structured_output(self, client, ea_base_url):
+        # SOUT-03 — PATCH can toggle structured_output
+        body = _make_action(timing="before")
+        create_r = client.post(ea_base_url, json=body)
+        action_id = create_r.json()["id"]
+
+        patch_r = client.patch(
+            f"{ea_base_url}/{action_id}",
+            json={"structured_output": True},
+        )
+        assert patch_r.status_code == 200
+        assert patch_r.json()["structured_output"] is True
+
+        # Toggle back
+        patch_r2 = client.patch(
+            f"{ea_base_url}/{action_id}",
+            json={"structured_output": False},
+        )
+        assert patch_r2.status_code == 200
+        assert patch_r2.json()["structured_output"] is False
+
+    def test_dispatch_stores_event_action_id_on_message(self, tmp_path):
+        # SOUT-04 — when structured_output=True, dispatch_to_staff is called with event_action_id
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="reviewer", scope_type="global")
+
+        # Insert action with structured_output=1 directly in DB
+        action_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, 1, 1, ?, ?)",
+            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        captured = {}
+
+        async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text,
+                                sender, raw_text=None, event_action_id=None, **kw):
+            captured["event_action_id"] = event_action_id
+            return str(uuid.uuid4())
+
+        async def run():
+            from src.master.event_dispatcher import _dispatch_one
+            from src.master.db import get_connection
+            app_state = _make_app_state(db_path=db_path)
+            app_state.event_loop = asyncio.get_running_loop()
+
+            conn = get_connection(db_path)
+            row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
+            conn.close()
+
+            event = {
+                "event_type": "topic_message_sent",
+                "topic_id": tp_id, "workspace_id": ws_id,
+                "timing": "before",
+                "variables": {"msgbody": "hi", "topic_name": "t"},
+                "scheduler_slot": None, "scheduler_action_id": None,
+            }
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch):
+                await _dispatch_one(app_state, row, event)
+
+        asyncio.run(run())
+        assert captured["event_action_id"] == action_id
+
+    def test_dispatch_no_event_action_id_when_not_structured(self, tmp_path):
+        # SOUT-05 — when structured_output=False, event_action_id is None
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="reviewer", scope_type="global")
+        action_id = _insert_event_action(
+            db_path, topic_id=tp_id, staff_name="reviewer", timing="before",
+        )
+
+        captured = {}
+
+        async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text,
+                                sender, raw_text=None, event_action_id=None, **kw):
+            captured["event_action_id"] = event_action_id
+            return str(uuid.uuid4())
+
+        async def run():
+            from src.master.event_dispatcher import _dispatch_one
+            from src.master.db import get_connection
+            app_state = _make_app_state(db_path=db_path)
+            app_state.event_loop = asyncio.get_running_loop()
+
+            conn = get_connection(db_path)
+            row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
+            conn.close()
+
+            event = {
+                "event_type": "topic_message_sent",
+                "topic_id": tp_id, "workspace_id": ws_id,
+                "timing": "before",
+                "variables": {"msgbody": "hi", "topic_name": "t"},
+                "scheduler_slot": None, "scheduler_action_id": None,
+            }
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch):
+                await _dispatch_one(app_state, row, event)
+
+        asyncio.run(run())
+        assert captured["event_action_id"] is None
+
+    def test_structured_response_message_posts_to_topic(self, tmp_path):
+        # SOUT-06 — MQTT response {"message": "..."} posts a new message to the topic
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="reviewer", scope_type="global")
+
+        # Create action with structured_output=1
+        action_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, 1, 1, ?, ?)",
+            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+
+        # Insert the prompt message with event_action_id set
+        prompt_msg_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
+            " VALUES (?, ?, 'event', 'hi', ?, ?)",
+            (prompt_msg_id, tp_id, action_id, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        import json
+        app_state = _make_app_state(db_path=db_path)
+        loop = asyncio.new_event_loop()
+        app_state.event_loop = loop
+
+        # Track what post_message_direct receives
+        posted = {}
+
+        async def fake_post_direct(*, app_state, topic_id, text, sender="agent", agent_name=None):
+            posted["text"] = text
+            posted["agent_name"] = agent_name
+            return str(uuid.uuid4())
+
+        payload = json.dumps({
+            "message_id": str(uuid.uuid4()),  # agent generates its own reply UUID
+            "reply_to": prompt_msg_id,        # references the prompt message
+            "last_response": json.dumps({"message": "Structured reply!"}),
+            "agent_name": "reviewer",
+        })
+
+        userdata = {
+            "db_path": db_path,
+            "hub": app_state.hub,
+            "loop": loop,
+            "app_state": app_state,
+            "settings": MagicMock(),
+        }
+
+        # run_coroutine_threadsafe requires the loop to be running in a background thread
+        t = threading.Thread(target=loop.run_forever, daemon=True)
+        t.start()
+
+        with patch("src.master.dispatch.post_message_direct", side_effect=fake_post_direct):
+            from src.master.mqtt_client import _on_message as on_msg
+            msg = MagicMock()
+            msg.topic = f"codex-slack/workspace/{ws_id}/topic/{tp_id}/response"
+            msg.payload = payload.encode()
+            on_msg(None, userdata, msg)
+
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=5.0)
+
+        assert posted.get("text") == "Structured reply!"
+        assert posted.get("agent_name") == "reviewer"
+
+    def test_structured_response_silent_suppresses_message(self, tmp_path):
+        # SOUT-07 — MQTT response {"silent": true} suppresses message, records ok status
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+
+        action_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, 1, 1, ?, ?)",
+            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        prompt_msg_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
+            " VALUES (?, ?, 'event', 'hi', ?, ?)",
+            (prompt_msg_id, tp_id, action_id, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        import json
+        app_state = _make_app_state(db_path=db_path)
+        loop = asyncio.new_event_loop()
+        app_state.event_loop = loop
+
+        payload = json.dumps({
+            "message_id": str(uuid.uuid4()),
+            "reply_to": prompt_msg_id,
+            "last_response": json.dumps({"silent": True, "log": "all quiet"}),
+            "agent_name": "reviewer",
+        })
+
+        userdata = {
+            "db_path": db_path,
+            "hub": app_state.hub,
+            "loop": loop,
+            "app_state": app_state,
+            "settings": MagicMock(),
+        }
+
+        from src.master.mqtt_client import _on_message as on_msg
+        msg = MagicMock()
+        msg.topic = f"codex-slack/workspace/{ws_id}/topic/{tp_id}/response"
+        msg.payload = payload.encode()
+        on_msg(None, userdata, msg)
+        loop.close()
+
+        # Hub broadcast should NOT have been called (message is suppressed)
+        app_state.hub.broadcast.assert_not_called()
+
+        # Action's last_run_status should be recorded as ok
+        conn = sqlite3.connect(db_path)
+        row = conn.execute(
+            "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
+            (action_id,),
+        ).fetchone()
+        conn.close()
+        assert row[0] == "ok"
+        assert "silent" in row[1]
+
+    def test_structured_response_break_is_logged(self, tmp_path):
+        # SOUT-08 — MQTT response {"break": true} logs intent, records ok status
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+
+        action_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_archived', 'topic', ?, 'reviewer', 'hi', NULL, NULL, 1, 1, ?, ?)",
+            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        prompt_msg_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
+            " VALUES (?, ?, 'event', 'hi', ?, ?)",
+            (prompt_msg_id, tp_id, action_id, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        import json
+        app_state = _make_app_state(db_path=db_path)
+        loop = asyncio.new_event_loop()
+
+        payload = json.dumps({
+            "message_id": str(uuid.uuid4()),
+            "reply_to": prompt_msg_id,
+            "last_response": json.dumps({"break": True, "message": "not archiving"}),
+            "agent_name": "reviewer",
+        })
+
+        userdata = {
+            "db_path": db_path,
+            "hub": app_state.hub,
+            "loop": loop,
+            "app_state": app_state,
+            "settings": MagicMock(),
+        }
+
+        from src.master.mqtt_client import _on_message as on_msg
+        msg = MagicMock()
+        msg.topic = f"codex-slack/workspace/{ws_id}/topic/{tp_id}/response"
+        msg.payload = payload.encode()
+        on_msg(None, userdata, msg)
+        loop.close()
+
+        conn = sqlite3.connect(db_path)
+        row = conn.execute(
+            "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
+            (action_id,),
+        ).fetchone()
+        conn.close()
+        assert row[0] == "ok"
+        assert "break" in row[1]
+
+    def test_structured_response_invalid_json_records_ok(self, tmp_path):
+        # SOUT-09 — non-JSON response is handled gracefully, records ok with invalid_json note
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+
+        action_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, 1, 1, ?, ?)",
+            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        prompt_msg_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
+            " VALUES (?, ?, 'event', 'hi', ?, ?)",
+            (prompt_msg_id, tp_id, action_id, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        import json
+        app_state = _make_app_state(db_path=db_path)
+        loop = asyncio.new_event_loop()
+
+        payload = json.dumps({
+            "message_id": str(uuid.uuid4()),
+            "reply_to": prompt_msg_id,
+            "last_response": "not valid json at all",
+            "agent_name": "reviewer",
+        })
+
+        userdata = {
+            "db_path": db_path,
+            "hub": app_state.hub,
+            "loop": loop,
+            "app_state": app_state,
+            "settings": MagicMock(),
+        }
+
+        from src.master.mqtt_client import _on_message as on_msg
+        msg = MagicMock()
+        msg.topic = f"codex-slack/workspace/{ws_id}/topic/{tp_id}/response"
+        msg.payload = payload.encode()
+        on_msg(None, userdata, msg)
+        loop.close()
+
+        conn = sqlite3.connect(db_path)
+        row = conn.execute(
+            "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
+            (action_id,),
+        ).fetchone()
+        conn.close()
+        assert row[0] == "ok"
+        assert "invalid_json" in row[1]
+
+    def test_non_structured_response_follows_normal_flow(self, tmp_path):
+        # SOUT-10 — message without event_action_id goes through normal _save_agent_response path
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+
+        # Message with no event_action_id (normal user message that gets a reply)
+        prompt_msg_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO messages (id, topic_id, sender, text, created_at)"
+            " VALUES (?, ?, 'user', 'hello', ?)",
+            (prompt_msg_id, tp_id, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        import json
+        app_state = _make_app_state(db_path=db_path)
+        loop = asyncio.new_event_loop()
+
+        payload = json.dumps({
+            "message_id": str(uuid.uuid4()),
+            "reply_to": prompt_msg_id,
+            "last_response": "Normal agent reply",
+            "agent_name": "claude",
+        })
+
+        userdata = {
+            "db_path": db_path,
+            "hub": app_state.hub,
+            "loop": loop,
+            "app_state": app_state,
+            "settings": MagicMock(),
+        }
+
+        from src.master.mqtt_client import _on_message as on_msg
+        msg = MagicMock()
+        msg.topic = f"codex-slack/workspace/{ws_id}/topic/{tp_id}/response"
+        msg.payload = payload.encode()
+        on_msg(None, userdata, msg)
+        loop.close()
+
+        # Hub should have been broadcast with the agent message
+        app_state.hub.broadcast_threadsafe.assert_called_once()
+        call_args = app_state.hub.broadcast_threadsafe.call_args[0]
+        assert call_args[1]["type"] == "message"
+        assert call_args[1]["sender"] == "agent"
+
+
+# ---------------------------------------------------------------------------
+# Gate action tests (before + structured_output=1 veto mechanism)
+# ---------------------------------------------------------------------------
+
+
+class TestGateActions:
+    """Tests for the break-gating mechanism (before+structured_output=1 actions)."""
+
+    def test_no_gate_actions_returns_true(self, tmp_path):
+        # GATE-01: No gate actions → run_gate_actions returns True immediately
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+
+        async def run():
+            from src.master.event_dispatcher import run_gate_actions
+            app_state = _make_app_state(db_path=db_path)
+            app_state.event_loop = asyncio.get_running_loop()
+            return await run_gate_actions(
+                app_state=app_state,
+                topic_id=tp_id,
+                workspace_id=ws_id,
+                variables={"msgbody": "hello", "topic_name": "t", "message_json": "{}"},
+            )
+
+        assert asyncio.run(run()) is True
+
+    def test_break_response_returns_false(self, tmp_path):
+        # GATE-02: Gate action resolving with "break" → run_gate_actions returns False
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="gatekeeper", scope_type="global")
+
+        action_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'Check: {msgbody}', 'before', NULL, 1, 1, ?, ?)",
+            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        async def run():
+            from src.master.event_dispatcher import run_gate_actions
+            app_state = _make_app_state(db_path=db_path)
+            loop = asyncio.get_running_loop()
+            app_state.event_loop = loop
+
+            async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text,
+                                    sender, raw_text=None, event_action_id=None, **kw):
+                return str(uuid.uuid4())
+
+            async def resolve_break():
+                for _ in range(200):
+                    if app_state.gate_futures:
+                        for fut in app_state.gate_futures.values():
+                            if not fut.done():
+                                fut.set_result("break")
+                        return
+                    await asyncio.sleep(0.01)
+
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch):
+                result, _ = await asyncio.gather(
+                    run_gate_actions(
+                        app_state=app_state, topic_id=tp_id, workspace_id=ws_id,
+                        variables={"msgbody": "hello", "topic_name": "t", "message_json": "{}"},
+                    ),
+                    resolve_break(),
+                )
+            return result
+
+        assert asyncio.run(run()) is False
+
+    def test_proceed_response_returns_true(self, tmp_path):
+        # GATE-03: Gate action resolving with "proceed" → run_gate_actions returns True
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="gatekeeper", scope_type="global")
+
+        action_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, 1, 1, ?, ?)",
+            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        async def run():
+            from src.master.event_dispatcher import run_gate_actions
+            app_state = _make_app_state(db_path=db_path)
+            loop = asyncio.get_running_loop()
+            app_state.event_loop = loop
+
+            async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text,
+                                    sender, raw_text=None, event_action_id=None, **kw):
+                return str(uuid.uuid4())
+
+            async def resolve_proceed():
+                for _ in range(200):
+                    if app_state.gate_futures:
+                        for fut in app_state.gate_futures.values():
+                            if not fut.done():
+                                fut.set_result("proceed")
+                        return
+                    await asyncio.sleep(0.01)
+
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch):
+                result, _ = await asyncio.gather(
+                    run_gate_actions(
+                        app_state=app_state, topic_id=tp_id, workspace_id=ws_id,
+                        variables={"msgbody": "hello", "topic_name": "t", "message_json": "{}"},
+                    ),
+                    resolve_proceed(),
+                )
+            return result
+
+        assert asyncio.run(run()) is True
+
+    def test_handle_event_excludes_gate_actions(self, tmp_path):
+        # GATE-04: _handle_event skips before+structured_output=1 actions for topic_message_sent
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="gatekeeper", scope_type="global")
+        _insert_staff(db_path, name="observer", scope_type="global")
+
+        gate_id = str(uuid.uuid4())
+        obs_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, 1, 1, ?, ?)",
+            (gate_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'observer', 'hi', 'before', NULL, 1, 0, ?, ?)",
+            (obs_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        dispatched_action_ids = []
+
+        async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text,
+                                sender, raw_text=None, event_action_id=None, **kw):
+            dispatched_action_ids.append(event_action_id)
+            return str(uuid.uuid4())
+
+        async def run():
+            from src.master.event_dispatcher import _handle_event
+            app_state = _make_app_state(db_path=db_path)
+            app_state.event_loop = asyncio.get_running_loop()
+            event = {
+                "event_type": "topic_message_sent",
+                "topic_id": tp_id, "workspace_id": ws_id,
+                "timing": "before",
+                "variables": {"msgbody": "hi", "topic_name": "t"},
+                "scheduler_slot": None, "scheduler_action_id": None,
+            }
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch):
+                await _handle_event(app_state, event)
+
+        asyncio.run(run())
+        # Observer (non-structured) fires; gatekeeper (structured) is excluded
+        assert None in dispatched_action_ids   # observer passes event_action_id=None
+        assert gate_id not in dispatched_action_ids
+
+    def test_resolve_gate_future_sets_result(self, tmp_path):
+        # GATE-05: _resolve_gate_future resolves the correct Future from the MQTT thread
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+
+        async def run():
+            from src.master.mqtt_client import _resolve_gate_future
+            loop = asyncio.get_running_loop()
+            app_state = _make_app_state(db_path=db_path)
+            reply_to = str(uuid.uuid4())
+            fut = loop.create_future()
+            app_state.gate_futures = {reply_to: fut}
+
+            _resolve_gate_future(app_state, loop, reply_to, "break")
+            await asyncio.sleep(0)  # let call_soon_threadsafe fire
+            assert fut.done()
+            assert fut.result() == "break"
+
+        asyncio.run(run())
+
+    def test_messages_endpoint_blocked_when_gate_breaks(self, tmp_path, monkeypatch):
+        # GATE-06: POST /messages returns {"status": "blocked"} when run_gate_actions returns False
+        monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+        monkeypatch.setenv("MASTER_DRY_RUN", "true")
+
+        with patch("src.master.main.build_mqtt_client") as mock_build, \
+             patch("src.master.event_dispatcher.run_gate_actions", new=AsyncMock(return_value=False)), \
+             patch("src.master.dispatch.dispatch_to_staff") as mock_dispatch:
+            mock_build.return_value = MagicMock()
+            with TestClient(app) as c:
+                ws = c.post("/api/workspaces", json={"name": "w", "repo_url": "https://x/y"}).json()
+                tp = c.post(
+                    f"/api/workspaces/{ws['id']}/topics",
+                    json={"subject": "t", "repo_ref": "main"},
+                ).json()
+                # Insert a global default staff
+                c.post("/api/global-staffs", json={
+                    "name": "claude", "adapter": "claude-code", "agent": "default",
+                    "model": "claude-3-opus", "is_default": True,
+                })
+                c.post(f"/api/workspaces/{ws['id']}/staffs", json={
+                    "name": "claude", "is_default": True,
+                })
+
+                r = c.post(
+                    f"/api/workspaces/{ws['id']}/topics/{tp['id']}/messages",
+                    data={"text": "hello world"},
+                )
+
+            assert r.status_code == 202
+            assert r.json()["status"] == "blocked"
+            mock_dispatch.assert_not_called()

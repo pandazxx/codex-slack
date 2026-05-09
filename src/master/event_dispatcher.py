@@ -12,6 +12,7 @@ See ADR-0013 and design doc §4 for the full rationale.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -132,6 +133,12 @@ async def _handle_event(app_state, event: dict) -> None:
     finally:
         conn.close()
 
+    # Gate actions (before + structured_output=1 for topic_message_sent) are handled
+    # synchronously by run_gate_actions() in the message handler before dispatch.
+    # Exclude them here to prevent double-dispatch.
+    if event.get("event_type") == "topic_message_sent" and event.get("timing") == "before":
+        rows = [r for r in rows if not r["structured_output"]]
+
     if not rows:
         return
 
@@ -145,8 +152,10 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
     """Dispatch a single matching action, recording last_run_* on completion."""
     from .dispatch import dispatch_to_staff  # local import avoids circular deps at module load
 
+    db_path: str = app_state.db_path
+
     try:
-        conn = get_connection(app_state.db_path)
+        conn = get_connection(db_path)
         try:
             staff = resolve_staff(
                 conn,
@@ -154,26 +163,43 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
                 event["workspace_id"],
                 event["topic_id"],
             )
+            topic_row = conn.execute(
+                "SELECT t.id, t.subject, t.workspace_id, w.name AS workspace_name"
+                " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
+                " WHERE t.id = ?",
+                (event["topic_id"],),
+            ).fetchone()
         finally:
             conn.close()
 
         if staff is None:
             LOGGER.warning("event_action.staff_missing id=%s staff=%s", row["id"], row["staff_name"])
             _record_run(
-                app_state,
+                db_path,
                 row["id"],
                 status="staff_missing",
                 output=f"staff_name={row['staff_name']!r} not resolvable at fire time",
             )
             return
 
+        # Build variables: merge caller-supplied vars with standard structural vars.
+        variables = dict(event["variables"])
+        if topic_row:
+            variables.setdefault("topic_json", json.dumps({
+                "id": topic_row["id"],
+                "subject": topic_row["subject"],
+                "workspace_id": topic_row["workspace_id"],
+                "workspace_name": topic_row["workspace_name"],
+            }))
+
         try:
-            prompt = render_template(row["prompt_template"], event["variables"])
+            prompt = render_template(row["prompt_template"], variables)
         except Exception as exc:
             LOGGER.exception("event_action.render_failed id=%s", row["id"])
-            _record_run(app_state, row["id"], status="render_error", output=str(exc))
+            _record_run(db_path, row["id"], status="render_error", output=str(exc))
             return
 
+        structured_output = bool(row["structured_output"])
         try:
             message_id = await asyncio.wait_for(
                 dispatch_to_staff(
@@ -184,32 +210,169 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
                     prompt_text=prompt,
                     sender="event",
                     raw_text=prompt,
+                    event_action_id=row["id"] if structured_output else None,
                 ),
                 timeout=DISPATCH_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
             _record_run(
-                app_state,
+                db_path,
                 row["id"],
                 status="dispatch_error",
                 output=f"timeout after {DISPATCH_TIMEOUT_S:.0f}s",
             )
             return
 
-        _record_run(
-            app_state,
-            row["id"],
-            status="ok",
-            output=f"message_id={message_id} prompt={prompt[:120]!r}",
-        )
+        if structured_output:
+            # last_run is written by the MQTT handler when the response arrives.
+            LOGGER.info("event_action.structured_output_dispatched id=%s message_id=%s", row["id"], message_id)
+        else:
+            _record_run(
+                db_path,
+                row["id"],
+                status="ok",
+                output=f"message_id={message_id} prompt={prompt[:120]!r}",
+            )
     except Exception as exc:
         LOGGER.exception("event_action.dispatch_failed id=%s", row["id"])
-        _record_run(app_state, row["id"], status="dispatch_error", output=str(exc))
+        _record_run(db_path, row["id"], status="dispatch_error", output=str(exc))
 
 
-def _record_run(app_state, action_id: str, *, status: str, output: str) -> None:
-    """Write last_run_at / last_run_status / last_run_output for a dispatch attempt."""
+_GATE_RESPONSE_TIMEOUT_S = 60.0  # max wait for an LLM gate response
+
+
+async def run_gate_actions(
+    app_state,
+    *,
+    topic_id: str,
+    workspace_id: str,
+    variables: dict[str, str],
+) -> bool:
+    """Run before+structured_output gate actions synchronously and return whether to proceed.
+
+    Each gate action dispatches a prompt to its staff and waits up to
+    _GATE_RESPONSE_TIMEOUT_S for the structured JSON response via MQTT.
+    Returns False if any gate action responds with {"break": true}; True otherwise.
+    Gate futures are stored on app_state.gate_futures keyed by the prompt message_id
+    and resolved by _resolve_gate_future in mqtt_client when the reply arrives.
+    """
+    from .dispatch import dispatch_to_staff
+
     conn = get_connection(app_state.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM event_actions"
+            " WHERE scope_type='topic' AND scope_id=?"
+            "   AND event_type='topic_message_sent'"
+            "   AND timing='before'"
+            "   AND structured_output=1"
+            "   AND enabled=1",
+            (topic_id,),
+        ).fetchall()
+        topic_row = conn.execute(
+            "SELECT t.id, t.subject, t.workspace_id, w.name AS workspace_name"
+            " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
+            " WHERE t.id = ?",
+            (topic_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not rows:
+        return True
+
+    loop = asyncio.get_running_loop()
+    gate_futures: dict = getattr(app_state, "gate_futures", {})
+
+    async def _run_one(row) -> bool:
+        conn2 = get_connection(app_state.db_path)
+        try:
+            staff = resolve_staff(conn2, row["staff_name"], workspace_id, topic_id)
+        finally:
+            conn2.close()
+
+        if staff is None:
+            LOGGER.warning("gate_action.staff_missing id=%s staff=%s", row["id"], row["staff_name"])
+            _record_run(
+                app_state.db_path, row["id"],
+                status="staff_missing",
+                output=f"staff_name={row['staff_name']!r} not resolvable at fire time",
+            )
+            return True  # missing staff → don't block
+
+        merged = dict(variables)
+        if topic_row:
+            merged.setdefault("topic_json", json.dumps({
+                "id": topic_row["id"],
+                "subject": topic_row["subject"],
+                "workspace_id": topic_row["workspace_id"],
+                "workspace_name": topic_row["workspace_name"],
+            }))
+
+        try:
+            prompt = render_template(row["prompt_template"], merged)
+        except Exception as exc:
+            LOGGER.exception("gate_action.render_failed id=%s", row["id"])
+            _record_run(app_state.db_path, row["id"], status="render_error", output=str(exc))
+            return True
+
+        fut: asyncio.Future = loop.create_future()
+
+        try:
+            message_id = await asyncio.wait_for(
+                dispatch_to_staff(
+                    app_state=app_state,
+                    workspace_id=workspace_id,
+                    topic_id=topic_id,
+                    staff=staff,
+                    prompt_text=prompt,
+                    sender="event",
+                    raw_text=prompt,
+                    event_action_id=row["id"],
+                ),
+                timeout=DISPATCH_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            _record_run(
+                app_state.db_path, row["id"],
+                status="dispatch_error",
+                output=f"dispatch timeout after {DISPATCH_TIMEOUT_S:.0f}s",
+            )
+            return True
+
+        gate_futures[message_id] = fut
+        try:
+            result = await asyncio.wait_for(
+                asyncio.shield(fut), timeout=_GATE_RESPONSE_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            LOGGER.warning(
+                "gate_action.response_timeout id=%s message_id=%s", row["id"], message_id
+            )
+            _record_run(
+                app_state.db_path, row["id"],
+                status="dispatch_error",
+                output=f"gate response timeout after {_GATE_RESPONSE_TIMEOUT_S:.0f}s",
+            )
+            return True  # timeout → don't block
+        finally:
+            gate_futures.pop(message_id, None)
+
+        return result != "break"
+
+    results = await asyncio.gather(*(_run_one(row) for row in rows), return_exceptions=True)
+    for r in results:
+        if isinstance(r, Exception):
+            LOGGER.exception("gate_action.unexpected_error: %r", r)
+            continue
+        if r is False:
+            return False
+    return True
+
+
+def _record_run(db_path: str, action_id: str, *, status: str, output: str) -> None:
+    """Write last_run_at / last_run_status / last_run_output for a dispatch attempt."""
+    conn = get_connection(db_path)
     try:
         conn.execute(
             "UPDATE event_actions"

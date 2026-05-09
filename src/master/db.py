@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS messages (
     transcript       TEXT,
     usage_json       TEXT,
     attachments_json TEXT,
+    event_action_id  TEXT,
     created_at       TEXT NOT NULL
 );
 
@@ -133,10 +134,11 @@ CREATE TABLE IF NOT EXISTS event_actions (
                         'render_error',
                         'dispatch_error'
                     )),
-    last_run_output TEXT,
-    enabled         INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL,
+    last_run_output   TEXT,
+    enabled           INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    structured_output INTEGER NOT NULL DEFAULT 0 CHECK (structured_output IN (0, 1)),
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
 
     CHECK (
         (event_type = 'topic_scheduler'      AND cron_expr IS NOT NULL AND timing IS NULL)
@@ -168,6 +170,8 @@ _MIGRATIONS = [
     "ALTER TABLE workspaces ADD COLUMN last_responded_at TEXT",
     "ALTER TABLE workspaces ADD COLUMN last_agent_state TEXT",
     "ALTER TABLE chunks ADD COLUMN agent_name TEXT",
+    "ALTER TABLE event_actions ADD COLUMN structured_output INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE messages ADD COLUMN event_action_id TEXT",
 ]
 
 

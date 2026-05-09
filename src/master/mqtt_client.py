@@ -133,6 +133,136 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
         LOGGER.exception("mqtt.save_agent_response_error topic_id=%s", topic_id)
 
 
+def _get_structured_output_action(db_path: str, message_id: str) -> sqlite3.Row | None:
+    """Return the event_action row if message_id links to a structured-output action."""
+    if not message_id:
+        return None
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            msg_row = conn.execute(
+                "SELECT event_action_id FROM messages WHERE id = ?", (message_id,)
+            ).fetchone()
+            if msg_row is None or not msg_row["event_action_id"]:
+                return None
+            action_row = conn.execute(
+                "SELECT * FROM event_actions WHERE id = ? AND structured_output = 1",
+                (msg_row["event_action_id"],),
+            ).fetchone()
+            return action_row
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.exception("mqtt.get_structured_output_action_error message_id=%s", message_id)
+        return None
+
+
+def _discard_chunks(db_path: str, message_id: str) -> None:
+    """Delete streaming chunks and broadcast a retract event so the frontend clears the bubble."""
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("DELETE FROM chunks WHERE message_id = ?", (message_id,))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.warning("structured_output.discard_chunks_failed message_id=%s", message_id)
+
+
+def _resolve_gate_future(app_state, loop, reply_to: str, result: str) -> None:
+    """Set the result on a pending gate Future keyed by reply_to, if one exists."""
+    if not reply_to or app_state is None or loop is None:
+        return
+    gate_futures: dict = getattr(app_state, "gate_futures", {})
+    fut = gate_futures.get(reply_to)
+    if fut is not None and not fut.done():
+        loop.call_soon_threadsafe(fut.set_result, result)
+
+
+def _handle_structured_response(
+    db_path: str,
+    action: sqlite3.Row,
+    topic_id: str,
+    payload: dict,  # type: ignore[type-arg]
+    userdata: dict,  # type: ignore[type-arg]
+) -> None:
+    """Parse staff JSON response and act on it for a structured-output action."""
+    from .event_dispatcher import _record_run
+
+    response_text = payload.get("last_response", "")
+    reply_message_id = payload.get("message_id", "")
+    reply_to = payload.get("reply_to", "")
+    hub = userdata.get("hub")
+    loop = userdata.get("loop")
+    app_state = userdata.get("app_state")
+
+    # Discard streaming chunks so the frontend bubble carrying the raw JSON is cleared.
+    if reply_message_id:
+        _discard_chunks(db_path, reply_message_id)
+    if hub is not None and loop is not None and reply_message_id:
+        hub.broadcast_threadsafe(
+            "_global",
+            {"type": "chunk_retract", "topic_id": topic_id, "message_id": reply_message_id},
+            loop,
+        )
+
+    try:
+        response = json.loads(response_text)
+    except (json.JSONDecodeError, ValueError):
+        LOGGER.warning(
+            "structured_output.invalid_json action_id=%s text=%r",
+            action["id"], response_text[:200],
+        )
+        _record_run(db_path, action["id"], status="ok", output=f"invalid_json: {response_text[:200]}")
+        _resolve_gate_future(app_state, loop, reply_to, "proceed")
+        return
+
+    # Resolve gate future before handling the response shape.
+    _resolve_gate_future(app_state, loop, reply_to, "break" if response.get("break") else "proceed")
+
+    if response.get("silent"):
+        log_msg = response.get("log", "")
+        LOGGER.info("structured_output.silent action_id=%s log=%r", action["id"], log_msg)
+        _record_run(db_path, action["id"], status="ok", output=f"silent log={log_msg!r}")
+    elif response.get("break"):
+        msg_text = response.get("message", "")
+        LOGGER.info("structured_output.break action_id=%s message=%r", action["id"], msg_text)
+        _record_run(db_path, action["id"], status="ok", output=f"break message={msg_text!r}")
+    elif "message" in response:
+        msg_text = str(response["message"])
+        app_state = userdata.get("app_state")
+        if app_state and loop:
+            from .dispatch import post_message_direct
+            fut = asyncio.run_coroutine_threadsafe(
+                post_message_direct(
+                    app_state=app_state,
+                    topic_id=topic_id,
+                    text=msg_text,
+                    sender="agent",
+                    agent_name=action["staff_name"],
+                ),
+                loop,
+            )
+            try:
+                new_message_id = fut.result(timeout=5.0)
+                _record_run(
+                    db_path, action["id"],
+                    status="ok",
+                    output=f"posted message_id={new_message_id}",
+                )
+            except Exception as exc:
+                LOGGER.exception("structured_output.post_failed action_id=%s", action["id"])
+                _record_run(db_path, action["id"], status="dispatch_error", output=str(exc))
+        else:
+            LOGGER.warning("structured_output.no_app_state action_id=%s", action["id"])
+            _record_run(db_path, action["id"], status="dispatch_error", output="no app_state/loop")
+    else:
+        LOGGER.warning("structured_output.unrecognised action_id=%s response=%r", action["id"], response)
+        _record_run(db_path, action["id"], status="ok", output=f"unrecognised_shape: {response_text[:200]}")
+
+
 def _get_workspace_id(db_path: str, topic_id: str) -> str | None:
     try:
         conn = sqlite3.connect(db_path)
@@ -215,6 +345,14 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
     elif msg_type == "response":
         message = {"type": "message", "sender": "agent", **payload}
         if db_path:
+            # Check before saving — structured-output responses are handled separately
+            # and suppressed from the normal agent-message flow.
+            # Use reply_to (the prompt's message_id) not message_id (the agent's new UUID).
+            action = _get_structured_output_action(db_path, payload.get("reply_to", ""))
+            if action is not None:
+                _handle_structured_response(db_path, action, topic_id, payload, userdata)
+                return
+
             _save_agent_response(db_path, topic_id, payload)
             _record_agent_response(db_path, topic_id)
             notify.notify_reply(
@@ -231,6 +369,8 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
                 topic_name = _get_topic_name(db_path, topic_id)
                 if workspace_id:
                     from .event_dispatcher import emit_event
+                    last_response = payload.get("last_response", "")
+                    agent_name = payload.get("agent_name")
                     emit_event(
                         app_state=app_state,
                         event_type="topic_message_received",
@@ -238,8 +378,13 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
                         workspace_id=workspace_id,
                         timing="after",
                         variables={
-                            "msgbody": payload.get("last_response", ""),
+                            "msgbody": last_response,
                             "topic_name": topic_name,
+                            "response_json": json.dumps({
+                                "text": last_response,
+                                "agent_name": agent_name,
+                                "sender": "agent",
+                            }),
                         },
                     )
     else:

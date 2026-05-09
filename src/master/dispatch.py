@@ -69,6 +69,7 @@ async def dispatch_to_staff(
     sender: str,
     raw_text: str | None = None,
     attachments: list[dict] | None = None,
+    event_action_id: str | None = None,
 ) -> str:
     """Insert a message row, build the MQTT dispatch payload, broadcast on the hub, and publish.
 
@@ -100,9 +101,9 @@ async def dispatch_to_staff(
         now = _now()
         conn.execute(
             "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, created_at)"
-            " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?)",
-            (message_id, topic_id, sender, raw_text, now),
+            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, event_action_id, created_at)"
+            " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?)",
+            (message_id, topic_id, sender, raw_text, event_action_id, now),
         )
         if sender == "user":
             conn.execute(
@@ -170,4 +171,43 @@ async def dispatch_to_staff(
     mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
     app_state.mqtt.publish(mqtt_topic, payload, qos=1)
 
+    return message_id
+
+
+async def post_message_direct(
+    *,
+    app_state,
+    topic_id: str,
+    text: str,
+    sender: str = "agent",
+    agent_name: str | None = None,
+) -> str:
+    """Insert a message row and broadcast it on the hub without MQTT dispatch.
+
+    Used by the structured-output handler to post a staff-authored reply to the
+    topic after parsing the JSON response, without triggering another LLM call.
+    """
+    conn = get_connection(app_state.db_path)
+    try:
+        message_id = str(uuid.uuid4())
+        now = _now()
+        conn.execute(
+            "INSERT INTO messages"
+            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, event_action_id, created_at)"
+            " VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)",
+            (message_id, topic_id, sender, agent_name, text, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    await app_state.hub.broadcast("_global", {
+        "type": "message",
+        "topic_id": topic_id,
+        "message_id": message_id,
+        "sender": sender,
+        "text": text,
+        "transcript": None,
+        "attachments": [],
+    })
     return message_id
