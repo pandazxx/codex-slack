@@ -158,6 +158,19 @@ def _get_structured_output_action(db_path: str, message_id: str) -> sqlite3.Row 
         return None
 
 
+def _discard_chunks(db_path: str, message_id: str) -> None:
+    """Delete streaming chunks and broadcast a retract event so the frontend clears the bubble."""
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("DELETE FROM chunks WHERE message_id = ?", (message_id,))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.warning("structured_output.discard_chunks_failed message_id=%s", message_id)
+
+
 def _handle_structured_response(
     db_path: str,
     action: sqlite3.Row,
@@ -169,8 +182,19 @@ def _handle_structured_response(
     from .event_dispatcher import _record_run
 
     response_text = payload.get("last_response", "")
+    reply_message_id = payload.get("message_id", "")
     hub = userdata.get("hub")
     loop = userdata.get("loop")
+
+    # Discard streaming chunks so the frontend bubble carrying the raw JSON is cleared.
+    if reply_message_id:
+        _discard_chunks(db_path, reply_message_id)
+    if hub is not None and loop is not None and reply_message_id:
+        hub.broadcast_threadsafe(
+            "_global",
+            {"type": "chunk_retract", "topic_id": topic_id, "message_id": reply_message_id},
+            loop,
+        )
 
     try:
         response = json.loads(response_text)

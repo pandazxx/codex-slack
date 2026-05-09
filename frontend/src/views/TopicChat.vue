@@ -495,6 +495,9 @@ function connectWs() {
       })
     } else if (data.type === 'message') {
       finaliseMessage(data)
+    } else if (data.type === 'chunk_retract') {
+      delete liveStreams.value[data.message_id]
+      seenSeq.delete(data.message_id)
     }
   }
 
