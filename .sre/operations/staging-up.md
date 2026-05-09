@@ -1,8 +1,8 @@
 # Operation: Spin up staging env
 
 ## Inputs
-- `<branch>` — git branch name
-- `<image-ref>` — full image reference without digest, e.g. `ghcr.io/pandazxx/codex-slack-master:v1.2.3`
+- `<branch>` — git branch name (used internally for logging; does not appear in the URL)
+- `<image-ref>` — full image reference without digest, e.g. `ghcr.io/pandazxx/codex-slack-master:v4.7-rc2`
 - `<image-digest>` — sha256 digest from the CI build, e.g. `sha256:abc123...`
 
 ## Required env vars
@@ -14,9 +14,12 @@
 - Image digest is available from the CI build-push workflow output.
 
 ## Steps
-1. Compute `BRANCH_SLUG=$(echo <branch> | tr '/_' '-' | tr '[:upper:]' '[:lower:]')`
+1. Compute `VERSION_SLUG` from the image tag: strip everything up to and including `:` from `<image-ref>`, then `tr './_' '-' | tr '[:upper:]' '[:lower:]'`.
+   Example: `ghcr.io/pandazxx/codex-slack-master:v4.7-rc2` → `v4-7-rc2`
 2. Run `.sre/staging-up.sh <branch> <image-ref> <image-digest>`
-   - Pulls image by digest, brings up services, waits for healthcheck, prints URL.
+   - Derives `VERSION_SLUG` internally (same formula as step 1).
+   - Pulls image by digest, brings up services under compose project `VERSION_SLUG`, waits for healthcheck, prints URL.
+   - URL pattern: `http://master.<version-slug>.<host-ip-dashed>.nip.io`
 
 ## On failure
 - Non-zero exit: stop and escalate. Do not tear down — preserve state for investigation.

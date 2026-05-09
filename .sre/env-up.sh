@@ -35,14 +35,14 @@ export MASTER_SSH_AUTH_SOCK_PATH
 
 echo "==> env-up: branch=${BRANCH} slug=${BRANCH_SLUG} host=${DEV_DOCKER_HOST}"
 echo "==> Building image (target: dev)..."
-docker-compose \
+docker compose \
   -p "${BRANCH_SLUG}" \
   -f "${PROJECT_ROOT}/docker-compose.yml" \
   -f "${PROJECT_ROOT}/docker-compose.override.yml" \
   build master
 
 echo "==> Bringing up services..."
-docker-compose \
+docker compose \
   -p "${BRANCH_SLUG}" \
   -f "${PROJECT_ROOT}/docker-compose.yml" \
   -f "${PROJECT_ROOT}/docker-compose.override.yml" \
@@ -50,7 +50,7 @@ docker-compose \
 
 echo "==> Waiting for master healthcheck..."
 RETRIES=18
-until docker-compose \
+until docker compose \
   -p "${BRANCH_SLUG}" \
   -f "${PROJECT_ROOT}/docker-compose.yml" \
   -f "${PROJECT_ROOT}/docker-compose.override.yml" \
