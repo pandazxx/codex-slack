@@ -6,6 +6,9 @@ set -euo pipefail
 
 : "${DEV_DOCKER_HOST:?DEV_DOCKER_HOST must be set}"
 : "${DOCKER_GID:?DOCKER_GID must be set (docker socket group GID on DEV_DOCKER_HOST)}"
+# SSH agent socket on the *remote* host to forward into master container.
+# Default covers the standard systemd user socket for uid 1000.
+MASTER_SSH_AUTH_SOCK_PATH="${MASTER_SSH_AUTH_SOCK_PATH:-/run/user/1000/ssh-agent.sock}"
 
 BRANCH="${1:?Usage: env-up.sh <branch>}"
 BRANCH_SLUG="$(echo "$BRANCH" | tr '/_' '-' | tr '[:upper:]' '[:lower:]')"
@@ -21,6 +24,7 @@ export DOCKER_HOST="$DEV_DOCKER_HOST"
 export BRANCH_SLUG
 export HOST_IP_DASHED
 export DOCKER_GID
+export MASTER_SSH_AUTH_SOCK_PATH
 
 echo "==> env-up: branch=${BRANCH} slug=${BRANCH_SLUG} host=${DEV_DOCKER_HOST}"
 echo "==> Building image (target: dev)..."
