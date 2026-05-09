@@ -5,6 +5,7 @@
 set -euo pipefail
 
 : "${DEV_DOCKER_HOST:?DEV_DOCKER_HOST must be set}"
+: "${DOCKER_GID:?DOCKER_GID must be set (docker socket group GID on DEV_DOCKER_HOST)}"
 
 BRANCH="${1:?Usage: env-up.sh <branch>}"
 BRANCH_SLUG="$(echo "$BRANCH" | tr '/_' '-' | tr '[:upper:]' '[:lower:]')"
@@ -19,6 +20,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export DOCKER_HOST="$DEV_DOCKER_HOST"
 export BRANCH_SLUG
 export HOST_IP_DASHED
+export DOCKER_GID
 
 echo "==> env-up: branch=${BRANCH} slug=${BRANCH_SLUG} host=${DEV_DOCKER_HOST}"
 echo "==> Building image (target: dev)..."
