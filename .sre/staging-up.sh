@@ -25,6 +25,14 @@ export BRANCH_SLUG
 export HOST_IP_DASHED
 export MASTER_RUNTIME_IMAGE="$IMAGE_REF"
 export IMAGE_DIGEST="$IMAGE_DIGEST"
+export MASTER_AGENT_NETWORK="${BRANCH_SLUG}_internal"
+
+# Auto-detect docker socket GID from the remote host unless overridden.
+if [ -z "${DOCKER_GID:-}" ]; then
+  DOCKER_GID="$(docker run --rm -v /var/run/docker.sock:/sock alpine stat -c '%g' /sock 2>/dev/null)"
+  echo "==> DOCKER_GID=${DOCKER_GID} (detected from ${HOST_ADDR})"
+fi
+export DOCKER_GID
 
 echo "==> staging-up: branch=${BRANCH} slug=${BRANCH_SLUG} image=${IMAGE_REF}@${IMAGE_DIGEST}"
 
