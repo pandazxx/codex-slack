@@ -85,7 +85,7 @@ async def dispatch_to_staff(
     conn = get_connection(app_state.db_path)
     try:
         topic = conn.execute(
-            "SELECT worktree_path, branch_name, repo_ref FROM topics WHERE id = ?",
+            "SELECT worktree_path, branch_name, repo_ref, base_sha FROM topics WHERE id = ?",
             (topic_id,),
         ).fetchone()
         if topic is None:
@@ -121,6 +121,7 @@ async def dispatch_to_staff(
         "worktree": topic["worktree_path"],
         "branch": topic["branch_name"],
         "repo_ref": topic["repo_ref"] or "",
+        "base_sha": topic["base_sha"] or "",
         "session_id": session_uuid,
         "is_new_session": is_new_session,
         "session_scope": staff["session_scope"] or "topic",
