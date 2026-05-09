@@ -31,6 +31,23 @@ The master service (`src/master/`) reads these environment variables on startup.
 | `MASTER_NOTIFY_TELEGRAM_CHAT_ID` | No | unset | Telegram chat or channel ID (numeric or `@channelusername`). Required together with `MASTER_NOTIFY_TELEGRAM_BOT_TOKEN`. |
 | `MASTER_NOTIFY_PREVIEW_CHARS` | No | `200` | Max characters of the agent reply included as a preview in notifications. Set to `0` to omit the preview entirely. |
 
+### System variables (sensitive and shared config)
+
+System variables are stored in the `config` table with `scope_type='global'` and are exposed via `GET /api/config/system-variables`. They are set through the web UI System Settings panel and forwarded as environment variables into agent containers. Sensitive variables are masked in the UI.
+
+| Key | Sensitive | Purpose |
+|-----|-----------|---------|
+| `GH_TOKEN` | Yes | GitHub token for repo access inside agent containers |
+| `ANTHROPIC_API_KEY` | Yes | Anthropic API key for Claude authentication |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Yes | Claude Code OAuth token for Claude authentication |
+| `OPENAI_API_KEY` | Yes | OpenAI API key forwarded to agent containers |
+| `CODEX_AUTH_JSON` | Yes | JSON content written to `~/.codex/auth.json` (mode 600) by the agent worker on startup. Use this to configure Codex authentication without mounting a host file. |
+| `MASTER_PUBLIC_URL` | No | Externally reachable base URL; used to build deep links in notifications |
+| `NOTIFY_DISCORD_WEBHOOK_URL` | Yes | Discord incoming-webhook URL for agent-reply notifications |
+| `NOTIFY_TELEGRAM_BOT_TOKEN` | Yes | Telegram bot token |
+| `NOTIFY_TELEGRAM_CHAT_ID` | No | Telegram chat or channel ID |
+| `NOTIFY_PREVIEW_CHARS` | No | Max characters of the agent reply included in notification previews |
+
 ### System settings (runtime config table)
 
 System settings are stored in the `config` table with `scope_type='global'` and are managed via `GET/PATCH /api/config/system-settings`. They are not environment variables.
@@ -86,15 +103,16 @@ Each agent container (`src/agent/`) reads these environment variables.
 | `CLAUDE_CODE_OAUTH_TOKEN` | No | unset | Passed through from master for Claude authentication |
 | `ANTHROPIC_API_KEY` | No | unset | Passed through from master for Claude authentication |
 
-### Volume — Claude session persistence
+### Volumes — persistent agent state
 
-Each agent container mounts a named Docker/Podman volume for Claude session state:
+Each agent container mounts two named Docker/Podman volumes:
 
-- Volume name: `codex-claude-{workspace_id}`
-- Mount point inside container: `/home/appuser/.claude`
-- Created automatically on first `docker run` / `podman run`
+| Volume name | Mount point | Purpose |
+|-------------|-------------|---------|
+| `codex-claude-{workspace_id}` | `/home/appuser/.claude` | Claude session state; ensures `claude` session IDs persist across container restarts |
+| `codex-codex-{workspace_id}` | `/home/appuser/.codex` | Codex config and auth; `CODEX_AUTH_JSON` is written here as `auth.json` on startup |
 
-This volume ensures `claude` session IDs persist across container restarts.
+Both volumes are created automatically on first `docker run` / `podman run`.
 
 ### LLM CLI invocations
 
@@ -110,9 +128,9 @@ Session expiry: if `--resume` fails with `No conversation found with session ID`
 
 **codex adapter:**
 ```
-codex --full-auto -q <prompt>
+codex exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access --ephemeral -o <tempfile> [-m <model>] <prompt>
 ```
-Codex sessions are not explicitly resumed via flag; the `CODEX_HOME` directory preserves state.
+The final agent response is read from `<tempfile>` after the process exits. Codex sessions are not explicitly resumed via flag; the `CODEX_HOME` directory preserves state.
 
 ## CD Daemon
 

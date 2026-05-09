@@ -57,12 +57,13 @@ Mosquitto container  [NEW]
 Agent container  (one per workspace)
   - Container name: codex-agent-{workspace_id}
   - Named volume: codex-claude-{workspace_id} → /home/appuser/.claude
+  - Named volume: codex-codex-{workspace_id} → /home/appuser/.codex
   - MQTT client
       - subscribes to prompt messages for its workspace
       - publishes response and status messages
   - LLM session manager
       - claude-code adapter: claude --print --verbose --output-format stream-json --dangerously-skip-permissions [--resume <id>]
-      - codex adapter: codex --full-auto -q <prompt>
+      - codex adapter: codex exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access --ephemeral -o <tempfile> [-m <model>] <prompt>
   - Mounts workspace volume (worktrees per topic)
 ```
 
@@ -224,9 +225,9 @@ without any additional configuration.
 
 | adapter | subagent column | CLI invocation |
 |---|---|---|
-| `claude-code` | null | `claude -p --resume <id>` |
-| `claude-code` | `"engineer"` | `claude -p --agent engineer --resume <id>` |
-| `codex` | null | Codex invocation without subagent flag |
+| `claude-code` | null | `claude --print --verbose --output-format stream-json --dangerously-skip-permissions [--resume <id>]` |
+| `claude-code` | `"engineer"` | `claude --print --verbose --output-format stream-json --dangerously-skip-permissions --agent engineer [--resume <id>]` |
+| `codex` | null | `codex exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access --ephemeral -o <tempfile> [-m <model>] <prompt>` |
 
 *Agent discovery:* Additional staff agents beyond the two defaults can be
 registered in two ways:
@@ -241,7 +242,7 @@ registered in two ways:
 
 *Claude Code:* First turn in a topic runs `claude --print --verbose --output-format stream-json --dangerously-skip-permissions <prompt>` without `--resume`. The `result` event in the stream-json output carries `session_id`, which master writes to the `sessions` table. Subsequent turns pass `--resume <session_id>`. If the session has expired (`No conversation found with session ID` in the output), the agent automatically retries without `--resume` and stores the new session ID. The `--verbose` flag is required — without it, `stream-json` format does not emit the `result` event.
 
-*Codex:* Runs `codex --full-auto -q <prompt>`. Session state is managed internally by the Codex CLI via the `CODEX_HOME` directory. The `sessions` table records `llm_session_id = NULL` for Codex entries (Codex does not expose a resumable session ID via its CLI flags).
+*Codex:* Runs `codex exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access --ephemeral -o <tempfile> [-m <model>] <prompt>`. The `--ephemeral` flag runs each turn without a persistent Codex project context. The `CODEX_HOME` directory (mounted as `codex-codex-{workspace_id}`) preserves config and auth across restarts. The `sessions` table records `llm_session_id = NULL` for Codex entries (Codex does not expose a resumable session ID via its CLI flags).
 
 ### Topic Lifecycle
 
