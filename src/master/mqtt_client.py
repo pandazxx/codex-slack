@@ -171,6 +171,16 @@ def _discard_chunks(db_path: str, message_id: str) -> None:
         LOGGER.warning("structured_output.discard_chunks_failed message_id=%s", message_id)
 
 
+def _resolve_gate_future(app_state, loop, reply_to: str, result: str) -> None:
+    """Set the result on a pending gate Future keyed by reply_to, if one exists."""
+    if not reply_to or app_state is None or loop is None:
+        return
+    gate_futures: dict = getattr(app_state, "gate_futures", {})
+    fut = gate_futures.get(reply_to)
+    if fut is not None and not fut.done():
+        loop.call_soon_threadsafe(fut.set_result, result)
+
+
 def _handle_structured_response(
     db_path: str,
     action: sqlite3.Row,
@@ -183,8 +193,10 @@ def _handle_structured_response(
 
     response_text = payload.get("last_response", "")
     reply_message_id = payload.get("message_id", "")
+    reply_to = payload.get("reply_to", "")
     hub = userdata.get("hub")
     loop = userdata.get("loop")
+    app_state = userdata.get("app_state")
 
     # Discard streaming chunks so the frontend bubble carrying the raw JSON is cleared.
     if reply_message_id:
@@ -204,7 +216,11 @@ def _handle_structured_response(
             action["id"], response_text[:200],
         )
         _record_run(db_path, action["id"], status="ok", output=f"invalid_json: {response_text[:200]}")
+        _resolve_gate_future(app_state, loop, reply_to, "proceed")
         return
+
+    # Resolve gate future before handling the response shape.
+    _resolve_gate_future(app_state, loop, reply_to, "break" if response.get("break") else "proceed")
 
     if response.get("silent"):
         log_msg = response.get("log", "")

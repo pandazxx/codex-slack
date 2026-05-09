@@ -124,7 +124,8 @@ async def send_message(
         })
 
     # Emit topic_message_sent (before) — returns immediately, handled by the event worker.
-    from .event_dispatcher import emit_event
+    # Gate actions (before+structured_output=1) are excluded from the worker and run below.
+    from .event_dispatcher import emit_event, run_gate_actions
     topic_name = _topic_subject(request.app.state.db_path, topic_id)
     _msg_json = json.dumps({"text": prompt_text, "sender": "user"})
     emit_event(
@@ -135,6 +136,15 @@ async def send_message(
         timing="before",
         variables={"msgbody": prompt_text, "topic_name": topic_name, "message_json": _msg_json},
     )
+
+    gate_passed = await run_gate_actions(
+        app_state=request.app.state,
+        topic_id=topic_id,
+        workspace_id=workspace_id,
+        variables={"msgbody": prompt_text, "topic_name": topic_name, "message_json": _msg_json},
+    )
+    if not gate_passed:
+        return {"message_id": "", "status": "blocked", "attachments": [], "dispatch": None}
 
     message_id = await dispatch_to_staff(
         app_state=request.app.state,

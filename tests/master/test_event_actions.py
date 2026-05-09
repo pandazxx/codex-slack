@@ -222,6 +222,7 @@ def _make_app_state(*, db_path: str) -> MagicMock:
     state.mqtt = MagicMock()
     state.settings = MagicMock()
     state.settings.dry_run = True
+    state.gate_futures = {}
     return state
 
 
@@ -3244,3 +3245,239 @@ class TestStructuredOutput:
         call_args = app_state.hub.broadcast_threadsafe.call_args[0]
         assert call_args[1]["type"] == "message"
         assert call_args[1]["sender"] == "agent"
+
+
+# ---------------------------------------------------------------------------
+# Gate action tests (before + structured_output=1 veto mechanism)
+# ---------------------------------------------------------------------------
+
+
+class TestGateActions:
+    """Tests for the break-gating mechanism (before+structured_output=1 actions)."""
+
+    def test_no_gate_actions_returns_true(self, tmp_path):
+        # GATE-01: No gate actions → run_gate_actions returns True immediately
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+
+        async def run():
+            from src.master.event_dispatcher import run_gate_actions
+            app_state = _make_app_state(db_path=db_path)
+            app_state.event_loop = asyncio.get_running_loop()
+            return await run_gate_actions(
+                app_state=app_state,
+                topic_id=tp_id,
+                workspace_id=ws_id,
+                variables={"msgbody": "hello", "topic_name": "t", "message_json": "{}"},
+            )
+
+        assert asyncio.run(run()) is True
+
+    def test_break_response_returns_false(self, tmp_path):
+        # GATE-02: Gate action resolving with "break" → run_gate_actions returns False
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="gatekeeper", scope_type="global")
+
+        action_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'Check: {msgbody}', 'before', NULL, 1, 1, ?, ?)",
+            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        async def run():
+            from src.master.event_dispatcher import run_gate_actions
+            app_state = _make_app_state(db_path=db_path)
+            loop = asyncio.get_running_loop()
+            app_state.event_loop = loop
+
+            async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text,
+                                    sender, raw_text=None, event_action_id=None, **kw):
+                return str(uuid.uuid4())
+
+            async def resolve_break():
+                for _ in range(200):
+                    if app_state.gate_futures:
+                        for fut in app_state.gate_futures.values():
+                            if not fut.done():
+                                fut.set_result("break")
+                        return
+                    await asyncio.sleep(0.01)
+
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch):
+                result, _ = await asyncio.gather(
+                    run_gate_actions(
+                        app_state=app_state, topic_id=tp_id, workspace_id=ws_id,
+                        variables={"msgbody": "hello", "topic_name": "t", "message_json": "{}"},
+                    ),
+                    resolve_break(),
+                )
+            return result
+
+        assert asyncio.run(run()) is False
+
+    def test_proceed_response_returns_true(self, tmp_path):
+        # GATE-03: Gate action resolving with "proceed" → run_gate_actions returns True
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="gatekeeper", scope_type="global")
+
+        action_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, 1, 1, ?, ?)",
+            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        async def run():
+            from src.master.event_dispatcher import run_gate_actions
+            app_state = _make_app_state(db_path=db_path)
+            loop = asyncio.get_running_loop()
+            app_state.event_loop = loop
+
+            async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text,
+                                    sender, raw_text=None, event_action_id=None, **kw):
+                return str(uuid.uuid4())
+
+            async def resolve_proceed():
+                for _ in range(200):
+                    if app_state.gate_futures:
+                        for fut in app_state.gate_futures.values():
+                            if not fut.done():
+                                fut.set_result("proceed")
+                        return
+                    await asyncio.sleep(0.01)
+
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch):
+                result, _ = await asyncio.gather(
+                    run_gate_actions(
+                        app_state=app_state, topic_id=tp_id, workspace_id=ws_id,
+                        variables={"msgbody": "hello", "topic_name": "t", "message_json": "{}"},
+                    ),
+                    resolve_proceed(),
+                )
+            return result
+
+        assert asyncio.run(run()) is True
+
+    def test_handle_event_excludes_gate_actions(self, tmp_path):
+        # GATE-04: _handle_event skips before+structured_output=1 actions for topic_message_sent
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="gatekeeper", scope_type="global")
+        _insert_staff(db_path, name="observer", scope_type="global")
+
+        gate_id = str(uuid.uuid4())
+        obs_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, 1, 1, ?, ?)",
+            (gate_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'observer', 'hi', 'before', NULL, 1, 0, ?, ?)",
+            (obs_id, tp_id, _NOW_UTC, _NOW_UTC),
+        )
+        conn.commit()
+        conn.close()
+
+        dispatched_action_ids = []
+
+        async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text,
+                                sender, raw_text=None, event_action_id=None, **kw):
+            dispatched_action_ids.append(event_action_id)
+            return str(uuid.uuid4())
+
+        async def run():
+            from src.master.event_dispatcher import _handle_event
+            app_state = _make_app_state(db_path=db_path)
+            app_state.event_loop = asyncio.get_running_loop()
+            event = {
+                "event_type": "topic_message_sent",
+                "topic_id": tp_id, "workspace_id": ws_id,
+                "timing": "before",
+                "variables": {"msgbody": "hi", "topic_name": "t"},
+                "scheduler_slot": None, "scheduler_action_id": None,
+            }
+            with patch("src.master.dispatch.dispatch_to_staff", side_effect=fake_dispatch):
+                await _handle_event(app_state, event)
+
+        asyncio.run(run())
+        # Observer (non-structured) fires; gatekeeper (structured) is excluded
+        assert None in dispatched_action_ids   # observer passes event_action_id=None
+        assert gate_id not in dispatched_action_ids
+
+    def test_resolve_gate_future_sets_result(self, tmp_path):
+        # GATE-05: _resolve_gate_future resolves the correct Future from the MQTT thread
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+
+        async def run():
+            from src.master.mqtt_client import _resolve_gate_future
+            loop = asyncio.get_running_loop()
+            app_state = _make_app_state(db_path=db_path)
+            reply_to = str(uuid.uuid4())
+            fut = loop.create_future()
+            app_state.gate_futures = {reply_to: fut}
+
+            _resolve_gate_future(app_state, loop, reply_to, "break")
+            await asyncio.sleep(0)  # let call_soon_threadsafe fire
+            assert fut.done()
+            assert fut.result() == "break"
+
+        asyncio.run(run())
+
+    def test_messages_endpoint_blocked_when_gate_breaks(self, tmp_path, monkeypatch):
+        # GATE-06: POST /messages returns {"status": "blocked"} when run_gate_actions returns False
+        monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+        monkeypatch.setenv("MASTER_DRY_RUN", "true")
+
+        with patch("src.master.main.build_mqtt_client") as mock_build, \
+             patch("src.master.event_dispatcher.run_gate_actions", new=AsyncMock(return_value=False)), \
+             patch("src.master.dispatch.dispatch_to_staff") as mock_dispatch:
+            mock_build.return_value = MagicMock()
+            with TestClient(app) as c:
+                ws = c.post("/api/workspaces", json={"name": "w", "repo_url": "https://x/y"}).json()
+                tp = c.post(
+                    f"/api/workspaces/{ws['id']}/topics",
+                    json={"subject": "t", "repo_ref": "main"},
+                ).json()
+                # Insert a global default staff
+                c.post("/api/global-staffs", json={
+                    "name": "claude", "adapter": "claude-code", "agent": "default",
+                    "model": "claude-3-opus", "is_default": True,
+                })
+                c.post(f"/api/workspaces/{ws['id']}/staffs", json={
+                    "name": "claude", "is_default": True,
+                })
+
+                r = c.post(
+                    f"/api/workspaces/{ws['id']}/topics/{tp['id']}/messages",
+                    data={"text": "hello world"},
+                )
+
+            assert r.status_code == 202
+            assert r.json()["status"] == "blocked"
+            mock_dispatch.assert_not_called()
