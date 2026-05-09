@@ -2983,7 +2983,8 @@ class TestStructuredOutput:
             return str(uuid.uuid4())
 
         payload = json.dumps({
-            "message_id": prompt_msg_id,
+            "message_id": str(uuid.uuid4()),  # agent generates its own reply UUID
+            "reply_to": prompt_msg_id,        # references the prompt message
             "last_response": json.dumps({"message": "Structured reply!"}),
             "agent_name": "reviewer",
         })
@@ -3043,7 +3044,8 @@ class TestStructuredOutput:
         app_state.event_loop = loop
 
         payload = json.dumps({
-            "message_id": prompt_msg_id,
+            "message_id": str(uuid.uuid4()),
+            "reply_to": prompt_msg_id,
             "last_response": json.dumps({"silent": True, "log": "all quiet"}),
             "agent_name": "reviewer",
         })
@@ -3105,7 +3107,8 @@ class TestStructuredOutput:
         loop = asyncio.new_event_loop()
 
         payload = json.dumps({
-            "message_id": prompt_msg_id,
+            "message_id": str(uuid.uuid4()),
+            "reply_to": prompt_msg_id,
             "last_response": json.dumps({"break": True, "message": "not archiving"}),
             "agent_name": "reviewer",
         })
@@ -3163,7 +3166,8 @@ class TestStructuredOutput:
         loop = asyncio.new_event_loop()
 
         payload = json.dumps({
-            "message_id": prompt_msg_id,
+            "message_id": str(uuid.uuid4()),
+            "reply_to": prompt_msg_id,
             "last_response": "not valid json at all",
             "agent_name": "reviewer",
         })
@@ -3214,7 +3218,8 @@ class TestStructuredOutput:
         loop = asyncio.new_event_loop()
 
         payload = json.dumps({
-            "message_id": prompt_msg_id,
+            "message_id": str(uuid.uuid4()),
+            "reply_to": prompt_msg_id,
             "last_response": "Normal agent reply",
             "agent_name": "claude",
         })

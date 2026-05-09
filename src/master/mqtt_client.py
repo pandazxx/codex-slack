@@ -307,7 +307,8 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
         if db_path:
             # Check before saving — structured-output responses are handled separately
             # and suppressed from the normal agent-message flow.
-            action = _get_structured_output_action(db_path, payload.get("message_id", ""))
+            # Use reply_to (the prompt's message_id) not message_id (the agent's new UUID).
+            action = _get_structured_output_action(db_path, payload.get("reply_to", ""))
             if action is not None:
                 _handle_structured_response(db_path, action, topic_id, payload, userdata)
                 return
