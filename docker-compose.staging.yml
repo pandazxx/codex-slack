@@ -1,0 +1,30 @@
+# Staging override — pulls versioned image by digest; no build section.
+# Set IMAGE_DIGEST to the full digest string from the CI build.
+# Example: IMAGE_DIGEST=sha256:abc123...
+services:
+  master:
+    image: ${MASTER_RUNTIME_IMAGE:?MASTER_RUNTIME_IMAGE must be set}@${IMAGE_DIGEST:?IMAGE_DIGEST must be set}
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${BRANCH_SLUG:-main}-master.rule=Host(`master.${BRANCH_SLUG:-main}.${HOST_IP_DASHED:-127-0-0-1}.nip.io`)"
+      - "traefik.http.routers.${BRANCH_SLUG:-main}-master.entrypoints=web"
+      - "traefik.http.services.${BRANCH_SLUG:-main}-master.loadbalancer.server.port=8080"
+    networks:
+      - internal
+      - sre-traefik-public
+
+  mosquitto:
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
+
+networks:
+  sre-traefik-public:
+    external: true

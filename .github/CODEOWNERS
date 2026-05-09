@@ -1,0 +1,11 @@
+# SRE-domain files require SRE review.
+# Engineers own everything else — no CODEOWNERS entry needed.
+.sre/                         @pandazxx
+.github/workflows/            @pandazxx
+.github/rulesets/             @pandazxx
+docker-compose.override.yml   @pandazxx
+docker-compose.ci.yml         @pandazxx
+docker-compose.staging.yml    @pandazxx
+docs/sre.md                   @pandazxx
+docs/deploy-prod.md           @pandazxx
+docs/repo-harness.md          @pandazxx

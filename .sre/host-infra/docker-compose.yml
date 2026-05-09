@@ -1,0 +1,24 @@
+# Shared host infrastructure — one instance per Docker host.
+# Project name: sre-host-infra
+# Managed by senior-sre only. Operators must not modify or restart this stack.
+#
+# NOTE: Before first bootstrap, verify the Traefik digest:
+#   DOCKER_HOST=<host> docker pull traefik:v3.3.4
+#   DOCKER_HOST=<host> docker inspect traefik:v3.3.4 --format '{{index .RepoDigests 0}}'
+# Then replace the image line below with the verified digest reference.
+services:
+  traefik:
+    image: traefik:v3.3.4
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+    networks:
+      - sre-traefik-public
+
+networks:
+  sre-traefik-public:
+    external: true

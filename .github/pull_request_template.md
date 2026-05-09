@@ -1,27 +1,29 @@
 ## Summary
 
-<!-- Describe what changed and why in 1-3 sentences. -->
+<!-- 1-3 bullet points describing what changed and why -->
+
+## Type of change
+
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Refactor / internal improvement
+- [ ] Documentation
+- [ ] SRE / infra change
+
+## Test plan
+
+<!-- How was this tested? Link to test plan doc if applicable -->
+
+- [ ] Unit tests pass (`sre` run-tests)
+- [ ] Stack tests pass (dev env)
+- [ ] Staging UAT complete (if required)
 
 ## Checklist
 
-<!-- Mark completed items with [x]. -->
+- [ ] Branch is up to date with master
+- [ ] No secrets committed
+- [ ] SRE-domain files changed? If yes, `senior-sre` reviewed.
 
-- [ ] Tests pass locally (`.sre/test.sh` or `pytest`)
-- [ ] No new `latest` tags in Dockerfile or docker-compose files
-- [ ] If database schema changed: migrations are present and reversible
-- [ ] Commit messages are clear and link issues where applicable
-- [ ] No hardcoded secrets or credentials
+## Related issues
 
-## Related Issues
-
-<!-- Link any GitHub issues resolved by this PR: Fixes #123 -->
-
-## Notes for Reviewer
-
-<!-- Anything the reviewer should know: design tradeoffs, known limitations, areas of concern. -->
-
----
-
-For more context on merge rules and SRE concerns, see:
-- [Repository Harness](../../docs/guides/repo-harness.md) — branch protection, CI requirements.
-- [SRE Workflow](../../docs/guides/sre.md) — container operations, test execution.
+<!-- Closes #NNN -->

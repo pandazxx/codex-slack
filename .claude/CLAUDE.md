@@ -13,14 +13,17 @@ Two agents share infrastructure responsibilities. Never run `docker`, `docker co
 
 Full details in `docs/sre.md`. Summary:
 
-| Variable | Required for | Example |
-|---|---|---|
-| `DEV_DOCKER_HOST` | Dev env operations | `ssh://ubuntu@dev.tail-scale.ts.net` |
-| `STAGING_DOCKER_HOST` | Staging deploys, UAT | `ssh://ubuntu@staging.tail-scale.ts.net` |
-| `REGISTRY` | Building/pushing images | `ghcr.io/myorg` |
-| `REGISTRY_TOKEN` | Pushing images | (from secret manager) |
+| Variable | Required for | Example | Status |
+|---|---|---|---|
+| `DEV_DOCKER_HOST` | Dev env operations | `ssh://ubuntu@10.10.10.238` | Set |
+| `DOCKER_GID` | Docker socket group on dev host | `988` | Set |
+| `STAGING_DOCKER_HOST` | Staging deploys, UAT | `ssh://ubuntu@<staging-ip>` | Requires human to set |
+| `REGISTRY` | Building/pushing images | `ghcr.io/pandazxx` | Requires human to set |
+| `REGISTRY_TOKEN` | Pushing images | (from secret manager) | Requires human to set |
 
 No fallback to local Docker — `DEV_DOCKER_HOST` must always be set explicitly.
+Never run `docker`, `docker compose`, or deploy commands directly — always delegate to `sre` or `senior-sre`.
+Runbooks are in `.sre/operations/`. The `sre` operator reads and follows them exactly; no improvisation.
 
 ### How to Invoke
 
