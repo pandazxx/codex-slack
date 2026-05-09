@@ -1,74 +1,36 @@
-# Development override — bind-mounts source code for live reload
-# Invoked when COMPOSE_FILE includes this file (set by env-up.sh)
-# Run `docker compose up` to start the dev stack; changes to src/ and frontend/
-# are reflected immediately without rebuilds.
-
+# Dev override — selected by docker-compose.override.yml auto-merge.
+# Builds the dev stage of Dockerfile against DEV_DOCKER_HOST.
+# No source bind-mounts; source is baked into the image at build time.
+# Edit → docker compose build master && docker compose up -d master
 services:
   master:
     build:
       context: .
-      dockerfile: Dockerfile.dev
-    image: codex-slack-master:dev
-    # Dev-only: run as root so the bind-mounted Docker socket (root:root on
-    # Docker Desktop / macOS) is reachable. Prod uses group_add with the
-    # host's docker group GID instead.
-    user: "0:0"
-    ports:
-      - "8080:8080"
-    volumes:
-      # Source code — bind-mounted for live reload
-      - ./src:/opt/codex-slack/src
-      - ./frontend:/opt/codex-slack/frontend
-      - ./config:/opt/codex-slack/config
-      # Dependencies installed in the image; preserve across restarts
-      - /opt/codex-slack/node_modules
-      - /opt/codex-slack/.venv
-      # Data volume
-      - master_data:/opt/codex-slack/data/master
-      # Docker socket for container operations
-      - ${CONTAINER_SOCKET_PATH:-/var/run/docker.sock}:/run/container.sock
+      dockerfile: Dockerfile
+      target: dev
     environment:
-      MASTER_PORT: 8080
-      MASTER_DRY_RUN: "false"
-      CONTAINER_RUNTIME: docker
-      DOCKER_HOST: unix:///run/container.sock
-      CONTAINER_HOST: unix:///run/container.sock
-      MQTT_HOST: mosquitto
-      MQTT_PORT: 1883
-      # Spawned agent containers must join the same project network as
-      # master+mosquitto so they can resolve "mosquitto" and "master".
-      MASTER_AGENT_NETWORK: ${COMPOSE_PROJECT_NAME:-codex-slack}_internal
-      # Optional: set these in .env.local for testing
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GH_TOKEN: ${GH_TOKEN:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    command:
-      - /bin/bash
-      - -c
-      - |
-        cd /opt/codex-slack/frontend && npm install --prefer-offline 2>/dev/null || npm install
-        cd /opt/codex-slack/frontend && npm run build &
-        FRONTEND_PID=$$!
-        cd /opt/codex-slack
-        python -m uvicorn src.master.main:app --host 0.0.0.0 --port 8080 --reload
-    depends_on:
-      - mosquitto
+      MASTER_AGENT_NETWORK: "${BRANCH_SLUG:-dev}_internal"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${BRANCH_SLUG:-dev}-master.rule=Host(`master.${BRANCH_SLUG:-dev}.${HOST_IP_DASHED:-127-0-0-1}.nip.io`)"
+      - "traefik.http.routers.${BRANCH_SLUG:-dev}-master.entrypoints=web"
+      - "traefik.http.services.${BRANCH_SLUG:-dev}-master.loadbalancer.server.port=8080"
     networks:
       - internal
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 30s
+      - sre-traefik-public
 
   mosquitto:
-    # Same as prod; no override needed for dev
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$SYS/broker/uptime", "-c", "1"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
+
+networks:
+  sre-traefik-public:
+    external: true

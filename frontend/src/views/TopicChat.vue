@@ -46,6 +46,15 @@
                   <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
                   <MarkdownMessage :text="agentResultText(row.event)" />
                 </div>
+                <div v-else-if="row.kind === 'codex_text'" class="tr-text">{{ row.event.item?.text }}</div>
+                <div v-else-if="row.kind === 'codex_error'" class="tr-meta">
+                  <span class="tr-badge tr-badge-error">failed</span>
+                  <span class="tr-stat">{{ row.event.error?.message || 'unknown error' }}</span>
+                </div>
+                <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
+                  <summary>{{ codexCmdLabel(row.event) }}</summary>
+                  <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
+                </details>
                 <details v-else-if="row.kind === 'folded'">
                   <summary>···</summary>
                   <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
@@ -71,6 +80,15 @@
                     <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
                     <MarkdownMessage :text="agentResultText(row.event)" />
                   </div>
+                  <div v-else-if="row.kind === 'codex_text'" class="tr-text">{{ row.event.item?.text }}</div>
+                  <div v-else-if="row.kind === 'codex_error'" class="tr-meta">
+                    <span class="tr-badge tr-badge-error">failed</span>
+                    <span class="tr-stat">{{ row.event.error?.message || 'unknown error' }}</span>
+                  </div>
+                  <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
+                    <summary>{{ codexCmdLabel(row.event) }}</summary>
+                    <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
+                  </details>
                   <details v-else-if="row.kind === 'folded'">
                     <summary>···</summary>
                     <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
@@ -145,6 +163,33 @@
                     <span v-if="evt.usage.cache_read_input_tokens" class="tr-stat tr-cache">{{ evt.usage.cache_read_input_tokens.toLocaleString() }} cached</span>
                     <span v-if="evt.usage.cache_creation_input_tokens" class="tr-stat tr-cache">{{ evt.usage.cache_creation_input_tokens.toLocaleString() }} cache_write</span>
                   </template>
+                </div>
+              </template>
+              <template v-else-if="evt.type === 'turn.completed'">
+                <div class="tr-meta">
+                  <span class="tr-badge tr-badge-done">done</span>
+                  <template v-if="evt.usage">
+                    <span class="tr-stat tr-tokens">{{ (evt.usage.input_tokens ?? 0).toLocaleString() }}↑</span>
+                    <span class="tr-stat tr-tokens">{{ (evt.usage.output_tokens ?? 0).toLocaleString() }}↓</span>
+                    <span v-if="evt.usage.cached_input_tokens" class="tr-stat tr-cache">{{ evt.usage.cached_input_tokens.toLocaleString() }} cached</span>
+                  </template>
+                </div>
+              </template>
+              <template v-else-if="evt.type === 'turn.failed'">
+                <div class="tr-meta">
+                  <span class="tr-badge tr-badge-error">failed</span>
+                  <span class="tr-stat">{{ evt.error?.message || 'unknown error' }}</span>
+                </div>
+              </template>
+              <template v-else-if="evt.type === 'item.completed' && evt.item?.type === 'agent_message'">
+                <div class="tr-text">{{ evt.item.text }}</div>
+              </template>
+              <template v-else-if="evt.type === 'item.completed' && evt.item?.type === 'command_execution'">
+                <div class="tr-tool-call">
+                  <details class="tool-use-fold">
+                    <summary :class="evt.item.status === 'failed' ? 'tr-cmd-failed' : ''">{{ codexCmdLabel(evt) }}</summary>
+                    <pre v-if="evt.item.aggregated_output" class="tr-json tr-result-body">{{ evt.item.aggregated_output }}</pre>
+                  </details>
                 </div>
               </template>
             </template>
@@ -247,12 +292,24 @@ function classifyEvent(event) {
   if (t === 'user') {
     const c = event.message?.content || []
     if (c.some(b => b.type === 'tool_result')) {
-      // Subagent (Agent tool) results are a synthesized summary worth showing
-      // expanded; raw tool_results (Bash/Read/...) stay folded.
       if (event.tool_use_result?.agentType) return 'agent_result'
       return 'folded'
     }
   }
+  // Codex event types
+  if (t === 'turn.completed')         return 'codex_done'
+  if (t === 'turn.failed')            return 'codex_error'
+  if (t === 'thread.started')         return 'hidden'
+  if (t === 'turn.started')           return 'hidden'
+  if (t === 'turn.token_usage')       return 'hidden'
+  if (t === 'turn.context_compacted') return 'hidden'
+  if (t === 'error')                  return 'folded'
+  // Codex item events (command executions + agent messages)
+  if (t === 'item.completed' && event.item?.type === 'agent_message')      return 'codex_text'
+  if (t === 'item.started'   && event.item?.type === 'command_execution')   return 'codex_cmd'
+  if (t === 'item.completed' && event.item?.type === 'command_execution')   return 'codex_cmd'
+  if (t === 'item.started')   return 'hidden'
+  if (t === 'item.completed') return 'hidden'
   return 'hidden'
 }
 
@@ -305,6 +362,14 @@ function toolUseLabel(event) {
   return `⚙ ${name}`
 }
 
+function codexCmdLabel(event) {
+  const item = event.item || event
+  const cmd = (item.command || '').slice(0, 80)
+  if (item.status === 'in_progress') return `⟳ ${cmd}`
+  if (item.status === 'failed')      return `✗ ${cmd}`
+  return `⚙ ${cmd}`
+}
+
 function transcriptToRows(transcriptJson) {
   if (!transcriptJson) return []
   try {
@@ -347,6 +412,21 @@ function handleChunk({ message_id, agent_name, seq, event }) {
       if (blk.type === 'text') live.text += blk.text
     const msg = messages.value.find(m => m.id === message_id)
     if (msg) msg.text = live.text
+  } else if (kind === 'codex_text') {
+    // item.completed agent_message: replace bubble with latest agent thought
+    live.text = event.item?.text || ''
+    const msg = messages.value.find(m => m.id === message_id)
+    if (msg) msg.text = live.text
+  } else if (kind === 'codex_cmd') {
+    // Replace in-progress item.started row when item.completed arrives (same item id)
+    const itemId = event.item?.id
+    const existingIdx = itemId !== undefined
+      ? live.rows.findIndex(r => r.kind === 'codex_cmd' && r.event.item?.id === itemId)
+      : -1
+    if (existingIdx >= 0) live.rows.splice(existingIdx, 1, { kind, event })
+    else live.rows.push({ kind, event })
+  } else if (kind === 'codex_done') {
+    // turn.completed: bubble already up to date from codex_text events; no row needed
   } else if (kind !== 'hidden') {
     live.rows.push({ kind, event })
   }
@@ -415,6 +495,11 @@ function connectWs() {
       })
     } else if (data.type === 'message') {
       finaliseMessage(data)
+    } else if (data.type === 'chunk_retract') {
+      const retractIdx = messages.value.findIndex(m => m.id === data.message_id)
+      if (retractIdx >= 0) messages.value.splice(retractIdx, 1)
+      delete liveStreams.value[data.message_id]
+      seenSeq.delete(data.message_id)
     }
   }
 
@@ -543,7 +628,13 @@ function buildDispatchCommand(transcript) {
   try {
     const p = JSON.parse(transcript)
     if (!p.adapter) return ''
-    if (p.adapter === 'codex') return `codex --full-auto -q ${JSON.stringify(p.text)}`
+    if (p.adapter === 'codex') {
+      const parts = ['codex', 'exec', '--json',
+        '--dangerously-bypass-approvals-and-sandbox', '-s', 'danger-full-access', '--ephemeral']
+      if (p.model) parts.push('-m', JSON.stringify(p.model))
+      parts.push(JSON.stringify(p.text))
+      return parts.join(' \\\n  ')
+    }
     const parts = ['claude', '--print', '--verbose', '--output-format', 'stream-json', '--dangerously-skip-permissions']
     if (p.session_id) parts.push(p.is_new_session ? `--session-id ${p.session_id}` : `--resume ${p.session_id}`)
     if (p.model) parts.push(`--model ${p.model}`)
@@ -678,6 +769,7 @@ onUnmounted(() => {
 .tool-use-fold > summary { cursor: pointer; list-style: none; }
 .tool-use-fold > summary::-webkit-details-marker { display: none; }
 .tool-use-fold[open] > summary { color: #ccc; }
+.tr-cmd-failed { color: #dc2626; }
 
 @media (max-width: 768px) {
   .chat-layout { height: calc(100vh - 90px); }

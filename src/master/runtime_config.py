@@ -58,6 +58,7 @@ _SYSTEM_VARIABLES: list[dict] = [
     {"name": "ANTHROPIC_API_KEY",                "sensitive": True},
     {"name": "CLAUDE_CODE_OAUTH_TOKEN",          "sensitive": True},
     {"name": "OPENAI_API_KEY",                   "sensitive": True},
+    {"name": "CODEX_AUTH_JSON",                  "sensitive": True},
     # Agent-reply notifications
     {"name": "MASTER_PUBLIC_URL",                "sensitive": False},
     {"name": "NOTIFY_DISCORD_WEBHOOK_URL",       "sensitive": True},

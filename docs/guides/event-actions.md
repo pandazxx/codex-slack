@@ -8,12 +8,14 @@ Event actions are configured per topic. One topic can have any number of event a
 
 | Event type | When it fires | Variables available |
 |---|---|---|
-| `topic_message_sent` | A user sends a message in the topic | `{msgbody}`, `{topic_name}` |
-| `topic_message_received` | An agent reply lands in the topic | `{msgbody}`, `{topic_name}` |
-| `topic_scheduler` | A cron schedule matches (minute-level resolution) | `{topic_name}`, `{workspace_name}` |
-| `topic_archived` | The topic is archived | `{topic_name}` |
+| `topic_message_sent` | A user sends a message in the topic | `{msgbody}`, `{topic_name}`, `{message_json}`, `{topic_json}` |
+| `topic_message_received` | An agent reply lands in the topic | `{msgbody}`, `{topic_name}`, `{response_json}`, `{topic_json}` |
+| `topic_scheduler` | A cron schedule matches (minute-level resolution) | `{topic_name}`, `{workspace_name}`, `{topic_json}` |
+| `topic_archived` | The topic is archived | `{topic_name}`, `{topic_json}` |
 
 `msgbody` is the raw text of the triggering message: the user's input for `topic_message_sent`, the agent's reply text for `topic_message_received`.
+
+`topic_json` is a JSON string carrying topic and workspace identifiers. It is available on every event type and is injected automatically by the dispatcher — you do not need to mention it in a template unless you want to include it in the prompt.
 
 For `topic_message_sent` you must also choose a **timing**:
 
@@ -31,8 +33,9 @@ For `topic_scheduler` you must supply a **cron expression** (5 fields: minute ho
 3. Under **Event Actions**, click **+ Add action**.
 4. Choose the event type from the dropdown. The available fields adjust based on your selection.
 5. Enter the staff name (without `@`), the prompt template, and any event-type-specific fields (timing or cron expression).
-6. Check or uncheck **Enabled** — disabled actions are saved but never fire.
-7. Click **Save**.
+6. Optionally check **Structured output** to intercept the staff's reply as JSON rather than posting it directly as an agent message. See the [Structural output](#structural-output) section.
+7. Check or uncheck **Enabled** — disabled actions are saved but never fire.
+8. Click **Save**.
 
 To edit an existing action, click **Edit** on its card. To toggle it on or off without editing, use the checkbox on the left side of the action card. To remove it permanently, click **✕**.
 
@@ -74,6 +77,31 @@ Invoke `@archivist` whenever a topic is archived:
 
 The action fires once, after the archive is committed. The staff's reply lands in the archived topic view.
 
+### Structured closing summary via `topic_archived`
+
+Use structured output to have `@archivist` post a closing summary through the controlled JSON response path instead of as a direct agent message:
+
+- Event type: `topic_archived`
+- Staff: `archivist`
+- Prompt template: `The topic {topic_name} (id={topic_json}) has been archived. Reply with a JSON object: {{"message": "<closing summary text>"}}.`
+- Structured output: enabled
+
+When the event fires, `@archivist`'s reply is intercepted. If it is valid JSON containing a `"message"` key, that text is posted in the topic as an agent message. If the reply is not valid JSON, `last_run_output` records the first 200 characters prefixed with `invalid_json:` and no message is posted.
+
+### Gating user messages via `topic_message_sent`
+
+Use structured output with `timing=before` to have `@screener` decide whether a user message should reach the agent at all:
+
+- Event type: `topic_message_sent`
+- Timing: `before`
+- Staff: `screener`
+- Prompt template: `A user sent the following message:\n\n{message_json}\n\nReply with a JSON object. To allow it: {{"silent": true}}. To block it: {{"break": true}}.`
+- Structured output: enabled
+
+When the user submits a message, `@screener` is dispatched first. The system waits up to 60 seconds for the structured reply. If `@screener` responds with `{"break": true}`, the message is discarded and never reaches the default agent. If it responds with `{"silent": true}` (or any non-break shape), dispatch continues normally.
+
+This pattern is useful for content filtering, rate limiting by message content, or any scenario where you need a second agent to approve messages before they reach the primary agent.
+
 ## Template variables and escaping
 
 Templates use Python `str.format_map` syntax: `{variable_name}`. The available variables depend on the event type (see the table above).
@@ -81,6 +109,80 @@ Templates use Python `str.format_map` syntax: `{variable_name}`. The available v
 If a placeholder is not in the variable list for the chosen event type, it is left in the rendered prompt as the literal text `{unknown_variable}` and a warning is logged. This is intentional — a misconfigured template does not crash dispatch.
 
 To include a literal brace character in your prompt, escape it by doubling: `{{` renders as `{`, `}}` renders as `}`.
+
+## Structural input — JSON variables
+
+In addition to the plain-text variables (`{msgbody}`, `{topic_name}`, `{workspace_name}`), three variables carry structured data as JSON strings embedded directly in the rendered prompt. Use them when your prompt instructs the staff to reason about the event's payload in a structured way.
+
+**`{message_json}`** — available on `topic_message_sent` only. Contains the triggering user message as a JSON object:
+
+```
+{"text": "Can you review the auth module?", "sender": "user"}
+```
+
+**`{response_json}`** — available on `topic_message_received` only. Contains the agent reply as a JSON object:
+
+```
+{"text": "I reviewed the auth module and found two issues.", "agent_name": "claude", "sender": "agent"}
+```
+
+**`{topic_json}`** — available on all event types. Contains topic and workspace identifiers as a JSON object:
+
+```
+{"id": "a1b2c3d4-...", "subject": "Fix login bug", "workspace_id": "e5f6g7h8-...", "workspace_name": "my-workspace"}
+```
+
+`{topic_json}` is injected automatically by the dispatcher for every event. You do not need to construct it or supply the data yourself; include `{topic_json}` in your template only when you want that data to appear in the rendered prompt.
+
+Example prompt using `{message_json}` and `{topic_json}`:
+
+```
+A user sent the following message in topic {topic_json}:
+
+{message_json}
+
+Classify the intent and reply with a JSON object: {{"message": "<your classification>"}}.
+```
+
+## Structural output
+
+When **Structured output** is enabled on an action (`structured_output: true`), the staff's LLM reply is not broadcast as a normal agent message in the topic. Instead, it is intercepted and parsed as JSON. The parsed object determines what happens next.
+
+Three response shapes are supported:
+
+**Post a message:**
+
+```json
+{"message": "text to post in topic"}
+```
+
+The value of `"message"` is posted in the topic as an agent message, exactly as a normal agent reply would appear, but without triggering another LLM call.
+
+**Veto / break:**
+
+```json
+{"break": true, "message": "reason for not responding"}
+```
+
+For `topic_message_sent` actions with `timing=before`, `break` **actively blocks the user's message** from being dispatched to the default agent. The HTTP handler waits for the gate action's structured reply (up to 60 seconds) before deciding whether to proceed. If any gate action returns `{"break": true}`, the dispatch is aborted and the API returns `{"status": "blocked"}`. The frontend shows no new message bubble.
+
+For all other event types (`topic_message_received`, `topic_archived`, `topic_scheduler`) the veto intent is logged and `last_run_status` is set to `ok`, but no blocking occurs — those event types do not gate an in-flight action. Vetoable archiving (blocking a `topic_archived` transition) is tracked in [issue #156](https://github.com/pandazxx/codex-slack/issues/156).
+
+**Suppress silently:**
+
+```json
+{"silent": true, "log": "optional log message"}
+```
+
+Nothing is posted to the topic. `last_run_status` is set to `ok`. The value of `"log"` (if present) appears in `last_run_output`.
+
+**Invalid JSON fallback:**
+
+If the staff's reply is not valid JSON, the action does not crash. `last_run_status` is set to `ok` and `last_run_output` contains `invalid_json: <first 200 characters of reply>`. No message is posted.
+
+**Timing of observability fields:**
+
+When `structured_output` is enabled, `last_run_at`, `last_run_status`, and `last_run_output` are written when the agent's reply arrives via MQTT — not at dispatch time. There may be a delay (equal to the agent's response latency) before the status is visible on the action card.
 
 ## Session sharing
 
@@ -117,6 +219,8 @@ Each event action card shows three observability fields:
 
 **`last_run_at` vs. `last_fired_at`**: `last_run_at` is updated by the event worker after every dispatch attempt and reflects whether the dispatch succeeded. `last_fired_at` is updated by the scheduler tick before dispatch and is used as the cron watermark for next-fire calculation. For non-scheduler event types, `last_fired_at` is always null.
 
+**Structured output actions**: when `structured_output` is enabled, `last_run_at` and `last_run_status` are written when the agent's reply arrives via MQTT, not at dispatch time. The action card may show a delay between dispatch and status update equal to the agent's response latency. An `invalid_json:` prefix in `last_run_output` means the staff's reply could not be parsed; check the staff's prompt and system prompt for instructions that produce non-JSON output.
+
 **Disabled actions** never fire. The checkbox in the action card is an instant enable/disable toggle. Disabled actions are retained for audit and can be re-enabled at any time.
 
 **Archived topics**: `topic_scheduler` actions stop firing the moment the topic is archived. The scheduler query filters on `archived_at IS NULL`. `topic_archived` fires once on the transition and then the topic is excluded from future scheduler checks.
@@ -126,7 +230,7 @@ Each event action card shows three observability fields:
 The following capabilities are not implemented in v1:
 
 - **Backpressure and rate limiting** for high-frequency event types. Tracked in [issue #154](https://github.com/pandazxx/codex-slack/issues/154).
-- **Vetoable archiving** (`topic_archiving` pre-commit interceptor that can block the archive). Tracked in [issue #156](https://github.com/pandazxx/codex-slack/issues/156).
+- **Vetoable archiving** (`topic_archiving` pre-commit interceptor that can block the archive). Tracked in [issue #156](https://github.com/pandazxx/codex-slack/issues/156). The `break` response shape is already enforced for `topic_message_sent before` gate actions, but archive-level veto is not yet wired up.
 - **Workspace-scope events**. Only topic-scope (`scope_type='topic'`) is implemented. The schema is forward-compatible; a follow-up ADR will define the output channel.
 - **TZ-awareness audit** of existing date columns across the codebase. Tracked in [issue #158](https://github.com/pandazxx/codex-slack/issues/158).
 - **Sub-minute scheduler precision**. The minimum effective interval is 1 minute.

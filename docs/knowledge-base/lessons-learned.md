@@ -2,7 +2,51 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-05-05 -->
+<!-- last updated: 2026-05-09 -->
+
+---
+
+## 2026-05-09 — Codex CLI API is not documented; must be inferred from the binary
+
+*Summary:* The `@openai/codex` CLI surface changed between the npm-published JS wrapper and the actual Rust binary it vendors. Documentation online (and model training data) describes the old JS-era flags (`--approval-mode full-auto`, `--output-format stream-json`) that no longer exist in the Rust binary shipped with v0.128.0. Using those flags causes silent failure with no output.
+
+*Root cause:* The npm package (`@openai/codex`) is a thin JS launcher that spawns a vendored platform-specific Rust binary. The Rust binary has its own subcommand structure (`codex exec`) and flag set that is not published in any README or man page. The `--help` output is the only authoritative source.
+
+*Fix applied:* Determined correct flags by running `codex exec --help` inside the container, then confirmed event type names by extracting strings from the Rust binary with `grep -oaE '[a-z]+\.[a-z_]+' <binary>`. Final correct invocation:
+```
+codex exec --json \
+  --dangerously-bypass-approvals-and-sandbox \
+  -s danger-full-access \
+  --ephemeral \
+  -o <tempfile> \
+  [-m <model>] \
+  <prompt>
+```
+Output events are JSONL on stdout. The canonical final-output field is `turn.completed.output_text` (with `last_message` as fallback). The `-o <tempfile>` flag writes the final answer to a file, which is more reliable than parsing stdout when the process exits quickly.
+
+*Prevention:* When integrating any CLI tool whose npm package is a wrapper around a native binary, always run `<binary> --help` directly rather than reading the npm README. Check flag existence before writing code — assume nothing is backward-compatible across major rewrites.
+
+---
+
+## 2026-05-08 — SRE workflow fully onboarded and validated
+
+*Summary:* The SRE subagent completed end-to-end onboarding of the containerized dev/test/staging workflow. All infrastructure files are in place, documented, and validated. Remote Docker support verified with DOCKER_HOST and DOCKER_GID environment variable handling. No blocking issues found.
+
+*Root cause:* N/A — this is a successful validation of existing infrastructure set up in prior audit.
+
+*Fix applied:* Enhanced three SRE scripts (env-up.sh, env-down.sh, test.sh) with explicit documentation of required environment variables (DOCKER_HOST, DOCKER_GID). Added defensive warning in test.sh when remote Docker is used without DOCKER_GID.
+
+*Prevention:* The enhanced script documentation ensures operators understand the dependency chain: when DOCKER_HOST is set to an SSH URL, DOCKER_GID must also be set so the compose file can map permissions correctly via the docker group. The warning prevents silent failures and permission errors in container startup.
+
+**Validated components:**
+- All .sre/ scripts present and executable (env-up.sh, env-down.sh, test.sh, setup-repo-protection.sh)
+- Production Dockerfile hardened (non-root user, HEALTHCHECK, pinned base image)
+- Dev/test Dockerfiles configured for live-reload and containerized testing
+- Three compose files (base, override, ci) with correct topology and no :latest tags in prod
+- Complete documentation: guides, onboarding summary, decision records, lessons-learned
+- Remote Docker support with proper group_add and fallback defaults
+- Secrets handling via .env.local (per-branch, gitignored)
+- Test infrastructure ready (docker-compose.ci.yml + Dockerfile.test)
 
 ---
 

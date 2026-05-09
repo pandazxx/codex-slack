@@ -23,6 +23,7 @@ The project name reflects its v2 origin as a Slack/Discord bridge. v3 dropped ch
 State lives in two places:
 - `master_data` Docker volume (SQLite at `/opt/codex-slack/data/master/master_data.db`) — workspaces, topics, messages, sessions, agent configs.
 - `codex-claude-{workspace_id}` Docker volumes — per-workspace Claude Code session state.
+- `codex-codex-{workspace_id}` Docker volumes — per-workspace Codex config and auth (`~/.codex`).
 
 ## Quick start
 
