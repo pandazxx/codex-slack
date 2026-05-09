@@ -87,4 +87,6 @@ USER root
 RUN pip install --no-cache-dir pytest pytest-cov pytest-asyncio httpx
 USER appuser
 COPY --chown=appuser:appuser tests ./tests
+COPY --chown=appuser:appuser Dockerfile.agent-minimal ./Dockerfile.agent-minimal
+COPY --chown=appuser:appuser docker/entrypoint.sh ./docker/entrypoint.sh
 CMD ["python", "-m", "pytest"]
