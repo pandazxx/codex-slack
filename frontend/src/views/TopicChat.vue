@@ -208,7 +208,7 @@
             </template>
           </div>
         </details>
-        <span class="ts">{{ m.created_at }}</span>
+        <span class="ts" :title="m.created_at">{{ formatInTimezone(m.created_at, configuredTimezone) }}</span>
       </div>
     </div>
 
@@ -244,6 +244,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import MarkdownMessage from '../components/MarkdownMessage.vue'
+import { formatInTimezone } from '../utils/datetime.js'
 
 const route = useRoute()
 let wsId = route.params.wsId
@@ -253,6 +254,7 @@ const topic = ref(null)
 const workspace = ref(null)
 const messages = ref([])
 const loading = ref(true)
+const configuredTimezone = ref('UTC')
 const sending = ref(false)
 const text = ref('')
 const agentStatus = ref('')
@@ -469,10 +471,11 @@ function finaliseMessage(data) {
 async function load() {
   loading.value = true
   try {
-    const [topicRes, msgsRes, wsRes] = await Promise.all([
+    const [topicRes, msgsRes, wsRes, tzRes] = await Promise.all([
       fetch(`/api/workspaces/${wsId}/topics/${topicId}`),
       fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages`),
       fetch(`/api/workspaces/${wsId}`),
+      fetch('/api/config/system-settings'),
     ])
     topic.value = await topicRes.json()
     const rawMsgs = await msgsRes.json()
@@ -483,6 +486,10 @@ async function load() {
       streaming: false,
     }))
     if (wsRes.ok) workspace.value = await wsRes.json()
+    if (tzRes.ok) {
+      const tz = await tzRes.json()
+      configuredTimezone.value = tz.timezone || 'UTC'
+    }
     scrollToBottom()
   } finally {
     loading.value = false

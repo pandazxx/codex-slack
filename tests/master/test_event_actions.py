@@ -1913,8 +1913,8 @@ class TestObservability:
             row = conn.execute("SELECT last_run_at, last_run_status FROM event_actions WHERE id=?", (action_id,)).fetchone()
             conn.close()
             assert row[0] is not None, f"last_run_at not set for {expected_status}"
-            # Validate ISO-8601 format
-            dt = datetime.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ")
+            # Validate ISO-8601 format (attach UTC so ruff DTZ007 is satisfied)
+            dt = datetime.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
             assert dt.year >= 2026
 
     def test_last_fired_at_unchanged_for_non_scheduler(self, tmp_path):
@@ -2240,7 +2240,7 @@ class TestScheduler:
         # Should parse as UTC ISO-8601 with Z suffix
         ts = row[0]
         assert ts.endswith("Z")
-        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         assert dt.year == 2026
 
     def test_null_last_fired_at_uses_created_at(self, tmp_path, frozen_utc):

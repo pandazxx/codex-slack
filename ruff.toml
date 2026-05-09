@@ -1,0 +1,17 @@
+[lint]
+# DTZ: enforce TZ-aware datetimes throughout.
+# DTZ001 – datetime.datetime() without tzinfo
+# DTZ002 – datetime.datetime.today()
+# DTZ003 – datetime.datetime.utcnow()
+# DTZ004 – datetime.datetime.utcfromtimestamp()
+# DTZ005 – datetime.datetime.now() without tz argument
+# DTZ006 – datetime.datetime.fromtimestamp() without tz argument
+# DTZ007 – datetime.datetime.strptime() used without %z
+# DTZ011 – datetime.date.today()
+# DTZ012 – datetime.date.fromtimestamp()
+select = ["DTZ"]
+
+[lint.per-file-ignores]
+# strptime without %z is intentional in _parse_iso_utc — the fallback
+# that handles pre-Z strings and immediately attaches UTC tzinfo.
+"src/master/main.py" = ["DTZ007"]
