@@ -173,7 +173,7 @@ def patch_system_settings(body: SystemSettings, request: Request) -> SystemSetti
         conn.commit()
     finally:
         conn.close()
-    return SystemSettings(timezone=body.timezone)
+    return SystemSettings(timezone=body.timezone, timezone_configured=True)
 
 
 @global_router.get("", response_model=dict[str, str])
