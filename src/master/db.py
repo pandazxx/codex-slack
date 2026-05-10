@@ -173,7 +173,7 @@ _MIGRATIONS = [
     "ALTER TABLE workspaces ADD COLUMN last_responded_at TEXT",
     "ALTER TABLE workspaces ADD COLUMN last_agent_state TEXT",
     "ALTER TABLE chunks ADD COLUMN agent_name TEXT",
-    "ALTER TABLE event_actions ADD COLUMN structured_output INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE event_actions ADD COLUMN structured_output INTEGER DEFAULT 0",
     "ALTER TABLE messages ADD COLUMN event_action_id TEXT",
     "ALTER TABLE topics ADD COLUMN veto_status TEXT",
     "ALTER TABLE topics ADD COLUMN veto_reason TEXT",
