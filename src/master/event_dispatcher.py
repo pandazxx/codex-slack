@@ -450,7 +450,7 @@ async def veto_dispatch(
         if staff is None:
             LOGGER.warning("veto_dispatch.staff_missing id=%s staff=%s", row["id"], row["staff_name"])
             _record_run(
-                app_state,
+                app_state.db_path,
                 row["id"],
                 status="staff_missing",
                 output=f"staff_name={row['staff_name']!r} not resolvable at fire time",
@@ -461,7 +461,7 @@ async def veto_dispatch(
             prompt = render_template(row["prompt_template"], variables)
         except Exception as exc:
             LOGGER.exception("veto_dispatch.render_failed id=%s", row["id"])
-            _record_run(app_state, row["id"], status="render_error", output=str(exc))
+            _record_run(app_state.db_path, row["id"], status="render_error", output=str(exc))
             continue
 
         try:
@@ -481,7 +481,7 @@ async def veto_dispatch(
         except asyncio.TimeoutError:
             LOGGER.warning("veto_dispatch.dispatch_timeout id=%s", row["id"])
             _record_run(
-                app_state,
+                app_state.db_path,
                 row["id"],
                 status="dispatch_error",
                 output=f"timeout after {DISPATCH_TIMEOUT_S:.0f}s",
@@ -510,7 +510,7 @@ async def veto_dispatch(
         )
         for _mid, (fut, row) in pending.items():
             if fut in timed_out_set:
-                _record_run(app_state, row["id"], status="veto_timeout", output="no verdict received")
+                _record_run(app_state.db_path, row["id"], status="veto_timeout", output="no verdict received")
         return VetoResult(allowed=True, reason="", timed_out=True)
 
     # Scan completed futures; first deny wins
@@ -527,7 +527,7 @@ async def veto_dispatch(
             agent_name = verdict_data.get("agent_name", "")
             if verdict == "deny":
                 _record_run(
-                    app_state,
+                    app_state.db_path,
                     row["id"],
                     status="vetoed",
                     output=f"agent={agent_name!r} reason={reason[:200]!r}",
@@ -540,7 +540,7 @@ async def veto_dispatch(
                 )
                 return VetoResult(allowed=False, reason=reason, timed_out=False)
             _record_run(
-                app_state,
+                app_state.db_path,
                 row["id"],
                 status="ok",
                 output=f"agent={agent_name!r} verdict=allow",
