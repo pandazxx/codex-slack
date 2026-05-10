@@ -73,7 +73,18 @@ const expanded = ref(false)
 const copied = ref(false)
 
 async function copyText() {
-  await navigator.clipboard.writeText(props.text)
+  try {
+    await navigator.clipboard.writeText(props.text)
+  } catch {
+    // Fallback for non-secure (HTTP) contexts where clipboard API is unavailable
+    const ta = document.createElement('textarea')
+    ta.value = props.text
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    ta.remove()
+  }
   copied.value = true
   setTimeout(() => { copied.value = false }, 1500)
 }
