@@ -7,6 +7,17 @@ on:
     branches: [master]
 
 jobs:
+  lint:
+    name: ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install "ruff>=0.4.0"
+      - run: ruff check src/ tests/
+
   test:
     name: Build and test
     runs-on: ubuntu-latest

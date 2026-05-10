@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -29,7 +29,7 @@ def _slugify(text: str, max_len: int = 64) -> str:
 def _slug_filename(ws_name: str, topic_subject: str, topic_id: str, ws_id: str) -> str:
     ws_slug = _slugify(ws_name) or ws_id[:8]
     topic_slug = _slugify(topic_subject) or topic_id[:8]
-    date_str = date.today().strftime("%Y%m%d")
+    date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
     return f"{ws_slug}-{topic_slug}-{date_str}.jsonl"
 
 

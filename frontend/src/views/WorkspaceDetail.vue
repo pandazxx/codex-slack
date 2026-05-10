@@ -16,7 +16,7 @@
       <button class="btn-restart-agent" @click="restartAgent" :disabled="restarting || refreshing">
         {{ restarting ? 'Restarting…' : 'Restart Agent' }}
       </button>
-      <span v-if="workspace?.last_refreshed_at" class="muted small">refreshed {{ workspace.last_refreshed_at }}</span>
+      <span v-if="workspace?.last_refreshed_at" class="muted small">refreshed {{ formatInTimezone(workspace.last_refreshed_at, configuredTimezone) }}</span>
     </div>
 
     <section>
@@ -172,6 +172,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import WorkspaceEnvVarsPanel from '../components/WorkspaceEnvVarsPanel.vue'
+import { formatInTimezone } from '../utils/datetime.js'
 
 const route = useRoute()
 const id = route.params.id
@@ -180,6 +181,7 @@ const workspace = ref(null)
 const topics = ref([])
 const staffs = ref([])
 const loading = ref(true)
+const configuredTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone)
 const creating = ref(false)
 const createError = ref('')
 const subject = ref('')
@@ -322,8 +324,17 @@ function scheduleBranchClose() {
 async function load() {
   loading.value = true
   try {
-    const wsRes = await fetch(`/api/workspaces/${id}`)
+    const [wsRes, tzRes] = await Promise.all([
+      fetch(`/api/workspaces/${id}`),
+      fetch('/api/config/system-settings'),
+    ])
     workspace.value = await wsRes.json()
+    if (tzRes.ok) {
+      const tz = await tzRes.json()
+      configuredTimezone.value = tz.timezone_configured
+        ? tz.timezone
+        : Intl.DateTimeFormat().resolvedOptions().timeZone
+    }
     const topicsParam = workspace.value.archived_at ? '?archived=true' : ''
     const [topicsRes, staffsRes] = await Promise.all([
       fetch(`/api/workspaces/${id}/topics${topicsParam}`),
