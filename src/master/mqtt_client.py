@@ -18,6 +18,7 @@ _RESPONSE_TOPIC = "codex-slack/workspace/+/topic/+/response"
 _STATUS_TOPIC = "codex-slack/workspace/+/topic/+/status"
 _CHUNK_TOPIC = "codex-slack/workspace/+/topic/+/chunk"
 _VERDICT_TOPIC = "codex-slack/workspace/+/topic/+/verdict"
+_PONG_TOPIC = "codex-slack/workspace/+/topic/+/pong"
 
 # Topic pattern: codex-slack/workspace/{wid}/topic/{tid}/{type}
 _TOPIC_PARTS = 6
@@ -299,7 +300,11 @@ def _on_connect(client: mqtt.Client, userdata, flags, reason_code, properties) -
     client.subscribe(_STATUS_TOPIC, qos=0)
     client.subscribe(_CHUNK_TOPIC, qos=0)
     client.subscribe(_VERDICT_TOPIC, qos=1)
-    LOGGER.info("mqtt.subscribed topics=%s,%s,%s,%s", _RESPONSE_TOPIC, _STATUS_TOPIC, _CHUNK_TOPIC, _VERDICT_TOPIC)
+    client.subscribe(_PONG_TOPIC, qos=0)
+    LOGGER.info(
+        "mqtt.subscribed topics=%s,%s,%s,%s,%s",
+        _RESPONSE_TOPIC, _STATUS_TOPIC, _CHUNK_TOPIC, _VERDICT_TOPIC, _PONG_TOPIC,
+    )
 
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties) -> None:  # type: ignore[type-arg]
@@ -406,6 +411,20 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
             reply_to,
             payload.get("verdict"),
         )
+    elif msg_type == "pong":
+        try:
+            app_state = userdata.get("app_state")
+            if app_state:
+                message_id = payload.get("message_id")
+                alive = payload.get("alive", False)
+                pending_pings = getattr(app_state, "pending_pings", {})
+                pending = pending_pings.get(message_id)
+                if pending is not None:
+                    pending["alive"] = alive
+                    pending["event"].set()
+                    LOGGER.info("mqtt.pong_received message_id=%s alive=%s", message_id, alive)
+        except Exception:
+            LOGGER.exception("mqtt.pong_handler_error")
         return
     else:
         return

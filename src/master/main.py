@@ -67,6 +67,27 @@ def _active_workspaces(db_path: str) -> list[dict]:  # type: ignore[type-arg]
 
 
 _STALE_STREAM_TIMEOUT_SECONDS = 600  # 10 minutes
+_PING_TIMEOUT_SECONDS = 10
+
+
+def _ping_for_alive(mqtt_client, app_state, workspace_id: str, topic_id: str, message_id: str) -> bool:
+    """Publish a ping and wait up to _PING_TIMEOUT_SECONDS for a pong. Returns True if alive."""
+    pending: dict = {"event": threading.Event(), "alive": None}
+    pending_pings = getattr(app_state, "pending_pings", {})
+    pending_pings[message_id] = pending
+    try:
+        ping_topic = f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/ping"
+        mqtt_client.publish(ping_topic, json.dumps({"message_id": message_id}), qos=0)
+        fired = pending["event"].wait(timeout=_PING_TIMEOUT_SECONDS)
+        if not fired:
+            LOGGER.warning("master.ping_timeout message_id=%s topic_id=%s", message_id, topic_id)
+            return False
+        return pending["alive"] is True
+    except Exception:
+        LOGGER.exception("master.ping_failed message_id=%s", message_id)
+        return False
+    finally:
+        pending_pings.pop(message_id, None)
 
 
 def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
@@ -109,13 +130,16 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
 
         chunk_age = now - last_chunk_at
         container_running = True
+        ws_row = None
+
+        mqtt_client = getattr(app_state, "mqtt", None) if app_state else None
 
         try:
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             try:
                 ws_row = conn.execute(
-                    "SELECT w.container_name FROM workspaces w"
+                    "SELECT w.id AS workspace_id, w.container_name FROM workspaces w"
                     " JOIN topics t ON t.workspace_id = w.id"
                     " WHERE t.id = ?",
                     (topic_id,),
@@ -128,7 +152,17 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
         except Exception:
             LOGGER.exception("master.stale_stream_container_check_failed message_id=%s", message_id)
 
-        is_stale = not container_running or chunk_age > _STALE_STREAM_TIMEOUT_SECONDS
+        if container_running:
+            if mqtt_client is not None and ws_row:
+                workspace_id = ws_row["workspace_id"]
+                alive = _ping_for_alive(mqtt_client, app_state, workspace_id, topic_id, message_id)
+                is_stale = not alive
+            else:
+                # No mqtt client available — fall back to age timeout
+                is_stale = chunk_age > _STALE_STREAM_TIMEOUT_SECONDS
+        else:
+            is_stale = True  # container not running → definitely stale
+
         if not is_stale:
             continue
 
@@ -453,6 +487,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     app.state.event_worker_last_progress = None
     app.state.gate_futures = {}  # message_id → asyncio.Future; resolves gate actions
     app.state.veto_futures = {}  # message_id → asyncio.Future; used by veto_dispatch
+    app.state.pending_pings = {}  # message_id → {"event": threading.Event, "alive": bool|None}
     event_worker_task = asyncio.create_task(event_worker(app.state))
     watchdog_task = asyncio.create_task(worker_watchdog(app.state))
     LOGGER.info("master.event_worker_start")

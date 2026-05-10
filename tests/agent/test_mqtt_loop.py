@@ -5,10 +5,12 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+import src.agent.mqtt_loop as mqtt_loop_module
 from src.agent.mqtt_loop import (
     _fetch_attachment,
     _parse_prompt_topic,
     _process_prompt,
+    _publish_interrupted_all,
     _run_claude,
     _run_codex,
     _ensure_worktree,
@@ -546,3 +548,98 @@ def test_process_prompt_no_attachments_no_note(tmp_path):
             )
 
     assert captured_text["text"] == "plain prompt"
+
+
+# ---------------------------------------------------------------------------
+# Ping / pong tests
+# ---------------------------------------------------------------------------
+
+def _make_ping_msg(workspace_id: str, topic_id: str, message_id: str) -> MagicMock:
+    msg = MagicMock()
+    msg.topic = f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/ping"
+    msg.payload = json.dumps({"message_id": message_id}).encode()
+    return msg
+
+
+def test_pong_alive_true_when_proc_running():
+    """Ping for a message whose process is actively running → pong with alive=True."""
+    client = MagicMock()
+    userdata = {"workspace_id": "ws1", "repo_dir": ""}
+
+    proc = MagicMock()
+    proc.poll.return_value = None  # process still running
+
+    with patch.dict(mqtt_loop_module._active_procs, {"msg-run": proc}, clear=True):
+        with patch.dict(mqtt_loop_module._active_contexts, {}, clear=True):
+            msg = _make_ping_msg("ws1", "t1", "msg-run")
+            _on_message(client, userdata, msg)
+
+    publish_calls = client.publish.call_args_list
+    pong_call = next((c for c in publish_calls if "pong" in c.args[0]), None)
+    assert pong_call is not None, "no pong published"
+    payload = json.loads(pong_call.args[1])
+    assert payload["message_id"] == "msg-run"
+    assert payload["alive"] is True
+
+
+def test_pong_alive_false_when_proc_not_found():
+    """Ping for an unknown message_id → pong with alive=False."""
+    client = MagicMock()
+    userdata = {"workspace_id": "ws1", "repo_dir": ""}
+
+    with patch.dict(mqtt_loop_module._active_procs, {}, clear=True):
+        with patch.dict(mqtt_loop_module._active_contexts, {}, clear=True):
+            msg = _make_ping_msg("ws1", "t1", "msg-unknown")
+            _on_message(client, userdata, msg)
+
+    pong_call = next((c for c in client.publish.call_args_list if "pong" in c.args[0]), None)
+    assert pong_call is not None
+    payload = json.loads(pong_call.args[1])
+    assert payload["alive"] is False
+
+
+def test_pong_alive_false_when_proc_exited():
+    """Ping for a message whose process has already exited → pong with alive=False."""
+    client = MagicMock()
+    userdata = {"workspace_id": "ws1", "repo_dir": ""}
+
+    proc = MagicMock()
+    proc.poll.return_value = 0  # process exited with code 0
+
+    with patch.dict(mqtt_loop_module._active_procs, {"msg-done": proc}, clear=True):
+        with patch.dict(mqtt_loop_module._active_contexts, {}, clear=True):
+            msg = _make_ping_msg("ws1", "t1", "msg-done")
+            _on_message(client, userdata, msg)
+
+    pong_call = next((c for c in client.publish.call_args_list if "pong" in c.args[0]), None)
+    assert pong_call is not None
+    payload = json.loads(pong_call.args[1])
+    assert payload["alive"] is False
+
+
+def test_publish_interrupted_all():
+    """_publish_interrupted_all kills procs and publishes interrupted response for each."""
+    client = MagicMock()
+
+    proc = MagicMock()
+    procs = {"msg-abc": proc}
+    contexts = {
+        "msg-abc": {
+            "workspace_id": "ws1",
+            "topic_id": "t1",
+            "agent_name": "claude",
+        }
+    }
+
+    with patch.dict(mqtt_loop_module._active_procs, procs, clear=True):
+        with patch.dict(mqtt_loop_module._active_contexts, contexts, clear=True):
+            _publish_interrupted_all(client)
+
+    proc.kill.assert_called_once()
+
+    response_calls = [c for c in client.publish.call_args_list if "response" in c.args[0]]
+    assert len(response_calls) == 1
+    payload = json.loads(response_calls[0].args[1])
+    assert payload["message_id"] == "msg-abc"
+    assert payload["last_response"] == "(message interrupted)"
+    assert payload["agent_name"] == "claude"

@@ -11,7 +11,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.master.db import init_db
-from src.master.main import app, _db_path, _STATIC_DIR, _close_stale_streams, _STALE_STREAM_TIMEOUT_SECONDS
+from src.master.main import (
+    app,
+    _db_path,
+    _STATIC_DIR,
+    _close_stale_streams,
+    _ping_for_alive,
+    _STALE_STREAM_TIMEOUT_SECONDS,
+    _PING_TIMEOUT_SECONDS,
+)
 
 
 @pytest.fixture()
@@ -251,3 +259,74 @@ def test_close_stale_streams_dry_run_uses_dry_run_status(stale_db):
     msg = _get_message(stale_db, "msg-dry")
     assert msg is not None
     assert msg["text"] == "(message interrupted)"
+
+
+# ---------------------------------------------------------------------------
+# Ping-based staleness tests
+# ---------------------------------------------------------------------------
+
+def _make_app_state_with_mqtt(mqtt_client):
+    """Build a minimal app_state SimpleNamespace with the given mqtt client."""
+    import threading
+    state = SimpleNamespace(
+        hub=MagicMock(),
+        event_loop=MagicMock(),
+        mqtt=mqtt_client,
+        pending_pings={},
+    )
+    return state
+
+
+def test_close_stale_streams_ping_alive_skips(stale_db):
+    """Container running + ping returns alive=True → stream NOT closed."""
+    _seed_chunks(stale_db, "msg-live-ping", age_seconds=30)
+    settings = _make_settings(dry_run=False)
+
+    mqtt_client = MagicMock()
+
+    with patch("src.master.main.get_container_status", return_value={"status": "running"}):
+        with patch("src.master.main._ping_for_alive", return_value=True):
+            app_state = _make_app_state_with_mqtt(mqtt_client)
+            _close_stale_streams(stale_db, settings, app_state)
+
+    assert _get_message(stale_db, "msg-live-ping") is None
+    assert _count_chunks(stale_db, "msg-live-ping") == 2
+
+
+def test_close_stale_streams_ping_dead_closes(stale_db):
+    """Container running + ping returns alive=False → stream closed."""
+    _seed_chunks(stale_db, "msg-dead-ping", age_seconds=30)
+    settings = _make_settings(dry_run=False)
+
+    mqtt_client = MagicMock()
+
+    with patch("src.master.main.get_container_status", return_value={"status": "running"}):
+        with patch("src.master.main._ping_for_alive", return_value=False):
+            app_state = _make_app_state_with_mqtt(mqtt_client)
+            _close_stale_streams(stale_db, settings, app_state)
+
+    msg = _get_message(stale_db, "msg-dead-ping")
+    assert msg is not None
+    assert msg["text"] == "(message interrupted)"
+    assert _count_chunks(stale_db, "msg-dead-ping") == 0
+
+
+def test_close_stale_streams_ping_timeout_closes(stale_db):
+    """Container running + no pong within timeout → stream closed."""
+    import src.master.main as main_module
+
+    _seed_chunks(stale_db, "msg-timeout-ping", age_seconds=30)
+    settings = _make_settings(dry_run=False)
+
+    mqtt_client = MagicMock()
+
+    with patch("src.master.main.get_container_status", return_value={"status": "running"}):
+        with patch.object(main_module, "_PING_TIMEOUT_SECONDS", 0.1):
+            # mqtt_client.publish does nothing; no pong arrives → event never set → timeout
+            app_state = _make_app_state_with_mqtt(mqtt_client)
+            _close_stale_streams(stale_db, settings, app_state)
+
+    msg = _get_message(stale_db, "msg-timeout-ping")
+    assert msg is not None
+    assert msg["text"] == "(message interrupted)"
+    assert _count_chunks(stale_db, "msg-timeout-ping") == 0
