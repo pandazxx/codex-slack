@@ -1,7 +1,10 @@
 <template>
   <div class="md-wrap">
     <div class="md-body" ref="container" v-html="rendered"></div>
-    <button class="expand-btn" @click="expanded = true" title="Expand message">⛶</button>
+    <div class="msg-actions">
+      <button class="action-btn" @click="copyText" :title="copied ? 'Copied!' : 'Copy raw text'">{{ copied ? '✓' : '⎘' }}</button>
+      <button class="action-btn" @click="expanded = true" title="Expand message">⛶</button>
+    </div>
   </div>
   <Teleport to="body">
     <div v-if="expanded" class="md-overlay" @click.self="expanded = false">
@@ -67,6 +70,24 @@ const props = defineProps({
 const container = ref(null)
 const dialogContainer = ref(null)
 const expanded = ref(false)
+const copied = ref(false)
+
+async function copyText() {
+  try {
+    await navigator.clipboard.writeText(props.text)
+  } catch {
+    // Fallback for non-secure (HTTP) contexts where clipboard API is unavailable
+    const ta = document.createElement('textarea')
+    ta.value = props.text
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    ta.remove()
+  }
+  copied.value = true
+  setTimeout(() => { copied.value = false }, 1500)
+}
 
 const rendered = computed(() => marked.parse(props.text || ''))
 
@@ -112,9 +133,16 @@ onUnmounted(() => document.removeEventListener('keydown', onEsc))
 
 <style scoped>
 .md-wrap { position: relative; }
-.expand-btn {
+.msg-actions {
   position: absolute;
   top: 0; right: 0;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.md-wrap:hover .msg-actions { opacity: 1; }
+.action-btn {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid #e2e8f0;
   border-radius: 4px;
@@ -123,11 +151,8 @@ onUnmounted(() => document.removeEventListener('keydown', onEsc))
   line-height: 1.5;
   cursor: pointer;
   color: #64748b;
-  opacity: 0;
-  transition: opacity 0.15s;
 }
-.md-wrap:hover .expand-btn { opacity: 1; }
-.expand-btn:hover { background: #f1f5f9; color: #1e293b; }
+.action-btn:hover { background: #f1f5f9; color: #1e293b; }
 
 /* ── fullscreen overlay ── */
 .md-overlay {
