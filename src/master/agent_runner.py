@@ -73,10 +73,10 @@ def spawn_agent(
         codex_volume: {"bind": "/home/appuser/.codex", "mode": "rw"},
     }
     if ssh_auth_sock_path:
-        env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
+        env["SSH_AUTH_SOCK"] = "/run/ssh-agent.sock"
         # Disable strict host checking so the container doesn't need a pre-seeded known_hosts
         env.setdefault("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
-        volumes[ssh_auth_sock_path] = {"bind": "/run/secrets/ssh-auth.sock", "mode": "ro"}
+        volumes[ssh_auth_sock_path] = {"bind": "/run/ssh-agent.sock", "mode": "ro"}
     if ssh_known_hosts_path:
         # If an explicit known_hosts is provided, prefer it over the no-check fallback
         env["GIT_SSH_COMMAND"] = f"ssh -o UserKnownHostsFile=/run/secrets/known_hosts"

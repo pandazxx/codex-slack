@@ -148,7 +148,7 @@ Reference: [`docs/references/config.md`](../references/config.md).
 | Symptom | First check | Reference |
 |---|---|---|
 | Agent container won't start | `docker logs codex-agent-<wsid>` for stage failure (preflight, repo_sync, workspace_prepare) | [`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md) |
-| `ssh-auth.sock` errors | Confirm `MASTER_SSH_AUTH_SOCK_PATH` points to a live socket on the host | [`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md) |
+| SSH agent socket errors | Confirm `MASTER_SSH_AUTH_SOCK_PATH` points to a live socket on the host | [`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md) |
 | Claude session expired | Self-healing — agent retries without `--resume` and stores the new session ID | [`docs/manuals/user-manual.md`](../manuals/user-manual.md) |
 | MQTT not delivering prompts | Tail `mosquitto` logs; check that master logs `master.mqtt_loop_start host=mosquitto port=1883` | [`docs/guides/runbooks/master-agent.md`](runbooks/master-agent.md) |
 | Production reports `version: vX.Y-rcN` | Expected — promotion retags the RC image without rebuilding | [`docs/manuals/ops-manual.md`](../manuals/ops-manual.md) |

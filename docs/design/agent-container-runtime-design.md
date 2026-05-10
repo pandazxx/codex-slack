@@ -85,7 +85,7 @@ One of the following adapter credentials, depending on what the operator configu
 Optional, set only when the operator opts in:
 
 - `GITHUB_TOKEN` — additional GitHub credential injected via DB-stored runtime config
-- `SSH_AUTH_SOCK=/run/secrets/ssh-auth.sock` — when master forwards an SSH agent socket
+- `SSH_AUTH_SOCK=/run/ssh-agent.sock` — when master forwards an SSH agent socket
 - `GIT_SSH_COMMAND` — set when SSH forwarding is in use
 
 Set inside the agent image / by the entrypoint, not by master:

@@ -344,10 +344,10 @@ def test_start_agent_mounts_ssh_forwarding_and_sets_env(tmp_path) -> None:
     assert runtime.calls[1][0] == "create_or_update_agent"
     env = runtime.calls[1][1]["env"]
     mounts = runtime.calls[1][1]["mounts"]
-    assert env["SSH_AUTH_SOCK"] == "/run/secrets/ssh-auth.sock"
+    assert env["SSH_AUTH_SOCK"] == "/run/ssh-agent.sock"
     assert env["GIT_SSH_COMMAND"] == "ssh -o UserKnownHostsFile=/run/secrets/ssh_known_hosts"
     assert mounts == [
-        "/run/user/1000/keyring/ssh:/run/secrets/ssh-auth.sock",
+        "/run/user/1000/keyring/ssh:/run/ssh-agent.sock",
         "/home/tester/.ssh/known_hosts:/run/secrets/ssh_known_hosts:ro",
     ]
 
@@ -372,9 +372,9 @@ def test_start_agent_sets_insecure_default_ssh_config_without_known_hosts(tmp_pa
     assert runtime.calls[0][0] == "pull_image"
     env = runtime.calls[1][1]["env"]
     mounts = runtime.calls[1][1]["mounts"]
-    assert env["SSH_AUTH_SOCK"] == "/run/secrets/ssh-auth.sock"
+    assert env["SSH_AUTH_SOCK"] == "/run/ssh-agent.sock"
     assert env["GIT_SSH_COMMAND"] == "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    assert mounts == ["/run/user/1000/keyring/ssh:/run/secrets/ssh-auth.sock"]
+    assert mounts == ["/run/user/1000/keyring/ssh:/run/ssh-agent.sock"]
 
 
 def test_run_git_uses_insecure_default_ssh_config_without_known_hosts(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

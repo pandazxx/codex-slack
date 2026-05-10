@@ -98,7 +98,7 @@ Master will respawn the container on next startup if the workspace is not archiv
    - `workspace_prepare`: filesystem permission error.
 3. Fix the env/auth and archive+recreate the workspace if needed (or manually remove the container and restart master to trigger respawn).
 
-### Agent exits with `ssh-auth.sock` error
+### Agent exits with SSH agent socket error
 
 If the mounted SSH auth sock becomes stale (e.g. agent was restarted with a new `SSH_AUTH_SOCK`):
 ```bash
