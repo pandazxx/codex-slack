@@ -29,6 +29,7 @@
             <option value="topic_message_received">topic_message_received — agent replies</option>
             <option value="topic_scheduler">topic_scheduler — cron schedule</option>
             <option value="topic_archived">topic_archived — topic is archived</option>
+            <option value="topic_archiving">topic_archiving — before topic is archived (veto)</option>
           </select>
 
           <label>Staff <span class="req">*</span></label>
@@ -161,6 +162,7 @@ const variableHint = computed(() => {
     topic_message_received: '{msgbody}, {response_json}, {topic_name}, {topic_json}',
     topic_scheduler: '{topic_name}, {workspace_name}, {topic_json}',
     topic_archived: '{topic_name}, {topic_json}',
+    topic_archiving: '{topic_name}, {topic_json}',
   }
   return m[form.value.event_type] || ''
 })
@@ -305,6 +307,7 @@ function typeBadgeClass(eventType) {
     'badge-received': eventType === 'topic_message_received',
     'badge-scheduler': eventType === 'topic_scheduler',
     'badge-archived': eventType === 'topic_archived',
+    'badge-archiving': eventType === 'topic_archiving',
   }
 }
 
