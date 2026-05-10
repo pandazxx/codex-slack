@@ -33,7 +33,14 @@
           </select>
 
           <label>Staff <span class="req">*</span></label>
-          <input v-model="form.staff_name" placeholder="e.g. reviewer" />
+          <select v-model="form.staff_name">
+            <option value="" disabled>— select staff —</option>
+            <template v-for="group in staffGroups" :key="group.label">
+              <optgroup :label="group.label">
+                <option v-for="s in group.items" :key="s.name" :value="s.name">{{ s.name }}</option>
+              </optgroup>
+            </template>
+          </select>
 
           <label>Prompt template <span class="req">*</span></label>
           <div>
@@ -144,6 +151,7 @@ const saving = ref(false)
 const formError = ref('')
 const configuredTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone)
 const expandedOutputs = ref({})
+const staffGroups = ref([])
 
 const emptyForm = () => ({
   event_type: 'topic_message_sent',
@@ -170,10 +178,13 @@ const variableHint = computed(() => {
 async function load() {
   loading.value = true
   try {
-    const [topicRes, actionsRes, tzRes] = await Promise.all([
+    const [topicRes, actionsRes, tzRes, globalStaffRes, wsStaffRes, topicStaffRes] = await Promise.all([
       fetch(`/api/workspaces/${wsId}/topics/${topicId}`),
       fetch(`/api/workspaces/${wsId}/topics/${topicId}/event-actions`),
       fetch('/api/config/system-settings'),
+      fetch('/api/staffs'),
+      fetch(`/api/workspaces/${wsId}/staffs`),
+      fetch(`/api/workspaces/${wsId}/topics/${topicId}/staffs`),
     ])
     if (topicRes.ok) {
       const t = await topicRes.json()
@@ -186,6 +197,20 @@ async function load() {
         ? tz.timezone
         : Intl.DateTimeFormat().resolvedOptions().timeZone
     }
+    const groups = []
+    if (topicStaffRes.ok) {
+      const items = (await topicStaffRes.json()).filter(s => !s.inherited_from)
+      if (items.length) groups.push({ label: 'Topic', items })
+    }
+    if (wsStaffRes.ok) {
+      const items = (await wsStaffRes.json()).filter(s => !s.inherited_from)
+      if (items.length) groups.push({ label: 'Workspace', items })
+    }
+    if (globalStaffRes.ok) {
+      const items = (await globalStaffRes.json()).filter(s => !s.inherited_from)
+      if (items.length) groups.push({ label: 'Global', items })
+    }
+    staffGroups.value = groups
   } finally {
     loading.value = false
   }
