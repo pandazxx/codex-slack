@@ -233,8 +233,11 @@ const staffError = ref('')
 const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false })
 
 const archivingTopics = ref({})  // topicId → true while DELETE is in flight
-const vetoResults = ref({})     // topicId → { topicId, subject, status, reason }
 const vetoDialog = ref(null)    // null | entry from vetoResults (shown when user clicks the button)
+
+const _vetoKey = `veto-results-${id}`
+const vetoResults = ref(JSON.parse(localStorage.getItem(_vetoKey) || '{}'))
+function _saveVetoResults() { localStorage.setItem(_vetoKey, JSON.stringify(vetoResults.value)) }
 
 const isArchived = computed(() => !!workspace.value?.archived_at)
 
@@ -422,13 +425,16 @@ async function deleteTopic(topicId, subject) {
       const next = { ...vetoResults.value }
       delete next[topicId]
       vetoResults.value = next
+      _saveVetoResults()
       await load()
     } else if (res.status === 423) {
       const body = await res.json().catch(() => ({}))
       vetoResults.value = { ...vetoResults.value, [topicId]: { topicId, subject, status: 'vetoed', reason: body?.detail?.reason || body?.detail || 'Archive blocked by veto staff.' } }
+      _saveVetoResults()
     } else if (res.status === 504) {
       const body = await res.json().catch(() => ({}))
       vetoResults.value = { ...vetoResults.value, [topicId]: { topicId, subject, status: 'timeout', reason: body?.detail?.reason || 'Veto staff did not respond in time.' } }
+      _saveVetoResults()
     }
   } finally {
     const next = { ...archivingTopics.value }
@@ -447,6 +453,7 @@ async function overrideTopic() {
     const next = { ...vetoResults.value }
     delete next[topicId]
     vetoResults.value = next
+    _saveVetoResults()
     await load()
   } finally {
     const next = { ...archivingTopics.value }
