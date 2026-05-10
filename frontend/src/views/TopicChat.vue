@@ -12,9 +12,9 @@
       >&#9881;</RouterLink>
       <a
         v-if="topic"
-        :href="`/api/workspaces/${wsId}/topics/${topicId}/export?format=md`"
+        :href="`/api/workspaces/${wsId}/topics/${topicId}/export`"
         class="topic-settings-link"
-        title="Export transcript as Markdown"
+        title="Export conversation as JSON Lines"
         download
       >&#8615;</a>
     </p>

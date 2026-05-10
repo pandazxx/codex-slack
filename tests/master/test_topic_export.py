@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 import uuid
 from pathlib import Path
@@ -12,11 +11,9 @@ from fastapi.testclient import TestClient
 
 from src.master.main import app
 from src.master.topic_export import (
-    _fenced,
-    _parse_transcript,
     _slug_filename,
     _slugify,
-    render_markdown,
+    render_jsonl,
 )
 
 
@@ -59,6 +56,10 @@ def _insert_message(sender, text, topic_id, agent_name=None, transcript=None):
     return mid
 
 
+def _parse_jsonl(text: str) -> list[dict]:
+    return [json.loads(line) for line in text.strip().splitlines() if line.strip()]
+
+
 # ---------------------------------------------------------------------------
 # Unit tests: _slugify
 # ---------------------------------------------------------------------------
@@ -80,222 +81,120 @@ def test_slugify_truncates():
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: _fenced
+# Unit tests: render_jsonl
 # ---------------------------------------------------------------------------
 
-def test_fenced_plain():
-    result = _fenced("hello world")
-    assert result.startswith("```")
-    assert "hello world" in result
-    assert result.endswith("```")
+def test_render_jsonl_empty():
+    assert render_jsonl([]) == ""
 
 
-def test_fenced_with_lang():
-    result = _fenced('{"a": 1}', "json")
-    assert result.startswith("```json")
+def test_render_jsonl_user_message():
+    msgs = [{"sender": "user", "text": "Hello", "created_at": "2026-05-09T10:00:00Z",
+             "agent_name": None, "transcript": None, "attachments": None}]
+    lines = _parse_jsonl(render_jsonl(msgs))
+    assert len(lines) == 1
+    assert lines[0]["type"] == "user"
+    assert lines[0]["timestamp"] == "2026-05-09T10:00:00Z"
+    assert lines[0]["text"] == "Hello"
+    assert "transcript" not in lines[0]
 
 
-def test_fenced_escapes_backticks():
-    content = "some ```code``` here"
-    result = _fenced(content)
-    first_line = result.split("\n")[0]
-    assert len(first_line) >= 4  # outer fence must be longer than inner run of 3
+def test_render_jsonl_agent_message_type():
+    msgs = [{"sender": "agent", "agent_name": "claude", "text": "Done.",
+             "created_at": "2026-05-09T10:01:00Z", "transcript": None, "attachments": None}]
+    lines = _parse_jsonl(render_jsonl(msgs))
+    assert lines[0]["type"] == "agent"
+    assert lines[0]["agent_name"] == "claude"
+    assert lines[0]["timestamp"] == "2026-05-09T10:01:00Z"
 
 
-# ---------------------------------------------------------------------------
-# Unit tests: _parse_transcript
-# ---------------------------------------------------------------------------
-
-def test_parse_transcript_none():
-    thinking, tools = _parse_transcript(None)
-    assert thinking == []
-    assert tools == []
-
-
-def test_parse_transcript_empty_list():
-    thinking, tools = _parse_transcript("[]")
-    assert thinking == []
-    assert tools == []
-
-
-def test_parse_transcript_invalid_json():
-    thinking, tools = _parse_transcript("not json")
-    assert thinking == []
-    assert tools == []
-
-
-def test_parse_transcript_thinking_block():
+def test_render_jsonl_transcript_parsed_as_json():
     events = [
-        {"type": "assistant", "content": [
-            {"type": "thinking", "thinking": "I should fix this."},
-        ]}
+        {"type": "assistant", "content": [{"type": "text", "text": "hi"}]},
+        {"type": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}]},
     ]
-    thinking, tools = _parse_transcript(json.dumps(events))
-    assert len(thinking) == 1
-    assert thinking[0].text == "I should fix this."
-    assert tools == []
+    msgs = [{"sender": "agent", "agent_name": "claude", "text": "hi",
+             "created_at": "2026-05-09T10:01:00Z",
+             "transcript": json.dumps(events), "attachments": None}]
+    lines = _parse_jsonl(render_jsonl(msgs))
+    # transcript must be the parsed array, not a string
+    assert isinstance(lines[0]["transcript"], list)
+    assert lines[0]["transcript"][0]["type"] == "assistant"
+    assert lines[0]["transcript"][1]["type"] == "user"
 
 
-def test_parse_transcript_tool_use_and_result():
+def test_render_jsonl_transcript_all_event_types_preserved():
     events = [
         {"type": "assistant", "content": [
+            {"type": "thinking", "thinking": "Let me think."},
             {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {"command": "ls"}},
         ]},
         {"type": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "tu_1", "content": "file1.py\nfile2.py"},
+            {"type": "tool_result", "tool_use_id": "tu_1", "content": "main.py"},
         ]},
     ]
-    thinking, tools = _parse_transcript(json.dumps(events))
-    assert len(tools) == 1
-    assert tools[0].name == "bash"
-    assert tools[0].input == {"command": "ls"}
-    assert tools[0].result == "file1.py\nfile2.py"
-
-
-def test_parse_transcript_tool_use_without_result():
-    events = [
-        {"type": "assistant", "content": [
-            {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {"command": "ls"}},
-        ]},
-    ]
-    _, tools = _parse_transcript(json.dumps(events))
-    assert len(tools) == 1
-    assert tools[0].result is None
-
-
-def test_parse_transcript_tool_result_content_list():
-    events = [
-        {"type": "assistant", "content": [
-            {"type": "tool_use", "id": "tu_1", "name": "read", "input": {}},
-        ]},
-        {"type": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "tu_1", "content": [
-                {"type": "text", "text": "line1"},
-                {"type": "text", "text": "line2"},
-            ]},
-        ]},
-    ]
-    _, tools = _parse_transcript(json.dumps(events))
-    assert tools[0].result == "line1\nline2"
-
-
-def test_parse_transcript_skips_noise_events():
-    events = [
-        {"type": "task_progress", "description": "working"},
-        {"type": "task_started", "description": "started"},
-        {"type": "retry_notice"},
-        {"type": "agent_result"},
-        {"type": "assistant", "content": [
-            {"type": "thinking", "thinking": "real content"},
-        ]},
-    ]
-    thinking, tools = _parse_transcript(json.dumps(events))
-    assert len(thinking) == 1
-    assert tools == []
-
-
-def test_parse_transcript_multiple_thinking_blocks():
-    events = [
-        {"type": "assistant", "content": [
-            {"type": "thinking", "thinking": "first thought"},
-            {"type": "thinking", "thinking": "second thought"},
-        ]},
-    ]
-    thinking, _ = _parse_transcript(json.dumps(events))
-    assert len(thinking) == 2
-    assert thinking[0].text == "first thought"
-    assert thinking[1].text == "second thought"
-
-
-# ---------------------------------------------------------------------------
-# Unit tests: render_markdown
-# ---------------------------------------------------------------------------
-
-def test_render_markdown_header():
-    md = render_markdown("My Workspace", "My Topic", "topic-id-1", [])
-    assert "# Topic: My Topic" in md
-    assert "Workspace: My Workspace" in md
-    assert "Exported:" in md
-
-
-def test_render_markdown_empty_topic():
-    md = render_markdown("ws", "t", "tid", [])
-    assert "# Topic: t" in md
-    assert "---" in md
-
-
-def test_render_markdown_user_message():
-    msgs = [{"sender": "user", "text": "Hello agent", "created_at": "2026-05-09T10:00:00Z",
-             "agent_name": None, "transcript": None, "attachments": []}]
-    md = render_markdown("ws", "topic", "tid", msgs)
-    assert "## User — 2026-05-09T10:00:00Z" in md
-    assert "Hello agent" in md
-
-
-def test_render_markdown_agent_message_no_transcript():
-    msgs = [{"sender": "agent", "agent_name": "claude", "text": "I fixed it.",
-             "created_at": "2026-05-09T10:01:00Z", "transcript": None, "attachments": []}]
-    md = render_markdown("ws", "topic", "tid", msgs)
-    assert "## Agent (claude) — 2026-05-09T10:01:00Z" in md
-    assert "I fixed it." in md
-
-
-def test_render_markdown_agent_message_with_thinking():
-    transcript = json.dumps([
-        {"type": "assistant", "content": [
-            {"type": "thinking", "thinking": "My inner thought."},
-        ]},
-    ])
     msgs = [{"sender": "agent", "agent_name": "claude", "text": "Done.",
-             "created_at": "2026-05-09T10:01:00Z", "transcript": transcript, "attachments": []}]
-    md = render_markdown("ws", "topic", "tid", msgs)
-    assert "<details>" in md
-    assert "<summary>Thinking</summary>" in md
-    assert "My inner thought." in md
+             "created_at": "2026-05-09T10:01:00Z",
+             "transcript": json.dumps(events), "attachments": None}]
+    lines = _parse_jsonl(render_jsonl(msgs))
+    transcript = lines[0]["transcript"]
+    # All events preserved verbatim — no filtering
+    assert len(transcript) == 2
+    assert transcript[0]["content"][0]["type"] == "thinking"
+    assert transcript[0]["content"][1]["type"] == "tool_use"
+    assert transcript[1]["content"][0]["type"] == "tool_result"
 
 
-def test_render_markdown_agent_message_with_tool():
-    transcript = json.dumps([
-        {"type": "assistant", "content": [
-            {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {"command": "echo hi"}},
-        ]},
-        {"type": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "tu_1", "content": "hi"},
-        ]},
-    ])
-    msgs = [{"sender": "agent", "agent_name": "claude", "text": "Done.",
-             "created_at": "2026-05-09T10:01:00Z", "transcript": transcript, "attachments": []}]
-    md = render_markdown("ws", "topic", "tid", msgs)
-    assert "<summary>Tool: bash</summary>" in md
-    assert "**Input:**" in md
-    assert "echo hi" in md
-    assert "**Output:**" in md
-    assert "hi" in md
-
-
-def test_render_markdown_tool_no_result():
-    transcript = json.dumps([
-        {"type": "assistant", "content": [
-            {"type": "tool_use", "id": "tu_1", "name": "read", "input": {}},
-        ]},
-    ])
-    msgs = [{"sender": "agent", "agent_name": "claude", "text": ".",
-             "created_at": "2026-05-09T10:01:00Z", "transcript": transcript, "attachments": []}]
-    md = render_markdown("ws", "topic", "tid", msgs)
-    assert "_(no result captured)_" in md
-
-
-def test_render_markdown_attachment_links():
+def test_render_jsonl_attachments_included():
+    atts = [{"id": "att-1", "filename": "photo.png", "mime_type": "image/png"}]
     msgs = [{"sender": "user", "text": "See attached", "created_at": "2026-05-09T10:00:00Z",
-             "agent_name": None, "transcript": None,
-             "attachments": [{"id": "att-abc", "filename": "photo.png"}]}]
-    md = render_markdown("ws", "topic", "tid", msgs)
-    assert "[photo.png](/attachments/att-abc/download)" in md
+             "agent_name": None, "transcript": None, "attachments": atts}]
+    lines = _parse_jsonl(render_jsonl(msgs))
+    assert lines[0]["attachments"][0]["filename"] == "photo.png"
+    assert lines[0]["attachments"][0]["id"] == "att-1"
 
 
-def test_render_markdown_fallback_subject():
-    md = render_markdown("ws", "", "my-topic-id", [])
-    assert "# Topic: my-topic-id" in md
+def test_render_jsonl_no_agent_name_omitted():
+    msgs = [{"sender": "agent", "agent_name": None, "text": "hi",
+             "created_at": "2026-05-09T10:01:00Z", "transcript": None, "attachments": None}]
+    lines = _parse_jsonl(render_jsonl(msgs))
+    assert "agent_name" not in lines[0]
+
+
+def test_render_jsonl_invalid_transcript_kept_as_string():
+    msgs = [{"sender": "agent", "agent_name": "claude", "text": ".",
+             "created_at": "2026-05-09T10:01:00Z",
+             "transcript": "not valid json", "attachments": None}]
+    lines = _parse_jsonl(render_jsonl(msgs))
+    assert lines[0]["transcript"] == "not valid json"
+
+
+def test_render_jsonl_multiple_messages_one_per_line():
+    msgs = [
+        {"sender": "user", "text": "hi", "created_at": "2026-05-09T10:00:00Z",
+         "agent_name": None, "transcript": None, "attachments": None},
+        {"sender": "agent", "agent_name": "claude", "text": "hello",
+         "created_at": "2026-05-09T10:01:00Z", "transcript": None, "attachments": None},
+    ]
+    output = render_jsonl(msgs)
+    lines = [l for l in output.splitlines() if l.strip()]
+    assert len(lines) == 2
+    assert json.loads(lines[0])["type"] == "user"
+    assert json.loads(lines[1])["type"] == "agent"
+
+
+def test_render_jsonl_each_line_valid_json():
+    events = [{"type": "assistant", "content": [{"type": "text", "text": "ok"}]}]
+    msgs = [
+        {"sender": "user", "text": "q", "created_at": "2026-05-09T10:00:00Z",
+         "agent_name": None, "transcript": None, "attachments": None},
+        {"sender": "agent", "agent_name": "claude", "text": "a",
+         "created_at": "2026-05-09T10:01:00Z",
+         "transcript": json.dumps(events), "attachments": None},
+    ]
+    for line in render_jsonl(msgs).splitlines():
+        if line.strip():
+            json.loads(line)  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -304,34 +203,74 @@ def test_render_markdown_fallback_subject():
 
 def test_export_returns_200(client, workspace_topic):
     ws_id, topic_id = workspace_topic
-    r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export?format=md")
+    r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
     assert r.status_code == 200
 
 
 def test_export_content_type(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
-    assert "text/markdown" in r.headers["content-type"]
+    assert "application/x-ndjson" in r.headers["content-type"]
 
 
-def test_export_content_disposition(client, workspace_topic):
+def test_export_content_disposition_jsonl(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
     cd = r.headers.get("content-disposition", "")
     assert "attachment" in cd
-    assert ".md" in cd
+    assert ".jsonl" in cd
 
 
-def test_export_contains_topic_subject(client, workspace_topic):
+def test_export_empty_topic_returns_empty_body(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
-    assert "Fix the bug" in r.text
+    assert r.status_code == 200
+    assert r.text.strip() == ""
 
 
-def test_export_contains_workspace_name(client, workspace_topic):
+def test_export_user_message_shape(client, workspace_topic):
     ws_id, topic_id = workspace_topic
+    _insert_message("user", "What should I do?", topic_id)
     r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
-    assert "My Repo" in r.text
+    lines = _parse_jsonl(r.text)
+    assert len(lines) == 1
+    assert lines[0]["type"] == "user"
+    assert lines[0]["text"] == "What should I do?"
+    assert "timestamp" in lines[0]
+
+
+def test_export_agent_message_with_full_transcript(client, workspace_topic):
+    ws_id, topic_id = workspace_topic
+    events = [
+        {"type": "assistant", "content": [
+            {"type": "thinking", "thinking": "Let me think."},
+            {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {"command": "ls"}},
+        ]},
+        {"type": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu_1", "content": "main.py"},
+        ]},
+    ]
+    _insert_message("agent", "Done.", topic_id, agent_name="claude",
+                    transcript=json.dumps(events))
+    r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
+    lines = _parse_jsonl(r.text)
+    assert lines[0]["type"] == "agent"
+    assert lines[0]["agent_name"] == "claude"
+    transcript = lines[0]["transcript"]
+    # All raw events present — nothing stripped
+    assert len(transcript) == 2
+    assert transcript[0]["content"][0]["type"] == "thinking"
+    assert transcript[0]["content"][1]["name"] == "bash"
+    assert transcript[1]["content"][0]["content"] == "main.py"
+
+
+def test_export_transcript_is_parsed_not_string(client, workspace_topic):
+    ws_id, topic_id = workspace_topic
+    _insert_message("agent", "ok", topic_id, agent_name="claude",
+                    transcript=json.dumps([{"type": "assistant", "content": []}]))
+    r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
+    obj = _parse_jsonl(r.text)[0]
+    assert isinstance(obj["transcript"], list)
 
 
 def test_export_unknown_workspace(client, workspace_topic):
@@ -346,50 +285,9 @@ def test_export_unknown_topic(client, workspace_topic):
     assert r.status_code == 404
 
 
-def test_export_unsupported_format(client, workspace_topic):
-    ws_id, topic_id = workspace_topic
-    r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export?format=pdf")
-    assert r.status_code == 422
-
-
-def test_export_empty_topic(client, workspace_topic):
-    ws_id, topic_id = workspace_topic
-    r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
-    assert r.status_code == 200
-    assert "# Topic:" in r.text
-
-
-def test_export_includes_messages(client, workspace_topic):
-    ws_id, topic_id = workspace_topic
-    _insert_message("user", "What should I do?", topic_id)
-    r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
-    assert "What should I do?" in r.text
-
-
-def test_export_agent_message_with_transcript(client, workspace_topic):
-    ws_id, topic_id = workspace_topic
-    transcript = json.dumps([
-        {"type": "assistant", "content": [
-            {"type": "thinking", "thinking": "Let me think..."},
-            {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {"command": "ls"}},
-        ]},
-        {"type": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "tu_1", "content": "main.py"},
-        ]},
-    ])
-    _insert_message("agent", "Done.", topic_id, agent_name="claude", transcript=transcript)
-    r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
-    body = r.text
-    assert "Let me think..." in body
-    assert "bash" in body
-    assert "main.py" in body
-
-
 def test_export_archived_topic(client, workspace_topic):
     ws_id, topic_id = workspace_topic
-    # Archive via DELETE (sets archived_at, does not remove the row)
     client.delete(f"/api/workspaces/{ws_id}/topics/{topic_id}")
-    # Export must still work — archived topics are readable
     r = client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export")
     assert r.status_code == 200
 
@@ -400,3 +298,13 @@ def test_export_filename_slug(client, workspace_topic):
     cd = r.headers.get("content-disposition", "")
     assert "my-repo" in cd
     assert "fix-the-bug" in cd
+    assert ".jsonl" in cd
+
+
+def test_export_message_order(client, workspace_topic):
+    ws_id, topic_id = workspace_topic
+    _insert_message("user", "first", topic_id)
+    _insert_message("agent", "second", topic_id, agent_name="claude")
+    lines = _parse_jsonl(client.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/export").text)
+    assert lines[0]["text"] == "first"
+    assert lines[1]["text"] == "second"
