@@ -254,7 +254,7 @@ const topic = ref(null)
 const workspace = ref(null)
 const messages = ref([])
 const loading = ref(true)
-const configuredTimezone = ref('UTC')
+const configuredTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone)
 const sending = ref(false)
 const text = ref('')
 const agentStatus = ref('')
@@ -488,7 +488,9 @@ async function load() {
     if (wsRes.ok) workspace.value = await wsRes.json()
     if (tzRes.ok) {
       const tz = await tzRes.json()
-      configuredTimezone.value = tz.timezone || 'UTC'
+      configuredTimezone.value = tz.timezone_configured
+        ? tz.timezone
+        : Intl.DateTimeFormat().resolvedOptions().timeZone
     }
     scrollToBottom()
   } finally {

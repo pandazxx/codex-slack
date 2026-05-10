@@ -141,7 +141,7 @@ const showForm = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
 const formError = ref('')
-const configuredTimezone = ref('UTC')
+const configuredTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone)
 const expandedOutputs = ref({})
 
 const emptyForm = () => ({
@@ -180,7 +180,9 @@ async function load() {
     if (actionsRes.ok) actions.value = await actionsRes.json()
     if (tzRes.ok) {
       const tz = await tzRes.json()
-      configuredTimezone.value = tz.timezone || 'UTC'
+      configuredTimezone.value = tz.timezone_configured
+        ? tz.timezone
+        : Intl.DateTimeFormat().resolvedOptions().timeZone
     }
   } finally {
     loading.value = false

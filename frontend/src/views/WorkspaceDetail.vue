@@ -181,7 +181,7 @@ const workspace = ref(null)
 const topics = ref([])
 const staffs = ref([])
 const loading = ref(true)
-const configuredTimezone = ref('UTC')
+const configuredTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone)
 const creating = ref(false)
 const createError = ref('')
 const subject = ref('')
@@ -331,7 +331,9 @@ async function load() {
     workspace.value = await wsRes.json()
     if (tzRes.ok) {
       const tz = await tzRes.json()
-      configuredTimezone.value = tz.timezone || 'UTC'
+      configuredTimezone.value = tz.timezone_configured
+        ? tz.timezone
+        : Intl.DateTimeFormat().resolvedOptions().timeZone
     }
     const topicsParam = workspace.value.archived_at ? '?archived=true' : ''
     const [topicsRes, staffsRes] = await Promise.all([

@@ -128,6 +128,7 @@ def _apply_patch(conn, scope_type: str, scope_id: str, patch: ConfigPatch) -> No
 
 class SystemSettings(BaseModel):
     timezone: str
+    timezone_configured: bool = False  # True only when explicitly set via PATCH
 
 
 # ── Global config ─────────────────────────────────────────────────────────────
@@ -150,10 +151,8 @@ def get_system_settings(request: Request) -> SystemSettings:
     finally:
         conn.close()
     if row:
-        tz = row["value"]
-    else:
-        tz = str(tzlocal.get_localzone())
-    return SystemSettings(timezone=tz)
+        return SystemSettings(timezone=row["value"], timezone_configured=True)
+    return SystemSettings(timezone=str(tzlocal.get_localzone()), timezone_configured=False)
 
 
 @global_router.patch("/system-settings", response_model=SystemSettings)
