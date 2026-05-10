@@ -53,6 +53,12 @@ services:
         printf 'listener 1883\nallow_anonymous true\npersistence false\nlog_type error\n' \
           > /mosquitto/config/mosquitto.conf
         exec mosquitto -c /mosquitto/config/mosquitto.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep mosquitto > /dev/null && echo 'healthy' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
     networks:
       - internal
     restart: unless-stopped

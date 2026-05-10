@@ -10,6 +10,13 @@
         class="topic-settings-link"
         title="Topic settings"
       >&#9881;</RouterLink>
+      <a
+        v-if="topic"
+        :href="`/api/workspaces/${wsId}/topics/${topicId}/export`"
+        class="topic-settings-link"
+        title="Export conversation as JSON Lines"
+        download
+      >&#8615;</a>
     </p>
 
     <div v-if="isArchived" class="archived-banner">This topic is archived — read only</div>
