@@ -340,6 +340,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     app.state.event_loop = asyncio.get_running_loop()
     app.state.event_worker_last_progress = None
     app.state.gate_futures = {}  # message_id → asyncio.Future; resolves gate actions
+    app.state.veto_futures = {}  # message_id → asyncio.Future; used by veto_dispatch
     event_worker_task = asyncio.create_task(event_worker(app.state))
     watchdog_task = asyncio.create_task(worker_watchdog(app.state))
     LOGGER.info("master.event_worker_start")

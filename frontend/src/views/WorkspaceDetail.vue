@@ -74,7 +74,13 @@
             </span>
           </span>
           <RouterLink v-if="!isArchived && !t.archived_at" :to="`/workspaces/${id}/topics/${t.id}/settings`" class="topic-settings-btn" title="Topic settings">&#9881;</RouterLink>
-          <button v-if="!isArchived" class="remove-btn" @click="deleteTopic(t.id, t.subject)" title="Archive topic">Archive</button>
+          <button v-if="!isArchived" class="remove-btn"
+            :class="{ 'veto-rejected-btn': !!vetoResults[t.id] }"
+            @click="handleArchiveClick(t)"
+            :disabled="!!archivingTopics[t.id]"
+            :title="vetoResults[t.id] ? 'Click to see veto details' : 'Archive topic'">
+            {{ archivingTopics[t.id] ? 'Archiving…' : vetoResults[t.id] ? 'Archive rejected' : 'Archive' }}
+          </button>
         </li>
       </ul>
     </section>
@@ -165,6 +171,21 @@
         </table>
       </div>
     </section>
+
+    <!-- ── Veto dialog ──────────────────────────────────────────────── -->
+    <div v-if="vetoDialog" class="veto-overlay">
+      <div class="veto-dialog card">
+        <h3 v-if="vetoDialog.status === 'vetoed'">Archive blocked</h3>
+        <h3 v-else>Veto staff timed out</h3>
+        <p class="veto-subject">Topic: <strong>{{ vetoDialog.subject }}</strong></p>
+        <p v-if="vetoDialog.reason" class="veto-reason">{{ vetoDialog.reason }}</p>
+        <div class="form-actions">
+          <button class="btn-primary" @click="overrideTopic">Override and archive anyway</button>
+          <button class="btn-secondary" @click="checkAgain">Check again</button>
+          <button class="btn-secondary" @click="vetoDialog = null">Cancel</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -211,6 +232,10 @@ const editingStaff = ref(null)
 const savingStaff = ref(false)
 const staffError = ref('')
 const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false })
+
+const archivingTopics = ref({})  // topicId → true while DELETE is in flight
+const vetoResults = ref({})     // topicId → { topicId, subject, status, reason } — mirrors DB
+const vetoDialog = ref(null)    // null | entry from vetoResults (shown when user clicks the button)
 
 const isArchived = computed(() => !!workspace.value?.archived_at)
 
@@ -342,6 +367,12 @@ async function load() {
     ])
     topics.value = await topicsRes.json()
     staffs.value = await staffsRes.json()
+    // Rebuild vetoResults from DB-backed topic fields
+    const vr = {}
+    for (const t of topics.value) {
+      if (t.veto_status) vr[t.id] = { topicId: t.id, subject: t.subject, status: t.veto_status, reason: t.veto_reason || '' }
+    }
+    vetoResults.value = vr
   } finally {
     loading.value = false
   }
@@ -376,10 +407,75 @@ async function createTopic() {
   }
 }
 
+function handleArchiveClick(t) {
+  if (archivingTopics.value[t.id]) return
+  if (vetoResults.value[t.id]) {
+    vetoDialog.value = vetoResults.value[t.id]
+  } else {
+    deleteTopic(t.id, t.subject)
+  }
+}
+
+function showVetoDialog(topicId) {
+  vetoDialog.value = vetoResults.value[topicId] || null
+}
+
+async function _archiveTopic(topicId, subject) {
+  archivingTopics.value = { ...archivingTopics.value, [topicId]: true }
+  try {
+    const res = await fetch(`/api/workspaces/${id}/topics/${topicId}`, { method: 'DELETE' })
+    if (res.status === 204) {
+      const next = { ...vetoResults.value }
+      delete next[topicId]
+      vetoResults.value = next
+      await load()
+    } else if (res.status === 423) {
+      const body = await res.json().catch(() => ({}))
+      vetoResults.value = { ...vetoResults.value, [topicId]: { topicId, subject, status: 'vetoed', reason: body?.detail?.reason || body?.detail || 'Archive blocked by veto staff.' } }
+      vetoDialog.value = vetoResults.value[topicId]
+    } else if (res.status === 504) {
+      const body = await res.json().catch(() => ({}))
+      vetoResults.value = { ...vetoResults.value, [topicId]: { topicId, subject, status: 'timeout', reason: body?.detail?.reason || 'Veto staff did not respond in time.' } }
+      vetoDialog.value = vetoResults.value[topicId]
+    }
+  } finally {
+    const next = { ...archivingTopics.value }
+    delete next[topicId]
+    archivingTopics.value = next
+  }
+}
+
 async function deleteTopic(topicId, subject) {
   if (!confirm(`Archive topic "${subject}"?`)) return
-  await fetch(`/api/workspaces/${id}/topics/${topicId}`, { method: 'DELETE' })
-  await load()
+  await _archiveTopic(topicId, subject)
+}
+
+async function checkAgain() {
+  if (!vetoDialog.value) return
+  const { topicId, subject } = vetoDialog.value
+  vetoDialog.value = null
+  const next = { ...vetoResults.value }
+  delete next[topicId]
+  vetoResults.value = next
+  await _archiveTopic(topicId, subject)
+}
+
+async function overrideTopic() {
+  if (!vetoDialog.value) return
+  const { topicId } = vetoDialog.value
+  vetoDialog.value = null
+  archivingTopics.value = { ...archivingTopics.value, [topicId]: true }
+  try {
+    await fetch(`/api/workspaces/${id}/topics/${topicId}?override=true`, { method: 'DELETE' })
+    const next = { ...vetoResults.value }
+    delete next[topicId]
+    vetoResults.value = next
+    await load()
+  } finally {
+    const next = { ...archivingTopics.value }
+    delete next[topicId]
+    archivingTopics.value = next
+  }
 }
 
 function startCreateStaff() {
@@ -565,4 +661,11 @@ section { margin-bottom: 2rem; }
   .form-grid label + .checkbox-label { margin-bottom: 0.5rem; }
   .form-actions { flex-wrap: wrap; }
 }
+.veto-rejected-btn { background: #fef2f2 !important; color: #dc2626 !important; border: 1px solid #fecaca !important; }
+.veto-rejected-btn:hover { background: #fee2e2 !important; }
+.veto-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.veto-dialog { background: #fff; border-radius: 8px; padding: 1.5rem; max-width: 480px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.18); }
+.veto-dialog h3 { margin: 0 0 0.75rem; color: #dc2626; }
+.veto-subject { margin: 0 0 0.5rem; font-size: 0.95em; }
+.veto-reason { background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; padding: 0.5rem 0.75rem; font-size: 0.9em; color: #991b1b; margin: 0.5rem 0 1rem; white-space: pre-wrap; }
 </style>

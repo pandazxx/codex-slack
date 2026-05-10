@@ -17,6 +17,7 @@ LOGGER = logging.getLogger(__name__)
 _RESPONSE_TOPIC = "codex-slack/workspace/+/topic/+/response"
 _STATUS_TOPIC = "codex-slack/workspace/+/topic/+/status"
 _CHUNK_TOPIC = "codex-slack/workspace/+/topic/+/chunk"
+_VERDICT_TOPIC = "codex-slack/workspace/+/topic/+/verdict"
 
 # Topic pattern: codex-slack/workspace/{wid}/topic/{tid}/{type}
 _TOPIC_PARTS = 6
@@ -297,7 +298,8 @@ def _on_connect(client: mqtt.Client, userdata, flags, reason_code, properties) -
     client.subscribe(_RESPONSE_TOPIC, qos=1)
     client.subscribe(_STATUS_TOPIC, qos=0)
     client.subscribe(_CHUNK_TOPIC, qos=0)
-    LOGGER.info("mqtt.subscribed topics=%s,%s,%s", _RESPONSE_TOPIC, _STATUS_TOPIC, _CHUNK_TOPIC)
+    client.subscribe(_VERDICT_TOPIC, qos=1)
+    LOGGER.info("mqtt.subscribed topics=%s,%s,%s,%s", _RESPONSE_TOPIC, _STATUS_TOPIC, _CHUNK_TOPIC, _VERDICT_TOPIC)
 
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties) -> None:  # type: ignore[type-arg]
@@ -387,6 +389,24 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
                             }),
                         },
                     )
+    elif msg_type == "verdict":
+        reply_to = payload.get("reply_to")
+        if reply_to:
+            loop = userdata.get("loop")
+            app_state = userdata.get("app_state")
+            if loop and app_state:
+                def _resolve_verdict(mid=reply_to, data=payload):
+                    fut = getattr(app_state, "veto_futures", {}).get(mid)
+                    if fut is not None and not fut.done():
+                        fut.set_result(data)
+                loop.call_soon_threadsafe(_resolve_verdict)
+        LOGGER.info(
+            "mqtt.verdict topic_id=%s reply_to=%s verdict=%s",
+            topic_id,
+            reply_to,
+            payload.get("verdict"),
+        )
+        return
     else:
         return
 

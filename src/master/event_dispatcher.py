@@ -1,4 +1,4 @@
-"""Event dispatch infrastructure: queue, worker, watchdog, and emit_event helper.
+"""Event dispatch infrastructure: queue, worker, watchdog, emit_event, and veto_dispatch.
 
 A single asyncio.Queue is owned by app.state. Emit sites call emit_event() from
 any thread (FastAPI loop, MQTT thread, scheduler thread) and return immediately.
@@ -7,7 +7,11 @@ across events — calling _handle_event for each. Within a single event, all
 matching event_actions fire concurrently via asyncio.gather so a slow sibling
 does not delay its peers or the next queued event.
 
-See ADR-0013 and design doc §4 for the full rationale.
+veto_dispatch() is a separate synchronous-await path for pre-commit interceptors
+(e.g. topic_archiving). It bypasses the queue, dispatches staff, and awaits
+structured verdicts via asyncio.Future objects stored in app_state.veto_futures.
+
+See ADR-0013 (post-commit events) and ADR-0014 (pre-commit veto) for rationale.
 """
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from .db import get_connection
 from .staffs import resolve_staff
@@ -25,6 +30,15 @@ LOGGER = logging.getLogger(__name__)
 # message row, broadcast on the WS hub, and publish to MQTT. NOT a budget for the agent's
 # LLM response, which is fully async (the agent reply arrives via MQTT minutes later).
 DISPATCH_TIMEOUT_S = 10.0
+
+# Budget for the agent to respond with a verdict. Covers LLM think time + MQTT round-trip.
+VETO_TIMEOUT_S = 30.0
+
+
+class VetoResult(NamedTuple):
+    allowed: bool
+    reason: str
+    timed_out: bool
 
 
 # ── Template rendering ────────────────────────────────────────────────────────
@@ -383,6 +397,156 @@ def _record_run(db_path: str, action_id: str, *, status: str, output: str) -> No
         conn.commit()
     finally:
         conn.close()
+
+
+# ── Veto dispatch — synchronous-await path for pre-commit interceptors ────────
+
+async def veto_dispatch(
+    *,
+    app_state,
+    workspace_id: str,
+    topic_id: str,
+    variables: dict[str, str],
+) -> VetoResult:
+    """Dispatch all enabled topic_archiving actions and await their verdicts.
+
+    Returns VetoResult(allowed, reason, timed_out):
+    - allowed=True, timed_out=False  → proceed with archive
+    - allowed=False, timed_out=False → at least one action denied; reason carries the text
+    - allowed=True,  timed_out=True  → no verdict received within VETO_TIMEOUT_S
+    - allowed=False, timed_out=True  → (not used; timeout is always returned as allowed=True)
+
+    Caller maps timed_out=True to HTTP 504 and allowed=False to HTTP 423.
+    """
+    from .dispatch import dispatch_to_staff  # local to avoid circular import at module load
+
+    conn = get_connection(app_state.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM event_actions"
+            " WHERE scope_type='topic'"
+            "   AND scope_id=?"
+            "   AND event_type='topic_archiving'"
+            "   AND enabled=1",
+            (topic_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return VetoResult(allowed=True, reason="", timed_out=False)
+
+    loop = asyncio.get_running_loop()
+    # message_id → (Future, action_row)
+    pending: dict[str, tuple[asyncio.Future, object]] = {}
+
+    for row in rows:
+        conn = get_connection(app_state.db_path)
+        try:
+            staff = resolve_staff(conn, row["staff_name"], workspace_id, topic_id)
+        finally:
+            conn.close()
+
+        if staff is None:
+            LOGGER.warning("veto_dispatch.staff_missing id=%s staff=%s", row["id"], row["staff_name"])
+            _record_run(
+                app_state.db_path,
+                row["id"],
+                status="staff_missing",
+                output=f"staff_name={row['staff_name']!r} not resolvable at fire time",
+            )
+            continue
+
+        try:
+            prompt = render_template(row["prompt_template"], variables)
+        except Exception as exc:
+            LOGGER.exception("veto_dispatch.render_failed id=%s", row["id"])
+            _record_run(app_state.db_path, row["id"], status="render_error", output=str(exc))
+            continue
+
+        try:
+            message_id = await asyncio.wait_for(
+                dispatch_to_staff(
+                    app_state=app_state,
+                    workspace_id=workspace_id,
+                    topic_id=topic_id,
+                    staff=staff,
+                    prompt_text=prompt,
+                    sender="event",
+                    raw_text=prompt,
+                    response_mode="verdict",
+                ),
+                timeout=DISPATCH_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            LOGGER.warning("veto_dispatch.dispatch_timeout id=%s", row["id"])
+            _record_run(
+                app_state.db_path,
+                row["id"],
+                status="dispatch_error",
+                output=f"timeout after {DISPATCH_TIMEOUT_S:.0f}s",
+            )
+            continue
+
+        fut: asyncio.Future = loop.create_future()
+        app_state.veto_futures[message_id] = fut
+        pending[message_id] = (fut, row)
+
+    if not pending:
+        return VetoResult(allowed=True, reason="", timed_out=False)
+
+    futures_list = [fut for fut, _row in pending.values()]
+    try:
+        done, timed_out_set = await asyncio.wait(futures_list, timeout=VETO_TIMEOUT_S)
+    finally:
+        for mid in list(pending):
+            app_state.veto_futures.pop(mid, None)
+
+    if timed_out_set:
+        LOGGER.warning(
+            "veto_dispatch.timeout topic_id=%s pending=%d",
+            topic_id,
+            len(timed_out_set),
+        )
+        for _mid, (fut, row) in pending.items():
+            if fut in timed_out_set:
+                _record_run(app_state.db_path, row["id"], status="veto_timeout", output="no verdict received")
+        return VetoResult(allowed=True, reason="", timed_out=True)
+
+    # Scan completed futures; first deny wins
+    for _mid, (fut, row) in pending.items():
+        if fut not in done:
+            continue
+        if fut.exception():
+            LOGGER.warning("veto_dispatch.future_exception mid=%s", _mid)
+            continue
+        verdict_data = fut.result()
+        if isinstance(verdict_data, dict):
+            verdict = verdict_data.get("verdict")
+            reason = verdict_data.get("reason", "")
+            agent_name = verdict_data.get("agent_name", "")
+            if verdict == "deny":
+                _record_run(
+                    app_state.db_path,
+                    row["id"],
+                    status="vetoed",
+                    output=f"agent={agent_name!r} reason={reason[:200]!r}",
+                )
+                LOGGER.info(
+                    "veto_dispatch.denied topic_id=%s agent=%s reason=%s",
+                    topic_id,
+                    agent_name,
+                    reason[:120],
+                )
+                return VetoResult(allowed=False, reason=reason, timed_out=False)
+            _record_run(
+                app_state.db_path,
+                row["id"],
+                status="ok",
+                output=f"agent={agent_name!r} verdict=allow",
+            )
+
+    return VetoResult(allowed=True, reason="", timed_out=False)
 
 
 # ── Stall watchdog ────────────────────────────────────────────────────────────

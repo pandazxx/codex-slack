@@ -57,6 +57,10 @@ def _chunk_topic(workspace_id: str, topic_id: str) -> str:
     return f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/chunk"
 
 
+def _verdict_topic(workspace_id: str, topic_id: str) -> str:
+    return f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/verdict"
+
+
 def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str, repo_ref: str = "", base_sha: str = "") -> None:
     if Path(worktree_path).exists():
         return
@@ -82,6 +86,31 @@ def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str, repo_ref: s
 
 
 _SESSION_NOT_FOUND = "No conversation found with session ID"
+
+_VERDICT_RE = __import__("re").compile(r'\{[^{}]+\}')
+
+
+def _extract_verdict(response_text: str) -> dict:  # type: ignore[type-arg]
+    """Find the last {verdict, reason} JSON object in the LLM response.
+
+    Tries to parse the entire text as JSON first, then scans for the last
+    JSON object containing a valid verdict key. Falls back to allow if none found.
+    """
+    text = response_text.strip()
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and data.get("verdict") in ("allow", "deny"):
+            return data
+    except (json.JSONDecodeError, ValueError):
+        pass
+    for m in reversed(_VERDICT_RE.findall(text)):
+        try:
+            data = json.loads(m)
+            if isinstance(data, dict) and data.get("verdict") in ("allow", "deny"):
+                return data
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return {"verdict": "allow", "reason": "(no verdict found in response)"}
 
 
 def _fetch_attachment(master_url: str, attachment_id: str, filename: str, worktree: str) -> None:
@@ -383,6 +412,7 @@ def _process_prompt(
     system_prompt = payload.get("system_prompt")
     attachments = payload.get("attachments", [])
     master_url = payload.get("master_url", "http://master:8080")
+    response_mode = payload.get("response_mode")
 
     if not text:
         LOGGER.warning("agent.empty_prompt topic_id=%s", topic_id)
@@ -449,6 +479,25 @@ def _process_prompt(
         }),
         qos=1,
     )
+
+    if response_mode == "verdict":
+        verdict = _extract_verdict(response_text)
+        client.publish(
+            _verdict_topic(workspace_id, topic_id),
+            json.dumps({
+                "reply_to": message_id,
+                "agent_name": agent_name,
+                "verdict": verdict["verdict"],
+                "reason": verdict.get("reason", ""),
+            }),
+            qos=1,
+        )
+        LOGGER.info(
+            "agent.verdict_published topic_id=%s verdict=%s",
+            topic_id,
+            verdict["verdict"],
+        )
+
     client.publish(_status_topic(workspace_id, topic_id), json.dumps({"state": "idle"}), qos=0)
 
 

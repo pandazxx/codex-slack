@@ -29,10 +29,18 @@
             <option value="topic_message_received">topic_message_received — agent replies</option>
             <option value="topic_scheduler">topic_scheduler — cron schedule</option>
             <option value="topic_archived">topic_archived — topic is archived</option>
+            <option value="topic_archiving">topic_archiving — before topic is archived (veto)</option>
           </select>
 
           <label>Staff <span class="req">*</span></label>
-          <input v-model="form.staff_name" placeholder="e.g. reviewer" />
+          <select v-model="form.staff_name">
+            <option value="" disabled>— select staff —</option>
+            <template v-for="group in staffGroups" :key="group.label">
+              <optgroup :label="group.label">
+                <option v-for="s in group.items" :key="s.name" :value="s.name">{{ s.name }}</option>
+              </optgroup>
+            </template>
+          </select>
 
           <label>Prompt template <span class="req">*</span></label>
           <div>
@@ -143,6 +151,7 @@ const saving = ref(false)
 const formError = ref('')
 const configuredTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone)
 const expandedOutputs = ref({})
+const staffGroups = ref([])
 
 const emptyForm = () => ({
   event_type: 'topic_message_sent',
@@ -161,6 +170,7 @@ const variableHint = computed(() => {
     topic_message_received: '{msgbody}, {response_json}, {topic_name}, {topic_json}',
     topic_scheduler: '{topic_name}, {workspace_name}, {topic_json}',
     topic_archived: '{topic_name}, {topic_json}',
+    topic_archiving: '{topic_name}, {topic_json}',
   }
   return m[form.value.event_type] || ''
 })
@@ -168,10 +178,13 @@ const variableHint = computed(() => {
 async function load() {
   loading.value = true
   try {
-    const [topicRes, actionsRes, tzRes] = await Promise.all([
+    const [topicRes, actionsRes, tzRes, globalStaffRes, wsStaffRes, topicStaffRes] = await Promise.all([
       fetch(`/api/workspaces/${wsId}/topics/${topicId}`),
       fetch(`/api/workspaces/${wsId}/topics/${topicId}/event-actions`),
       fetch('/api/config/system-settings'),
+      fetch('/api/staffs'),
+      fetch(`/api/workspaces/${wsId}/staffs`),
+      fetch(`/api/workspaces/${wsId}/topics/${topicId}/staffs`),
     ])
     if (topicRes.ok) {
       const t = await topicRes.json()
@@ -184,6 +197,20 @@ async function load() {
         ? tz.timezone
         : Intl.DateTimeFormat().resolvedOptions().timeZone
     }
+    const groups = []
+    if (topicStaffRes.ok) {
+      const items = (await topicStaffRes.json()).filter(s => !s.inherited_from)
+      if (items.length) groups.push({ label: 'Topic', items })
+    }
+    if (wsStaffRes.ok) {
+      const items = (await wsStaffRes.json()).filter(s => !s.inherited_from)
+      if (items.length) groups.push({ label: 'Workspace', items })
+    }
+    if (globalStaffRes.ok) {
+      const items = (await globalStaffRes.json()).filter(s => !s.inherited_from)
+      if (items.length) groups.push({ label: 'Global', items })
+    }
+    staffGroups.value = groups
   } finally {
     loading.value = false
   }
@@ -305,6 +332,7 @@ function typeBadgeClass(eventType) {
     'badge-received': eventType === 'topic_message_received',
     'badge-scheduler': eventType === 'topic_scheduler',
     'badge-archived': eventType === 'topic_archived',
+    'badge-archiving': eventType === 'topic_archiving',
   }
 }
 

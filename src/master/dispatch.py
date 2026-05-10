@@ -70,6 +70,7 @@ async def dispatch_to_staff(
     raw_text: str | None = None,
     attachments: list[dict] | None = None,
     event_action_id: str | None = None,
+    response_mode: str | None = None,
 ) -> str:
     """Insert a message row, build the MQTT dispatch payload, broadcast on the hub, and publish.
 
@@ -114,7 +115,7 @@ async def dispatch_to_staff(
     finally:
         conn.close()
 
-    payload = json.dumps({
+    payload_dict: dict = {
         "message_id": message_id,
         "agent_name": staff["name"],
         "adapter": staff["adapter"],
@@ -130,7 +131,10 @@ async def dispatch_to_staff(
         "system_prompt": staff["system_prompt"],
         "text": prompt_text,
         "attachments": attachments,
-    })
+    }
+    if response_mode is not None:
+        payload_dict["response_mode"] = response_mode
+    payload = json.dumps(payload_dict)
 
     disp_conn = get_connection(app_state.db_path)
     try:
