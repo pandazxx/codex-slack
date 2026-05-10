@@ -22,6 +22,18 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _set_veto_status(db_path: str, topic_id: str, status: str, reason: str) -> None:
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE topics SET veto_status = ?, veto_reason = ? WHERE id = ?",
+            (status, reason, topic_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _slugify(text: str) -> str:
     slug = text.lower().strip()
     slug = re.sub(r"[^\w\s-]", "", slug)
@@ -94,6 +106,8 @@ class TopicOut(BaseModel):
     worktree_path: str
     created_at: str
     archived_at: str | None
+    veto_status: str | None = None
+    veto_reason: str | None = None
 
 
 def _row_to_topic(row) -> TopicOut:
@@ -107,6 +121,8 @@ def _row_to_topic(row) -> TopicOut:
         worktree_path=row["worktree_path"],
         created_at=row["created_at"],
         archived_at=row["archived_at"],
+        veto_status=row["veto_status"] if "veto_status" in row.keys() else None,
+        veto_reason=row["veto_reason"] if "veto_reason" in row.keys() else None,
     )
 
 
@@ -212,11 +228,13 @@ async def delete_topic(
             variables={"topic_name": topic_name},
         )
         if result.timed_out:
+            _set_veto_status(request.app.state.db_path, topic_id, "timeout", "veto staff did not respond in time")
             raise HTTPException(
                 status_code=504,
                 detail={"reason": "veto staff did not respond in time"},
             )
         if not result.allowed:
+            _set_veto_status(request.app.state.db_path, topic_id, "vetoed", result.reason)
             raise HTTPException(
                 status_code=423,
                 detail={"reason": result.reason},
@@ -225,7 +243,8 @@ async def delete_topic(
     conn = get_connection(request.app.state.db_path)
     try:
         conn.execute(
-            "UPDATE topics SET archived_at = ? WHERE id = ?", (_now(), topic_id)
+            "UPDATE topics SET archived_at = ?, veto_status = NULL, veto_reason = NULL WHERE id = ?",
+            (_now(), topic_id),
         )
         conn.commit()
     finally:
