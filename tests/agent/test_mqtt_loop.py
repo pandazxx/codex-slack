@@ -417,9 +417,9 @@ def test_on_connect_subscribes_to_workspace_topic():
     reason = MagicMock()
     reason.is_failure = False
     _on_connect(client, {"workspace_id": "ws42"}, None, reason, None)
-    topic = client.subscribe.call_args.args[0]
-    assert "ws42" in topic
-    assert topic.endswith("/prompt")
+    subscribed_topics = [call.args[0] for call in client.subscribe.call_args_list]
+    assert any("ws42" in t and t.endswith("/prompt") for t in subscribed_topics)
+    assert any("ws42" in t and t.endswith("/cancel") for t in subscribed_topics)
 
 
 # --- _fetch_attachment ---
