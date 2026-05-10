@@ -74,7 +74,13 @@
             </span>
           </span>
           <RouterLink v-if="!isArchived && !t.archived_at" :to="`/workspaces/${id}/topics/${t.id}/settings`" class="topic-settings-btn" title="Topic settings">&#9881;</RouterLink>
-          <button v-if="!isArchived" class="remove-btn" @click="deleteTopic(t.id, t.subject)" :disabled="archiving" title="Archive topic">{{ archiving ? 'Archiving…' : 'Archive' }}</button>
+          <button v-if="!isArchived" class="remove-btn"
+            :class="{ 'veto-rejected-btn': !!vetoResults[t.id] }"
+            @click="handleArchiveClick(t)"
+            :disabled="!!archivingTopics[t.id]"
+            :title="vetoResults[t.id] ? 'Click to see veto details' : 'Archive topic'">
+            {{ archivingTopics[t.id] ? 'Archiving…' : vetoResults[t.id] ? 'Archive rejected' : 'Archive' }}
+          </button>
         </li>
       </ul>
     </section>
@@ -226,8 +232,9 @@ const savingStaff = ref(false)
 const staffError = ref('')
 const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false })
 
-const archiving = ref(false)
-const vetoDialog = ref(null)  // null | { topicId, subject, status: 'vetoed'|'timeout', reason }
+const archivingTopics = ref({})  // topicId → true while DELETE is in flight
+const vetoResults = ref({})     // topicId → { topicId, subject, status, reason }
+const vetoDialog = ref(null)    // null | entry from vetoResults (shown when user clicks the button)
 
 const isArchived = computed(() => !!workspace.value?.archived_at)
 
@@ -393,36 +400,58 @@ async function createTopic() {
   }
 }
 
+function handleArchiveClick(t) {
+  if (archivingTopics.value[t.id]) return
+  if (vetoResults.value[t.id]) {
+    vetoDialog.value = vetoResults.value[t.id]
+  } else {
+    deleteTopic(t.id, t.subject)
+  }
+}
+
+function showVetoDialog(topicId) {
+  vetoDialog.value = vetoResults.value[topicId] || null
+}
+
 async function deleteTopic(topicId, subject) {
   if (!confirm(`Archive topic "${subject}"?`)) return
-  archiving.value = true
-  vetoDialog.value = null
+  archivingTopics.value = { ...archivingTopics.value, [topicId]: true }
   try {
     const res = await fetch(`/api/workspaces/${id}/topics/${topicId}`, { method: 'DELETE' })
     if (res.status === 204) {
+      const next = { ...vetoResults.value }
+      delete next[topicId]
+      vetoResults.value = next
       await load()
     } else if (res.status === 423) {
       const body = await res.json().catch(() => ({}))
-      vetoDialog.value = { topicId, subject, status: 'vetoed', reason: body?.detail?.reason || body?.detail || 'Archive blocked by veto staff.' }
+      vetoResults.value = { ...vetoResults.value, [topicId]: { topicId, subject, status: 'vetoed', reason: body?.detail?.reason || body?.detail || 'Archive blocked by veto staff.' } }
     } else if (res.status === 504) {
       const body = await res.json().catch(() => ({}))
-      vetoDialog.value = { topicId, subject, status: 'timeout', reason: body?.detail?.reason || 'Veto staff did not respond in time.' }
+      vetoResults.value = { ...vetoResults.value, [topicId]: { topicId, subject, status: 'timeout', reason: body?.detail?.reason || 'Veto staff did not respond in time.' } }
     }
   } finally {
-    archiving.value = false
+    const next = { ...archivingTopics.value }
+    delete next[topicId]
+    archivingTopics.value = next
   }
 }
 
 async function overrideTopic() {
   if (!vetoDialog.value) return
-  const { topicId, subject } = vetoDialog.value
+  const { topicId } = vetoDialog.value
   vetoDialog.value = null
-  archiving.value = true
+  archivingTopics.value = { ...archivingTopics.value, [topicId]: true }
   try {
     await fetch(`/api/workspaces/${id}/topics/${topicId}?override=true`, { method: 'DELETE' })
+    const next = { ...vetoResults.value }
+    delete next[topicId]
+    vetoResults.value = next
     await load()
   } finally {
-    archiving.value = false
+    const next = { ...archivingTopics.value }
+    delete next[topicId]
+    archivingTopics.value = next
   }
 }
 
@@ -609,6 +638,8 @@ section { margin-bottom: 2rem; }
   .form-grid label + .checkbox-label { margin-bottom: 0.5rem; }
   .form-actions { flex-wrap: wrap; }
 }
+.veto-rejected-btn { background: #fef2f2 !important; color: #dc2626 !important; border: 1px solid #fecaca !important; }
+.veto-rejected-btn:hover { background: #fee2e2 !important; }
 .veto-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .veto-dialog { background: #fff; border-radius: 8px; padding: 1.5rem; max-width: 480px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.18); }
 .veto-dialog h3 { margin: 0 0 0.75rem; color: #dc2626; }
