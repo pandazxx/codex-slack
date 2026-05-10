@@ -181,6 +181,7 @@
         <p v-if="vetoDialog.reason" class="veto-reason">{{ vetoDialog.reason }}</p>
         <div class="form-actions">
           <button class="btn-primary" @click="overrideTopic">Override and archive anyway</button>
+          <button class="btn-secondary" @click="checkAgain">Check again</button>
           <button class="btn-secondary" @click="vetoDialog = null">Cancel</button>
         </div>
       </div>
@@ -419,8 +420,7 @@ function showVetoDialog(topicId) {
   vetoDialog.value = vetoResults.value[topicId] || null
 }
 
-async function deleteTopic(topicId, subject) {
-  if (!confirm(`Archive topic "${subject}"?`)) return
+async function _archiveTopic(topicId, subject) {
   archivingTopics.value = { ...archivingTopics.value, [topicId]: true }
   try {
     const res = await fetch(`/api/workspaces/${id}/topics/${topicId}`, { method: 'DELETE' })
@@ -428,22 +428,36 @@ async function deleteTopic(topicId, subject) {
       const next = { ...vetoResults.value }
       delete next[topicId]
       vetoResults.value = next
-
       await load()
     } else if (res.status === 423) {
       const body = await res.json().catch(() => ({}))
       vetoResults.value = { ...vetoResults.value, [topicId]: { topicId, subject, status: 'vetoed', reason: body?.detail?.reason || body?.detail || 'Archive blocked by veto staff.' } }
-
+      vetoDialog.value = vetoResults.value[topicId]
     } else if (res.status === 504) {
       const body = await res.json().catch(() => ({}))
       vetoResults.value = { ...vetoResults.value, [topicId]: { topicId, subject, status: 'timeout', reason: body?.detail?.reason || 'Veto staff did not respond in time.' } }
-
+      vetoDialog.value = vetoResults.value[topicId]
     }
   } finally {
     const next = { ...archivingTopics.value }
     delete next[topicId]
     archivingTopics.value = next
   }
+}
+
+async function deleteTopic(topicId, subject) {
+  if (!confirm(`Archive topic "${subject}"?`)) return
+  await _archiveTopic(topicId, subject)
+}
+
+async function checkAgain() {
+  if (!vetoDialog.value) return
+  const { topicId, subject } = vetoDialog.value
+  vetoDialog.value = null
+  const next = { ...vetoResults.value }
+  delete next[topicId]
+  vetoResults.value = next
+  await _archiveTopic(topicId, subject)
 }
 
 async function overrideTopic() {
@@ -456,7 +470,6 @@ async function overrideTopic() {
     const next = { ...vetoResults.value }
     delete next[topicId]
     vetoResults.value = next
-    _saveVetoResults()
     await load()
   } finally {
     const next = { ...archivingTopics.value }
