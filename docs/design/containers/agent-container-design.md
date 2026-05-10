@@ -117,7 +117,7 @@ The master typically mounts:
 
 - workspace volume at `/workspace`
 - Codex auth seed at `/run/secrets/codex_auth.json`
-- SSH agent socket at `/run/secrets/ssh-auth.sock`
+- SSH agent socket at `/run/ssh-agent.sock`
 - transient request data under `/workspace/message/...`
 
 ## Storage Layout

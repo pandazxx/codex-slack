@@ -523,7 +523,7 @@ class MasterService:
         if self._git_user_email:
             env["AGENT_GIT_USER_EMAIL"] = self._git_user_email
         if self._agent_ssh_auth_sock_path:
-            env["SSH_AUTH_SOCK"] = "/run/secrets/ssh-auth.sock"
+            env["SSH_AUTH_SOCK"] = "/run/ssh-agent.sock"
             env["GIT_SSH_COMMAND"] = self._agent_git_ssh_command()
         # CLAUDE_CONFIG_DIR is intentionally NOT set here. The entrypoint seeds
         # baked-in Claude config into a writable ~/.claude/ inside the workspace
@@ -565,7 +565,7 @@ class MasterService:
         if self._agent_codex_auth_json_path:
             mounts.append(f"{self._agent_codex_auth_json_path}:/run/secrets/codex_auth.json:ro")
         if self._agent_ssh_auth_sock_path:
-            mounts.append(f"{self._agent_ssh_auth_sock_path}:/run/secrets/ssh-auth.sock")
+            mounts.append(f"{self._agent_ssh_auth_sock_path}:/run/ssh-agent.sock")
         if self._agent_ssh_known_hosts_path:
             mounts.append(f"{self._agent_ssh_known_hosts_path}:/run/secrets/ssh_known_hosts:ro")
         return mounts
