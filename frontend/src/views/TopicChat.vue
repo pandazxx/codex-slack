@@ -27,7 +27,7 @@
         :class="m.sender === 'user' ? 'user' : 'agent'"
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
-        <div class="bubble">
+        <div class="bubble" :class="{'bubble-streaming': m.sender === 'agent' && m.streaming, 'bubble-done': m.sender === 'agent' && !m.streaming}">
           <template v-if="m.sender === 'agent'">
             <template v-if="m.streaming && m.rows?.length">
               <div class="trace-row" v-for="(row, i) in m.rows" :key="i">
@@ -101,6 +101,12 @@
           </template>
           <template v-else><MarkdownMessage :text="m.text" /></template>
         </div>
+        <button
+          v-if="m.sender === 'agent' && m.streaming"
+          class="cancel-btn"
+          @click="cancelMessage(m.id)"
+          title="Cancel this response"
+        >&#9632; Stop</button>
         <div v-if="m.attachments && m.attachments.length" class="attachment-list">
           <template v-for="a in m.attachments" :key="a.id">
             <div v-if="a.mime_type && a.mime_type.startsWith('image/')" class="attachment-img-wrap">
@@ -615,6 +621,16 @@ async function sendMessage() {
 
 function toggleRaw(id) { rawView.value[id] = !rawView.value[id] }
 
+async function cancelMessage(messageId) {
+  try {
+    await fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages/${messageId}/cancel`, {
+      method: 'POST',
+    })
+  } catch (_) {
+    // ignore — the streaming bubble will finalize when the agent responds
+  }
+}
+
 function isDispatchPayload(transcript) {
   if (!transcript) return false
   try { const p = JSON.parse(transcript); return p && typeof p === 'object' && 'adapter' in p } catch { return false }
@@ -706,7 +722,9 @@ onUnmounted(() => {
 .label { font-size: 0.75em; color: #64748b; margin-bottom: 2px; }
 .bubble { padding: 0.6rem 0.9rem; border-radius: 12px; line-height: 1.45; }
 .message.user .bubble { background: #fff; color: #1e293b; border: 1px solid #2563eb; border-bottom-right-radius: 3px; max-width: 100%; overflow: hidden; }
-.message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; max-width: 100%; overflow: hidden; }
+.message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; max-width: 100%; overflow: hidden; transition: border-color 0.3s; }
+.bubble-streaming { border-color: #f97316 !important; box-shadow: 0 0 0 1px #f9731640; }
+.bubble-done { border-color: #22c55e !important; }
 .ts { font-size: 0.7em; color: #94a3b8; margin-top: 2px; }
 .detail-panel { margin-top: 4px; max-width: 100%; }
 .detail-toggle { font-size: 0.72em; color: #94a3b8; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.5rem; }
@@ -750,6 +768,8 @@ onUnmounted(() => {
 .dispatch-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 0.78em; }
 .dispatch-info { color: #64748b; }
 .dispatch-cmd { font-size: 0.72em; max-height: 200px; overflow-x: auto; white-space: pre; }
+.cancel-btn { align-self: flex-start; margin-top: 4px; padding: 2px 10px; background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; border-radius: 4px; cursor: pointer; font-size: 0.78em; }
+.cancel-btn:hover { background: #fecaca; }
 .send-error { color: #dc2626; font-size: 0.85em; margin-top: 0.25rem; }
 .hint { font-size: 0.8em; text-align: right; margin-top: 0.25rem; }
 .muted { color: #64748b; }

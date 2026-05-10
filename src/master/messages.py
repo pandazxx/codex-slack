@@ -202,6 +202,27 @@ def _read_transcript(db_path: str, message_id: str) -> str | None:
         conn.close()
 
 
+@router.post("/{message_id}/cancel", status_code=202)
+async def cancel_message(
+    workspace_id: str,
+    topic_id: str,
+    message_id: str,
+    request: Request,
+) -> dict:  # type: ignore[type-arg]
+    """Signal the agent to abort an in-progress response.
+
+    Publishes a cancel MQTT message; the agent kills the running subprocess and
+    publishes a normal (partial) response, which finalises the streaming bubble.
+    """
+    mqtt_cancel_topic = f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/cancel"
+    request.app.state.mqtt.publish(
+        mqtt_cancel_topic,
+        json.dumps({"message_id": message_id}),
+        qos=1,
+    )
+    return {"status": "cancel_requested", "message_id": message_id}
+
+
 @router.get("", response_model=list[MessageOut])
 def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[MessageOut]:
     conn = get_connection(request.app.state.db_path)

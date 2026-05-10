@@ -6,6 +6,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +22,10 @@ _LLM_TIMEOUT = None  # no timeout — claude/codex can run as long as needed
 
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent-llm")
 
+# Tracks active claude subprocesses by reply_message_id so they can be killed on cancel.
+_active_procs: dict[str, subprocess.Popen] = {}  # type: ignore[type-arg]
+_active_procs_lock = threading.Lock()
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -29,6 +34,13 @@ def _now() -> str:
 def _parse_prompt_topic(raw: str) -> tuple[str, str] | None:
     parts = raw.split("/")
     if len(parts) != _TOPIC_PARTS or parts[5] != "prompt":
+        return None
+    return parts[2], parts[4]  # workspace_id, topic_id
+
+
+def _parse_cancel_topic(raw: str) -> tuple[str, str] | None:
+    parts = raw.split("/")
+    if len(parts) != _TOPIC_PARTS or parts[5] != "cancel":
         return None
     return parts[2], parts[4]  # workspace_id, topic_id
 
@@ -119,37 +131,44 @@ def _stream_claude_once(
     is_error = False
     seq = seq_start
     outputs: list[str] = []
+    proc = None
     try:
         proc = subprocess.Popen(
             cmd, cwd=worktree,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            events.append(event)
-            client.publish(chunk_topic, json.dumps({
-                "message_id": reply_message_id,
-                "agent_name": agent_name,
-                "seq": seq,
-                "event": event,
-            }), qos=0)
-            LOGGER.debug("agent.llm_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
-            seq += 1
-            if event.get("type") == "result":
-                new_session_id = event.get("session_id")
-                result_text = event.get("result") or event.get("last_response")
-                if result_text:
-                    outputs.append(result_text)
-                if event.get("is_error"):
-                    is_error = True
-        proc.wait()
+        with _active_procs_lock:
+            _active_procs[reply_message_id] = proc
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                events.append(event)
+                client.publish(chunk_topic, json.dumps({
+                    "message_id": reply_message_id,
+                    "agent_name": agent_name,
+                    "seq": seq,
+                    "event": event,
+                }), qos=0)
+                LOGGER.debug("agent.llm_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+                seq += 1
+                if event.get("type") == "result":
+                    new_session_id = event.get("session_id")
+                    result_text = event.get("result") or event.get("last_response")
+                    if result_text:
+                        outputs.append(result_text)
+                    if event.get("is_error"):
+                        is_error = True
+            proc.wait()
+        finally:
+            with _active_procs_lock:
+                _active_procs.pop(reply_message_id, None)
         output = "\n\n---\n\n".join(outputs) if outputs else None
         if not output:
             err = (proc.stderr.read() or "").strip()
@@ -163,10 +182,14 @@ def _stream_claude_once(
     except FileNotFoundError:
         return "(claude CLI not found in agent container)", None, None, True
     except Exception as exc:
-        try:
-            proc.kill()
-        finally:
-            return f"(claude error: {exc})", None, None, True
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        with _active_procs_lock:
+            _active_procs.pop(reply_message_id, None)
+        return f"(claude error: {exc})", None, None, True
 
 
 def _run_claude(
@@ -435,8 +458,10 @@ def _on_connect(client: mqtt.Client, userdata, flags, reason_code, properties) -
         return
     workspace_id = userdata["workspace_id"]
     prompt_sub = f"codex-slack/workspace/{workspace_id}/topic/+/prompt"
+    cancel_sub = f"codex-slack/workspace/{workspace_id}/topic/+/cancel"
     client.subscribe(prompt_sub, qos=1)
-    LOGGER.info("agent.mqtt_connected subscribed=%s", prompt_sub)
+    client.subscribe(cancel_sub, qos=1)
+    LOGGER.info("agent.mqtt_connected subscribed=%s,%s", prompt_sub, cancel_sub)
 
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties) -> None:  # type: ignore[type-arg]
@@ -445,6 +470,28 @@ def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties) 
 
 def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
     LOGGER.info("agent.mqtt_message topic=%s bytes=%d", msg.topic, len(msg.payload))
+
+    parsed_cancel = _parse_cancel_topic(msg.topic)
+    if parsed_cancel is not None:
+        _, topic_id = parsed_cancel
+        try:
+            payload = json.loads(msg.payload)
+            cancel_msg_id = payload.get("message_id")
+        except Exception:
+            cancel_msg_id = None
+        if cancel_msg_id:
+            with _active_procs_lock:
+                proc = _active_procs.get(cancel_msg_id)
+            if proc is not None:
+                LOGGER.info("agent.cancel message_id=%s pid=%s", cancel_msg_id, proc.pid)
+                try:
+                    proc.kill()
+                except Exception:
+                    LOGGER.exception("agent.cancel_kill_failed message_id=%s", cancel_msg_id)
+            else:
+                LOGGER.info("agent.cancel_noop message_id=%s reason=not_found", cancel_msg_id)
+        return
+
     parsed = _parse_prompt_topic(msg.topic)
     if parsed is None:
         return

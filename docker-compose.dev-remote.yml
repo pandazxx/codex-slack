@@ -1,0 +1,62 @@
+services:
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: codex-slack-master:dev-remote
+    container_name: codex-slack-master-remote
+    working_dir: /opt/codex-slack
+    ports:
+      - "8082:8080"
+    environment:
+      MASTER_PORT: 8080
+      MASTER_DRY_RUN: "false"
+      CONTAINER_RUNTIME: docker
+      DOCKER_HOST: unix:///run/container.sock
+      CONTAINER_HOST: unix:///run/container.sock
+      DOCKER_GID: ${DOCKER_GID:-988}
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+    volumes:
+      - master_data:/opt/codex-slack/data/master
+      - /var/run/docker.sock:/run/container.sock
+    group_add:
+      - "${DOCKER_GID:-988}"
+    depends_on:
+      - mosquitto
+    networks:
+      - internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: codex-slack-mosquitto-remote
+    entrypoint:
+      - sh
+      - -c
+      - |
+        printf 'listener 1883\nallow_anonymous true\npersistence false\nlog_type error\n' \
+          > /mosquitto/config/mosquitto.conf
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
+    networks:
+      - internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$SYS/broker/uptime", "-c", "1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  master_data:
