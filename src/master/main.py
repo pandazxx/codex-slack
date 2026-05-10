@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -65,6 +66,111 @@ def _active_workspaces(db_path: str) -> list[dict]:  # type: ignore[type-arg]
         conn.close()
 
 
+_STALE_STREAM_TIMEOUT_SECONDS = 600  # 10 minutes
+
+
+def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
+    """Find orphaned chunk streams and mark them as interrupted.
+
+    A stream is stale when its chunks have no corresponding final message AND
+    either the agent container is not running or the chunks are older than
+    _STALE_STREAM_TIMEOUT_SECONDS.
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            orphaned = conn.execute(
+                "SELECT c.message_id, c.topic_id, c.agent_name,"
+                " MAX(c.created_at) AS last_chunk_at"
+                " FROM chunks c"
+                " LEFT JOIN messages m ON m.id = c.message_id"
+                " WHERE m.id IS NULL"
+                " GROUP BY c.message_id"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.exception("master.stale_stream_query_failed")
+        return
+
+    if not orphaned:
+        return
+
+    now = time.time()
+    hub = getattr(app_state, "hub", None) if app_state else None
+    loop = getattr(app_state, "event_loop", None) if app_state else None
+
+    for row in orphaned:
+        message_id = row["message_id"]
+        topic_id = row["topic_id"]
+        agent_name = row["agent_name"]
+        last_chunk_at = row["last_chunk_at"] or 0.0
+
+        chunk_age = now - last_chunk_at
+        container_running = True
+
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                ws_row = conn.execute(
+                    "SELECT w.container_name FROM workspaces w"
+                    " JOIN topics t ON t.workspace_id = w.id"
+                    " WHERE t.id = ?",
+                    (topic_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if ws_row and ws_row["container_name"]:
+                status = get_container_status(name=ws_row["container_name"], dry_run=settings.dry_run)
+                container_running = status["status"] == "running"
+        except Exception:
+            LOGGER.exception("master.stale_stream_container_check_failed message_id=%s", message_id)
+
+        is_stale = not container_running or chunk_age > _STALE_STREAM_TIMEOUT_SECONDS
+        if not is_stale:
+            continue
+
+        LOGGER.warning(
+            "master.stale_stream_interrupted message_id=%s topic_id=%s"
+            " container_running=%s chunk_age_s=%.0f",
+            message_id, topic_id, container_running, chunk_age,
+        )
+
+        try:
+            conn = sqlite3.connect(db_path)
+            try:
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                with conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO messages"
+                        " (id, topic_id, sender, agent_name, text, created_at)"
+                        " VALUES (?, ?, 'agent', ?, ?, ?)",
+                        (message_id, topic_id, agent_name, "(message interrupted)", now_str),
+                    )
+                    conn.execute("DELETE FROM chunks WHERE message_id = ?", (message_id,))
+            finally:
+                conn.close()
+        except Exception:
+            LOGGER.exception("master.stale_stream_close_failed message_id=%s", message_id)
+            continue
+
+        if hub is not None and loop is not None:
+            hub.broadcast_threadsafe(
+                "_global",
+                {
+                    "type": "message",
+                    "topic_id": topic_id,
+                    "message_id": message_id,
+                    "sender": "agent",
+                    "agent_name": agent_name,
+                    "last_response": "(message interrupted)",
+                },
+                loop,
+            )
+
+
 def _background_tasks(settings, db_path: str, stop_event: threading.Event, app_state=None) -> None:
     """Background loop: scheduler tick, idle auto-stop, health-check respawn, and auth auto-refresh."""
     idle_timeout = settings.agent_idle_timeout_seconds
@@ -80,6 +186,12 @@ def _background_tasks(settings, db_path: str, stop_event: threading.Event, app_s
                 _scheduler_tick(db_path, app_state, datetime.now(_tz.utc))
             except Exception:
                 LOGGER.exception("master.scheduler_tick_failed")
+
+        # Stale stream detection — runs once per tick across all workspaces
+        try:
+            _close_stale_streams(db_path, settings, app_state)
+        except Exception:
+            LOGGER.exception("master.stale_stream_check_failed")
 
         try:
             workspaces = _active_workspaces(db_path)
