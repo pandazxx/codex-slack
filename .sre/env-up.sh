@@ -27,11 +27,26 @@ MASTER_SSH_AUTH_SOCK_PATH="${MASTER_SSH_AUTH_SOCK_PATH:-/run/user/1000/ssh-agent
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Compute APP_VERSION from local git state so dev images reflect the
+# branch + short SHA the build was made from.
+# Format: <branch>:<short-sha>(dirty)? — e.g. feat/foo:a1b2c3d(dirty)
+if git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  GIT_BRANCH="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD)"
+  GIT_SHA="$(git -C "$PROJECT_ROOT" rev-parse --short HEAD)"
+  GIT_DIRTY=""
+  [ -n "$(git -C "$PROJECT_ROOT" status --porcelain)" ] && GIT_DIRTY="(dirty)"
+  APP_VERSION="${GIT_BRANCH}:${GIT_SHA}${GIT_DIRTY}"
+else
+  APP_VERSION="dev-unknown"
+fi
+echo "==> APP_VERSION=${APP_VERSION}"
+
 export DOCKER_HOST="$DEV_DOCKER_HOST"
 export BRANCH_SLUG
 export HOST_IP_DASHED
 export DOCKER_GID
 export MASTER_SSH_AUTH_SOCK_PATH
+export APP_VERSION
 # Branch-scoped image name so agent containers never pick up a stale
 # cross-branch :latest tag from a different dev build on the same host.
 export MASTER_RUNTIME_IMAGE="${BRANCH_SLUG}-master:dev"
