@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import subprocess
 import tempfile
 import threading
@@ -24,7 +25,11 @@ _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent-llm")
 
 # Tracks active claude subprocesses by reply_message_id so they can be killed on cancel.
 _active_procs: dict[str, subprocess.Popen] = {}  # type: ignore[type-arg]
+_active_contexts: dict[str, dict] = {}  # message_id → {workspace_id, topic_id, agent_name}
 _active_procs_lock = threading.Lock()
+
+# Module-level reference to the MQTT client, used by the SIGTERM handler.
+_mqtt_client_ref: mqtt.Client | None = None
 
 
 def _now() -> str:
@@ -41,6 +46,21 @@ def _parse_prompt_topic(raw: str) -> tuple[str, str] | None:
 def _parse_cancel_topic(raw: str) -> tuple[str, str] | None:
     parts = raw.split("/")
     if len(parts) != _TOPIC_PARTS or parts[5] != "cancel":
+        return None
+    return parts[2], parts[4]  # workspace_id, topic_id
+
+
+def _ping_topic(workspace_id: str, topic_id: str) -> str:
+    return f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/ping"
+
+
+def _pong_topic(workspace_id: str, topic_id: str) -> str:
+    return f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/pong"
+
+
+def _parse_ping_topic(raw: str) -> tuple[str, str] | None:
+    parts = raw.split("/")
+    if len(parts) != _TOPIC_PARTS or parts[5] != "ping":
         return None
     return parts[2], parts[4]  # workspace_id, topic_id
 
@@ -169,6 +189,11 @@ def _stream_claude_once(
         )
         with _active_procs_lock:
             _active_procs[reply_message_id] = proc
+            _active_contexts[reply_message_id] = {
+                "workspace_id": workspace_id,
+                "topic_id": topic_id,
+                "agent_name": agent_name,
+            }
         try:
             for line in proc.stdout:
                 line = line.strip()
@@ -198,6 +223,7 @@ def _stream_claude_once(
         finally:
             with _active_procs_lock:
                 _active_procs.pop(reply_message_id, None)
+                _active_contexts.pop(reply_message_id, None)
         output = "\n\n---\n\n".join(outputs) if outputs else None
         if not output:
             err = (proc.stderr.read() or "").strip()
@@ -218,6 +244,7 @@ def _stream_claude_once(
                 pass
         with _active_procs_lock:
             _active_procs.pop(reply_message_id, None)
+            _active_contexts.pop(reply_message_id, None)
         return f"(claude error: {exc})", None, None, True
 
 
@@ -508,17 +535,69 @@ def _on_connect(client: mqtt.Client, userdata, flags, reason_code, properties) -
     workspace_id = userdata["workspace_id"]
     prompt_sub = f"codex-slack/workspace/{workspace_id}/topic/+/prompt"
     cancel_sub = f"codex-slack/workspace/{workspace_id}/topic/+/cancel"
+    ping_sub = f"codex-slack/workspace/{workspace_id}/topic/+/ping"
     client.subscribe(prompt_sub, qos=1)
     client.subscribe(cancel_sub, qos=1)
-    LOGGER.info("agent.mqtt_connected subscribed=%s,%s", prompt_sub, cancel_sub)
+    client.subscribe(ping_sub, qos=0)
+    LOGGER.info("agent.mqtt_connected subscribed=%s,%s,%s", prompt_sub, cancel_sub, ping_sub)
 
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties) -> None:  # type: ignore[type-arg]
     LOGGER.warning("agent.mqtt_disconnected reason=%s", reason_code)
 
 
+def _publish_interrupted_all(client: mqtt.Client) -> None:
+    """Kill active subprocesses and publish an interrupted response for each."""
+    with _active_procs_lock:
+        contexts = dict(_active_contexts)
+        procs = dict(_active_procs)
+    for message_id, ctx in contexts.items():
+        proc = procs.get(message_id)
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            client.publish(
+                _response_topic(ctx["workspace_id"], ctx["topic_id"]),
+                json.dumps({
+                    "message_id": message_id,
+                    "agent_name": ctx["agent_name"],
+                    "reply_to": None,
+                    "last_response": "(message interrupted)",
+                    "transcript": None,
+                    "session_id": None,
+                }),
+                qos=1,
+            )
+            LOGGER.info("agent.sigterm_abort message_id=%s", message_id)
+        except Exception:
+            LOGGER.exception("agent.sigterm_abort_failed message_id=%s", message_id)
+
+
 def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
     LOGGER.info("agent.mqtt_message topic=%s bytes=%d", msg.topic, len(msg.payload))
+
+    parsed_ping = _parse_ping_topic(msg.topic)
+    if parsed_ping is not None:
+        workspace_id_ping, topic_id_ping = parsed_ping
+        try:
+            payload = json.loads(msg.payload)
+            message_id = payload.get("message_id")
+        except Exception:
+            message_id = None
+        if message_id:
+            with _active_procs_lock:
+                proc = _active_procs.get(message_id)
+            alive = proc is not None and proc.poll() is None
+            client.publish(
+                _pong_topic(workspace_id_ping, topic_id_ping),
+                json.dumps({"message_id": message_id, "alive": alive}),
+                qos=0,
+            )
+            LOGGER.info("agent.pong message_id=%s alive=%s", message_id, alive)
+        return
 
     parsed_cancel = _parse_cancel_topic(msg.topic)
     if parsed_cancel is not None:
@@ -578,4 +657,16 @@ def run_mqtt_loop(
     client.on_message = _on_message
     client.connect(mqtt_host, mqtt_port, keepalive=60)
     LOGGER.info("agent.mqtt_loop_start workspace_id=%s host=%s port=%s", workspace_id, mqtt_host, mqtt_port)
+
+    global _mqtt_client_ref
+    _mqtt_client_ref = client
+
+    def _sigterm_handler(signum, frame):
+        LOGGER.info("agent.sigterm_received active=%d", len(_active_procs))
+        _publish_interrupted_all(client)
+        import time
+        time.sleep(1)  # allow MQTT to flush QoS-1 messages
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
     client.loop_forever()

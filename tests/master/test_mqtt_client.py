@@ -10,6 +10,7 @@ from src.master.config import MasterSettings
 from src.master.mqtt_client import (
     _RESPONSE_TOPIC,
     _STATUS_TOPIC,
+    _PONG_TOPIC,
     _on_connect,
     _on_disconnect,
     _on_message,
@@ -156,6 +157,68 @@ def test_record_agent_response_sets_last_responded_at(tmp_path):
     conn.close()
     assert row[0] is not None
     assert row[0] != "2000-01-01T00:00:00Z"
+
+
+# --- pong handling ---
+
+def test_pong_resolves_pending_ping(tmp_path):
+    """A pong message sets the pending_ping event and records the alive value."""
+    import threading
+    from types import SimpleNamespace
+
+    db = _make_db(tmp_path)
+    message_id = "msg-ping-1"
+
+    event = threading.Event()
+    pending = {"event": event, "alive": None}
+    app_state = SimpleNamespace(pending_pings={message_id: pending})
+
+    msg = _make_msg(
+        "codex-slack/workspace/ws1/topic/t1/pong",
+        {"message_id": message_id, "alive": True},
+    )
+    settings = _make_settings()
+    _on_message(MagicMock(), {"db_path": db, "settings": settings, "app_state": app_state}, msg)
+
+    assert event.is_set(), "event should be set after pong"
+    assert pending["alive"] is True
+
+
+def test_pong_not_broadcast_to_websocket(tmp_path):
+    """Pong messages must not be forwarded to the WebSocket hub."""
+    import threading
+    from types import SimpleNamespace
+
+    db = _make_db(tmp_path)
+    message_id = "msg-ping-2"
+
+    event = threading.Event()
+    pending = {"event": event, "alive": False}
+    app_state = SimpleNamespace(pending_pings={message_id: pending})
+    hub = MagicMock()
+
+    msg = _make_msg(
+        "codex-slack/workspace/ws1/topic/t1/pong",
+        {"message_id": message_id, "alive": False},
+    )
+    settings = _make_settings()
+    _on_message(
+        MagicMock(),
+        {"db_path": db, "settings": settings, "app_state": app_state, "hub": hub, "loop": MagicMock()},
+        msg,
+    )
+
+    hub.broadcast_threadsafe.assert_not_called()
+
+
+def test_on_connect_subscribes_to_pong():
+    """Master _on_connect must subscribe to the pong wildcard topic."""
+    client = MagicMock()
+    reason_code = MagicMock()
+    reason_code.is_failure = False
+    _on_connect(client, None, None, reason_code, None)
+    subscribed_topics = {c.args[0] for c in client.subscribe.call_args_list}
+    assert _PONG_TOPIC in subscribed_topics
 
 
 # --- lifespan integration ---
