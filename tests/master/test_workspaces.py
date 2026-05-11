@@ -138,3 +138,68 @@ def test_agent_status_dry_run(client):
 def test_agent_status_not_found(client):
     r = client.get("/api/workspaces/does-not-exist/agent-status")
     assert r.status_code == 404
+
+
+# --- list_workspace_branches: GH_TOKEN resolution ---
+
+
+def test_branches_uses_env_gh_token_when_set(client, monkeypatch):
+    """If GH_TOKEN is in env, list_workspace_branches passes it to the fetcher."""
+    monkeypatch.setenv("GH_TOKEN", "env-token")
+    # Rebuild settings to pick up the env var (the client fixture started
+    # the app before this monkeypatch).
+    from src.master.config import load_master_settings
+
+    client.app.state.settings = load_master_settings()
+
+    ws_id = create_ws(client, name="env-token-ws", repo_url="https://github.com/x/y").json()["id"]
+    with patch("src.master.workspaces._fetch_github_branches", return_value=["main"]) as m:
+        r = client.get(f"/api/workspaces/{ws_id}/branches")
+    assert r.status_code == 200
+    assert r.json() == ["main"]
+    m.assert_called_once_with("x", "y", "env-token")
+
+
+def test_branches_falls_back_to_db_gh_token(client, monkeypatch):
+    """Regression: when GH_TOKEN is unset in env but configured via the UI
+    (runtime_config DB), list_workspace_branches must use the DB value
+    instead of calling the GitHub API unauthenticated. Without this fix,
+    private repos return 502."""
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    from src.master.config import load_master_settings
+
+    client.app.state.settings = load_master_settings()
+    assert client.app.state.settings.gh_token is None
+
+    ws_id = create_ws(client, name="db-token-ws", repo_url="https://github.com/x/y").json()["id"]
+
+    # Configure GH_TOKEN via the global runtime-config endpoint (mirrors the UI path).
+    cfg_resp = client.patch("/api/config", json={"set": {"GH_TOKEN": "db-token"}})
+    assert cfg_resp.status_code == 200, cfg_resp.text
+
+    with patch("src.master.workspaces._fetch_github_branches", return_value=["main"]) as m:
+        r = client.get(f"/api/workspaces/{ws_id}/branches")
+    assert r.status_code == 200, r.text
+    m.assert_called_once_with("x", "y", "db-token")
+
+
+def test_branches_db_token_used_in_git_lsremote_fallback(client, monkeypatch):
+    """If the REST API fetcher raises, the git ls-remote fallback must
+    also receive the DB-resolved token (so a private repo can still
+    succeed via the fallback if the API path fails for any reason)."""
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    from src.master.config import load_master_settings
+
+    client.app.state.settings = load_master_settings()
+    ws_id = create_ws(
+        client, name="lsremote-ws", repo_url="https://github.com/x/y"
+    ).json()["id"]
+    cfg_resp = client.patch("/api/config", json={"set": {"GH_TOKEN": "db-token"}})
+    assert cfg_resp.status_code == 200, cfg_resp.text
+
+    with patch(
+        "src.master.workspaces._fetch_github_branches", side_effect=RuntimeError("api down")
+    ), patch("src.master.workspaces._fetch_git_branches", return_value=["main"]) as m:
+        r = client.get(f"/api/workspaces/{ws_id}/branches")
+    assert r.status_code == 200, r.text
+    m.assert_called_once_with("https://github.com/x/y", "db-token")
