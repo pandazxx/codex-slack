@@ -416,6 +416,167 @@ def test_tc07_migration_idempotent(tmp_path):
     init_db(db_path)  # should not raise
 
 
+def test_tc07_migration_preserves_structured_output_values(tmp_path):
+    """Regression for prod 500: `_migrate_event_actions_v2` previously
+    recreated the table without `structured_output`, dropping the column and
+    any values in it during the same init_db that the `_MIGRATIONS` ALTER
+    had just added. Verify the column survives v2 and existing values carry."""
+    db_path = str(tmp_path / "with_structured_output.db")
+
+    # Old (pre-topic_archiving) event_actions plus a structured_output column,
+    # mirroring the state of a DB that had the staging-fix ALTER applied but
+    # was still on schema v1.
+    old_schema_with_struct = """
+    CREATE TABLE event_actions (
+        id              TEXT PRIMARY KEY,
+        event_type      TEXT NOT NULL CHECK (event_type IN (
+                            'topic_message_sent',
+                            'topic_message_received',
+                            'topic_scheduler',
+                            'topic_archived'
+                        )),
+        scope_type      TEXT NOT NULL CHECK (scope_type IN ('topic')),
+        scope_id        TEXT NOT NULL,
+        staff_name      TEXT NOT NULL,
+        prompt_template TEXT NOT NULL,
+        timing          TEXT CHECK (timing IN ('before', 'after')),
+        cron_expr       TEXT,
+        last_fired_at   TEXT,
+        last_run_at     TEXT,
+        last_run_status TEXT,
+        last_run_output TEXT,
+        enabled         INTEGER NOT NULL DEFAULT 1,
+        structured_output INTEGER DEFAULT 0,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    );
+    CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, repo_url TEXT NOT NULL,
+        container_name TEXT, created_at TEXT NOT NULL, archived_at TEXT
+    );
+    CREATE TABLE staffs (
+        id TEXT PRIMARY KEY, scope_type TEXT NOT NULL, scope_id TEXT,
+        name TEXT NOT NULL, adapter TEXT NOT NULL DEFAULT 'claude-code',
+        model TEXT, system_prompt TEXT, agent TEXT,
+        session_scope TEXT NOT NULL DEFAULT 'topic', is_default INTEGER NOT NULL DEFAULT 0,
+        extra_flags TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE topics (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, subject TEXT NOT NULL,
+        branch_name TEXT NOT NULL, worktree_path TEXT NOT NULL,
+        created_at TEXT NOT NULL, archived_at TEXT
+    );
+    """
+    conn = sqlite3.connect(db_path)
+    conn.executescript(old_schema_with_struct)
+    now = "2026-05-10T10:00:00Z"
+    keeps_struct_on = str(uuid.uuid4())
+    keeps_struct_off = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO event_actions"
+        " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+        "  timing, enabled, structured_output, created_at, updated_at)"
+        " VALUES (?, 'topic_message_sent', 'topic', 't1', 'bot', 'p',"
+        "         'before', 1, 1, ?, ?)",
+        (keeps_struct_on, now, now),
+    )
+    conn.execute(
+        "INSERT INTO event_actions"
+        " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+        "  timing, enabled, structured_output, created_at, updated_at)"
+        " VALUES (?, 'topic_message_sent', 'topic', 't1', 'bot', 'p',"
+        "         'before', 1, 0, ?, ?)",
+        (keeps_struct_off, now, now),
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(event_actions)")}
+        assert "structured_output" in cols, "v2 must preserve structured_output column"
+        rows = {
+            r["id"]: r["structured_output"]
+            for r in conn.execute(
+                "SELECT id, structured_output FROM event_actions WHERE id IN (?, ?)",
+                (keeps_struct_on, keeps_struct_off),
+            )
+        }
+        assert rows[keeps_struct_on] == 1, "structured_output=1 must survive v2"
+        assert rows[keeps_struct_off] == 0, "structured_output=0 must survive v2"
+    finally:
+        conn.close()
+
+
+def test_tc07_migration_recovers_lost_structured_output(tmp_path):
+    """Regression for prod 500: a DB that already ran the *broken* v2
+    (event_actions has `topic_archiving` but no `structured_output`) must
+    recover the column on the next init_db, restoring the message-send path.
+    The fix relies on `_MIGRATIONS` ALTER adding the column; v2 then short-circuits."""
+    db_path = str(tmp_path / "post_broken_v2.db")
+
+    # Schema matches what `_migrate_event_actions_v2` produced before the fix:
+    # topic_archiving is in the event_type CHECK, but structured_output is absent.
+    post_broken_v2 = """
+    CREATE TABLE event_actions (
+        id              TEXT PRIMARY KEY,
+        event_type      TEXT NOT NULL CHECK (event_type IN (
+                            'topic_message_sent',
+                            'topic_message_received',
+                            'topic_scheduler',
+                            'topic_archived',
+                            'topic_archiving'
+                        )),
+        scope_type      TEXT NOT NULL CHECK (scope_type IN ('topic')),
+        scope_id        TEXT NOT NULL,
+        staff_name      TEXT NOT NULL,
+        prompt_template TEXT NOT NULL,
+        timing          TEXT CHECK (timing IN ('before', 'after')),
+        cron_expr       TEXT,
+        last_fired_at   TEXT,
+        last_run_at     TEXT,
+        last_run_status TEXT,
+        last_run_output TEXT,
+        enabled         INTEGER NOT NULL DEFAULT 1,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    );
+    CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, repo_url TEXT NOT NULL,
+        container_name TEXT, created_at TEXT NOT NULL, archived_at TEXT
+    );
+    CREATE TABLE staffs (
+        id TEXT PRIMARY KEY, scope_type TEXT NOT NULL, scope_id TEXT,
+        name TEXT NOT NULL, adapter TEXT NOT NULL DEFAULT 'claude-code',
+        model TEXT, system_prompt TEXT, agent TEXT,
+        session_scope TEXT NOT NULL DEFAULT 'topic', is_default INTEGER NOT NULL DEFAULT 0,
+        extra_flags TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE topics (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, subject TEXT NOT NULL,
+        branch_name TEXT NOT NULL, worktree_path TEXT NOT NULL,
+        created_at TEXT NOT NULL, archived_at TEXT
+    );
+    """
+    conn = sqlite3.connect(db_path)
+    conn.executescript(post_broken_v2)
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(event_actions)")}
+        assert "structured_output" in cols, (
+            "init_db on a post-broken-v2 DB must restore structured_output"
+        )
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # TC-08: _extract_verdict — inline JSON
 # ---------------------------------------------------------------------------
