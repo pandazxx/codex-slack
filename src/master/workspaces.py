@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import sqlite3
+import subprocess
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -337,18 +338,36 @@ def _fetch_github_branches(owner: str, repo: str, token: str | None) -> list[str
         )
         if token:
             req.add_header("Authorization", f"Bearer {token}")
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data: list[dict] = json.loads(resp.read().decode())
-        except Exception:
-            LOGGER.exception("workspaces.fetch_branches_failed owner=%s repo=%s page=%d", owner, repo, page)
-            break
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data: list[dict] = json.loads(resp.read().decode())
         if not data:
             break
         branches.extend(b["name"] for b in data)
         if len(data) < 100:
             break
         page += 1
+    return sorted(branches)
+
+
+def _fetch_git_branches(repo_url: str, token: str | None) -> list[str]:
+    url = repo_url.strip()
+    if token:
+        m = re.match(r"(https?://)github\.com/(.+)", url)
+        if m:
+            url = f"{m.group(1)}x-access-token:{token}@github.com/{m.group(2)}"
+    result = subprocess.run(
+        ["git", "ls-remote", "--heads", url],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git ls-remote failed: {result.stderr.strip()}")
+    branches = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2 and parts[1].startswith("refs/heads/"):
+            branches.append(parts[1][len("refs/heads/"):])
     return sorted(branches)
 
 
@@ -363,9 +382,21 @@ def list_workspace_branches(workspace_id: str, request: Request) -> list[str]:
         conn.close()
     if row is None:
         raise HTTPException(status_code=404, detail="workspace not found")
-    parsed = _parse_github_repo(row["repo_url"])
-    if parsed is None:
-        return []
-    owner, repo = parsed
+    repo_url: str = row["repo_url"]
     settings = request.app.state.settings
-    return _fetch_github_branches(owner, repo, settings.gh_token)
+    parsed = _parse_github_repo(repo_url)
+    if parsed is not None:
+        owner, repo = parsed
+        try:
+            return _fetch_github_branches(owner, repo, settings.gh_token)
+        except Exception:
+            LOGGER.warning(
+                "workspaces.github_branches_failed owner=%s repo=%s, falling back to git ls-remote",
+                owner,
+                repo,
+            )
+    try:
+        return _fetch_git_branches(repo_url, settings.gh_token)
+    except Exception:
+        LOGGER.exception("workspaces.git_branches_failed repo_url=%s", repo_url)
+        raise HTTPException(status_code=502, detail="failed to fetch branches")
