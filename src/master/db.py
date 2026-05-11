@@ -255,15 +255,26 @@ def _migrate_event_actions_v2(conn: sqlite3.Connection) -> None:
 
     SQLite cannot modify CHECK constraints in-place; we recreate the table.
     Idempotent: skips if topic_archiving is already present in the schema.
+
+    Preserves every column added by prior `_MIGRATIONS` (e.g. `structured_output`)
+    by reading the legacy column list dynamically rather than hard-coding it. An
+    earlier form of this helper hard-coded the SELECT list and silently dropped
+    `structured_output` on upgrade.
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='event_actions'"
     ).fetchone()
     if row is None or "topic_archiving" in (row[0] or ""):
         return
+    # Connection from init_db() has no row_factory set; PRAGMA table_info
+    # returns positional tuples (cid, name, type, notnull, dflt_value, pk).
+    legacy_cols = {r[1] for r in conn.execute("PRAGMA table_info(event_actions)")}
+    structured_output_select = (
+        "structured_output" if "structured_output" in legacy_cols else "0 AS structured_output"
+    )
     LOGGER.info("db.migration_start event_actions_v2")
     conn.execute("PRAGMA foreign_keys = OFF")
-    conn.executescript("""
+    conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS event_actions_new (
             id              TEXT PRIMARY KEY,
             event_type      TEXT NOT NULL CHECK (event_type IN (
@@ -291,6 +302,7 @@ def _migrate_event_actions_v2(conn: sqlite3.Connection) -> None:
                             )),
             last_run_output TEXT,
             enabled         INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+            structured_output INTEGER NOT NULL DEFAULT 0 CHECK (structured_output IN (0, 1)),
             created_at      TEXT NOT NULL,
             updated_at      TEXT NOT NULL,
             CHECK (
@@ -302,10 +314,14 @@ def _migrate_event_actions_v2(conn: sqlite3.Connection) -> None:
                                                       AND cron_expr IS NULL     AND (timing IS NULL OR timing = 'after'))
             )
         );
-        INSERT OR IGNORE INTO event_actions_new
+        INSERT OR IGNORE INTO event_actions_new (
+            id, event_type, scope_type, scope_id, staff_name, prompt_template,
+            timing, cron_expr, last_fired_at, last_run_at, last_run_status,
+            last_run_output, enabled, structured_output, created_at, updated_at
+        )
             SELECT id, event_type, scope_type, scope_id, staff_name, prompt_template,
                    timing, cron_expr, last_fired_at, last_run_at, last_run_status,
-                   last_run_output, enabled, created_at, updated_at
+                   last_run_output, enabled, {structured_output_select}, created_at, updated_at
             FROM event_actions;
         DROP TABLE event_actions;
         ALTER TABLE event_actions_new RENAME TO event_actions;
