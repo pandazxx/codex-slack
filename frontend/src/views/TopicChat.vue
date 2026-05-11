@@ -410,7 +410,7 @@ function handleChunk({ message_id, agent_name, seq, event }) {
 
   let live = liveStreams.value[message_id]
   if (!live) {
-    live = { rows: [], text: '' }
+    live = { rows: [], text: '', agent_name: agent_name || null }
     liveStreams.value[message_id] = live
     messages.value.push({
       id: message_id, sender: 'agent',
@@ -492,6 +492,23 @@ async function load() {
       traceOpen: false,
       streaming: false,
     }))
+    // Re-apply any streaming bubbles that arrived via chunk_replay before load() finished.
+    // Also clean up liveStreams entries for messages that finalized while we were away.
+    for (const [mid, live] of Object.entries(liveStreams.value)) {
+      const existing = messages.value.find(m => m.id === mid)
+      if (!existing) {
+        messages.value.push({
+          id: mid, sender: 'agent',
+          agent_name: live.agent_name,
+          text: live.text, rows: live.rows,
+          streaming: true, traceOpen: false,
+          created_at: new Date().toISOString(),
+        })
+      } else if (!existing.streaming) {
+        delete liveStreams.value[mid]
+        seenSeq.delete(mid)
+      }
+    }
     if (wsRes.ok) workspace.value = await wsRes.json()
     if (tzRes.ok) {
       const tz = await tzRes.json()
@@ -714,6 +731,8 @@ watch(
     topicId = newTopicId
     topic.value = null
     messages.value = []
+    liveStreams.value = {}
+    seenSeq.clear()
     agentStatus.value = ''
     load()
     if (!isArchived.value) connectWs()
