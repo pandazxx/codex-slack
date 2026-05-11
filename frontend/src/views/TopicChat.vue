@@ -707,6 +707,8 @@ watch(
     topicId = newTopicId
     topic.value = null
     messages.value = []
+    liveStreams.value = {}
+    seenSeq.clear()
     agentStatus.value = ''
     load()
     if (!isArchived.value) connectWs()
