@@ -34,7 +34,11 @@
         :class="m.sender === 'user' ? 'user' : 'agent'"
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
-        <div class="bubble" :class="{'bubble-streaming': m.sender === 'agent' && m.streaming, 'bubble-done': m.sender === 'agent' && !m.streaming}">
+        <div class="bubble" :class="{
+          'bubble-streaming': m.sender === 'agent' && m.streaming,
+          'bubble-interrupted': m.sender === 'agent' && !m.streaming && m.text === '(message interrupted)',
+          'bubble-done': m.sender === 'agent' && !m.streaming && m.text !== '(message interrupted)'
+        }">
           <template v-if="m.sender === 'agent'">
             <template v-if="m.streaming && m.rows?.length">
               <div class="trace-row" v-for="(row, i) in m.rows" :key="i">
@@ -103,7 +107,10 @@
                 </div>
               </details>
             </template>
-            <MarkdownMessage :text="m.text" />
+            <div v-if="m.text === '(message interrupted)'" class="interrupted-notice">
+              <span class="tr-badge tr-badge-interrupted">interrupted</span>
+            </div>
+            <MarkdownMessage v-else :text="m.text" />
             <span v-if="m.streaming" class="cursor">▍</span>
           </template>
           <template v-else><MarkdownMessage :text="m.text" /></template>
@@ -741,6 +748,9 @@ onUnmounted(() => {
 .message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; max-width: 100%; overflow: hidden; transition: border-color 0.3s; }
 .bubble-streaming { border-color: #f97316 !important; box-shadow: 0 0 0 1px #f9731640; }
 .bubble-done { border-color: #22c55e !important; }
+.bubble-interrupted { border-color: #f59e0b !important; }
+.tr-badge-interrupted { background: #fef3c7; color: #92400e; }
+.interrupted-notice { padding: 2px 0; }
 .ts { font-size: 0.7em; color: #94a3b8; margin-top: 2px; }
 .detail-panel { margin-top: 4px; max-width: 100%; }
 .detail-toggle { font-size: 0.72em; color: #94a3b8; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.5rem; }
