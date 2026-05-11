@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import sqlite3
+import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -340,9 +341,12 @@ def _fetch_github_branches(owner: str, repo: str, token: str | None) -> list[str
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data: list[dict] = json.loads(resp.read().decode())
-        except Exception:
+        except urllib.error.HTTPError as exc:
+            LOGGER.exception("workspaces.fetch_branches_failed owner=%s repo=%s page=%d status=%d", owner, repo, page, exc.code)
+            raise RuntimeError(f"GitHub returned {exc.code} for {owner}/{repo}") from exc
+        except Exception as exc:
             LOGGER.exception("workspaces.fetch_branches_failed owner=%s repo=%s page=%d", owner, repo, page)
-            break
+            raise RuntimeError(f"Failed to fetch branches for {owner}/{repo}: {exc}") from exc
         if not data:
             break
         branches.extend(b["name"] for b in data)
@@ -368,4 +372,7 @@ def list_workspace_branches(workspace_id: str, request: Request) -> list[str]:
         return []
     owner, repo = parsed
     settings = request.app.state.settings
-    return _fetch_github_branches(owner, repo, settings.gh_token)
+    try:
+        return _fetch_github_branches(owner, repo, settings.gh_token)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

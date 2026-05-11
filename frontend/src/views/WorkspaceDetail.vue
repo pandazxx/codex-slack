@@ -44,6 +44,7 @@
           </div>
           <ul v-if="branchDropdownOpen" class="branch-dropdown">
             <li v-if="branchesLoading" class="branch-hint">Loading…</li>
+            <li v-else-if="branchesError" class="branch-hint branch-error">{{ branchesError }}</li>
             <li v-else-if="!filteredBranches.length" class="branch-hint">No branches found</li>
             <template v-else>
               <li
@@ -212,6 +213,7 @@ let statusTimer = null
 const branches = ref([])
 const branchesLoading = ref(false)
 const branchesFetched = ref(false)
+const branchesError = ref('')
 const branchFilter = ref('')
 const selectedBranch = ref('')
 const branchDropdownOpen = ref(false)
@@ -297,6 +299,7 @@ async function fetchAgentStatus() {
 async function fetchBranches() {
   if (branchesFetched.value) return
   branchesLoading.value = true
+  branchesError.value = ''
   try {
     const r = await fetch(`/api/workspaces/${id}/branches`)
     if (r.ok) {
@@ -310,8 +313,13 @@ async function fetchBranches() {
           branchFilter.value = fallback
         }
       }
+    } else {
+      const body = await r.json().catch(() => ({}))
+      branchesError.value = body.detail || `Failed to fetch branches (${r.status})`
     }
-  } catch { /* ignore */ } finally {
+  } catch (err) {
+    branchesError.value = 'Failed to fetch branches'
+  } finally {
     branchesLoading.value = false
   }
 }
@@ -639,6 +647,7 @@ section { margin-bottom: 2rem; }
 .branch-dropdown li.branch-selected { background: #eff6ff; color: #2563eb; font-weight: 500; }
 .branch-hint { color: #94a3b8; cursor: default !important; font-size: 0.85em; }
 .branch-hint:hover { background: none !important; }
+.branch-error { color: #dc2626 !important; }
 .repo-ref-badge { background: #dbeafe; color: #1d4ed8; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 500; margin-left: 0.25rem; }
 
 @media (max-width: 768px) {
