@@ -172,16 +172,30 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
             message_id, topic_id, container_running, chunk_age,
         )
 
+        transcript_json = None
         try:
             conn = sqlite3.connect(db_path)
             try:
                 now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                chunk_rows = conn.execute(
+                    "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
+                    (message_id,),
+                ).fetchall()
+                if chunk_rows:
+                    events = []
+                    for r in chunk_rows:
+                        try:
+                            events.append(json.loads(r[0]))
+                        except Exception:
+                            pass
+                    if events:
+                        transcript_json = json.dumps(events)
                 with conn:
                     conn.execute(
                         "INSERT OR IGNORE INTO messages"
-                        " (id, topic_id, sender, agent_name, text, created_at)"
-                        " VALUES (?, ?, 'agent', ?, ?, ?)",
-                        (message_id, topic_id, agent_name, "(message interrupted)", now_str),
+                        " (id, topic_id, sender, agent_name, text, transcript, created_at)"
+                        " VALUES (?, ?, 'agent', ?, ?, ?, ?)",
+                        (message_id, topic_id, agent_name, "(message interrupted)", transcript_json, now_str),
                     )
                     conn.execute("DELETE FROM chunks WHERE message_id = ?", (message_id,))
             finally:
@@ -200,6 +214,7 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
                     "sender": "agent",
                     "agent_name": agent_name,
                     "last_response": "(message interrupted)",
+                    "transcript": transcript_json,
                 },
                 loop,
             )

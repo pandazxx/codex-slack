@@ -112,6 +112,20 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
             llm_session_id = payload.get("session_id")
             agent_name = payload.get("agent_name")
             message_id = payload.get("message_id") or str(uuid.uuid4())
+            if transcript is None and text == "(message interrupted)":
+                chunk_rows = conn.execute(
+                    "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
+                    (message_id,),
+                ).fetchall()
+                if chunk_rows:
+                    events = []
+                    for r in chunk_rows:
+                        try:
+                            events.append(json.loads(r["event"]))
+                        except Exception:
+                            pass
+                    if events:
+                        transcript = json.dumps(events)
             usage_json = _extract_usage(transcript)
             with conn:
                 conn.execute(
