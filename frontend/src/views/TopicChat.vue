@@ -28,7 +28,7 @@
       <p v-if="loading" class="muted center">Loading…</p>
       <p v-else-if="!messages.length" class="muted center">No messages yet. Send one below.</p>
       <div
-        v-for="m in messages"
+        v-for="(m, msgIdx) in messages"
         :key="m.id"
         class="message"
         :class="m.sender === 'user' ? 'user' : 'agent'"
@@ -116,17 +116,24 @@
             <div v-if="m.text === '(message interrupted)'" class="interrupted-notice">
               <span class="tr-badge tr-badge-interrupted">interrupted</span>
             </div>
-            <template v-else-if="isMsgCollapsible(m) && !isMsgExpanded(m.id)">
+            <template v-else-if="isMsgCollapsible(m, msgIdx) && !isMsgExpanded(m.id)">
               <MarkdownMessage :text="collapsedPreview(m.text)" />
               <button class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show more ▾</button>
             </template>
             <template v-else>
               <MarkdownMessage :text="m.text" />
-              <button v-if="isMsgCollapsible(m)" class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show less ▴</button>
+              <button v-if="isMsgCollapsible(m, msgIdx)" class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show less ▴</button>
             </template>
             <span v-if="m.streaming" class="cursor">▍</span>
           </template>
-          <template v-else><MarkdownMessage :text="m.text" /></template>
+          <template v-else-if="isMsgCollapsible(m, msgIdx) && !isMsgExpanded(m.id)">
+            <MarkdownMessage :text="collapsedPreview(m.text)" />
+            <button class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show more ▾</button>
+          </template>
+          <template v-else>
+            <MarkdownMessage :text="m.text" />
+            <button v-if="isMsgCollapsible(m, msgIdx)" class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show less ▴</button>
+          </template>
         </div>
         <button
           v-if="m.sender === 'agent' && m.streaming"
@@ -304,8 +311,9 @@ function saveDraft(tid, val) {
 }
 function loadDraft(tid) { return localStorage.getItem(draftKey(tid)) || '' }
 
-function isMsgCollapsible(msg) {
-  return msg.sender === 'agent' && !msg.streaming && (msg.text || '').length > MSG_COLLAPSE_THRESHOLD
+function isMsgCollapsible(msg, idx) {
+  if (idx !== undefined && idx >= messages.value.length - 1) return false
+  return !msg.streaming && (msg.text || '').length > MSG_COLLAPSE_THRESHOLD
 }
 function isMsgExpanded(id) { return expandedMsgs.value.has(id) }
 function toggleMsgExpand(id) {
