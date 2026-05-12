@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .db import get_connection
+from .runtime_config import load_agent_env
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/topics", tags=["topics"])
 recent_router = APIRouter(prefix="/topics", tags=["topics"])
@@ -152,7 +153,12 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
     finally:
         conn.close()
 
-    base_sha = _fetch_ref_sha(ws_row["repo_url"], repo_ref, request.app.state.settings.gh_token)
+    # Honor UI-configured GH_TOKEN (runtime_config) when env is empty,
+    # otherwise base_sha lookup silently fails on private repos.
+    settings = request.app.state.settings
+    db_cfg = load_agent_env(request.app.state.db_path, workspace_id)
+    gh_token = settings.gh_token or db_cfg.get("GH_TOKEN")
+    base_sha = _fetch_ref_sha(ws_row["repo_url"], repo_ref, gh_token)
     if base_sha:
         conn2 = get_connection(request.app.state.db_path)
         try:

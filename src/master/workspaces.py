@@ -384,11 +384,15 @@ def list_workspace_branches(workspace_id: str, request: Request) -> list[str]:
         raise HTTPException(status_code=404, detail="workspace not found")
     repo_url: str = row["repo_url"]
     settings = request.app.state.settings
+    # Honor the UI-configured token (stored in runtime_config) when the
+    # process env doesn't carry GH_TOKEN. Matches refresh-auth's resolution.
+    db_cfg = load_agent_env(request.app.state.db_path, workspace_id)
+    gh_token = settings.gh_token or db_cfg.get("GH_TOKEN")
     parsed = _parse_github_repo(repo_url)
     if parsed is not None:
         owner, repo = parsed
         try:
-            return _fetch_github_branches(owner, repo, settings.gh_token)
+            return _fetch_github_branches(owner, repo, gh_token)
         except Exception:
             LOGGER.warning(
                 "workspaces.github_branches_failed owner=%s repo=%s, falling back to git ls-remote",
@@ -396,7 +400,7 @@ def list_workspace_branches(workspace_id: str, request: Request) -> list[str]:
                 repo,
             )
     try:
-        return _fetch_git_branches(repo_url, settings.gh_token)
+        return _fetch_git_branches(repo_url, gh_token)
     except Exception:
         LOGGER.exception("workspaces.git_branches_failed repo_url=%s", repo_url)
         raise HTTPException(status_code=502, detail="failed to fetch branches")
