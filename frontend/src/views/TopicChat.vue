@@ -28,7 +28,7 @@
       <p v-if="loading" class="muted center">Loading…</p>
       <p v-else-if="!messages.length" class="muted center">No messages yet. Send one below.</p>
       <div
-        v-for="m in messages"
+        v-for="(m, msgIdx) in messages"
         :key="m.id"
         class="message"
         :class="m.sender === 'user' ? 'user' : 'agent'"
@@ -41,35 +41,41 @@
         }">
           <template v-if="m.sender === 'agent'">
             <template v-if="m.streaming && m.rows?.length">
-              <div class="trace-row" v-for="(row, i) in m.rows" :key="i">
-                <details v-if="row.kind === 'tool_use'" class="tool-use-fold">
-                  <summary>{{ toolUseLabel(row.event) }}</summary>
-                  <pre class="tr-json">{{ toolUseInput(row.event) }}</pre>
-                </details>
-                <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
-                <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
-                <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
-                <div v-else-if="row.kind === 'thinking'" class="thinking-block">
-                  <div class="thinking-meta">💭 Thinking</div>
-                  <div class="thinking-text">{{ thinkingText(row.event) }}</div>
+              <div class="trace-rows-scroll">
+                <div class="trace-row" v-for="(row, i) in m.rows" :key="i">
+                  <!-- compact past rows, full display only for the last row -->
+                  <span v-if="i < m.rows.length - 1" class="trace-row-past">{{ compactRowLabel(row) }}</span>
+                  <template v-else>
+                    <details v-if="row.kind === 'tool_use'" class="tool-use-fold">
+                      <summary>{{ toolUseLabel(row.event) }}</summary>
+                      <pre class="tr-json">{{ toolUseInput(row.event) }}</pre>
+                    </details>
+                    <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
+                    <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
+                    <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                    <div v-else-if="row.kind === 'thinking'" class="thinking-block">
+                      <div class="thinking-meta">💭 Thinking</div>
+                      <div class="thinking-text">{{ thinkingText(row.event) }}</div>
+                    </div>
+                    <div v-else-if="row.kind === 'agent_result'" class="agent-result">
+                      <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
+                      <MarkdownMessage :text="agentResultText(row.event)" />
+                    </div>
+                    <div v-else-if="row.kind === 'codex_text'" class="tr-text">{{ row.event.item?.text }}</div>
+                    <div v-else-if="row.kind === 'codex_error'" class="tr-meta">
+                      <span class="tr-badge tr-badge-error">failed</span>
+                      <span class="tr-stat">{{ row.event.error?.message || 'unknown error' }}</span>
+                    </div>
+                    <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
+                      <summary>{{ codexCmdLabel(row.event) }}</summary>
+                      <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
+                    </details>
+                    <details v-else-if="row.kind === 'folded'">
+                      <summary>···</summary>
+                      <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
+                    </details>
+                  </template>
                 </div>
-                <div v-else-if="row.kind === 'agent_result'" class="agent-result">
-                  <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
-                  <MarkdownMessage :text="agentResultText(row.event)" />
-                </div>
-                <div v-else-if="row.kind === 'codex_text'" class="tr-text">{{ row.event.item?.text }}</div>
-                <div v-else-if="row.kind === 'codex_error'" class="tr-meta">
-                  <span class="tr-badge tr-badge-error">failed</span>
-                  <span class="tr-stat">{{ row.event.error?.message || 'unknown error' }}</span>
-                </div>
-                <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
-                  <summary>{{ codexCmdLabel(row.event) }}</summary>
-                  <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
-                </details>
-                <details v-else-if="row.kind === 'folded'">
-                  <summary>···</summary>
-                  <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
-                </details>
               </div>
             </template>
             <template v-else-if="!m.streaming && m.traceRows?.length">
@@ -110,10 +116,24 @@
             <div v-if="m.text === '(message interrupted)'" class="interrupted-notice">
               <span class="tr-badge tr-badge-interrupted">interrupted</span>
             </div>
-            <MarkdownMessage v-else :text="m.text" />
+            <template v-else-if="isMsgCollapsible(m, msgIdx) && !isMsgExpanded(m.id)">
+              <MarkdownMessage :text="collapsedPreview(m.text)" />
+              <button class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show more ▾</button>
+            </template>
+            <template v-else>
+              <MarkdownMessage :text="m.text" />
+              <button v-if="isMsgCollapsible(m, msgIdx)" class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show less ▴</button>
+            </template>
             <span v-if="m.streaming" class="cursor">▍</span>
           </template>
-          <template v-else><MarkdownMessage :text="m.text" /></template>
+          <template v-else-if="isMsgCollapsible(m, msgIdx) && !isMsgExpanded(m.id)">
+            <MarkdownMessage :text="collapsedPreview(m.text)" />
+            <button class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show more ▾</button>
+          </template>
+          <template v-else>
+            <MarkdownMessage :text="m.text" />
+            <button v-if="isMsgCollapsible(m, msgIdx)" class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show less ▴</button>
+          </template>
         </div>
         <button
           v-if="m.sender === 'agent' && m.streaming"
@@ -232,14 +252,17 @@
         <textarea
           v-model="text"
           placeholder="Type a message…"
-          rows="3"
+          :rows="textExpanded ? 12 : 3"
           :disabled="sending"
           @keydown.enter.shift.exact.prevent="sendMessage"
           @paste="onPaste"
         />
-        <button type="submit" :disabled="sending || !text.trim()">
-          {{ sending ? 'Sending…' : 'Send' }}
-        </button>
+        <div class="send-side">
+          <button type="button" class="expand-btn" @click="textExpanded = !textExpanded" :title="textExpanded ? 'Collapse input' : 'Expand input'">{{ textExpanded ? '⊟' : '⊞' }}</button>
+          <button type="submit" :disabled="sending || !text.trim()">
+            {{ sending ? 'Sending…' : 'Send' }}
+          </button>
+        </div>
       </form>
       <p v-if="sendError" class="send-error">{{ sendError }}</p>
       <p class="hint muted">Shift+Enter to send · Enter for new line · Use <code>@name</code> to address a specific staff</p>
@@ -271,10 +294,51 @@ const fileInput = ref(null)
 const selectedFiles = ref([])
 const liveStreams = ref({})
 const seenSeq = new Map()
+const textExpanded = ref(false)
+const expandedMsgs = ref(new Set())
+
+const MSG_COLLAPSE_THRESHOLD = 600
+const MSG_COLLAPSED_PREVIEW = 300
 
 const isArchived = computed(() => !!topic.value?.archived_at)
 const isWorkspaceArchived = computed(() => !!workspace.value?.archived_at)
 const sendError = ref('')
+
+function draftKey(tid) { return `draft:${tid}` }
+function saveDraft(tid, val) {
+  if (val) localStorage.setItem(draftKey(tid), val)
+  else localStorage.removeItem(draftKey(tid))
+}
+function loadDraft(tid) { return localStorage.getItem(draftKey(tid)) || '' }
+
+function isMsgCollapsible(msg, idx) {
+  if (idx !== undefined && idx >= messages.value.length - 1) return false
+  return !msg.streaming && (msg.text || '').length > MSG_COLLAPSE_THRESHOLD
+}
+function isMsgExpanded(id) { return expandedMsgs.value.has(id) }
+function toggleMsgExpand(id) {
+  const s = new Set(expandedMsgs.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  expandedMsgs.value = s
+}
+function collapsedPreview(text) {
+  return text.slice(0, MSG_COLLAPSED_PREVIEW) + '…'
+}
+
+function compactRowLabel(row) {
+  const { kind, event } = row
+  if (kind === 'tool_use') return toolUseLabel(event)
+  if (kind === 'task_progress') return `↳ ${event.description || ''}`
+  if (kind === 'task_started') return `🚀 ${event.description || ''}`
+  if (kind === 'thinking') return '💭 Thinking…'
+  if (kind === 'agent_result') return `🤖 Subagent · ${agentResultMeta(event)}`
+  if (kind === 'codex_text') return (event.item?.text || '').slice(0, 60)
+  if (kind === 'codex_cmd') return codexCmdLabel(event)
+  if (kind === 'codex_error') return `✗ ${event.error?.message || 'error'}`
+  if (kind === 'retry_notice') return '⟳ Session expired — retrying…'
+  return '···'
+}
 
 const _MAX_WS_NAME = 64
 const displayWorkspaceName = computed(() => {
@@ -289,6 +353,9 @@ let ws = null
 function scrollToBottom() {
   nextTick(() => {
     if (msgBox.value) msgBox.value.scrollTop = msgBox.value.scrollHeight
+    document.querySelectorAll('.trace-rows-scroll').forEach(el => {
+      el.scrollTop = el.scrollHeight
+    })
   })
 }
 
@@ -632,6 +699,7 @@ async function sendMessage() {
     })
     if (r.ok) {
       text.value = ''
+      saveDraft(topicId, '')
       selectedFiles.value = []
       const data = await r.json()
       const localMsg = {
@@ -723,6 +791,8 @@ function extractToolResult(content) {
   return JSON.stringify(content, null, 2)
 }
 
+watch(text, (val) => { saveDraft(topicId, val) })
+
 watch(
   () => [route.params.wsId, route.params.topicId],
   ([newWsId, newTopicId]) => {
@@ -734,12 +804,14 @@ watch(
     liveStreams.value = {}
     seenSeq.clear()
     agentStatus.value = ''
+    text.value = loadDraft(topicId)
     load()
     if (!isArchived.value) connectWs()
   },
 )
 
 onMounted(async () => {
+  text.value = loadDraft(topicId)
   await load()
   if (!isArchived.value) connectWs()
 })
@@ -796,8 +868,11 @@ onUnmounted(() => {
 .tr-thinking-body { background: #1a0a2e; color: #c4b5fd; }
 .send-form { display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: flex-end; }
 .send-form textarea { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; resize: none; font-family: inherit; font-size: 0.95rem; }
-.send-form button { padding: 0.5rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; align-self: flex-end; }
-.send-form button:disabled { opacity: 0.6; cursor: default; }
+.send-side { display: flex; flex-direction: column; gap: 0.35rem; align-items: stretch; }
+.send-side button { padding: 0.5rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+.send-side button:disabled { opacity: 0.6; cursor: default; }
+.expand-btn { background: #f1f5f9 !important; color: #475569 !important; border: 1px solid #cbd5e1 !important; font-size: 1rem; padding: 0.3rem 0.5rem !important; }
+.expand-btn:hover { background: #e2e8f0 !important; }
 .attach-btn { background: #f1f5f9; color: #475569; padding: 0.5rem 0.6rem; font-size: 1.1rem; border: 1px solid #cbd5e1; }
 .attach-btn:hover:not(:disabled) { background: #e2e8f0; }
 .file-input-hidden { display: none; }
@@ -824,8 +899,12 @@ onUnmounted(() => {
   animation: blink 1s steps(2) infinite;
 }
 @keyframes blink { to { visibility: hidden; } }
+.trace-rows-scroll { max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; scroll-behavior: smooth; }
 .trace-row { font-size: 0.85em; color: #888; padding: 1px 0; font-family: monospace; }
+.trace-row-past { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; opacity: 0.55; font-size: 0.9em; }
 .trace-row details summary { cursor: pointer; }
+.expand-msg-btn { display: block; margin-top: 0.25rem; background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.82em; padding: 0; text-align: left; }
+.expand-msg-btn:hover { text-decoration: underline; }
 .agent-result { font-family: inherit; color: inherit; margin: 0.5em 0; padding: 0.5em 0.75em; border-left: 3px solid #6c8cff; background: rgba(108, 140, 255, 0.05); border-radius: 0 4px 4px 0; }
 .agent-result-meta { font-size: 0.75em; color: #6c8cff; margin-bottom: 0.25em; font-family: monospace; }
 .thinking-block { font-family: inherit; color: #555; margin: 0.4em 0; padding: 0.4em 0.75em; border-left: 3px solid #c0a85a; background: rgba(192, 168, 90, 0.06); border-radius: 0 4px 4px 0; }

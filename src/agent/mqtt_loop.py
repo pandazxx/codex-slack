@@ -172,7 +172,6 @@ def _stream_claude_once(
         cmd += ["--append-system-prompt", system_prompt]
     if subagent:
         cmd += ["--agent", subagent]
-    cmd.append(text)
     chunk_topic = _chunk_topic(workspace_id, topic_id)
     events: list[dict] = []
     new_session_id: str | None = None
@@ -184,9 +183,12 @@ def _stream_claude_once(
     try:
         proc = subprocess.Popen(
             cmd, cwd=worktree,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
+        proc.stdin.write(text)
+        proc.stdin.close()
         with _active_procs_lock:
             _active_procs[reply_message_id] = proc
             _active_contexts[reply_message_id] = {
@@ -313,7 +315,6 @@ def _stream_codex_once(
     ]
     if model:
         cmd += ["-m", model]
-    cmd.append(text)
     chunk_topic = _chunk_topic(workspace_id, topic_id)
     events: list[dict] = []
     is_error = False
@@ -323,9 +324,12 @@ def _stream_codex_once(
     try:
         proc = subprocess.Popen(
             cmd, cwd=worktree,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
+        proc.stdin.write(text)
+        proc.stdin.close()
         for line in proc.stdout:
             line = line.strip()
             if not line:
