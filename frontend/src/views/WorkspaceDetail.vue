@@ -127,6 +127,7 @@
             <option value="topic">topic — fresh session per topic</option>
             <option value="workspace">workspace — shared across all topics</option>
             <option value="global">global — single shared session</option>
+            <option value="none">none — stateless, no session tracking</option>
           </select>
 
           <label>Default</label>

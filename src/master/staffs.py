@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from .db import get_connection
 
 _VALID_ADAPTERS = {"claude-code", "codex"}
-_VALID_SESSION_SCOPES = {"topic", "workspace", "global"}
+_VALID_SESSION_SCOPES = {"topic", "workspace", "global", "none"}
 
 _SELECT_COLS = (
     "id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
