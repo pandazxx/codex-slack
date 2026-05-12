@@ -38,8 +38,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @openai/codex @anthropic-ai/claude-code
-
 RUN useradd -m -u 1000 -s /bin/bash appuser \
     && mkdir -p /workspace/home /home/appuser/.claude /home/appuser/.codex /opt/codex-slack/data/master \
     && chown -R appuser:appuser /workspace /home/appuser/.claude /home/appuser/.codex /opt/codex-slack

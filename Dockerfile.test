@@ -1,5 +1,10 @@
 FROM ghcr.io/pandazxx/codex-slack-base:latest
 
+ARG CODEX_NPM_PACKAGE=@openai/codex
+ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code
+
+RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
+
 WORKDIR /opt/codex-slack
 
 # Install Python deps globally so pytest and other entrypoints land in
