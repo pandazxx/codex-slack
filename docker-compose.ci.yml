@@ -10,6 +10,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.test
+      cache_from:
+        - type=gha,scope=test
+      cache_to:
+        - type=gha,mode=max,scope=test
     image: codex-slack:test
     working_dir: /opt/codex-slack
     environment:
