@@ -353,6 +353,9 @@ let ws = null
 function scrollToBottom() {
   nextTick(() => {
     if (msgBox.value) msgBox.value.scrollTop = msgBox.value.scrollHeight
+    document.querySelectorAll('.trace-rows-scroll').forEach(el => {
+      el.scrollTop = el.scrollHeight
+    })
   })
 }
 
