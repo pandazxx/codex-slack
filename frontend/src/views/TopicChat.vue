@@ -20,6 +20,13 @@
     </p>
 
     <div v-if="isArchived" class="archived-banner">This topic is archived — read only</div>
+    <div v-if="!isArchived && availableStaffs.length" class="staff-picker-bar">
+      <label class="staff-picker-label">Staff:</label>
+      <select class="staff-picker-select" :value="topic?.current_staff_name || ''" @change="setCurrentStaff($event.target.value)">
+        <option value="">— use default —</option>
+        <option v-for="s in availableStaffs" :key="s.name" :value="s.name">@{{ s.name }}</option>
+      </select>
+    </div>
     <div class="status-bar" v-if="agentStatus && !isArchived">
       Agent: <em>{{ agentStatus }}</em>
     </div>
@@ -294,6 +301,7 @@ const fileInput = ref(null)
 const selectedFiles = ref([])
 const liveStreams = ref({})
 const seenSeq = new Map()
+const availableStaffs = ref([])
 const textExpanded = ref(false)
 const expandedMsgs = ref(new Set())
 
@@ -357,6 +365,15 @@ function scrollToBottom() {
       el.scrollTop = el.scrollHeight
     })
   })
+}
+
+async function setCurrentStaff(name) {
+  await fetch(`/api/workspaces/${wsId}/topics/${topicId}/current-staff`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name || null }),
+  })
+  if (topic.value) topic.value = { ...topic.value, current_staff_name: name || null }
 }
 
 async function fetchAgentStatus() {
@@ -545,11 +562,12 @@ function finaliseMessage(data) {
 async function load() {
   loading.value = true
   try {
-    const [topicRes, msgsRes, wsRes, tzRes] = await Promise.all([
+    const [topicRes, msgsRes, wsRes, tzRes, staffsRes] = await Promise.all([
       fetch(`/api/workspaces/${wsId}/topics/${topicId}`),
       fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages`),
       fetch(`/api/workspaces/${wsId}`),
       fetch('/api/config/system-settings'),
+      fetch(`/api/workspaces/${wsId}/staffs`),
     ])
     topic.value = await topicRes.json()
     const rawMsgs = await msgsRes.json()
@@ -577,6 +595,7 @@ async function load() {
       }
     }
     if (wsRes.ok) workspace.value = await wsRes.json()
+    if (staffsRes.ok) availableStaffs.value = await staffsRes.json()
     if (tzRes.ok) {
       const tz = await tzRes.json()
       configuredTimezone.value = tz.timezone_configured
@@ -828,6 +847,9 @@ onUnmounted(() => {
 .topic-settings-link:hover { color: #475569; }
 .archived-banner { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; color: #713f12; }
 .status-bar { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; }
+.staff-picker-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+.staff-picker-label { font-size: 0.8em; color: #64748b; }
+.staff-picker-select { font-size: 0.82em; padding: 0.2rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; color: #1e293b; cursor: pointer; }
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding: 0.5rem 0; }
 .message { display: flex; flex-direction: column; max-width: 72%; }
 .message.agent { max-width: 88%; }

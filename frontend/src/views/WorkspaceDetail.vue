@@ -155,7 +155,10 @@
               <td>{{ s.adapter }}</td>
               <td>{{ s.model || '—' }}</td>
               <td>{{ s.session_scope }}</td>
-              <td>{{ s.is_default ? '✓' : '' }}</td>
+              <td>
+                <span v-if="s.is_default" class="badge-default">✓ default</span>
+                <button v-else-if="!isArchived && !s.inherited_from" class="action-btn set-default-btn" @click="setDefaultStaff(s.name)">Set default</button>
+              </td>
               <td>
                 <span v-if="s.inherited_from" class="badge-global">{{ s.inherited_from }}</span>
                 <span v-else class="badge-local">workspace</span>
@@ -543,6 +546,11 @@ async function deleteStaff(name) {
   await load()
 }
 
+async function setDefaultStaff(name) {
+  await fetch(`/api/workspaces/${id}/staffs/${name}/set-default`, { method: 'POST' })
+  await load()
+}
+
 onMounted(async () => {
   await load()
   if (!isArchived.value) {
@@ -624,6 +632,9 @@ section { margin-bottom: 2rem; }
 .small { font-size: 0.82em; }
 .remove-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.9em; padding: 0.15rem 0.4rem; border-radius: 3px; }
 .remove-btn:hover { background: #fee2e2; color: #dc2626; }
+.set-default-btn { color: #64748b; text-decoration: none; }
+.set-default-btn:hover { background: #f0fdf4; color: #15803d; }
+.badge-default { background: #dcfce7; color: #15803d; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 600; }
 .topic-settings-btn { color: #94a3b8; text-decoration: none; font-size: 1em; padding: 0.15rem 0.4rem; border-radius: 3px; }
 .topic-settings-btn:hover { background: #f1f5f9; color: #475569; }
 

@@ -177,6 +177,7 @@ _MIGRATIONS = [
     "ALTER TABLE messages ADD COLUMN event_action_id TEXT",
     "ALTER TABLE topics ADD COLUMN veto_status TEXT",
     "ALTER TABLE topics ADD COLUMN veto_reason TEXT",
+    "ALTER TABLE topics ADD COLUMN current_staff_name TEXT",
 ]
 
 

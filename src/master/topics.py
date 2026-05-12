@@ -109,9 +109,11 @@ class TopicOut(BaseModel):
     archived_at: str | None
     veto_status: str | None = None
     veto_reason: str | None = None
+    current_staff_name: str | None = None
 
 
 def _row_to_topic(row) -> TopicOut:
+    keys = row.keys()
     return TopicOut(
         id=row["id"],
         workspace_id=row["workspace_id"],
@@ -122,8 +124,9 @@ def _row_to_topic(row) -> TopicOut:
         worktree_path=row["worktree_path"],
         created_at=row["created_at"],
         archived_at=row["archived_at"],
-        veto_status=row["veto_status"] if "veto_status" in row.keys() else None,
-        veto_reason=row["veto_reason"] if "veto_reason" in row.keys() else None,
+        veto_status=row["veto_status"] if "veto_status" in keys else None,
+        veto_reason=row["veto_reason"] if "veto_reason" in keys else None,
+        current_staff_name=row["current_staff_name"] if "current_staff_name" in keys else None,
     )
 
 
@@ -201,6 +204,31 @@ def get_topic(workspace_id: str, topic_id: str, request: Request) -> TopicOut:
     if row is None:
         raise HTTPException(status_code=404, detail="topic not found")
     return _row_to_topic(row)
+
+
+class TopicStaffPatch(BaseModel):
+    name: str | None = None
+
+
+@router.patch("/{topic_id}/current-staff", response_model=TopicOut)
+def set_current_staff(workspace_id: str, topic_id: str, body: TopicStaffPatch, request: Request) -> TopicOut:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM topics WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
+            (topic_id, workspace_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "topic not found")
+        conn.execute(
+            "UPDATE topics SET current_staff_name = ? WHERE id = ?",
+            (body.name, topic_id),
+        )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+    finally:
+        conn.close()
+    return _row_to_topic(updated)
 
 
 @router.delete("/{topic_id}", status_code=204)
