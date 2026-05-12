@@ -79,6 +79,7 @@ const SECRET_KEY_SUBSTRINGS = ['KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'CREDENTIAL
 
 const mergedConfig = ref({})
 const globalConfig = ref({})
+const sensitiveSystemKeys = ref(new Set())
 const loading = ref(false)
 const saving = ref(false)
 const saveError = ref('')
@@ -97,6 +98,7 @@ watch(() => props.workspaceId, () => {
 })
 
 function isSecret(key) {
+  if (sensitiveSystemKeys.value.has(key)) return true
   const upper = key.toUpperCase()
   return SECRET_KEY_SUBSTRINGS.some(s => upper.includes(s))
 }
@@ -152,12 +154,17 @@ const rows = computed(() => {
 async function loadConfig() {
   loading.value = true
   try {
-    const [mergedRes, globalRes] = await Promise.all([
+    const [mergedRes, globalRes, sysVarsRes] = await Promise.all([
       fetch(`/api/workspaces/${props.workspaceId}/config`),
       fetch('/api/config'),
+      fetch('/api/config/system-variables'),
     ])
     mergedConfig.value = mergedRes.ok ? await mergedRes.json() : {}
     globalConfig.value = globalRes.ok ? await globalRes.json() : {}
+    if (sysVarsRes.ok) {
+      const sysVars = await sysVarsRes.json()
+      sensitiveSystemKeys.value = new Set(sysVars.filter(v => v.sensitive).map(v => v.name))
+    }
   } finally {
     loading.value = false
   }
