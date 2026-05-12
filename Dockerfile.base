@@ -41,3 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN useradd -m -u 1000 -s /bin/bash appuser \
     && mkdir -p /workspace/home /home/appuser/.claude /home/appuser/.codex /opt/codex-slack/data/master \
     && chown -R appuser:appuser /workspace /home/appuser/.claude /home/appuser/.codex /opt/codex-slack
+
+# npm globals (@openai/codex, @anthropic-ai/claude-code) are intentionally
+# NOT installed here — they update daily and are installed in each consumer
+# Dockerfile so every build picks up the latest version.

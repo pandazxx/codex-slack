@@ -9,7 +9,6 @@ name: Build base image
 
 on:
   push:
-    branches: [master]
     paths:
       - Dockerfile.base
   workflow_dispatch:
