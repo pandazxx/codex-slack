@@ -1,0 +1,45 @@
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install Docker CLI from Docker's official repo.
+# Podman ships a /usr/bin/docker shim on Debian that would shadow the real CLI;
+# installing docker-ce-cli from Docker's repo first prevents that.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg \
+       -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+       https://download.docker.com/linux/debian \
+       $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+       > /etc/apt/sources.list.d/docker.list \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    docker-ce-cli \
+    docker-compose-plugin \
+    git \
+    gh \
+    jq \
+    less \
+    make \
+    mosquitto-clients \
+    openssh-client \
+    poppler-utils \
+    tini \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @openai/codex @anthropic-ai/claude-code
+
+RUN useradd -m -u 1000 -s /bin/bash appuser \
+    && mkdir -p /workspace/home /home/appuser/.claude /home/appuser/.codex /opt/codex-slack/data/master \
+    && chown -R appuser:appuser /workspace /home/appuser/.claude /home/appuser/.codex /opt/codex-slack
