@@ -20,13 +20,6 @@
     </p>
 
     <div v-if="isArchived" class="archived-banner">This topic is archived — read only</div>
-    <div v-if="!isArchived && availableStaffs.length" class="staff-picker-bar">
-      <label class="staff-picker-label">Staff:</label>
-      <select class="staff-picker-select" :value="topic?.current_staff_name || ''" @change="setCurrentStaff($event.target.value)">
-        <option value="">— use default —</option>
-        <option v-for="s in availableStaffs" :key="s.name" :value="s.name">@{{ s.name }}</option>
-      </select>
-    </div>
     <div class="status-bar" v-if="agentStatus && !isArchived">
       Agent: <em>{{ agentStatus }}</em>
     </div>
@@ -254,26 +247,63 @@
         </span>
       </div>
       <form @submit.prevent="sendMessage" class="send-form">
-        <input type="file" multiple ref="fileInput" class="file-input-hidden" @change="onFilesSelected" />
-        <button type="button" class="attach-btn" @click="fileInput.click()" :disabled="sending" title="Attach files">📎</button>
-        <textarea
-          v-model="text"
-          placeholder="Type a message…"
-          :rows="textExpanded ? 12 : 3"
-          :disabled="sending"
-          @keydown.enter.shift.exact.prevent="sendMessage"
-          @paste="onPaste"
-        />
-        <div class="send-side">
-          <button type="button" class="expand-btn" @click="textExpanded = !textExpanded" :title="textExpanded ? 'Collapse input' : 'Expand input'">{{ textExpanded ? '⊟' : '⊞' }}</button>
-          <button type="submit" :disabled="sending || !text.trim()">
-            {{ sending ? 'Sending…' : 'Send' }}
-          </button>
+        <div v-if="availableStaffs.length" class="send-staff-row">
+          <label class="send-staff-label">Staff:</label>
+          <select class="send-staff-select" :value="topic?.current_staff_name || ''" @change="setCurrentStaff($event.target.value)">
+            <option value="">— use default —</option>
+            <option v-for="s in availableStaffs" :key="s.name" :value="s.name">@{{ s.name }}</option>
+          </select>
+        </div>
+        <div class="send-input-row">
+          <input type="file" multiple ref="fileInput" class="file-input-hidden" @change="onFilesSelected" />
+          <button type="button" class="attach-btn" @click="fileInput.click()" :disabled="sending" title="Attach files">📎</button>
+          <textarea
+            v-model="text"
+            placeholder="Type a message…"
+            rows="3"
+            :disabled="sending"
+            @keydown.enter.shift.exact.prevent="sendMessage"
+            @paste="onPaste"
+          />
+          <div class="send-side">
+            <button type="button" class="expand-btn" @click="openComposeOverlay" title="Open full-screen editor">⊞</button>
+            <button type="submit" :disabled="sending || !text.trim()">
+              {{ sending ? 'Sending…' : 'Send' }}
+            </button>
+          </div>
         </div>
       </form>
       <p v-if="sendError" class="send-error">{{ sendError }}</p>
       <p class="hint muted">Shift+Enter to send · Enter for new line · Use <code>@name</code> to address a specific staff</p>
     </template>
+    <Teleport to="body">
+      <div v-if="composeOverlay" class="compose-overlay" @click.self="closeComposeOverlay">
+        <div class="compose-modal">
+          <div class="compose-modal-header">
+            <span class="compose-modal-title">Compose message</span>
+            <button class="compose-modal-close" @click="closeComposeOverlay" title="Close (Esc)">✕</button>
+          </div>
+          <textarea
+            class="compose-modal-textarea"
+            v-model="text"
+            placeholder="Type a message…"
+            :disabled="sending"
+            @keydown.shift.enter.exact.prevent="sendFromOverlay"
+            @paste="onPaste"
+            ref="overlayTextarea"
+          />
+          <div class="compose-modal-footer">
+            <span class="compose-modal-hint">Shift+Enter to send · Esc to close</span>
+            <div class="compose-modal-actions">
+              <button type="button" class="compose-modal-cancel" @click="closeComposeOverlay">Cancel</button>
+              <button type="button" class="compose-modal-send" @click="sendFromOverlay" :disabled="sending || !text.trim()">
+                {{ sending ? 'Sending…' : 'Send' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -302,7 +332,8 @@ const selectedFiles = ref([])
 const liveStreams = ref({})
 const seenSeq = new Map()
 const availableStaffs = ref([])
-const textExpanded = ref(false)
+const composeOverlay = ref(false)
+const overlayTextarea = ref(null)
 const expandedMsgs = ref(new Set())
 
 const MSG_COLLAPSE_THRESHOLD = 600
@@ -365,6 +396,20 @@ function scrollToBottom() {
       el.scrollTop = el.scrollHeight
     })
   })
+}
+
+function openComposeOverlay() {
+  composeOverlay.value = true
+  nextTick(() => overlayTextarea.value?.focus())
+}
+
+function closeComposeOverlay() {
+  composeOverlay.value = false
+}
+
+async function sendFromOverlay() {
+  await sendMessage()
+  if (!sendError.value) composeOverlay.value = false
 }
 
 async function setCurrentStaff(name) {
@@ -829,13 +874,19 @@ watch(
   },
 )
 
+function _handleKeydown(e) {
+  if (e.key === 'Escape' && composeOverlay.value) closeComposeOverlay()
+}
+
 onMounted(async () => {
+  document.addEventListener('keydown', _handleKeydown)
   text.value = loadDraft(topicId)
   await load()
   if (!isArchived.value) connectWs()
 })
 
 onUnmounted(() => {
+  document.removeEventListener('keydown', _handleKeydown)
   if (ws) { ws.onclose = null; ws.close() }
 })
 </script>
@@ -847,9 +898,6 @@ onUnmounted(() => {
 .topic-settings-link:hover { color: #475569; }
 .archived-banner { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; color: #713f12; }
 .status-bar { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; }
-.staff-picker-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
-.staff-picker-label { font-size: 0.8em; color: #64748b; }
-.staff-picker-select { font-size: 0.82em; padding: 0.2rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; color: #1e293b; cursor: pointer; }
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding: 0.5rem 0; }
 .message { display: flex; flex-direction: column; max-width: 72%; }
 .message.agent { max-width: 88%; }
@@ -888,13 +936,33 @@ onUnmounted(() => {
 .tr-badge-thinking { background: #f3e8ff; color: #7c3aed; }
 .tr-thinking { display: flex; flex-direction: column; gap: 2px; }
 .tr-thinking-body { background: #1a0a2e; color: #c4b5fd; }
-.send-form { display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: flex-end; }
-.send-form textarea { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; resize: none; font-family: inherit; font-size: 0.95rem; }
+.send-form { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.75rem; }
+.send-staff-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }
+.send-staff-label { font-size: 0.8em; font-weight: 600; color: #475569; white-space: nowrap; }
+.send-staff-select { flex: 1; font-size: 0.88em; padding: 0.25rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; color: #1e293b; cursor: pointer; }
+.send-input-row { display: flex; gap: 0.5rem; align-items: flex-end; }
+.send-input-row textarea { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; resize: none; font-family: inherit; font-size: 0.95rem; }
 .send-side { display: flex; flex-direction: column; gap: 0.35rem; align-items: stretch; }
 .send-side button { padding: 0.5rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
 .send-side button:disabled { opacity: 0.6; cursor: default; }
 .expand-btn { background: #f1f5f9 !important; color: #475569 !important; border: 1px solid #cbd5e1 !important; font-size: 1rem; padding: 0.3rem 0.5rem !important; }
 .expand-btn:hover { background: #e2e8f0 !important; }
+.compose-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 200; }
+.compose-modal { background: #fff; border-radius: 10px; width: 90vw; height: 85vh; display: flex; flex-direction: column; padding: 1rem; gap: 0.75rem; box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
+.compose-modal-header { display: flex; align-items: center; justify-content: space-between; }
+.compose-modal-title { font-size: 0.95em; font-weight: 600; color: #1e293b; }
+.compose-modal-close { background: none; border: none; font-size: 1.1rem; color: #94a3b8; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 4px; }
+.compose-modal-close:hover { background: #f1f5f9; color: #475569; }
+.compose-modal-textarea { flex: 1; resize: none; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.75rem; font-family: inherit; font-size: 1rem; line-height: 1.5; outline: none; }
+.compose-modal-textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 2px #2563eb26; }
+.compose-modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.compose-modal-hint { font-size: 0.78em; color: #94a3b8; }
+.compose-modal-actions { display: flex; gap: 0.5rem; }
+.compose-modal-cancel { padding: 0.45rem 1rem; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-size: 0.9em; }
+.compose-modal-cancel:hover { background: #e2e8f0; }
+.compose-modal-send { padding: 0.45rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 600; }
+.compose-modal-send:disabled { opacity: 0.6; cursor: default; }
+.compose-modal-send:not(:disabled):hover { background: #1d4ed8; }
 .attach-btn { background: #f1f5f9; color: #475569; padding: 0.5rem 0.6rem; font-size: 1.1rem; border: 1px solid #cbd5e1; }
 .attach-btn:hover:not(:disabled) { background: #e2e8f0; }
 .file-input-hidden { display: none; }
