@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from .db import get_connection
 
 _VALID_ADAPTERS = {"claude-code", "codex"}
-_VALID_SESSION_SCOPES = {"topic", "workspace", "global"}
+_VALID_SESSION_SCOPES = {"topic", "workspace", "global", "none"}
 
 _SELECT_COLS = (
     "id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
@@ -196,6 +196,32 @@ def _update_staff(
     return _row_to_out(updated)
 
 
+def _set_default_staff(
+    conn: sqlite3.Connection,
+    scope_type: str,
+    scope_id: str | None,
+    name: str,
+) -> StaffOut:
+    row = conn.execute(
+        f"SELECT {_SELECT_COLS} FROM staffs WHERE scope_type=? AND scope_id IS ? AND name=?",
+        (scope_type, scope_id, name),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, f"staff '{name}' not found")
+    now = _now()
+    conn.execute(
+        "UPDATE staffs SET is_default=0, updated_at=? WHERE scope_type=? AND scope_id IS ?",
+        (now, scope_type, scope_id),
+    )
+    conn.execute(
+        "UPDATE staffs SET is_default=1, updated_at=? WHERE id=?",
+        (now, row["id"]),
+    )
+    conn.commit()
+    updated = conn.execute(f"SELECT {_SELECT_COLS} FROM staffs WHERE id=?", (row["id"],)).fetchone()
+    return _row_to_out(updated)
+
+
 def _delete_staff(
     conn: sqlite3.Connection,
     scope_type: str,
@@ -252,6 +278,15 @@ def delete_global_staff(name: str, request: Request) -> None:
     conn = get_connection(request.app.state.db_path)
     try:
         _delete_staff(conn, "global", None, name)
+    finally:
+        conn.close()
+
+
+@global_router.post("/{name}/set-default", response_model=StaffOut)
+def set_default_global_staff(name: str, request: Request) -> StaffOut:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        return _set_default_staff(conn, "global", None, name)
     finally:
         conn.close()
 
@@ -320,6 +355,19 @@ def delete_workspace_staff(workspace_id: str, name: str, request: Request) -> No
         ).fetchone() is None:
             raise HTTPException(404, "workspace not found")
         _delete_staff(conn, "workspace", workspace_id, name)
+    finally:
+        conn.close()
+
+
+@workspace_router.post("/{name}/set-default", response_model=StaffOut)
+def set_default_workspace_staff(workspace_id: str, name: str, request: Request) -> StaffOut:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        if conn.execute(
+            "SELECT 1 FROM workspaces WHERE id=?", (workspace_id,)
+        ).fetchone() is None:
+            raise HTTPException(404, "workspace not found")
+        return _set_default_staff(conn, "workspace", workspace_id, name)
     finally:
         conn.close()
 

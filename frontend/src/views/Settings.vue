@@ -65,6 +65,7 @@
             <option value="topic">topic — fresh session per topic</option>
             <option value="workspace">workspace — shared across all topics</option>
             <option value="global">global — single shared session</option>
+            <option value="none">none — stateless, no session tracking</option>
           </select>
 
           <label>Default</label>
@@ -92,7 +93,10 @@
               <td>{{ s.adapter }}</td>
               <td>{{ s.model || '—' }}</td>
               <td>{{ s.session_scope }}</td>
-              <td>{{ s.is_default ? '✓' : '' }}</td>
+              <td>
+                <span v-if="s.is_default" class="badge-default">✓ default</span>
+                <button v-else class="action-btn set-default-btn" @click="setDefaultStaff(s.name)">Set default</button>
+              </td>
               <td class="actions">
                 <button class="action-btn" @click="startEditStaff(s)">Edit</button>
                 <button class="action-btn remove-btn" @click="deleteStaff(s.name)">✕</button>
@@ -352,6 +356,11 @@ async function deleteStaff(name) {
   await loadStaffs()
 }
 
+async function setDefaultStaff(name) {
+  await fetch(`/api/staffs/${name}/set-default`, { method: 'POST' })
+  await loadStaffs()
+}
+
 async function addConfigKey() {
   const key = newConfigKey.value.trim()
   const value = newConfigValue.value
@@ -427,6 +436,9 @@ section { margin-bottom: 3rem; border-top: 1px solid #e2e8f0; padding-top: 1.5re
 .action-btn:hover { background: #eff6ff; }
 .remove-btn { color: #94a3b8; text-decoration: none; }
 .remove-btn:hover { background: #fee2e2; color: #dc2626; }
+.set-default-btn { color: #64748b; text-decoration: none; }
+.set-default-btn:hover { background: #f0fdf4; color: #15803d; }
+.badge-default { background: #dcfce7; color: #15803d; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 600; }
 
 @media (max-width: 768px) {
   h1 { font-size: 1.5rem; margin-bottom: 1.25rem; }

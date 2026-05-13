@@ -77,7 +77,7 @@ async def send_message(
         if ws_row is None:
             raise HTTPException(404, "workspace not found")
         topic = conn.execute(
-            "SELECT id FROM topics"
+            "SELECT id, current_staff_name FROM topics"
             " WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
             (topic_id, workspace_id),
         ).fetchone()
@@ -90,6 +90,10 @@ async def send_message(
             staff = resolve_staff(conn, mention_name, workspace_id, topic_id)
             if staff is None:
                 raise HTTPException(404, f"staff '{mention_name}' not found")
+        elif topic["current_staff_name"]:
+            staff = resolve_staff(conn, topic["current_staff_name"], workspace_id, topic_id)
+            if staff is None:
+                raise HTTPException(404, f"current staff '{topic['current_staff_name']}' not found")
         else:
             staff = resolve_default_staff(conn, workspace_id, topic_id)
             if staff is None:

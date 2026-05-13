@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS staffs (
     model         TEXT,
     system_prompt TEXT,
     agent         TEXT,
-    session_scope TEXT NOT NULL DEFAULT 'topic' CHECK (session_scope IN ('topic', 'workspace', 'global')),
+    session_scope TEXT NOT NULL DEFAULT 'topic' CHECK (session_scope IN ('topic', 'workspace', 'global', 'none')),
     is_default    INTEGER NOT NULL DEFAULT 0,
     extra_flags   TEXT,
     created_at    TEXT NOT NULL,
@@ -177,6 +177,7 @@ _MIGRATIONS = [
     "ALTER TABLE messages ADD COLUMN event_action_id TEXT",
     "ALTER TABLE topics ADD COLUMN veto_status TEXT",
     "ALTER TABLE topics ADD COLUMN veto_reason TEXT",
+    "ALTER TABLE topics ADD COLUMN current_staff_name TEXT",
 ]
 
 
@@ -335,6 +336,47 @@ def _migrate_event_actions_v2(conn: sqlite3.Connection) -> None:
     LOGGER.info("db.migration_done event_actions_v2")
 
 
+def _migrate_staffs_session_scope_none(conn: sqlite3.Connection) -> None:
+    """Widen the session_scope CHECK constraint to allow 'none'.
+
+    SQLite cannot modify CHECK constraints in-place; we recreate the table.
+    Idempotent: skips if 'none' is already present in the constraint.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='staffs'"
+    ).fetchone()
+    if row is None or "'none'" in (row[0] or ""):
+        return
+    LOGGER.info("db.migration_start staffs_session_scope_none")
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS staffs_new (
+            id            TEXT PRIMARY KEY,
+            scope_type    TEXT NOT NULL CHECK (scope_type IN ('global', 'workspace', 'topic')),
+            scope_id      TEXT,
+            name          TEXT NOT NULL,
+            adapter       TEXT NOT NULL DEFAULT 'claude-code',
+            model         TEXT,
+            system_prompt TEXT,
+            agent         TEXT,
+            session_scope TEXT NOT NULL DEFAULT 'topic'
+                          CHECK (session_scope IN ('topic', 'workspace', 'global', 'none')),
+            is_default    INTEGER NOT NULL DEFAULT 0,
+            extra_flags   TEXT,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        );
+        INSERT INTO staffs_new SELECT * FROM staffs;
+        DROP TABLE staffs;
+        ALTER TABLE staffs_new RENAME TO staffs;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_staffs_scope_name
+            ON staffs(scope_type, COALESCE(scope_id, ''), name);
+    """)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.commit()
+    LOGGER.info("db.migration_done staffs_session_scope_none")
+
+
 def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -353,6 +395,7 @@ def init_db(db_path: str) -> None:
         _migrate_workspace_name_uniqueness(conn)
         _migrate_agents_to_staffs(conn)
         _migrate_event_actions_v2(conn)
+        _migrate_staffs_session_scope_none(conn)
         conn.commit()
     finally:
         conn.close()

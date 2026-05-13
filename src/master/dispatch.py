@@ -93,10 +93,13 @@ async def dispatch_to_staff(
         if topic is None:
             raise ValueError(f"topic {topic_id!r} not found")
 
-        ss_scope_type, ss_scope_id = _staff_session_key(staff, workspace_id, topic_id)
-        session_uuid, is_new_session = _get_staff_session(
-            conn, ss_scope_type, ss_scope_id, staff["name"]
-        )
+        if (staff["session_scope"] or "topic") == "none":
+            session_uuid, is_new_session = None, True
+        else:
+            ss_scope_type, ss_scope_id = _staff_session_key(staff, workspace_id, topic_id)
+            session_uuid, is_new_session = _get_staff_session(
+                conn, ss_scope_type, ss_scope_id, staff["name"]
+            )
 
         message_id = str(uuid.uuid4())
         now = _now()
