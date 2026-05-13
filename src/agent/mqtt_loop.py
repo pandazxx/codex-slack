@@ -339,34 +339,46 @@ def _stream_codex_once(
         )
         proc.stdin.write(text)
         proc.stdin.close()
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                event = {"type": "output", "content": line}
-            events.append(event)
-            client.publish(chunk_topic, json.dumps({
-                "message_id": reply_message_id,
+        with _active_procs_lock:
+            _active_procs[reply_message_id] = proc
+            _active_contexts[reply_message_id] = {
+                "workspace_id": workspace_id,
+                "topic_id": topic_id,
                 "agent_name": agent_name,
-                "seq": seq,
-                "event": event,
-            }), qos=0)
-            LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
-            seq += 1
-            ev_type = event.get("type", "")
-            if ev_type == "turn.completed":
-                final = event.get("output_text") or event.get("last_message")
-                if final:
-                    fallback_outputs.append(str(final))
-            elif ev_type == "turn.failed":
-                is_error = True
-                err_msg = (event.get("error") or {}).get("message", "")
-                if err_msg:
-                    fallback_outputs.append(f"(codex error: {err_msg})")
-        proc.wait()
+            }
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    event = {"type": "output", "content": line}
+                events.append(event)
+                client.publish(chunk_topic, json.dumps({
+                    "message_id": reply_message_id,
+                    "agent_name": agent_name,
+                    "seq": seq,
+                    "event": event,
+                }), qos=0)
+                LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+                seq += 1
+                ev_type = event.get("type", "")
+                if ev_type == "turn.completed":
+                    final = event.get("output_text") or event.get("last_message")
+                    if final:
+                        fallback_outputs.append(str(final))
+                elif ev_type == "turn.failed":
+                    is_error = True
+                    err_msg = (event.get("error") or {}).get("message", "")
+                    if err_msg:
+                        fallback_outputs.append(f"(codex error: {err_msg})")
+            proc.wait()
+        finally:
+            with _active_procs_lock:
+                _active_procs.pop(reply_message_id, None)
+                _active_contexts.pop(reply_message_id, None)
         if proc.returncode and proc.returncode != 0 and not is_error:
             is_error = True
         output = None
