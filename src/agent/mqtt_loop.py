@@ -10,6 +10,7 @@ import tempfile
 import threading
 import urllib.request
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,14 @@ _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent-llm")
 _active_procs: dict[str, subprocess.Popen] = {}  # type: ignore[type-arg]
 _active_contexts: dict[str, dict] = {}  # message_id → {workspace_id, topic_id, agent_name}
 _active_procs_lock = threading.Lock()
+
+# Deduplication: clean_session=False means the broker redelivers QoS-1 prompts when
+# the agent reconnects mid-run, which would start a second parallel LLM run and produce
+# two streaming bubbles. Track seen message_ids (bounded to 2000) and discard re-deliveries.
+# Accessed only from the single-threaded MQTT event loop — no lock required.
+_seen_prompt_ids: set[str] = set()
+_seen_prompt_ids_queue: deque[str] = deque()
+_MAX_SEEN_PROMPT_IDS = 2000
 
 # Module-level reference to the MQTT client, used by the SIGTERM handler.
 _mqtt_client_ref: mqtt.Client | None = None
@@ -633,6 +642,18 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
     except (json.JSONDecodeError, ValueError):
         LOGGER.warning("agent.mqtt_parse_error topic=%s", msg.topic)
         return
+
+    # Deduplicate QoS-1 redeliveries (clean_session=False can replay already-processed prompts).
+    prompt_id = payload.get("message_id")
+    if prompt_id:
+        if prompt_id in _seen_prompt_ids:
+            LOGGER.info("agent.skip_duplicate_prompt message_id=%s", prompt_id)
+            return
+        _seen_prompt_ids.add(prompt_id)
+        _seen_prompt_ids_queue.append(prompt_id)
+        if len(_seen_prompt_ids_queue) > _MAX_SEEN_PROMPT_IDS:
+            _seen_prompt_ids.discard(_seen_prompt_ids_queue.popleft())
+
     repo_dir = userdata.get("repo_dir", "")
     master_url = userdata.get("master_url", "http://master:8080")
     # inject master_url into payload so _process_prompt can use it
