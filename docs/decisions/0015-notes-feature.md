@@ -31,14 +31,14 @@ Users want to maintain freeform notes scoped to a workspace or topic — things 
 ### Consequences
 
 - *Good:* tags replace types — note categories are user-defined and composable, not schema-constrained.
-- *Good:* injection is fully explicit (`{{ws:note:keylist:memory}}`) — no implicit shadowing between scopes.
+- *Good:* injection is fully explicit (`{ws:note:keylist:memory}`) — no implicit shadowing between scopes.
 - *Good:* additive schema change; existing deployments pick it up on next process start.
 - *Bad:* `key` is immutable post-create; renames require delete-then-recreate.
-- *Bad:* topic-scope injection (`{{t:note:keylist:<tag>}}`) is not supported in v1; markers are left literal with a WARNING log.
+- *Bad:* topic-scope injection (`{t:note:keylist:<tag>}`) is not supported in v1; markers are left literal with a WARNING log.
 
 ### Confirmation
 
-CRUD round-trip tests per scope; injection tests for known/unknown tags, empty matches, and `{{t:...}}` fallback. CI gate enforces green before merge.
+CRUD round-trip tests per scope; injection tests for known/unknown tags, empty matches, and `{t:...}` fallback. CI gate enforces green before merge.
 
 ## Pros and Cons of the Options
 
@@ -91,7 +91,7 @@ No FK on `scope_id` — same pattern as `event_actions`.
 **Injection marker syntax:**
 
 ```
-{{ws:note:keylist:<tag>}}
+{ws:note:keylist:<tag>}
 ```
 
 - `ws` — workspace scope (v1 only; `t` = topic scope, deferred to v2)
@@ -103,13 +103,13 @@ Empty tag match → empty string substitution (not the literal marker).
 
 **Marker resolution — two-pass `render_template`:**
 
-The existing `render_template` uses Python's `str.format_map`. Double-brace `{{...}}` is currently Python's escape for a literal brace. To support `{{ws:note:keylist:tag}}` cleanly, a regex pre-pass resolves note markers *before* `format_map` runs:
+The existing `render_template` uses Python's `str.format_map`. Note markers like `{ws:note:keylist:tag}` contain colons; `format_map` would interpret the colon as a format-spec separator (`{field:spec}`) and produce garbage or an error. A regex pre-pass must resolve note markers *before* `format_map` runs, so `format_map` never sees them:
 
 ```python
 import re
 
 _NOTE_MARKER_RE = re.compile(
-    r'\{\{(ws|t):note:keylist:([a-z0-9_-]+)\}\}',
+    r'\{(ws|t):note:keylist:([a-z0-9_-]+)\}',
     re.IGNORECASE,
 )
 

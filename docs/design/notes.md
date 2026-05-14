@@ -20,7 +20,7 @@ Staff system prompts and event-action prompt templates are static strings today.
 
 ## Non-Goals
 
-- Topic-scope injection (`{{t:note:keylist:<tag>}}`). Deferred to v2 — it changes whether staff system prompts retain their "constant per dispatch" semantic and needs a separate ADR call.
+- Topic-scope injection (`{t:note:keylist:<tag>}}`). Deferred to v2 — it changes whether staff system prompts retain their "constant per dispatch" semantic and needs a separate ADR call.
 - Versioning or history of note values.
 - Note ordering within a tag group (sorted by key).
 - Any injection verb other than `keylist` in v1 (`value`, `json`, etc. are future).
@@ -54,7 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_notes_scope ON notes (scope_type, scope_id);
 ### 2. Injection marker syntax
 
 ```
-{{ws:note:keylist:<tag>}}
+{ws:note:keylist:<tag>}
 ```
 
 | Segment | Meaning |
@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_notes_scope ON notes (scope_type, scope_id);
 | `keylist` | render verb — emit matching notes as sorted `key: value` lines |
 | `<tag>` | tag string to filter by |
 
-Example: `{{ws:note:keylist:memory}}` injects all workspace notes tagged `memory` as:
+Example: `{ws:note:keylist:memory}` injects all workspace notes tagged `memory` as:
 
 ```
 project_goal: Ship v1 by end of Q2
@@ -72,15 +72,15 @@ stack: Python + FastAPI + SQLite + Vue
 timezone: Asia/Shanghai
 ```
 
-Empty tag match → empty string (not the literal marker). Unknown verb or unsupported scope → literal marker + WARNING log.
+Empty tag match → empty string (not the literal marker). Unsupported scope or missing db context → empty string + WARNING log.
 
 ### 3. Two-pass `render_template`
 
-The existing `render_template` in `src/master/event_actions.py` uses Python's `str.format_map`. Double-brace `{{...}}` is currently Python's escape for a literal brace (`{`). The note markers use `{{...}}` deliberately so they pass through `format_map` untouched without a pre-pass; the regex pre-pass runs *before* `format_map` to intercept them.
+The existing `render_template` in `src/master/event_actions.py` uses Python's `str.format_map`. Note markers like `{ws:note:keylist:tag}` contain colons that `format_map` interprets as format-spec separators (`{field:spec}`), which would produce garbage or an error. A regex pre-pass must fully consume note markers *before* `format_map` runs.
 
 ```python
 _NOTE_MARKER_RE = re.compile(
-    r'\{\{(ws|t):note:keylist:([a-z0-9_-]+)\}\}',
+    r'\{(ws|t):note:keylist:([a-z0-9_-]+)\}',
     re.IGNORECASE,
 )
 
@@ -96,10 +96,10 @@ def render_template(
         scope, tag = m.group(1).lower(), m.group(2)
         if scope == 't':
             LOGGER.warning("note_marker.scope_unsupported_in_v1 marker=%s", m.group(0))
-            return m.group(0)
+            return ''  # return empty — can't leave the raw marker; format_map would misparse the colon as a format-spec separator
         if conn is None or workspace_id is None:
             LOGGER.warning("note_marker.no_db_context marker=%s", m.group(0))
-            return m.group(0)
+            return ''
         rows = conn.execute(
             "SELECT key, value FROM notes"
             " WHERE scope_type='workspace' AND scope_id=?"
@@ -194,16 +194,16 @@ The `config` table already has `scope_type / scope_id / key / value`. Adding a `
 
 One freeform text field per workspace/topic. Simplest possible model. Rejected: no granular injection (you can only inject the whole blob), no tagging, no per-note update semantics.
 
-### `{{ws.note.keylist.memory}}` (dot syntax)
+### `{ws.note.keylist.memory}` (dot syntax)
 
-Using dots instead of colons in the marker. Rejected: conflicts with Python's `format_map` attribute-access syntax; colons are neutral inside `{{...}}`.
+Using dots instead of colons. Rejected: `format_map` interprets `{ws.note.keylist.memory}` as an attribute-access chain (`ws.note.keylist.memory`), which would fail or produce wrong output even with `_SafeDict`. Colons are the natural segment separator here; the pre-pass regex handles them before `format_map` runs.
 
 ## Open Questions
 
 ### Resolved
 
 - [x] *Scope*: both workspace and topic in v1 CRUD; workspace injection only in v1 renderer. See §3.
-- [x] *Injection syntax*: namespaced `{{ws:note:keylist:<tag>}}`. See §2.
+- [x] *Injection syntax*: namespaced `{ws:note:keylist:<tag>}`. See §2.
 - [x] *Conflict resolution*: explicit scope in marker — no implicit shadowing. See §2.
 - [x] *New table vs. extending `config`*: new `notes` table. See Alternatives Considered.
 - [x] *`key` mutability*: immutable post-create; renames are delete-then-recreate.
@@ -211,7 +211,7 @@ Using dots instead of colons in the marker. Rejected: conflicts with Python's `f
 
 ### Deferred
 
-- *Topic-scope injection (`{{t:note:keylist:<tag>}}`)*: changes whether system prompts are "constant per dispatch." Requires a v2 ADR decision on that semantic before implementing.
+- *Topic-scope injection (`{t:note:keylist:<tag>}}`)*: changes whether system prompts are "constant per dispatch." Requires a v2 ADR decision on that semantic before implementing.
 - *Additional render verbs* (`{{ws:note:value:key}}` for a single note value). Not needed in v1.
 - *Cross-scope inheritance* (topic notes falling back to workspace notes for the same key). Not in scope.
 
@@ -223,7 +223,7 @@ Using dots instead of colons in the marker. Rejected: conflicts with Python's `f
 - Tag filtering: note with `tags=["memory","context"]` is returned by `keylist:memory` and `keylist:context` but not `keylist:goal`.
 - `keylist` output is sorted by `key`; two notes produce two lines.
 - Empty tag match → empty string substitution (not the literal marker).
-- `{{t:note:keylist:memory}}` in v1 → literal marker preserved + WARNING log emitted.
+- `{t:note:keylist:memory}` in v1 → empty string + WARNING log emitted (raw marker cannot be left for `format_map` — the colon would be misread as a format-spec separator).
 - Marker in staff `system_prompt` is resolved at dispatch time via `render_template`.
 - Marker in event-action `prompt_template` is resolved by the event worker.
 - Existing `{variable}` placeholders in templates coexist with note markers (two-pass does not corrupt them).
