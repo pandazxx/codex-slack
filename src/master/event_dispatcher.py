@@ -45,7 +45,8 @@ class VetoResult(NamedTuple):
 # ── Template rendering ────────────────────────────────────────────────────────
 
 _TEMPLATE_RE = re.compile(
-    r"\{(ws|t):note:keylist:([a-z0-9_-]+)\}"  # note marker
+    r"\{\{([^}]*)\}\}"                          # double-brace escape → literal {content}
+    r"|\{(ws|t):note:keylist:([a-z0-9_-]+)\}"  # note marker
     r"|\{([a-zA-Z_][a-zA-Z0-9_]*)\}",          # plain variable
     re.IGNORECASE,
 )
@@ -59,10 +60,15 @@ def render_template(
     workspace_id: str | None = None,
     topic_id: str | None = None,
 ) -> str:
-    """Substitute {variable} placeholders and {ws:note:keylist:<tag>} markers in one pass."""
+    """Substitute {variable} placeholders and {ws:note:keylist:<tag>} markers in one pass.
+
+    {{content}} produces a literal {content} (escape for braces, same as format_map).
+    """
     def _resolve(m: re.Match) -> str:
-        if m.group(1) is not None:  # note marker
-            scope, tag = m.group(1).lower(), m.group(2)
+        if m.group(1) is not None:  # double-brace escape
+            return "{" + m.group(1) + "}"
+        if m.group(2) is not None:  # note marker
+            scope, tag = m.group(2).lower(), m.group(3)
             if scope == "t":
                 LOGGER.warning("note_marker.scope_unsupported_in_v1 marker=%s", m.group(0))
                 return ""
@@ -81,12 +87,12 @@ def render_template(
             finally:
                 conn.close()
             return "\n".join(f"{r['key']}: {r['value']}" for r in rows)
-        else:  # plain variable
-            key = m.group(3)
-            if key not in variables:
-                LOGGER.warning("render_template.unknown_variable key=%s", key)
-                return m.group(0)
-            return variables[key]
+        # plain variable (group 4)
+        key = m.group(4)
+        if key not in variables:
+            LOGGER.warning("render_template.unknown_variable key=%s", key)
+            return m.group(0)
+        return variables[key]
 
     return _TEMPLATE_RE.sub(_resolve, template)
 

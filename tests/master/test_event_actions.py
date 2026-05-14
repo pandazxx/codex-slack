@@ -734,11 +734,13 @@ class TestTemplateRendering:
         result = render_template("{{literal}}", {})
         assert result == "{literal}"
 
-    def test_double_close_brace_produces_literal_brace(self):
-        # TMPL-08
+    def test_double_close_brace_passes_through(self):
+        # TMPL-08: standalone }} is not a special sequence in the regex renderer
+        # (unlike format_map where }} escaped a literal }). A lone } never triggers
+        # substitution, so }} passes through unchanged.
         from src.master.event_dispatcher import render_template
         result = render_template("end}}", {})
-        assert result == "end}"
+        assert result == "end}}"
 
     def test_no_placeholders_unchanged(self):
         # TMPL-09
