@@ -633,9 +633,11 @@ def test_publish_interrupted_all():
 
     with patch.dict(mqtt_loop_module._active_procs, procs, clear=True):
         with patch.dict(mqtt_loop_module._active_contexts, contexts, clear=True):
-            _publish_interrupted_all(client)
+            with patch("src.agent.mqtt_loop.os.killpg") as mock_killpg:
+                _publish_interrupted_all(client)
 
-    proc.kill.assert_called_once()
+    import signal
+    mock_killpg.assert_called_once_with(proc.pid, signal.SIGKILL)
 
     response_calls = [c for c in client.publish.call_args_list if "response" in c.args[0]]
     assert len(response_calls) == 1

@@ -10,6 +10,7 @@ import tempfile
 import threading
 import urllib.request
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,12 +29,37 @@ _active_procs: dict[str, subprocess.Popen] = {}  # type: ignore[type-arg]
 _active_contexts: dict[str, dict] = {}  # message_id → {workspace_id, topic_id, agent_name}
 _active_procs_lock = threading.Lock()
 
+# Deduplication: clean_session=False means the broker redelivers QoS-1 prompts when
+# the agent reconnects mid-run, which would start a second parallel LLM run and produce
+# two streaming bubbles. Track seen message_ids (bounded to 2000) and discard re-deliveries.
+# Accessed only from the single-threaded MQTT event loop — no lock required.
+_seen_prompt_ids: set[str] = set()
+_seen_prompt_ids_queue: deque[str] = deque()
+_MAX_SEEN_PROMPT_IDS = 2000
+
 # Module-level reference to the MQTT client, used by the SIGTERM handler.
 _mqtt_client_ref: mqtt.Client | None = None
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _kill_proc_tree(proc: subprocess.Popen) -> None:  # type: ignore[type-arg]
+    """Kill a subprocess and all its descendants via process-group signal.
+
+    Requires the proc to have been spawned with start_new_session=True so its
+    pgid == pid and killing the group only affects that subprocess tree.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def _parse_prompt_topic(raw: str) -> tuple[str, str] | None:
@@ -186,6 +212,7 @@ def _stream_claude_once(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
+            start_new_session=True,
         )
         proc.stdin.write(text)
         proc.stdin.close()
@@ -240,10 +267,7 @@ def _stream_claude_once(
         return "(claude CLI not found in agent container)", None, None, True
     except Exception as exc:
         if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            _kill_proc_tree(proc)
         with _active_procs_lock:
             _active_procs.pop(reply_message_id, None)
             _active_contexts.pop(reply_message_id, None)
@@ -327,37 +351,50 @@ def _stream_codex_once(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
+            start_new_session=True,
         )
         proc.stdin.write(text)
         proc.stdin.close()
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                event = {"type": "output", "content": line}
-            events.append(event)
-            client.publish(chunk_topic, json.dumps({
-                "message_id": reply_message_id,
+        with _active_procs_lock:
+            _active_procs[reply_message_id] = proc
+            _active_contexts[reply_message_id] = {
+                "workspace_id": workspace_id,
+                "topic_id": topic_id,
                 "agent_name": agent_name,
-                "seq": seq,
-                "event": event,
-            }), qos=0)
-            LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
-            seq += 1
-            ev_type = event.get("type", "")
-            if ev_type == "turn.completed":
-                final = event.get("output_text") or event.get("last_message")
-                if final:
-                    fallback_outputs.append(str(final))
-            elif ev_type == "turn.failed":
-                is_error = True
-                err_msg = (event.get("error") or {}).get("message", "")
-                if err_msg:
-                    fallback_outputs.append(f"(codex error: {err_msg})")
-        proc.wait()
+            }
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    event = {"type": "output", "content": line}
+                events.append(event)
+                client.publish(chunk_topic, json.dumps({
+                    "message_id": reply_message_id,
+                    "agent_name": agent_name,
+                    "seq": seq,
+                    "event": event,
+                }), qos=0)
+                LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+                seq += 1
+                ev_type = event.get("type", "")
+                if ev_type == "turn.completed":
+                    final = event.get("output_text") or event.get("last_message")
+                    if final:
+                        fallback_outputs.append(str(final))
+                elif ev_type == "turn.failed":
+                    is_error = True
+                    err_msg = (event.get("error") or {}).get("message", "")
+                    if err_msg:
+                        fallback_outputs.append(f"(codex error: {err_msg})")
+            proc.wait()
+        finally:
+            with _active_procs_lock:
+                _active_procs.pop(reply_message_id, None)
+                _active_contexts.pop(reply_message_id, None)
         if proc.returncode and proc.returncode != 0 and not is_error:
             is_error = True
         output = None
@@ -390,11 +427,8 @@ def _stream_codex_once(
             pass
         return "(codex CLI not found in agent container)", None, True
     except Exception as exc:
-        try:
-            if proc is not None:
-                proc.kill()
-        except Exception:
-            pass
+        if proc is not None:
+            _kill_proc_tree(proc)
         try:
             Path(output_file).unlink()
         except Exception:
@@ -558,10 +592,7 @@ def _publish_interrupted_all(client: mqtt.Client) -> None:
     for message_id, ctx in contexts.items():
         proc = procs.get(message_id)
         if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            _kill_proc_tree(proc)
         try:
             client.publish(
                 _response_topic(ctx["workspace_id"], ctx["topic_id"]),
@@ -616,10 +647,7 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
                 proc = _active_procs.get(cancel_msg_id)
             if proc is not None:
                 LOGGER.info("agent.cancel message_id=%s pid=%s", cancel_msg_id, proc.pid)
-                try:
-                    proc.kill()
-                except Exception:
-                    LOGGER.exception("agent.cancel_kill_failed message_id=%s", cancel_msg_id)
+                _kill_proc_tree(proc)
             else:
                 LOGGER.info("agent.cancel_noop message_id=%s reason=not_found", cancel_msg_id)
         return
@@ -633,6 +661,18 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
     except (json.JSONDecodeError, ValueError):
         LOGGER.warning("agent.mqtt_parse_error topic=%s", msg.topic)
         return
+
+    # Deduplicate QoS-1 redeliveries (clean_session=False can replay already-processed prompts).
+    prompt_id = payload.get("message_id")
+    if prompt_id:
+        if prompt_id in _seen_prompt_ids:
+            LOGGER.info("agent.skip_duplicate_prompt message_id=%s", prompt_id)
+            return
+        _seen_prompt_ids.add(prompt_id)
+        _seen_prompt_ids_queue.append(prompt_id)
+        if len(_seen_prompt_ids_queue) > _MAX_SEEN_PROMPT_IDS:
+            _seen_prompt_ids.discard(_seen_prompt_ids_queue.popleft())
+
     repo_dir = userdata.get("repo_dir", "")
     master_url = userdata.get("master_url", "http://master:8080")
     # inject master_url into payload so _process_prompt can use it
