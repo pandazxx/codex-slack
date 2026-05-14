@@ -45,6 +45,23 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _kill_proc_tree(proc: subprocess.Popen) -> None:  # type: ignore[type-arg]
+    """Kill a subprocess and all its descendants via process-group signal.
+
+    Requires the proc to have been spawned with start_new_session=True so its
+    pgid == pid and killing the group only affects that subprocess tree.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 def _parse_prompt_topic(raw: str) -> tuple[str, str] | None:
     parts = raw.split("/")
     if len(parts) != _TOPIC_PARTS or parts[5] != "prompt":
@@ -195,6 +212,7 @@ def _stream_claude_once(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
+            start_new_session=True,
         )
         proc.stdin.write(text)
         proc.stdin.close()
@@ -249,10 +267,7 @@ def _stream_claude_once(
         return "(claude CLI not found in agent container)", None, None, True
     except Exception as exc:
         if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            _kill_proc_tree(proc)
         with _active_procs_lock:
             _active_procs.pop(reply_message_id, None)
             _active_contexts.pop(reply_message_id, None)
@@ -336,6 +351,7 @@ def _stream_codex_once(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
+            start_new_session=True,
         )
         proc.stdin.write(text)
         proc.stdin.close()
@@ -411,11 +427,8 @@ def _stream_codex_once(
             pass
         return "(codex CLI not found in agent container)", None, True
     except Exception as exc:
-        try:
-            if proc is not None:
-                proc.kill()
-        except Exception:
-            pass
+        if proc is not None:
+            _kill_proc_tree(proc)
         try:
             Path(output_file).unlink()
         except Exception:
@@ -579,10 +592,7 @@ def _publish_interrupted_all(client: mqtt.Client) -> None:
     for message_id, ctx in contexts.items():
         proc = procs.get(message_id)
         if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            _kill_proc_tree(proc)
         try:
             client.publish(
                 _response_topic(ctx["workspace_id"], ctx["topic_id"]),
@@ -637,10 +647,7 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
                 proc = _active_procs.get(cancel_msg_id)
             if proc is not None:
                 LOGGER.info("agent.cancel message_id=%s pid=%s", cancel_msg_id, proc.pid)
-                try:
-                    proc.kill()
-                except Exception:
-                    LOGGER.exception("agent.cancel_kill_failed message_id=%s", cancel_msg_id)
+                _kill_proc_tree(proc)
             else:
                 LOGGER.info("agent.cancel_noop message_id=%s reason=not_found", cancel_msg_id)
         return
