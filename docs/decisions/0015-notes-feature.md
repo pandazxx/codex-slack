@@ -101,15 +101,16 @@ No FK on `scope_id` — same pattern as `event_actions`.
 
 Empty tag match → empty string substitution (not the literal marker).
 
-**Marker resolution — two-pass `render_template`:**
+**Marker resolution — single-pass `render_template`:**
 
-The existing `render_template` uses Python's `str.format_map`. Note markers like `{ws:note:keylist:tag}` contain colons; `format_map` would interpret the colon as a format-spec separator (`{field:spec}`) and produce garbage or an error. A regex pre-pass must resolve note markers *before* `format_map` runs, so `format_map` never sees them:
+A single regex matches both note markers and plain variable placeholders. `str.format_map` is replaced entirely — this avoids two-pass complexity and the colon-as-format-spec-separator problem:
 
 ```python
 import re
 
-_NOTE_MARKER_RE = re.compile(
-    r'\{(ws|t):note:keylist:([a-z0-9_-]+)\}',
+_TEMPLATE_RE = re.compile(
+    r'\{(ws|t):note:keylist:([a-z0-9_-]+)\}'   # note marker
+    r'|\{([a-zA-Z_][a-zA-Z0-9_]*)\}',           # plain variable
     re.IGNORECASE,
 )
 
@@ -121,30 +122,34 @@ def render_template(
     workspace_id: str | None = None,
     topic_id: str | None = None,
 ) -> str:
-    def _resolve_note_marker(m: re.Match) -> str:
-        scope, tag = m.group(1).lower(), m.group(2)
-        if scope == 't':
-            LOGGER.warning("note_marker.scope_unsupported_in_v1 marker=%s", m.group(0))
-            return m.group(0)  # leave literal
-        if conn is None or workspace_id is None:
-            LOGGER.warning("note_marker.no_db_context marker=%s", m.group(0))
-            return m.group(0)
-        rows = conn.execute(
-            "SELECT key, value FROM notes"
-            " WHERE scope_type='workspace' AND scope_id=?"
-            "   AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value=?)"
-            " ORDER BY key",
-            (workspace_id, tag),
-        ).fetchall()
-        return "\n".join(f"{r['key']}: {r['value']}" for r in rows)
+    def _resolve(m: re.Match) -> str:
+        if m.group(1) is not None:  # note marker
+            scope, tag = m.group(1).lower(), m.group(2)
+            if scope == 't':
+                LOGGER.warning("note_marker.scope_unsupported_in_v1 marker=%s", m.group(0))
+                return ''
+            if conn is None or workspace_id is None:
+                LOGGER.warning("note_marker.no_db_context marker=%s", m.group(0))
+                return ''
+            rows = conn.execute(
+                "SELECT key, value FROM notes"
+                " WHERE scope_type='workspace' AND scope_id=?"
+                "   AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value=?)"
+                " ORDER BY key",
+                (workspace_id, tag),
+            ).fetchall()
+            return "\n".join(f"{r['key']}: {r['value']}" for r in rows)
+        else:  # plain variable
+            key = m.group(3)
+            if key not in variables:
+                LOGGER.warning("render_template.unknown_variable key=%s", key)
+                return m.group(0)
+            return variables[key]
 
-    # Pre-pass: resolve note markers
-    text = _NOTE_MARKER_RE.sub(_resolve_note_marker, template)
-    # Second pass: existing {variable} substitution
-    return text.format_map(_SafeDict(variables))
+    return _TEMPLATE_RE.sub(_resolve, template)
 ```
 
-Callers that do not pass `conn` / `workspace_id` are unaffected — the pre-pass is a no-op when the marker regex finds no matches, and degrades gracefully (literal + WARN) when context is missing.
+`_SafeDict` is no longer needed. Callers that do not pass `conn` / `workspace_id` get empty-string substitution for note markers with a WARNING; plain variable handling is unchanged.
 
 **Integration points:**
 
