@@ -451,6 +451,7 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
             reply_to,
             payload.get("verdict"),
         )
+        return
     elif msg_type == "pong":
         try:
             app_state = userdata.get("app_state")
