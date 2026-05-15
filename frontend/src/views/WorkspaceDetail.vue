@@ -283,6 +283,9 @@
       </div>
     </section>
 
+    <!-- ── Notes ────────────────────────────────────────────────────── -->
+    <NotesPanel v-if="!isArchived" :workspace-id="id" />
+
     <!-- ── Veto dialog ──────────────────────────────────────────────── -->
     <div v-if="vetoDialog" class="veto-overlay">
       <div class="veto-dialog card">
@@ -304,6 +307,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import WorkspaceEnvVarsPanel from '../components/WorkspaceEnvVarsPanel.vue'
+import NotesPanel from '../components/NotesPanel.vue'
 import { formatInTimezone } from '../utils/datetime.js'
 
 const route = useRoute()
