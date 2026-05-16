@@ -4,5 +4,12 @@
   "compactRatio": 0.5,
   "env": {
     "AI_AGENT_NAME": "Exit! agent"
+  },
+  "mcpServers": {
+    "notes": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "src.notes_mcp"]
+    }
   }
 }

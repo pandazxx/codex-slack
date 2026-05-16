@@ -3,3 +3,7 @@
 # Keep user-scope runtime behavior in AGENTS.md unless a Codex
 # setting must be enforced here. Repos can override this file with
 # `.codex/config.toml` at project scope.
+
+[mcp_servers.notes]
+command = "python"
+args    = ["-m", "src.notes_mcp"]
