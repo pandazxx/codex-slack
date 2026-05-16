@@ -118,6 +118,14 @@ async def dispatch_to_staff(
     finally:
         conn.close()
 
+    raw_system_prompt = staff["system_prompt"] or ""
+    if raw_system_prompt:
+        from .event_dispatcher import render_template  # local import — avoids circular dep
+        raw_system_prompt = render_template(
+            raw_system_prompt, {},
+            db_path=app_state.db_path, workspace_id=workspace_id,
+        )
+
     payload_dict: dict = {
         "message_id": message_id,
         "agent_name": staff["name"],
@@ -131,7 +139,7 @@ async def dispatch_to_staff(
         "is_new_session": is_new_session,
         "session_scope": staff["session_scope"] or "topic",
         "model": staff["model"],
-        "system_prompt": staff["system_prompt"],
+        "system_prompt": raw_system_prompt or None,
         "text": prompt_text,
         "attachments": attachments,
     }

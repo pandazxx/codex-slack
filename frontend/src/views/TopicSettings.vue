@@ -131,12 +131,16 @@
         </div>
       </div>
     </section>
+
+    <!-- ── Notes ─────────────────────────────────────────────────────── -->
+    <NotesPanel :workspace-id="wsId" :topic-id="topicId" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import NotesPanel from '../components/NotesPanel.vue'
 
 const route = useRoute()
 const wsId = route.params.wsId

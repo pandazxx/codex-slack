@@ -156,9 +156,22 @@ CREATE INDEX IF NOT EXISTS idx_event_actions_scope_event
     ON event_actions (scope_type, scope_id, event_type, enabled);
 CREATE INDEX IF NOT EXISTS idx_event_actions_scheduler
     ON event_actions (event_type, enabled) WHERE event_type = 'topic_scheduler';
+
+CREATE TABLE IF NOT EXISTS notes (
+    id          TEXT PRIMARY KEY,
+    scope_type  TEXT NOT NULL CHECK (scope_type IN ('workspace', 'topic')),
+    scope_id    TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '[]',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    UNIQUE (scope_type, scope_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_notes_scope ON notes (scope_type, scope_id);
 """
 
-TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks", "event_actions"]
+TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks", "event_actions", "notes"]
 
 
 _MIGRATIONS = [

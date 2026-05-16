@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import NamedTuple
 
@@ -43,19 +44,63 @@ class VetoResult(NamedTuple):
 
 # ── Template rendering ────────────────────────────────────────────────────────
 
-class _SafeDict(dict):
-    """dict subclass that returns the literal placeholder for missing keys.
+_TEMPLATE_RE = re.compile(
+    r"\{\{([^}]*)\}\}"                                  # double-brace escape → literal {content}
+    r"|\{(ws|t):note:(keys|notes):([a-z0-9_-]+)\}"     # note marker — verb is keys or notes
+    r"|\{([a-zA-Z_][a-zA-Z0-9_]*)\}",                  # plain variable
+    re.IGNORECASE,
+)
 
-    A misconfigured template logs a warning but does not crash dispatch.
+
+def render_template(
+    template: str,
+    variables: dict[str, str],
+    *,
+    db_path: str | None = None,
+    workspace_id: str | None = None,
+    topic_id: str | None = None,
+) -> str:
+    """Substitute {variable} placeholders and note markers in one pass.
+
+    Note markers:
+      {ws:note:keys:<tag>}  — newline-separated list of matching keys
+      {ws:note:notes:<tag>} — newline-separated list of "key: value" pairs
+
+    {{content}} produces a literal {content} (escape for braces, same as format_map).
     """
-    def __missing__(self, key: str) -> str:
-        LOGGER.warning("event_action.unknown_variable key=%s", key)
-        return "{" + key + "}"
+    def _resolve(m: re.Match) -> str:
+        if m.group(1) is not None:  # double-brace escape
+            return "{" + m.group(1) + "}"
+        if m.group(2) is not None:  # note marker
+            scope, verb, tag = m.group(2).lower(), m.group(3).lower(), m.group(4)
+            if scope == "t":
+                LOGGER.warning("note_marker.scope_unsupported_in_v1 marker=%s", m.group(0))
+                return ""
+            if db_path is None or workspace_id is None:
+                LOGGER.warning("note_marker.no_db_context marker=%s", m.group(0))
+                return ""
+            conn = get_connection(db_path)
+            try:
+                rows = conn.execute(
+                    "SELECT key, value FROM notes"
+                    " WHERE scope_type='workspace' AND scope_id=?"
+                    "   AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value=?)"
+                    " ORDER BY key",
+                    (workspace_id, tag),
+                ).fetchall()
+            finally:
+                conn.close()
+            if verb == "keys":
+                return "\n".join(r["key"] for r in rows)
+            return "\n".join(f"{r['key']}: {r['value']}" for r in rows)
+        # plain variable (group 5)
+        key = m.group(5)
+        if key not in variables:
+            LOGGER.warning("render_template.unknown_variable key=%s", key)
+            return m.group(0)
+        return variables[key]
 
-
-def render_template(template: str, variables: dict[str, str]) -> str:
-    """Substitute {variable} placeholders; unknown placeholders are left literal."""
-    return template.format_map(_SafeDict(variables))
+    return _TEMPLATE_RE.sub(_resolve, template)
 
 
 # ── emit_event — single threadsafe entry point ────────────────────────────────
@@ -221,7 +266,10 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
             }))
 
         try:
-            prompt = render_template(row["prompt_template"], variables)
+            prompt = render_template(
+                row["prompt_template"], variables,
+                db_path=db_path, workspace_id=event["workspace_id"],
+            )
         except Exception as exc:
             LOGGER.exception("event_action.render_failed id=%s", row["id"])
             _record_run(db_path, row["id"], status="render_error", output=str(exc))
@@ -348,7 +396,10 @@ async def run_gate_actions(
             }))
 
         try:
-            prompt = render_template(row["prompt_template"], merged)
+            prompt = render_template(
+                row["prompt_template"], merged,
+                db_path=app_state.db_path, workspace_id=workspace_id,
+            )
         except Exception as exc:
             LOGGER.exception("gate_action.render_failed id=%s", row["id"])
             _record_run(app_state.db_path, row["id"], status="render_error", output=str(exc))
@@ -491,7 +542,10 @@ async def veto_dispatch(
             continue
 
         try:
-            prompt = render_template(row["prompt_template"], variables)
+            prompt = render_template(
+                row["prompt_template"], variables,
+                db_path=app_state.db_path, workspace_id=workspace_id,
+            )
         except Exception as exc:
             LOGGER.exception("veto_dispatch.render_failed id=%s", row["id"])
             _record_run(app_state.db_path, row["id"], status="render_error", output=str(exc))

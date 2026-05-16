@@ -22,3 +22,4 @@ Status flow: `proposed` → `accepted` → `deprecated` / `superseded`
 | 0012 | [Stream agent reply incrementally](0012-streaming-agent-reply.md) | accepted |
 | 0013 | [Event-based staff actions](0013-event-based-staff-action.md) | accepted |
 | 0014 | [Codex agent adapter](0014-codex-agent-adapter.md) | accepted |
+| 0015 | [Workspace and topic notes with prompt injection](0015-notes-feature.md) | accepted |
