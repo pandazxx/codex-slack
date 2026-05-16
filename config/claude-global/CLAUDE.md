@@ -18,6 +18,15 @@ Never assume the user can inspect files locally.
 - When using that marker, aim to keep each section around 1700 characters when practical.
 - Use the exact marker line only. Do not add numbering or extra text on the marker line.
 
+## Memory and Notes
+
+Use the **`notes` MCP tools** for persistent memory — never create `memory.md` or other local files as a substitute.
+
+- `list_workspace_notes` / `create_workspace_note` / `update_workspace_note` / `delete_workspace_note` — workspace-scoped, visible across all topics.
+- `list_topic_notes` / `create_topic_note` / `update_topic_note` / `delete_topic_note` — topic-scoped (only available when a topic is active).
+
+Tag notes with `memory` so they can be injected into future prompts. When recalling context, call `list_workspace_notes(tag="memory")` at the start of a session.
+
 ## Project Scope
 
 This file covers runtime environment and formatting conventions only. Each project is expected to supply its own `.claude/CLAUDE.md` with git workflow, knowledge persistence, project layout, document layout, and the common development workflow. Without a project-scoped file, git workflow rules and documentation conventions will not apply.
