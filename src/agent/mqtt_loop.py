@@ -234,8 +234,9 @@ def _stream_claude_once(
     outputs: list[str] = []
     proc = None
     try:
+        proc_env = {**os.environ, "TOPIC_ID": topic_id}
         proc = subprocess.Popen(
-            cmd, cwd=worktree,
+            cmd, cwd=worktree, env=proc_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
@@ -426,8 +427,9 @@ def _stream_codex_once(
     new_session_id: str | None = None
     proc = None
     try:
+        proc_env = {**os.environ, "TOPIC_ID": topic_id}
         proc = subprocess.Popen(
-            cmd, cwd=worktree,
+            cmd, cwd=worktree, env=proc_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
