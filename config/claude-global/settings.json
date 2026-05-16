@@ -8,11 +8,8 @@
   "mcpServers": {
     "notes": {
       "type": "stdio",
-      "command": "python",
-      "args": ["-m", "src.notes_mcp"],
-      "env": {
-        "PYTHONPATH": "/opt/codex-slack"
-      }
+      "command": "bash",
+      "args": ["-c", "cd /opt/codex-slack && exec python -m src.notes_mcp"]
     }
   }
 }

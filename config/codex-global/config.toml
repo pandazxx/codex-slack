@@ -5,8 +5,5 @@
 # `.codex/config.toml` at project scope.
 
 [mcp_servers.notes]
-command = "python"
-args    = ["-m", "src.notes_mcp"]
-
-[mcp_servers.notes.env]
-PYTHONPATH = "/opt/codex-slack"
+command = "bash"
+args    = ["-c", "cd /opt/codex-slack && exec python -m src.notes_mcp"]
