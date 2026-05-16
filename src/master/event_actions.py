@@ -1,9 +1,9 @@
-"""CRUD API for event_actions — topic-scoped event trigger configurations.
+"""CRUD API for event_actions — topic- and workspace-scoped event trigger configurations.
 
-Endpoints live under /api/workspaces/{wid}/topics/{tid}/event-actions following
-the existing router pattern in staffs.py. Validation mirrors the DB CHECK
-constraints with friendly HTTP errors; the CHECK constraints provide defence in
-depth.
+Topic-scoped endpoints live under /api/workspaces/{wid}/topics/{tid}/event-actions.
+Workspace-scoped endpoints live under /api/workspaces/{wid}/event-actions.
+Validation mirrors the DB CHECK constraints with friendly HTTP errors; the CHECK
+constraints provide defence in depth.
 """
 from __future__ import annotations
 
@@ -18,6 +18,11 @@ from .db import get_connection
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/topics/{topic_id}/event-actions",
+    tags=["event-actions"],
+)
+
+workspace_router = APIRouter(
+    prefix="/workspaces/{workspace_id}/event-actions",
     tags=["event-actions"],
 )
 
@@ -78,7 +83,7 @@ class EventActionIn(BaseModel):
 class EventActionOut(BaseModel):
     id: str
     event_type: str
-    scope_type: Literal["topic"]
+    scope_type: Literal["topic", "workspace"]
     scope_id: str
     staff_name: str
     prompt_template: str
@@ -175,6 +180,48 @@ def _row_to_out(row) -> EventActionOut:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+# ── Workspace-scoped models ───────────────────────────────────────────────────
+
+class WorkspaceEventActionIn(BaseModel):
+    """Input for workspace-scoped event actions.
+
+    topic_scheduler is excluded because it needs a concrete topic to dispatch to.
+    All other event types fire in the context of whichever topic triggered the event.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal[
+        "topic_message_sent",
+        "topic_message_received",
+        "topic_archived",
+        "topic_archiving",
+    ]
+    staff_name: str
+    prompt_template: str
+    timing: Literal["before", "after"] | None = None
+    enabled: bool = True
+    structured_output: bool = False
+
+    @model_validator(mode="after")
+    def validate_event_type_fields(self) -> "WorkspaceEventActionIn":
+        et = self.event_type
+        if et == "topic_message_sent":
+            if self.timing not in ("before", "after"):
+                raise ValueError("timing must be 'before' or 'after' for topic_message_sent")
+        elif et in ("topic_message_received", "topic_archived", "topic_archiving"):
+            if self.timing not in (None, "after"):
+                raise ValueError(f"timing must be null or 'after' for {et}")
+        return self
+
+
+def _require_workspace(conn, workspace_id: str) -> None:
+    if conn.execute(
+        "SELECT 1 FROM workspaces WHERE id = ? AND archived_at IS NULL",
+        (workspace_id,),
+    ).fetchone() is None:
+        raise HTTPException(404, "workspace not found")
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -324,6 +371,153 @@ def delete_event_action(
         row = conn.execute(
             "SELECT id FROM event_actions WHERE id = ? AND scope_id = ?",
             (action_id, topic_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "event action not found")
+        conn.execute("DELETE FROM event_actions WHERE id = ?", (action_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ── Workspace-scoped endpoints ─────────────────────────────────────────────────
+
+@workspace_router.get("", response_model=list[EventActionOut])
+def list_workspace_event_actions(workspace_id: str, request: Request) -> list[EventActionOut]:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        _require_workspace(conn, workspace_id)
+        rows = conn.execute(
+            "SELECT * FROM event_actions WHERE scope_type='workspace' AND scope_id=? ORDER BY created_at",
+            (workspace_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_out(r) for r in rows]
+
+
+@workspace_router.post("", status_code=201, response_model=EventActionOut)
+def create_workspace_event_action(
+    workspace_id: str,
+    body: WorkspaceEventActionIn,
+    request: Request,
+) -> EventActionOut:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        _require_workspace(conn, workspace_id)
+        action_id = str(uuid.uuid4())
+        now = _now()
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, last_fired_at, last_run_at, last_run_status,"
+            "  last_run_output, enabled, structured_output, created_at, updated_at)"
+            " VALUES (?, ?, 'workspace', ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?)",
+            (
+                action_id,
+                body.event_type,
+                workspace_id,
+                body.staff_name,
+                body.prompt_template,
+                body.timing,
+                1 if body.enabled else 0,
+                1 if body.structured_output else 0,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM event_actions WHERE id = ?", (action_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return _row_to_out(row)
+
+
+@workspace_router.get("/{action_id}", response_model=EventActionOut)
+def get_workspace_event_action(
+    workspace_id: str,
+    action_id: str,
+    request: Request,
+) -> EventActionOut:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        _require_workspace(conn, workspace_id)
+        row = conn.execute(
+            "SELECT * FROM event_actions WHERE id = ? AND scope_type='workspace' AND scope_id = ?",
+            (action_id, workspace_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(404, "event action not found")
+    return _row_to_out(row)
+
+
+@workspace_router.patch("/{action_id}", response_model=EventActionOut)
+def patch_workspace_event_action(
+    workspace_id: str,
+    action_id: str,
+    body: EventActionPatch,
+    request: Request,
+) -> EventActionOut:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        _require_workspace(conn, workspace_id)
+        existing = conn.execute(
+            "SELECT * FROM event_actions WHERE id = ? AND scope_type='workspace' AND scope_id = ?",
+            (action_id, workspace_id),
+        ).fetchone()
+        if existing is None:
+            raise HTTPException(404, "event action not found")
+
+        sent = body.model_dump(exclude_unset=True)
+        for field in ("staff_name", "prompt_template", "enabled", "structured_output"):
+            if field in sent and sent[field] is None:
+                raise HTTPException(422, f"{field} cannot be null")
+        new_staff = sent["staff_name"] if "staff_name" in sent else existing["staff_name"]
+        new_template = sent["prompt_template"] if "prompt_template" in sent else existing["prompt_template"]
+        new_timing = sent["timing"] if "timing" in sent else existing["timing"]
+        new_cron = sent["cron_expr"] if "cron_expr" in sent else existing["cron_expr"]
+        new_enabled = (1 if sent["enabled"] else 0) if "enabled" in sent else existing["enabled"]
+        new_structured_output = (1 if sent["structured_output"] else 0) if "structured_output" in sent else existing["structured_output"]
+
+        _validate_merged_state(
+            event_type=existing["event_type"],
+            timing=new_timing,
+            cron_expr=new_cron,
+        )
+
+        now = _now()
+        conn.execute(
+            "UPDATE event_actions"
+            "   SET staff_name=?, prompt_template=?, timing=?, cron_expr=?, enabled=?,"
+            "       structured_output=?, updated_at=?"
+            " WHERE id=?",
+            (new_staff, new_template, new_timing, new_cron, new_enabled, new_structured_output, now, action_id),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM event_actions WHERE id = ?", (action_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return _row_to_out(row)
+
+
+@workspace_router.delete("/{action_id}", status_code=204)
+def delete_workspace_event_action(
+    workspace_id: str,
+    action_id: str,
+    request: Request,
+) -> None:
+    conn = get_connection(request.app.state.db_path)
+    try:
+        _require_workspace(conn, workspace_id)
+        row = conn.execute(
+            "SELECT id FROM event_actions WHERE id = ? AND scope_type='workspace' AND scope_id = ?",
+            (action_id, workspace_id),
         ).fetchone()
         if row is None:
             raise HTTPException(404, "event action not found")

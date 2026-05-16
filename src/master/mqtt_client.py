@@ -149,6 +149,28 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
         LOGGER.exception("mqtt.save_agent_response_error topic_id=%s", topic_id)
 
 
+def _prompt_was_event_dispatched(db_path: str, reply_to: str) -> bool:
+    """Return True if the prompt message that triggered this reply had sender='event'.
+
+    Agent replies to event-dispatched prompts must not re-fire topic_message_received,
+    otherwise every event action on that event type loops indefinitely.
+    """
+    if not reply_to:
+        return False
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT sender FROM messages WHERE id = ?", (reply_to,)
+            ).fetchone()
+            return row is not None and row[0] == "event"
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.exception("mqtt.prompt_sender_check_error reply_to=%s", reply_to)
+        return False
+
+
 def _get_structured_output_action(db_path: str, message_id: str) -> sqlite3.Row | None:
     """Return the event_action row if message_id links to a structured-output action."""
     if not message_id:
@@ -385,7 +407,11 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
             app_state = userdata.get("app_state")
             # emit_event self-guards if event infrastructure isn't up; the only thing
             # we need to check here is that we have the app_state to pass through.
-            if app_state is not None:
+            # Skip if this reply is responding to an event-dispatched prompt — otherwise
+            # every topic_message_received action loops: action fires → agent replies →
+            # topic_message_received re-fires → action fires again.
+            reply_to = payload.get("reply_to", "")
+            if app_state is not None and not _prompt_was_event_dispatched(db_path, reply_to):
                 workspace_id = _get_workspace_id(db_path, topic_id)
                 topic_name = _get_topic_name(db_path, topic_id)
                 if workspace_id:
@@ -425,6 +451,7 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
             reply_to,
             payload.get("verdict"),
         )
+        return
     elif msg_type == "pong":
         try:
             app_state = userdata.get("app_state")

@@ -132,10 +132,14 @@ async def event_worker(app_state) -> None:
 
 
 async def _handle_event(app_state, event: dict) -> None:
-    """Load matching event_actions and dispatch all of them in parallel."""
+    """Load matching event_actions and dispatch all of them in parallel.
+
+    Loads both topic-scoped actions (for the specific topic) and workspace-scoped
+    actions (configured at the workspace level, fired in the topic context).
+    """
     conn = get_connection(app_state.db_path)
     try:
-        rows = conn.execute(
+        topic_rows = conn.execute(
             "SELECT * FROM event_actions"
             " WHERE scope_type='topic'"
             "   AND scope_id=?"
@@ -144,6 +148,16 @@ async def _handle_event(app_state, event: dict) -> None:
             "   AND (timing IS NULL OR timing=?)",
             (event["topic_id"], event["event_type"], event["timing"]),
         ).fetchall()
+        workspace_rows = conn.execute(
+            "SELECT * FROM event_actions"
+            " WHERE scope_type='workspace'"
+            "   AND scope_id=?"
+            "   AND event_type=?"
+            "   AND enabled=1"
+            "   AND (timing IS NULL OR timing=?)",
+            (event["workspace_id"], event["event_type"], event["timing"]),
+        ).fetchall()
+        rows = list(topic_rows) + list(workspace_rows)
     finally:
         conn.close()
 
@@ -274,7 +288,7 @@ async def run_gate_actions(
 
     conn = get_connection(app_state.db_path)
     try:
-        rows = conn.execute(
+        topic_rows = conn.execute(
             "SELECT * FROM event_actions"
             " WHERE scope_type='topic' AND scope_id=?"
             "   AND event_type='topic_message_sent'"
@@ -283,6 +297,16 @@ async def run_gate_actions(
             "   AND enabled=1",
             (topic_id,),
         ).fetchall()
+        workspace_rows = conn.execute(
+            "SELECT * FROM event_actions"
+            " WHERE scope_type='workspace' AND scope_id=?"
+            "   AND event_type='topic_message_sent'"
+            "   AND timing='before'"
+            "   AND structured_output=1"
+            "   AND enabled=1",
+            (workspace_id,),
+        ).fetchall()
+        rows = list(topic_rows) + list(workspace_rows)
         topic_row = conn.execute(
             "SELECT t.id, t.subject, t.workspace_id, w.name AS workspace_name"
             " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
@@ -422,7 +446,7 @@ async def veto_dispatch(
 
     conn = get_connection(app_state.db_path)
     try:
-        rows = conn.execute(
+        topic_rows = conn.execute(
             "SELECT * FROM event_actions"
             " WHERE scope_type='topic'"
             "   AND scope_id=?"
@@ -430,6 +454,15 @@ async def veto_dispatch(
             "   AND enabled=1",
             (topic_id,),
         ).fetchall()
+        workspace_rows = conn.execute(
+            "SELECT * FROM event_actions"
+            " WHERE scope_type='workspace'"
+            "   AND scope_id=?"
+            "   AND event_type='topic_archiving'"
+            "   AND enabled=1",
+            (workspace_id,),
+        ).fetchall()
+        rows = list(topic_rows) + list(workspace_rows)
     finally:
         conn.close()
 
