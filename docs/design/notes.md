@@ -13,17 +13,17 @@ Staff system prompts and event-action prompt templates are static strings today.
 
 - One `notes` table covering both workspace and topic scope.
 - Notes are key/value pairs tagged for filtering; types emerge from tags, not schema.
-- Injection via `{{ws:note:notelist:<tag>}}` markers in system prompts and prompt templates.
+- Injection via `{{ws:note:notes:<tag>}}` markers in system prompts and prompt templates.
 - Full CRUD API at both scopes.
 - Coexist cleanly with existing `{variable}` substitution (`format_map`).
 - v1: workspace-scope injection only.
 
 ## Non-Goals
 
-- Topic-scope injection (`{t:note:notelist:<tag>}}`). Deferred to v2 — it changes whether staff system prompts retain their "constant per dispatch" semantic and needs a separate ADR call.
+- Topic-scope injection (`{t:note:notes:<tag>}}`). Deferred to v2 — it changes whether staff system prompts retain their "constant per dispatch" semantic and needs a separate ADR call.
 - Versioning or history of note values.
 - Note ordering within a tag group (sorted by key).
-- Any injection verb other than `notelist` in v1 (`value`, `json`, etc. are future).
+- Any injection verb other than `notes` in v1 (`value`, `json`, etc. are future).
 
 ## Design
 
@@ -53,18 +53,21 @@ CREATE INDEX IF NOT EXISTS idx_notes_scope ON notes (scope_type, scope_id);
 
 ### 2. Injection marker syntax
 
+Two verbs are supported:
+
 ```
-{ws:note:notelist:<tag>}
+{ws:note:notes:<tag>}   → key: value pairs, one per line, sorted by key
+{ws:note:keys:<tag>}    → keys only, one per line, sorted
 ```
 
 | Segment | Meaning |
 |---|---|
 | `ws` | workspace scope (`t` = topic, v2 only) |
 | `note` | object type (notes table) |
-| `notelist` | render verb — emit matching notes as sorted `key: value` lines |
+| `notes` / `keys` | render verb — `notes` emits `key: value` lines; `keys` emits key names only |
 | `<tag>` | tag string to filter by |
 
-Example: `{ws:note:notelist:memory}` injects all workspace notes tagged `memory` as:
+Example: `{ws:note:notes:memory}` injects all workspace notes tagged `memory` as:
 
 ```
 project_goal: Ship v1 by end of Q2
@@ -72,16 +75,24 @@ stack: Python + FastAPI + SQLite + Vue
 timezone: Asia/Shanghai
 ```
 
+Example: `{ws:note:keys:memory}` injects just the key names:
+
+```
+project_goal
+stack
+timezone
+```
+
 Empty tag match → empty string (not the literal marker). Unsupported scope or missing db context → empty string + WARNING log.
 
 ### 3. Single-pass `render_template`
 
-`str.format_map` is replaced with a single regex substitution that handles both note markers and plain variable placeholders in one pass. This avoids two-pass complexity and the colon-as-format-spec-separator problem that `format_map` would have with `{ws:note:notelist:tag}`.
+`str.format_map` is replaced with a single regex substitution that handles both note markers and plain variable placeholders in one pass. This avoids two-pass complexity and the colon-as-format-spec-separator problem that `format_map` would have with `{ws:note:notes:tag}`.
 
 ```python
 _TEMPLATE_RE = re.compile(
-    r'\{(ws|t):note:notelist:([a-z0-9_-]+)\}'   # note marker
-    r'|\{([a-zA-Z_][a-zA-Z0-9_]*)\}',           # plain variable
+    r'\{(ws|t):note:(keys|notes):([a-z0-9_-]+)\}'  # note marker
+    r'|\{([a-zA-Z_][a-zA-Z0-9_]*)\}',               # plain variable
     re.IGNORECASE,
 )
 
@@ -201,24 +212,24 @@ The `config` table already has `scope_type / scope_id / key / value`. Adding a `
 
 One freeform text field per workspace/topic. Simplest possible model. Rejected: no granular injection (you can only inject the whole blob), no tagging, no per-note update semantics.
 
-### `{ws.note.notelist.memory}` (dot syntax)
+### `{ws.note.notes.memory}` (dot syntax)
 
-Using dots instead of colons. Rejected: `format_map` interprets `{ws.note.notelist.memory}` as an attribute-access chain (`ws.note.notelist.memory`), which would fail or produce wrong output even with `_SafeDict`. Colons are the natural segment separator here; the pre-pass regex handles them before `format_map` runs.
+Using dots instead of colons. Rejected: `format_map` interprets `{ws.note.notes.memory}` as an attribute-access chain (`ws.note.notes.memory`), which would fail or produce wrong output even with `_SafeDict`. Colons are the natural segment separator here; the pre-pass regex handles them before `format_map` runs.
 
 ## Open Questions
 
 ### Resolved
 
 - [x] *Scope*: both workspace and topic in v1 CRUD; workspace injection only in v1 renderer. See §3.
-- [x] *Injection syntax*: namespaced `{ws:note:notelist:<tag>}`. See §2.
+- [x] *Injection syntax*: namespaced `{ws:note:notes:<tag>}`. See §2.
 - [x] *Conflict resolution*: explicit scope in marker — no implicit shadowing. See §2.
 - [x] *New table vs. extending `config`*: new `notes` table. See Alternatives Considered.
 - [x] *`key` mutability*: immutable post-create; renames are delete-then-recreate.
-- [x] *`notelist` output format*: sorted `key: value` newline list; empty match → empty string.
+- [x] *`notes` output format*: sorted `key: value` newline list; empty match → empty string.
 
 ### Deferred
 
-- *Topic-scope injection (`{t:note:notelist:<tag>}}`)*: changes whether system prompts are "constant per dispatch." Requires a v2 ADR decision on that semantic before implementing.
+- *Topic-scope injection (`{t:note:notes:<tag>}}`)*: changes whether system prompts are "constant per dispatch." Requires a v2 ADR decision on that semantic before implementing.
 - *Additional render verbs* (`{{ws:note:value:key}}` for a single note value). Not needed in v1.
 - *Cross-scope inheritance* (topic notes falling back to workspace notes for the same key). Not in scope.
 
@@ -227,10 +238,10 @@ Using dots instead of colons. Rejected: `format_map` interprets `{ws.note.noteli
 - CRUD round-trip for workspace-scoped notes; same for topic-scoped.
 - `UNIQUE (scope_type, scope_id, key)` constraint: duplicate key on POST returns 409.
 - `key` is not patchable: PATCH with `key` field returns 422.
-- Tag filtering: note with `tags=["memory","context"]` is returned by `notelist:memory` and `notelist:context` but not `notelist:goal`.
-- `notelist` output is sorted by `key`; two notes produce two lines.
+- Tag filtering: note with `tags=["memory","context"]` is returned by `notes:memory` and `notes:context` but not `notes:goal`.
+- `notes` output is sorted by `key`; two notes produce two lines.
 - Empty tag match → empty string substitution (not the literal marker).
-- `{t:note:notelist:memory}` in v1 → empty string + WARNING log emitted (raw marker cannot be left for `format_map` — the colon would be misread as a format-spec separator).
+- `{t:note:notes:memory}` in v1 → empty string + WARNING log emitted (raw marker cannot be left for `format_map` — the colon would be misread as a format-spec separator).
 - Marker in staff `system_prompt` is resolved at dispatch time via `render_template`.
 - Marker in event-action `prompt_template` is resolved by the event worker.
 - Existing `{variable}` placeholders in templates coexist with note markers (two-pass does not corrupt them).

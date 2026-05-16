@@ -5,8 +5,9 @@
       <button v-if="!showForm" class="btn-add" @click="startCreate">+ Add note</button>
     </div>
     <p class="muted hint">
-      Key-value pairs injected into prompts via
-      <code>{ws:note:notelist:&lt;tag&gt;}</code>.
+      Inject into prompts:
+      <code>{ws:note:notes:&lt;tag&gt;}</code> (key: value pairs) or
+      <code>{ws:note:keys:&lt;tag&gt;}</code> (keys only).
     </p>
 
     <p v-if="loading" class="muted">Loading…</p>

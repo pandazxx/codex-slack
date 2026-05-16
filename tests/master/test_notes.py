@@ -10,9 +10,10 @@ Coverage matrix:
   4.  GET/PATCH/DELETE non-existent key → 404
   5.  PATCH with key field present → 422 (NotePatch has extra="forbid")
   6.  Tag filtering in render_template: note appears in matching tag but not in unrelated tag
-  7.  notelist output is sorted by key; two notes produce two "key: value" lines
+  7.  notes verb output is sorted by key; two notes produce two "key: value" lines
+  7b. keys verb output is sorted by key; two notes produce just the key names
   8.  Empty tag match → empty string (not literal marker)
-  9.  {t:note:notelist:memory} → empty string + WARNING (v1 only supports ws)
+  9.  {t:note:notes:memory} → empty string + WARNING (v1 only supports ws)
  10.  {variable} placeholders coexist with note markers in one pass
  11.  render_template with no db_path/workspace_id → note markers → empty string + WARNING
  12.  Unknown {variable} → left literal + WARNING
@@ -327,10 +328,10 @@ def db_with_notes(tmp_path):
 
 
 def test_tag_filtering_memory_tag_matches_both(db_with_notes):
-    """Notes tagged 'memory' appear in {ws:note:notelist:memory}."""
+    """Notes tagged 'memory' appear in {ws:note:notes:memory}."""
     db_path, ws_id = db_with_notes
     result = render_template(
-        "{ws:note:notelist:memory}",
+        "{ws:note:notes:memory}",
         {},
         db_path=db_path,
         workspace_id=ws_id,
@@ -340,10 +341,10 @@ def test_tag_filtering_memory_tag_matches_both(db_with_notes):
 
 
 def test_tag_filtering_context_tag_matches_only_one(db_with_notes):
-    """Only the note tagged 'context' appears in {ws:note:notelist:context}."""
+    """Only the note tagged 'context' appears in {ws:note:notes:context}."""
     db_path, ws_id = db_with_notes
     result = render_template(
-        "{ws:note:notelist:context}",
+        "{ws:note:notes:context}",
         {},
         db_path=db_path,
         workspace_id=ws_id,
@@ -353,10 +354,10 @@ def test_tag_filtering_context_tag_matches_only_one(db_with_notes):
 
 
 def test_tag_filtering_unrelated_tag_matches_none(db_with_notes):
-    """{ws:note:notelist:goal} → empty string (no note has that tag)."""
+    """{ws:note:notes:goal} → empty string (no note has that tag)."""
     db_path, ws_id = db_with_notes
     result = render_template(
-        "{ws:note:notelist:goal}",
+        "{ws:note:notes:goal}",
         {},
         db_path=db_path,
         workspace_id=ws_id,
@@ -365,15 +366,15 @@ def test_tag_filtering_unrelated_tag_matches_none(db_with_notes):
 
 
 # ---------------------------------------------------------------------------
-# 7. notelist output is sorted by key
+# 7. notes verb output is sorted by key
 # ---------------------------------------------------------------------------
 
 
-def test_notelist_sorted_by_key(db_with_notes):
+def test_notes_verb_sorted_by_key(db_with_notes):
     """Two notes tagged 'memory' → output sorted alphabetically by key."""
     db_path, ws_id = db_with_notes
     result = render_template(
-        "{ws:note:notelist:memory}",
+        "{ws:note:notes:memory}",
         {},
         db_path=db_path,
         workspace_id=ws_id,
@@ -382,6 +383,35 @@ def test_notelist_sorted_by_key(db_with_notes):
     assert len(lines) == 2
     assert lines[0] == "aardvark: always start here"
     assert lines[1] == "zebra: last item"
+
+
+def test_keys_verb_returns_only_keys(db_with_notes):
+    """{ws:note:keys:memory} → only key names, no values, sorted alphabetically."""
+    db_path, ws_id = db_with_notes
+    result = render_template(
+        "{ws:note:keys:memory}",
+        {},
+        db_path=db_path,
+        workspace_id=ws_id,
+    )
+    lines = result.splitlines()
+    assert len(lines) == 2
+    assert lines[0] == "aardvark"
+    assert lines[1] == "zebra"
+    assert "always start here" not in result
+    assert "last item" not in result
+
+
+def test_keys_verb_empty_tag_match_returns_empty(db_with_notes):
+    """{ws:note:keys:nonexistent} → empty string."""
+    db_path, ws_id = db_with_notes
+    result = render_template(
+        "PREFIX{ws:note:keys:nonexistent}SUFFIX",
+        {},
+        db_path=db_path,
+        workspace_id=ws_id,
+    )
+    assert result == "PREFIXSUFFIX"
 
 
 # ---------------------------------------------------------------------------
@@ -393,17 +423,17 @@ def test_empty_tag_match_returns_empty_string(db_with_notes):
     """A tag with no matching notes must produce an empty string, not the raw marker."""
     db_path, ws_id = db_with_notes
     result = render_template(
-        "PREFIX{ws:note:notelist:nonexistent}SUFFIX",
+        "PREFIX{ws:note:notes:nonexistent}SUFFIX",
         {},
         db_path=db_path,
         workspace_id=ws_id,
     )
     assert result == "PREFIXSUFFIX"
-    assert "{ws:note:notelist:nonexistent}" not in result
+    assert "{ws:note:notes:nonexistent}" not in result
 
 
 # ---------------------------------------------------------------------------
-# 9. {t:note:notelist:…} → empty string + WARNING
+# 9. {t:note:notes:…} → empty string + WARNING
 # ---------------------------------------------------------------------------
 
 
@@ -412,7 +442,7 @@ def test_topic_scope_marker_returns_empty_and_warns(db_with_notes, caplog):
     db_path, ws_id = db_with_notes
     with caplog.at_level(logging.WARNING, logger="src.master.event_dispatcher"):
         result = render_template(
-            "{t:note:notelist:memory}",
+            "{t:note:notes:memory}",
             {},
             db_path=db_path,
             workspace_id=ws_id,
@@ -427,10 +457,10 @@ def test_topic_scope_marker_returns_empty_and_warns(db_with_notes, caplog):
 
 
 def test_variable_and_note_marker_coexistence(db_with_notes):
-    """Both {variable} and {ws:note:notelist:tag} resolve correctly in one pass."""
+    """Both {variable} and {ws:note:notes:tag} resolve correctly in one pass."""
     db_path, ws_id = db_with_notes
     result = render_template(
-        "Hello {name}! Notes: {ws:note:notelist:context}",
+        "Hello {name}! Notes: {ws:note:notes:context}",
         {"name": "World"},
         db_path=db_path,
         workspace_id=ws_id,
@@ -443,7 +473,7 @@ def test_variable_resolved_alongside_note_marker(db_with_notes):
     """A single template string with both kinds of markers resolves both correctly."""
     db_path, ws_id = db_with_notes
     result = render_template(
-        "{greeting} {ws:note:notelist:memory} {farewell}",
+        "{greeting} {ws:note:notes:memory} {farewell}",
         {"greeting": "START", "farewell": "END"},
         db_path=db_path,
         workspace_id=ws_id,
@@ -463,7 +493,7 @@ def test_no_db_context_note_marker_returns_empty_and_warns(caplog):
     """When db_path or workspace_id is None, note markers must produce empty + warning."""
     with caplog.at_level(logging.WARNING, logger="src.master.event_dispatcher"):
         result = render_template(
-            "Before{ws:note:notelist:memory}After",
+            "Before{ws:note:notes:memory}After",
             {"unused": "x"},
         )
     assert result == "BeforeAfter"
@@ -474,7 +504,7 @@ def test_no_db_context_variable_still_resolves(caplog):
     """When db context is absent, {variable} substitution still works."""
     with caplog.at_level(logging.WARNING, logger="src.master.event_dispatcher"):
         result = render_template(
-            "{name} says {ws:note:notelist:memory}",
+            "{name} says {ws:note:notes:memory}",
             {"name": "Alice"},
         )
     assert result.startswith("Alice says ")
@@ -513,7 +543,7 @@ def test_known_variable_resolves_unknown_stays(caplog):
 
 
 def test_staff_system_prompt_note_injection(tmp_path, monkeypatch):
-    """A staff whose system_prompt contains {ws:note:notelist:memory} must have
+    """A staff whose system_prompt contains {ws:note:notes:memory} must have
     the note values injected into the MQTT dispatch payload."""
     monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
@@ -544,7 +574,7 @@ def test_staff_system_prompt_note_injection(tmp_path, monkeypatch):
                 json={
                     "name": "claude",
                     "adapter": "claude-code",
-                    "system_prompt": "Context: {ws:note:notelist:memory}",
+                    "system_prompt": "Context: {ws:note:notes:memory}",
                     "is_default": True,
                 },
             )

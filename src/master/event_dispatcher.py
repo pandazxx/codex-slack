@@ -45,9 +45,9 @@ class VetoResult(NamedTuple):
 # ── Template rendering ────────────────────────────────────────────────────────
 
 _TEMPLATE_RE = re.compile(
-    r"\{\{([^}]*)\}\}"                           # double-brace escape → literal {content}
-    r"|\{(ws|t):note:notelist:([a-z0-9_-]+)\}"  # note marker
-    r"|\{([a-zA-Z_][a-zA-Z0-9_]*)\}",           # plain variable
+    r"\{\{([^}]*)\}\}"                                  # double-brace escape → literal {content}
+    r"|\{(ws|t):note:(keys|notes):([a-z0-9_-]+)\}"     # note marker — verb is keys or notes
+    r"|\{([a-zA-Z_][a-zA-Z0-9_]*)\}",                  # plain variable
     re.IGNORECASE,
 )
 
@@ -60,7 +60,11 @@ def render_template(
     workspace_id: str | None = None,
     topic_id: str | None = None,
 ) -> str:
-    """Substitute {variable} placeholders and {ws:note:notelist:<tag>} markers in one pass.
+    """Substitute {variable} placeholders and note markers in one pass.
+
+    Note markers:
+      {ws:note:keys:<tag>}  — newline-separated list of matching keys
+      {ws:note:notes:<tag>} — newline-separated list of "key: value" pairs
 
     {{content}} produces a literal {content} (escape for braces, same as format_map).
     """
@@ -68,7 +72,7 @@ def render_template(
         if m.group(1) is not None:  # double-brace escape
             return "{" + m.group(1) + "}"
         if m.group(2) is not None:  # note marker
-            scope, tag = m.group(2).lower(), m.group(3)
+            scope, verb, tag = m.group(2).lower(), m.group(3).lower(), m.group(4)
             if scope == "t":
                 LOGGER.warning("note_marker.scope_unsupported_in_v1 marker=%s", m.group(0))
                 return ""
@@ -86,9 +90,11 @@ def render_template(
                 ).fetchall()
             finally:
                 conn.close()
+            if verb == "keys":
+                return "\n".join(r["key"] for r in rows)
             return "\n".join(f"{r['key']}: {r['value']}" for r in rows)
-        # plain variable (group 4)
-        key = m.group(4)
+        # plain variable (group 5)
+        key = m.group(5)
         if key not in variables:
             LOGGER.warning("render_template.unknown_variable key=%s", key)
             return m.group(0)

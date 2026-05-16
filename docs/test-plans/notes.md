@@ -10,7 +10,7 @@
 
 Key/value notes with tags, stored at workspace or topic scope. Notes are
 injected into staff system prompts and event-action prompt templates via
-`{ws:note:notelist:<tag>}` markers resolved by `render_template`.
+`{ws:note:notes:<tag>}` markers resolved by `render_template`.
 
 ---
 
@@ -38,23 +38,23 @@ All three operations on a key that was never created return 404, for both worksp
 
 ### 6. Tag filtering in render_template (`automated`)
 
-A note tagged `["memory","context"]` appears in `{ws:note:notelist:memory}` and `{ws:note:notelist:context}` but NOT in `{ws:note:notelist:goal}`.
+A note tagged `["memory","context"]` appears in `{ws:note:notes:memory}` and `{ws:note:notes:context}` but NOT in `{ws:note:notes:goal}`.
 
-### 7. notelist output sorted by key (`automated`)
+### 7. notes output sorted by key (`automated`)
 
 Two notes tagged the same tag appear in the substituted string in ascending key order, one `key: value` line each.
 
 ### 8. Empty tag match → empty string (`automated`)
 
-A `{ws:note:notelist:<tag>}` marker for a tag with no matching notes produces an empty string. The raw marker must not appear in the output.
+A `{ws:note:notes:<tag>}` marker for a tag with no matching notes produces an empty string. The raw marker must not appear in the output.
 
-### 9. `{t:note:notelist:…}` → empty string + WARNING (`automated`)
+### 9. `{t:note:notes:…}` → empty string + WARNING (`automated`)
 
 v1 only supports `ws` scope. Topic-scoped markers must produce empty string and emit a `WARNING` log entry containing `scope_unsupported_in_v1`.
 
 ### 10. `{variable}` and note markers coexist in one pass (`automated`)
 
-A template with both `{name}` and `{ws:note:notelist:tag}` resolves both correctly in a single `render_template` call.
+A template with both `{name}` and `{ws:note:notes:tag}` resolves both correctly in a single `render_template` call.
 
 ### 11. render_template without db_path/workspace_id (`automated`)
 
@@ -66,11 +66,11 @@ An unrecognised variable placeholder is left unchanged in the output and produce
 
 ### 13. Staff system_prompt injection via MQTT dispatch (`automated`)
 
-A staff whose `system_prompt` contains `{ws:note:notelist:memory}` has the note values injected into the MQTT publish payload before delivery.
+A staff whose `system_prompt` contains `{ws:note:notes:memory}` has the note values injected into the MQTT publish payload before delivery.
 
 ### 14. Event-action prompt_template injection (`needs-human`)
 
-Create an event action whose `prompt_template` contains `{ws:note:notelist:memory}`, send a message that fires it, and confirm the rendered prompt delivered to the agent contains the note value. Requires a running stack with MQTT broker and agent container.
+Create an event action whose `prompt_template` contains `{ws:note:notes:memory}`, send a message that fires it, and confirm the rendered prompt delivered to the agent contains the note value. Requires a running stack with MQTT broker and agent container.
 
 ---
 
