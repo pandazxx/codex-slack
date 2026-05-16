@@ -9,7 +9,10 @@
     "notes": {
       "type": "stdio",
       "command": "python",
-      "args": ["-m", "src.notes_mcp"]
+      "args": ["-m", "src.notes_mcp"],
+      "env": {
+        "PYTHONPATH": "/opt/codex-slack"
+      }
     }
   }
 }

@@ -7,3 +7,6 @@
 [mcp_servers.notes]
 command = "python"
 args    = ["-m", "src.notes_mcp"]
+
+[mcp_servers.notes.env]
+PYTHONPATH = "/opt/codex-slack"
