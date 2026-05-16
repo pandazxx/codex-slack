@@ -19,7 +19,7 @@ Each note has:
 | `value` | Freeform text. Any length. |
 | `tags` | List of strings used for filtering (e.g. `["memory", "context"]`). |
 
-Notes tagged `memory` are commonly injected into prompts via `{ws:note:keylist:memory}`.
+Notes tagged `memory` are commonly injected into prompts via `{ws:note:notelist:memory}`.
 
 ---
 
@@ -175,5 +175,5 @@ Match by name if the user refers to a workspace or topic by name rather than ID.
 1. **Never guess a key.** If asked to update or delete a note and unsure of the exact key, list notes first and confirm with the user.
 2. **Prefer PATCH over delete-and-recreate.** If a note exists (409 on create), switch to PATCH on the same key.
 3. **Scope explicitly.** Always clarify whether the user means workspace-level or topic-level before creating. Workspace notes are visible across all topics; topic notes are private to one topic.
-4. **Tags are searchable.** When creating notes the user intends to inject into prompts, suggest the `memory` tag so the `{ws:note:keylist:memory}` marker picks them up automatically.
+4. **Tags are searchable.** When creating notes the user intends to inject into prompts, suggest the `memory` tag so the `{ws:note:notelist:memory}` marker picks them up automatically.
 5. **Confirm before deleting.** Deletion is permanent. Confirm the key and scope with the user before issuing a DELETE.

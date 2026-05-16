@@ -6,7 +6,7 @@
     </div>
     <p class="muted hint">
       Key-value pairs injected into prompts via
-      <code>{ws:note:keylist:&lt;tag&gt;}</code>.
+      <code>{ws:note:notelist:&lt;tag&gt;}</code>.
     </p>
 
     <p v-if="loading" class="muted">Loading…</p>

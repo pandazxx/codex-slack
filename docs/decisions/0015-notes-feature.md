@@ -31,10 +31,10 @@ Users want to maintain freeform notes scoped to a workspace or topic — things 
 ### Consequences
 
 - *Good:* tags replace types — note categories are user-defined and composable, not schema-constrained.
-- *Good:* injection is fully explicit (`{ws:note:keylist:memory}`) — no implicit shadowing between scopes.
+- *Good:* injection is fully explicit (`{ws:note:notelist:memory}`) — no implicit shadowing between scopes.
 - *Good:* additive schema change; existing deployments pick it up on next process start.
 - *Bad:* `key` is immutable post-create; renames require delete-then-recreate.
-- *Bad:* topic-scope injection (`{t:note:keylist:<tag>}`) is not supported in v1; markers are left literal with a WARNING log.
+- *Bad:* topic-scope injection (`{t:note:notelist:<tag>}`) is not supported in v1; markers are left literal with a WARNING log.
 
 ### Confirmation
 
@@ -91,12 +91,12 @@ No FK on `scope_id` — same pattern as `event_actions`.
 **Injection marker syntax:**
 
 ```
-{ws:note:keylist:<tag>}
+{ws:note:notelist:<tag>}
 ```
 
 - `ws` — workspace scope (v1 only; `t` = topic scope, deferred to v2)
 - `note` — object type
-- `keylist` — render verb: emits all matching notes as a sorted `key: value\n` list
+- `notelist` — render verb: emits all matching notes as a sorted `key: value\n` list
 - `<tag>` — tag to filter by; notes must contain this tag
 
 Empty tag match → empty string substitution (not the literal marker).
@@ -109,7 +109,7 @@ A single regex matches both note markers and plain variable placeholders. `str.f
 import re
 
 _TEMPLATE_RE = re.compile(
-    r'\{(ws|t):note:keylist:([a-z0-9_-]+)\}'   # note marker
+    r'\{(ws|t):note:notelist:([a-z0-9_-]+)\}'   # note marker
     r'|\{([a-zA-Z_][a-zA-Z0-9_]*)\}',           # plain variable
     re.IGNORECASE,
 )

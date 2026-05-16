@@ -45,9 +45,9 @@ class VetoResult(NamedTuple):
 # ── Template rendering ────────────────────────────────────────────────────────
 
 _TEMPLATE_RE = re.compile(
-    r"\{\{([^}]*)\}\}"                          # double-brace escape → literal {content}
-    r"|\{(ws|t):note:keylist:([a-z0-9_-]+)\}"  # note marker
-    r"|\{([a-zA-Z_][a-zA-Z0-9_]*)\}",          # plain variable
+    r"\{\{([^}]*)\}\}"                           # double-brace escape → literal {content}
+    r"|\{(ws|t):note:notelist:([a-z0-9_-]+)\}"  # note marker
+    r"|\{([a-zA-Z_][a-zA-Z0-9_]*)\}",           # plain variable
     re.IGNORECASE,
 )
 
@@ -60,7 +60,7 @@ def render_template(
     workspace_id: str | None = None,
     topic_id: str | None = None,
 ) -> str:
-    """Substitute {variable} placeholders and {ws:note:keylist:<tag>} markers in one pass.
+    """Substitute {variable} placeholders and {ws:note:notelist:<tag>} markers in one pass.
 
     {{content}} produces a literal {content} (escape for braces, same as format_map).
     """
