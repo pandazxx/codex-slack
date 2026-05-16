@@ -94,6 +94,7 @@ def spawn_agent(
         pass
 
     run_kwargs: dict = dict(
+        entrypoint=["/usr/bin/tini", "--", "/usr/local/bin/bot-entrypoint"],
         command=["python", "-m", "src.agent.main"],
         name=name,
         network=network,
