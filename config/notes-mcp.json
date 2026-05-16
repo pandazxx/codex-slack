@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "notes": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["-c", "cd /opt/codex-slack && exec python -m src.notes_mcp"]
+    }
+  }
+}

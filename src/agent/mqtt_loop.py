@@ -158,6 +158,7 @@ def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str, repo_ref: s
 
 
 _SESSION_NOT_FOUND = "No conversation found with session ID"
+_MCP_CONFIG = "/opt/codex-slack/config/notes-mcp.json"
 
 _VERDICT_RE = __import__("re").compile(r'\{[^{}]+\}')
 
@@ -212,7 +213,8 @@ def _stream_claude_once(
 
     Returns (output, new_session_id, transcript, is_error).
     """
-    cmd = ["claude", "--print", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions"]
+    cmd = ["claude", "--print", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions",
+           "--mcp-config", _MCP_CONFIG]
     if session_id:
         if is_new_session:
             cmd += ["--session-id", session_id]
