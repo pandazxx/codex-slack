@@ -73,6 +73,14 @@ if [[ -n "${GIT_USER_EMAIL:-}" ]]; then
   git config --global user.email "${GIT_USER_EMAIL}"
 fi
 
+# Write runtime env vars to a well-known file so MCP server subprocesses can read
+# them even when the parent (Codex) does not pass its environment to subprocesses.
+{
+  echo "export WORKSPACE_ID=${WORKSPACE_ID:-}"
+  echo "export MASTER_URL=${MASTER_URL:-http://master:8080}"
+} > /run/agent-env
+entrypoint_log "agent_env_written workspace_id=${WORKSPACE_ID:-} master_url=${MASTER_URL:-http://master:8080}"
+
 SESSION_ARGS=()
 if [[ -n "${CODEX_SESSION_ID:-}" ]]; then
   SESSION_ARGS+=("--session-id" "${CODEX_SESSION_ID}")
