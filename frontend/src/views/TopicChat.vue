@@ -114,7 +114,7 @@
               </details>
             </template>
             <div v-if="m.text === '(message interrupted)'" class="interrupted-notice">
-              <span class="tr-badge tr-badge-interrupted">interrupted</span>
+              <span class="tr-badge tr-badge-interrupted">{{ interruptLabel(m) }}</span>
             </div>
             <template v-else-if="isMsgCollapsible(m, msgIdx) && !isMsgExpanded(m.id)">
               <MarkdownMessage :text="collapsedPreview(m.text)" />
@@ -365,6 +365,15 @@ function collapsedPreview(text) {
   return text.slice(0, MSG_COLLAPSED_PREVIEW) + '…'
 }
 
+function interruptLabel(m) {
+  switch (m.interrupt_reason) {
+    case 'agent-shutdown': return 'interrupted: agent restarted'
+    case 'container-gone': return 'interrupted: container gone'
+    case 'ping-timeout':   return 'interrupted: no response'
+    default:               return 'interrupted'
+  }
+}
+
 function compactRowLabel(row) {
   const { kind, event } = row
   if (kind === 'tool_use') return toolUseLabel(event)
@@ -594,6 +603,7 @@ function finaliseMessage(data) {
     transcript: data.transcript || existing?.transcript || null,
     traceRows: transcriptToRows(data.transcript) || existing?.traceRows || [],
     attachments: data.attachments ?? existing?.attachments ?? [],
+    interrupt_reason: data.interrupt_reason ?? existing?.interrupt_reason ?? null,
     traceOpen: false, streaming: false,
     created_at: existing?.created_at || new Date().toISOString(),
   }

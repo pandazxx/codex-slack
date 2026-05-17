@@ -55,6 +55,7 @@ class MessageOut(BaseModel):
     text: str
     transcript: str | None
     usage_json: str | None = None
+    interrupt_reason: str | None = None
     created_at: str
     attachments: list[AttachmentMeta] = []
 
@@ -238,7 +239,7 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
         ).fetchone() is None:
             raise HTTPException(404, "topic not found")
         rows = conn.execute(
-            "SELECT id, sender, agent_name, text, transcript, usage_json, created_at FROM messages"
+            "SELECT id, sender, agent_name, text, transcript, usage_json, interrupt_reason, created_at FROM messages"
             " WHERE topic_id = ? ORDER BY created_at",
             (topic_id,),
         ).fetchall()
@@ -259,6 +260,7 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
                 MessageOut(
                     id=r["id"], sender=r["sender"], agent_name=r["agent_name"],
                     text=r["text"], transcript=r["transcript"], usage_json=r["usage_json"],
+                    interrupt_reason=r["interrupt_reason"],
                     created_at=r["created_at"], attachments=attachments,
                 )
             )

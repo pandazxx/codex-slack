@@ -601,6 +601,7 @@ def _publish_interrupted_all(client: mqtt.Client) -> None:
                     "agent_name": ctx["agent_name"],
                     "reply_to": None,
                     "last_response": "(message interrupted)",
+                    "interrupt_reason": "agent-shutdown",
                     "transcript": None,
                     "session_id": None,
                 }),
