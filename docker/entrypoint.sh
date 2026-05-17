@@ -78,7 +78,7 @@ fi
 {
   echo "export WORKSPACE_ID=${WORKSPACE_ID:-}"
   echo "export MASTER_URL=${MASTER_URL:-http://master:8080}"
-} > /run/agent-env
+} > /tmp/agent-env
 entrypoint_log "agent_env_written workspace_id=${WORKSPACE_ID:-} master_url=${MASTER_URL:-http://master:8080}"
 
 SESSION_ARGS=()
