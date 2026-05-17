@@ -53,6 +53,10 @@
                     <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
                     <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
                     <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                    <div v-else-if="row.kind === 'parse_warning'" class="tr-meta">
+                      <span class="tr-badge tr-badge-warning">parse error</span>
+                      <span class="tr-stat">{{ row.event.line || '' }}</span>
+                    </div>
                     <div v-else-if="row.kind === 'thinking'" class="thinking-block">
                       <div class="thinking-meta">💭 Thinking</div>
                       <div class="thinking-text">{{ thinkingText(row.event) }}</div>
@@ -89,6 +93,10 @@
                   <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
                   <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
                   <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                  <div v-else-if="row.kind === 'parse_warning'" class="tr-meta">
+                    <span class="tr-badge tr-badge-warning">parse error</span>
+                    <span class="tr-stat">{{ row.event.line || '' }}</span>
+                  </div>
                   <div v-else-if="row.kind === 'thinking'" class="thinking-block">
                     <div class="thinking-meta">💭 Thinking</div>
                     <div class="thinking-text">{{ thinkingText(row.event) }}</div>
@@ -385,6 +393,7 @@ function compactRowLabel(row) {
   if (kind === 'codex_cmd') return codexCmdLabel(event)
   if (kind === 'codex_error') return `✗ ${event.error?.message || 'error'}`
   if (kind === 'retry_notice') return '⟳ Session expired — retrying…'
+  if (kind === 'parse_warning') return `⚠ parse error: ${(event.line || '').slice(0, 60)}`
   return '···'
 }
 
@@ -446,9 +455,10 @@ function classifyEvent(event) {
     if (c.some(b => b.type === 'thinking')) return 'thinking'
     if (c.some(b => b.type === 'tool_use')) return 'tool_use'
   }
-  if (t === 'system' && s === 'task_progress') return 'task_progress'
-  if (t === 'system' && s === 'task_started')  return 'task_started'
-  if (t === 'system' && s === 'retry')         return 'retry_notice'
+  if (t === 'system' && s === 'task_progress')  return 'task_progress'
+  if (t === 'system' && s === 'task_started')   return 'task_started'
+  if (t === 'system' && s === 'retry')          return 'retry_notice'
+  if (t === 'system' && s === 'parse_warning')  return 'parse_warning'
   if (t === 'user') {
     const c = event.message?.content || []
     if (c.some(b => b.type === 'tool_result')) {
@@ -943,6 +953,7 @@ onUnmounted(() => {
 .tr-badge-result { background: #dcfce7; color: #15803d; }
 .tr-badge-done { background: #dcfce7; color: #15803d; }
 .tr-badge-error { background: #fee2e2; color: #dc2626; }
+.tr-badge-warning { background: #fef3c7; color: #92400e; }
 .tr-badge-thinking { background: #f3e8ff; color: #7c3aed; }
 .tr-thinking { display: flex; flex-direction: column; gap: 2px; }
 .tr-thinking-body { background: #1a0a2e; color: #c4b5fd; }

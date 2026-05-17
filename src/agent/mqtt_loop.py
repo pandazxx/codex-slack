@@ -231,6 +231,14 @@ def _stream_claude_once(
                 event = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 LOGGER.warning("agent.llm_chunk_parse_error topic_id=%s line=%r", topic_id, line[:200])
+                warn_event = {"type": "system", "subtype": "parse_warning", "line": line[:200]}
+                client.publish(chunk_topic, json.dumps({
+                    "message_id": reply_message_id,
+                    "agent_name": agent_name,
+                    "seq": seq,
+                    "event": warn_event,
+                }), qos=0)
+                seq += 1
                 continue
             events.append(event)
             client.publish(chunk_topic, json.dumps({
