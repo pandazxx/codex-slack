@@ -5,5 +5,7 @@
 # `.codex/config.toml` at project scope.
 
 [mcp_servers.notes]
-command = "bash"
-args    = ["-c", "cd /opt/codex-slack && exec python -m src.notes_mcp"]
+command      = "bash"
+args         = ["-c", "cd /opt/codex-slack && exec python -m src.notes_mcp"]
+always_load  = true
+instructions = "Provides persistent key-value note storage scoped to the current workspace and topic. Use these tools to read and write memory that survives across sessions. Always call list_workspace_notes at the start of a session to recall prior context."
