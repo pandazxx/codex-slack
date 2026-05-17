@@ -376,6 +376,7 @@ function collapsedPreview(text) {
 function interruptLabel(m) {
   switch (m.interrupt_reason) {
     case 'agent-shutdown': return 'interrupted: agent restarted'
+    case 'agent-killed':   return 'interrupted: agent killed'
     case 'container-gone': return 'interrupted: container gone'
     case 'ping-timeout':   return 'interrupted: no response'
     default:               return 'interrupted'

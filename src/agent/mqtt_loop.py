@@ -29,6 +29,16 @@ _active_procs: dict[str, subprocess.Popen] = {}  # type: ignore[type-arg]
 _active_contexts: dict[str, dict] = {}  # message_id → {workspace_id, topic_id, agent_name}
 _active_procs_lock = threading.Lock()
 
+# Persisted snapshot of in-flight subprocess contexts so that a SIGKILL-survivor
+# restart can emit a real interrupt event for messages whose subprocess died
+# along with the container. Path is on the container's writable layer; survives
+# a Docker restart (same container) but not a remove+recreate, which is fine —
+# remove+recreate is master-initiated and master's stale-stream check already
+# detects "container-gone" in that path.
+_STATE_DIR = Path("/tmp/master-agent")
+_ACTIVE_PROCS_PATH = _STATE_DIR / "active_procs.json"
+_inherited_already_published = False
+
 # Deduplication: clean_session=False means the broker redelivers QoS-1 prompts when
 # the agent reconnects mid-run, which would start a second parallel LLM run and produce
 # two streaming bubbles. Track seen message_ids (bounded to 2000) and discard re-deliveries.
@@ -223,6 +233,7 @@ def _stream_claude_once(
                 "topic_id": topic_id,
                 "agent_name": agent_name,
             }
+            _persist_active_procs_locked()
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -314,6 +325,7 @@ def _stream_claude_once(
         with _active_procs_lock:
             _active_procs.pop(reply_message_id, None)
             _active_contexts.pop(reply_message_id, None)
+            _persist_active_procs_locked()
         return f"(claude error: {exc})", None, None, True
 
 
@@ -405,6 +417,7 @@ def _stream_codex_once(
                 "topic_id": topic_id,
                 "agent_name": agent_name,
             }
+            _persist_active_procs_locked()
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -500,6 +513,7 @@ def _stream_codex_once(
         with _active_procs_lock:
             _active_procs.pop(reply_message_id, None)
             _active_contexts.pop(reply_message_id, None)
+            _persist_active_procs_locked()
         try:
             Path(output_file).unlink()
         except Exception:
@@ -640,6 +654,7 @@ def _process_prompt(
         with _active_procs_lock:
             _active_procs.pop(reply_message_id, None)
             _active_contexts.pop(reply_message_id, None)
+            _persist_active_procs_locked()
 
     client.publish(_status_topic(workspace_id, topic_id), json.dumps({"state": "idle"}), qos=0)
 
@@ -656,10 +671,88 @@ def _on_connect(client: mqtt.Client, userdata, flags, reason_code, properties) -
     client.subscribe(cancel_sub, qos=1)
     client.subscribe(ping_sub, qos=0)
     LOGGER.info("agent.mqtt_connected subscribed=%s,%s,%s", prompt_sub, cancel_sub, ping_sub)
+    # Emit `(message interrupted)` for any subprocess that didn't survive the
+    # previous container life. No-op on the first start after a clean shutdown
+    # (the file was unlinked by `_publish_interrupted_all`).
+    _publish_inherited_interrupts(client)
 
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties) -> None:  # type: ignore[type-arg]
     LOGGER.warning("agent.mqtt_disconnected reason=%s", reason_code)
+
+
+def _persist_active_procs_locked() -> None:
+    """Atomically write `_active_contexts` to disk. Caller MUST hold
+    `_active_procs_lock` so the snapshot matches the in-memory state.
+
+    Failure to persist is non-fatal (logged) — the worst case is a missed
+    `agent-killed` interrupt event after a SIGKILL, which is no worse than
+    today's behavior."""
+    try:
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        snapshot = json.dumps(_active_contexts)
+        tmp = _ACTIVE_PROCS_PATH.with_suffix(".json.tmp")
+        tmp.write_text(snapshot)
+        os.replace(tmp, _ACTIVE_PROCS_PATH)
+    except Exception:
+        LOGGER.exception("agent.persist_active_procs_failed")
+
+
+def _publish_inherited_interrupts(client: mqtt.Client) -> None:
+    """Emit `(message interrupted)` with reason `agent-killed` for any
+    in-flight subprocesses that didn't survive the previous container life.
+
+    The typical trigger is the container being SIGKILL'd while a subprocess
+    was running — Python is just gone, so the SIGTERM handler never ran and
+    master can only see `alive=False` on its next ping. Without this replay,
+    master labels such messages `ping-timeout`, which is misleading.
+
+    Fires at most once per agent process (guarded by `_inherited_already_published`)
+    even if MQTT reconnects multiple times."""
+    global _inherited_already_published
+    if _inherited_already_published:
+        return
+    _inherited_already_published = True
+    try:
+        if not _ACTIVE_PROCS_PATH.exists():
+            return
+        try:
+            data = json.loads(_ACTIVE_PROCS_PATH.read_text())
+        except Exception:
+            LOGGER.exception("agent.startup_inherited_parse_failed path=%s", _ACTIVE_PROCS_PATH)
+            _ACTIVE_PROCS_PATH.unlink(missing_ok=True)
+            return
+        if not isinstance(data, dict) or not data:
+            _ACTIVE_PROCS_PATH.unlink(missing_ok=True)
+            return
+        LOGGER.warning(
+            "agent.startup_inherited_active count=%d message_ids=%s",
+            len(data), list(data.keys()),
+        )
+        for message_id, ctx in data.items():
+            if not isinstance(ctx, dict) or "workspace_id" not in ctx or "topic_id" not in ctx:
+                LOGGER.warning("agent.startup_inherited_skip_bad_entry message_id=%s ctx=%r", message_id, ctx)
+                continue
+            try:
+                client.publish(
+                    _response_topic(ctx["workspace_id"], ctx["topic_id"]),
+                    json.dumps({
+                        "message_id": message_id,
+                        "agent_name": ctx.get("agent_name"),
+                        "reply_to": None,
+                        "last_response": "(message interrupted)",
+                        "interrupt_reason": "agent-killed",
+                        "transcript": None,
+                        "session_id": None,
+                    }),
+                    qos=1,
+                )
+                LOGGER.info("agent.startup_interrupt_published message_id=%s", message_id)
+            except Exception:
+                LOGGER.exception("agent.startup_interrupt_publish_failed message_id=%s", message_id)
+        _ACTIVE_PROCS_PATH.unlink(missing_ok=True)
+    except Exception:
+        LOGGER.exception("agent.startup_inherited_unexpected")
 
 
 def _publish_interrupted_all(client: mqtt.Client) -> None:
@@ -688,6 +781,12 @@ def _publish_interrupted_all(client: mqtt.Client) -> None:
             LOGGER.info("agent.sigterm_abort message_id=%s", message_id)
         except Exception:
             LOGGER.exception("agent.sigterm_abort_failed message_id=%s", message_id)
+    # Clear the persisted snapshot so the restart doesn't double-publish with
+    # interrupt_reason=agent-killed for the same messages we just handled.
+    try:
+        _ACTIVE_PROCS_PATH.unlink(missing_ok=True)
+    except Exception:
+        LOGGER.exception("agent.persist_active_procs_clear_failed")
 
 
 def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:

@@ -648,3 +648,91 @@ def test_publish_interrupted_all():
     assert payload["message_id"] == "msg-abc"
     assert payload["last_response"] == "(message interrupted)"
     assert payload["agent_name"] == "claude"
+
+
+# ---------------------------------------------------------------------------
+# SIGKILL-survivor path: persist + replay inherited interrupts on startup.
+# ---------------------------------------------------------------------------
+
+
+def test_persist_active_procs_writes_atomic_snapshot(tmp_path):
+    """_persist_active_procs_locked dumps _active_contexts to disk atomically."""
+    state_path = tmp_path / "active_procs.json"
+    contexts = {
+        "msg-1": {"workspace_id": "ws1", "topic_id": "t1", "agent_name": "codex"},
+        "msg-2": {"workspace_id": "ws1", "topic_id": "t2", "agent_name": "claude"},
+    }
+    with patch.object(mqtt_loop_module, "_STATE_DIR", tmp_path), \
+         patch.object(mqtt_loop_module, "_ACTIVE_PROCS_PATH", state_path), \
+         patch.dict(mqtt_loop_module._active_contexts, contexts, clear=True):
+        mqtt_loop_module._persist_active_procs_locked()
+    assert state_path.exists()
+    written = json.loads(state_path.read_text())
+    assert written == contexts
+
+
+def test_publish_inherited_interrupts_replays_each_leftover(tmp_path):
+    """On startup, a non-empty active_procs.json triggers `(message interrupted)`
+    publishes with interrupt_reason=agent-killed for every leftover entry, and
+    the file is then deleted so subsequent reconnects don't re-publish."""
+    state_path = tmp_path / "active_procs.json"
+    state_path.write_text(json.dumps({
+        "msg-killed-1": {"workspace_id": "wsX", "topic_id": "tA", "agent_name": "codex"},
+        "msg-killed-2": {"workspace_id": "wsX", "topic_id": "tB", "agent_name": "claude"},
+    }))
+    client = MagicMock()
+    with patch.object(mqtt_loop_module, "_ACTIVE_PROCS_PATH", state_path), \
+         patch.object(mqtt_loop_module, "_inherited_already_published", False):
+        mqtt_loop_module._publish_inherited_interrupts(client)
+    response_calls = [c for c in client.publish.call_args_list if "response" in c.args[0]]
+    assert len(response_calls) == 2
+    payloads = [json.loads(c.args[1]) for c in response_calls]
+    ids = {p["message_id"] for p in payloads}
+    assert ids == {"msg-killed-1", "msg-killed-2"}
+    for p in payloads:
+        assert p["last_response"] == "(message interrupted)"
+        assert p["interrupt_reason"] == "agent-killed"
+        assert p["transcript"] is None
+    # File must be cleared so future _on_connect calls (reconnects) don't replay.
+    assert not state_path.exists()
+
+
+def test_publish_inherited_interrupts_is_idempotent(tmp_path):
+    """Multiple invocations (e.g. MQTT reconnect during the same process)
+    must not re-publish."""
+    state_path = tmp_path / "active_procs.json"
+    state_path.write_text(json.dumps({
+        "msg-killed-1": {"workspace_id": "wsX", "topic_id": "tA", "agent_name": "codex"},
+    }))
+    client = MagicMock()
+    with patch.object(mqtt_loop_module, "_ACTIVE_PROCS_PATH", state_path), \
+         patch.object(mqtt_loop_module, "_inherited_already_published", False):
+        mqtt_loop_module._publish_inherited_interrupts(client)
+        first_call_count = client.publish.call_count
+        mqtt_loop_module._publish_inherited_interrupts(client)
+        assert client.publish.call_count == first_call_count
+
+
+def test_publish_inherited_interrupts_noop_when_file_missing(tmp_path):
+    """Fresh startup (no leftover file) is a no-op, no publish."""
+    state_path = tmp_path / "active_procs.json"
+    client = MagicMock()
+    with patch.object(mqtt_loop_module, "_ACTIVE_PROCS_PATH", state_path), \
+         patch.object(mqtt_loop_module, "_inherited_already_published", False):
+        mqtt_loop_module._publish_inherited_interrupts(client)
+    assert client.publish.call_count == 0
+
+
+def test_publish_interrupted_all_clears_persisted_state(tmp_path):
+    """SIGTERM handler path clears the snapshot so the post-shutdown restart
+    doesn't double-publish agent-killed for the same messages."""
+    state_path = tmp_path / "active_procs.json"
+    state_path.write_text(json.dumps({"msg-abc": {"workspace_id": "ws1", "topic_id": "t1", "agent_name": "claude"}}))
+    client = MagicMock()
+    contexts = {"msg-abc": {"workspace_id": "ws1", "topic_id": "t1", "agent_name": "claude"}}
+    with patch.object(mqtt_loop_module, "_ACTIVE_PROCS_PATH", state_path), \
+         patch.dict(mqtt_loop_module._active_procs, {"msg-abc": MagicMock()}, clear=True), \
+         patch.dict(mqtt_loop_module._active_contexts, contexts, clear=True), \
+         patch("src.agent.mqtt_loop.os.killpg"):
+        _publish_interrupted_all(client)
+    assert not state_path.exists()
