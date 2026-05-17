@@ -230,6 +230,7 @@ def _stream_claude_once(
             try:
                 event = json.loads(line)
             except (json.JSONDecodeError, ValueError):
+                LOGGER.warning("agent.llm_chunk_parse_error topic_id=%s line=%r", topic_id, line[:200])
                 continue
             events.append(event)
             client.publish(chunk_topic, json.dumps({
