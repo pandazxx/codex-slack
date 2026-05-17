@@ -257,19 +257,58 @@ def _stream_claude_once(
                 if event.get("is_error"):
                     is_error = True
         proc.wait()
+        rc = proc.returncode
         output = "\n\n---\n\n".join(outputs) if outputs else None
-        if not output:
-            err = (proc.stderr.read() or "").strip()
-            output = err or "(no output)"
+        stderr_tail = ""
+        if not output or rc != 0:
+            stderr_tail = (proc.stderr.read() or "").strip()
+            if not output:
+                output = stderr_tail or "(no output)"
         transcript = json.dumps(events) if events else None
+        if rc != 0:
+            # Non-zero exit without an exception — claude exited cleanly with
+            # a failure code. Surface enough postmortem to correlate with a
+            # later alive=False ping (master keeps the proc reference past
+            # this point, so the ping window is short but it exists).
+            LOGGER.warning(
+                "agent.llm_subprocess_nonzero_exit topic_id=%s message_id=%s pid=%s returncode=%d chunks=%d chars=%d stderr_tail=%r",
+                topic_id, reply_message_id, proc.pid, rc,
+                seq - seq_start, len(output), stderr_tail[-500:],
+            )
+            is_error = True
         LOGGER.info(
-            "agent.llm_done topic_id=%s chunks=%d chars=%d",
-            topic_id, seq - seq_start, len(output),
+            "agent.llm_done topic_id=%s message_id=%s pid=%s returncode=%s chunks=%d chars=%d",
+            topic_id, reply_message_id, proc.pid, rc,
+            seq - seq_start, len(output),
         )
         return output, new_session_id, transcript, is_error
     except FileNotFoundError:
+        LOGGER.error(
+            "agent.llm_cli_missing topic_id=%s message_id=%s cmd=%s",
+            topic_id, reply_message_id, cmd[0] if cmd else "claude",
+        )
         return "(claude CLI not found in agent container)", None, None, True
     except Exception as exc:
+        # Silent subprocess crashes (e.g. broken pipe on stdout, MQTT publish
+        # raising mid-stream, an OS error while reading proc.stdout) were the
+        # observed cause of "alive=False without agent.llm_done" in prod.
+        # Capture proc state BEFORE killing the tree so the postmortem is
+        # accurate, even if proc.poll() may already be None for a live proc
+        # that we're about to terminate.
+        rc = proc.poll() if proc is not None else None
+        stderr_tail = ""
+        if proc is not None and proc.stderr is not None:
+            try:
+                stderr_tail = (proc.stderr.read() or "").strip()
+            except Exception:
+                pass
+        LOGGER.exception(
+            "agent.llm_subprocess_aborted topic_id=%s message_id=%s pid=%s returncode=%s chunks=%d exc_type=%s exc=%s stderr_tail=%r",
+            topic_id, reply_message_id,
+            proc.pid if proc is not None else None,
+            rc, seq - seq_start,
+            type(exc).__name__, exc, stderr_tail[-500:],
+        )
         if proc is not None:
             _kill_proc_tree(proc)
         with _active_procs_lock:
@@ -394,7 +433,8 @@ def _stream_codex_once(
                 if err_msg:
                     fallback_outputs.append(f"(codex error: {err_msg})")
         proc.wait()
-        if proc.returncode and proc.returncode != 0 and not is_error:
+        rc = proc.returncode
+        if rc and rc != 0 and not is_error:
             is_error = True
         output = None
         try:
@@ -410,22 +450,51 @@ def _stream_codex_once(
                 pass
         if not output:
             output = "\n\n---\n\n".join(fallback_outputs) if fallback_outputs else None
-        if not output:
-            err = (proc.stderr.read() or "").strip()
-            output = err or "(no output)"
+        stderr_tail = ""
+        if not output or (rc is not None and rc != 0):
+            stderr_tail = (proc.stderr.read() or "").strip()
+            if not output:
+                output = stderr_tail or "(no output)"
         transcript = json.dumps(events) if events else None
+        if rc is not None and rc != 0:
+            LOGGER.warning(
+                "agent.codex_subprocess_nonzero_exit topic_id=%s message_id=%s pid=%s returncode=%d chunks=%d chars=%d stderr_tail=%r",
+                topic_id, reply_message_id, proc.pid, rc,
+                seq - seq_start, len(output), stderr_tail[-500:],
+            )
         LOGGER.info(
-            "agent.codex_done topic_id=%s chunks=%d chars=%d",
-            topic_id, seq - seq_start, len(output),
+            "agent.codex_done topic_id=%s message_id=%s pid=%s returncode=%s chunks=%d chars=%d",
+            topic_id, reply_message_id, proc.pid, rc,
+            seq - seq_start, len(output),
         )
         return output, transcript, is_error
     except FileNotFoundError:
+        LOGGER.error(
+            "agent.codex_cli_missing topic_id=%s message_id=%s cmd=%s",
+            topic_id, reply_message_id, cmd[0] if cmd else "codex",
+        )
         try:
             Path(output_file).unlink()
         except Exception:
             pass
         return "(codex CLI not found in agent container)", None, True
     except Exception as exc:
+        # See _stream_claude_once for rationale — same alive=False-without-done
+        # pattern. Capture postmortem before kill_proc_tree.
+        rc = proc.poll() if proc is not None else None
+        stderr_tail = ""
+        if proc is not None and proc.stderr is not None:
+            try:
+                stderr_tail = (proc.stderr.read() or "").strip()
+            except Exception:
+                pass
+        LOGGER.exception(
+            "agent.codex_subprocess_aborted topic_id=%s message_id=%s pid=%s returncode=%s chunks=%d exc_type=%s exc=%s stderr_tail=%r",
+            topic_id, reply_message_id,
+            proc.pid if proc is not None else None,
+            rc, seq - seq_start,
+            type(exc).__name__, exc, stderr_tail[-500:],
+        )
         if proc is not None:
             _kill_proc_tree(proc)
         with _active_procs_lock:
@@ -635,13 +704,30 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
         if message_id:
             with _active_procs_lock:
                 proc = _active_procs.get(message_id)
+                active_count = len(_active_procs)
             alive = proc is not None
             client.publish(
                 _pong_topic(workspace_id_ping, topic_id_ping),
                 json.dumps({"message_id": message_id, "alive": alive}),
                 qos=0,
             )
-            LOGGER.info("agent.pong message_id=%s alive=%s", message_id, alive)
+            if alive:
+                LOGGER.info(
+                    "agent.pong message_id=%s alive=True pid=%s",
+                    message_id, proc.pid,
+                )
+            else:
+                # alive=False means the proc is no longer in _active_procs.
+                # The subprocess either exited normally (look up the prior
+                # agent.llm_done / agent.codex_done line for returncode) or
+                # aborted (look up the prior agent.llm_subprocess_aborted /
+                # agent.codex_subprocess_aborted line for the exception and
+                # stderr tail). active_procs_size aids correlation when many
+                # streams are in flight.
+                LOGGER.info(
+                    "agent.pong message_id=%s alive=False active_procs_size=%d",
+                    message_id, active_count,
+                )
         return
 
     parsed_cancel = _parse_cancel_topic(msg.topic)
