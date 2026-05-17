@@ -629,6 +629,8 @@ async def ws_global(websocket: WebSocket) -> None:
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def spa_index(full_path: str) -> FileResponse:
+    if full_path.startswith("api/"):
+        raise HTTPException(404, "not found")
     index = _STATIC_DIR / "index.html"
     if not index.exists():
         raise HTTPException(404, "frontend not built")

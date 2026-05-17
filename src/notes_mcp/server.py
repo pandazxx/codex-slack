@@ -26,13 +26,26 @@ def _client() -> httpx.Client:
     return httpx.Client(timeout=10.0)
 
 
+def _parse_json(resp: httpx.Response) -> object:
+    """Parse JSON response, raising a descriptive error for non-JSON bodies."""
+    try:
+        return resp.json()
+    except Exception:
+        ct = resp.headers.get("content-type", "?")
+        raise RuntimeError(
+            f"notes API returned non-JSON (status={resp.status_code}, "
+            f"content-type={ct!r}, url={resp.url}) — "
+            "master service may be outdated or WORKSPACE_ID may be empty"
+        )
+
+
 # ── Workspace-scoped tools ────────────────────────────────────────────────────
 
 @mcp.tool()
 def list_workspace_notes(tag: str | None = None) -> list[dict]:
     """List workspace notes. Pass a tag to filter (e.g. 'memory', 'context')."""
     with _client() as c:
-        notes = c.get(_WS_BASE).raise_for_status().json()
+        notes = _parse_json(c.get(_WS_BASE).raise_for_status())
     if tag:
         notes = [n for n in notes if tag in n.get("tags", [])]
     return notes
@@ -42,14 +55,14 @@ def list_workspace_notes(tag: str | None = None) -> list[dict]:
 def get_workspace_note(key: str) -> dict:
     """Get a single workspace note by key."""
     with _client() as c:
-        return c.get(f"{_WS_BASE}/{key}").raise_for_status().json()
+        return _parse_json(c.get(f"{_WS_BASE}/{key}").raise_for_status())
 
 
 @mcp.tool()
 def create_workspace_note(key: str, value: str, tags: list[str] | None = None) -> dict:
     """Create a workspace note. key must be a unique slug. Returns 409 if key already exists."""
     with _client() as c:
-        return c.post(_WS_BASE, json={"key": key, "value": value, "tags": tags or []}).raise_for_status().json()
+        return _parse_json(c.post(_WS_BASE, json={"key": key, "value": value, "tags": tags or []}).raise_for_status())
 
 
 @mcp.tool()
@@ -61,7 +74,7 @@ def update_workspace_note(key: str, value: str | None = None, tags: list[str] | 
     if tags is not None:
         body["tags"] = tags
     with _client() as c:
-        return c.patch(f"{_WS_BASE}/{key}", json=body).raise_for_status().json()
+        return _parse_json(c.patch(f"{_WS_BASE}/{key}", json=body).raise_for_status())
 
 
 @mcp.tool()
@@ -79,7 +92,7 @@ if _TID:
     def list_topic_notes(tag: str | None = None) -> list[dict]:
         """List notes for the current topic. Pass a tag to filter."""
         with _client() as c:
-            notes = c.get(_T_BASE).raise_for_status().json()
+            notes = _parse_json(c.get(_T_BASE).raise_for_status())
         if tag:
             notes = [n for n in notes if tag in n.get("tags", [])]
         return notes
@@ -88,7 +101,7 @@ if _TID:
     def create_topic_note(key: str, value: str, tags: list[str] | None = None) -> dict:
         """Create a note scoped to the current topic."""
         with _client() as c:
-            return c.post(_T_BASE, json={"key": key, "value": value, "tags": tags or []}).raise_for_status().json()
+            return _parse_json(c.post(_T_BASE, json={"key": key, "value": value, "tags": tags or []}).raise_for_status())
 
     @mcp.tool()
     def update_topic_note(key: str, value: str | None = None, tags: list[str] | None = None) -> dict:
@@ -99,7 +112,7 @@ if _TID:
         if tags is not None:
             body["tags"] = tags
         with _client() as c:
-            return c.patch(f"{_T_BASE}/{key}", json=body).raise_for_status().json()
+            return _parse_json(c.patch(f"{_T_BASE}/{key}", json=body).raise_for_status())
 
     @mcp.tool()
     def delete_topic_note(key: str) -> str:
