@@ -290,7 +290,7 @@ def test_stream_claude_once_detects_is_error_from_result(tmp_path):
 
 
 def test_stream_claude_once_skips_blank_and_malformed_lines(tmp_path):
-    """Blank lines and non-JSON lines are silently ignored."""
+    """Blank lines are skipped; non-JSON lines emit a parse_warning chunk."""
     text_event = _events("text")[0]
     result_event = _events("result_ok")[0]
     lines = [
@@ -313,8 +313,13 @@ def test_stream_claude_once_skips_blank_and_malformed_lines(tmp_path):
             subagent=None, model=None, system_prompt=None,
         )
 
-    # Only 2 valid events published
-    assert len(client.publish.call_args_list) == 2
+    # 2 valid events + 2 parse_warning chunks (one per malformed line)
+    assert len(client.publish.call_args_list) == 4
+    published_events = [json.loads(call.args[1])["event"] for call in client.publish.call_args_list]
+    warnings = [e for e in published_events if e.get("subtype") == "parse_warning"]
+    assert len(warnings) == 2
+    assert warnings[0]["line"] == "not-json"
+    assert warnings[1]["line"] == "{broken"
     assert is_error is False
 
 
