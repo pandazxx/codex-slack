@@ -1,6 +1,41 @@
 # Notes Agent Guide
 
-This guide is intended to be pasted into an agent's **system prompt**. It teaches the agent how to create, read, update, and delete notes at both workspace and topic scope via the internal REST API.
+This guide is intended to be pasted into an agent's **system prompt**. It teaches the agent how to create, read, update, and delete notes at both workspace and topic scope.
+
+## MCP tools (preferred)
+
+When running inside a codex-slack agent container the `notes` MCP server is
+available. Prefer these tools over direct REST calls — they handle
+authentication and endpoint resolution automatically.
+
+### Always available (workspace scope)
+
+| Tool | Purpose |
+|---|---|
+| `list_workspace_notes(tag?)` | List all workspace notes; pass `tag` to filter (e.g. `"memory"`) |
+| `get_workspace_note(key)` | Fetch a single workspace note by key |
+| `create_workspace_note(key, value, tags?)` | Create a new workspace note |
+| `update_workspace_note(key, value?, tags?)` | Update value and/or tags of an existing note |
+| `delete_workspace_note(key)` | Delete a workspace note |
+
+### Available when a topic is active (topic scope)
+
+| Tool | Purpose |
+|---|---|
+| `list_topic_notes(tag?)` | List notes for the current topic |
+| `create_topic_note(key, value, tags?)` | Create a note scoped to this topic |
+| `update_topic_note(key, value?, tags?)` | Update a topic note |
+| `delete_topic_note(key)` | Delete a topic note |
+
+**Session start:** always call `list_workspace_notes(tag="memory")` first to
+recall persistent context before replying.
+
+---
+
+## REST API (fallback)
+
+Use the REST API only if MCP tools are unavailable. Replace `{BASE}` with
+`$MASTER_URL/api`, `{WID}` with `$WORKSPACE_ID`, `{TID}` with `$TOPIC_ID`.
 
 ---
 
