@@ -239,71 +239,17 @@
       </div>
     </div>
 
-    <template v-if="!isArchived">
-      <div v-if="selectedFiles.length" class="file-chips">
-        <span v-for="(f, i) in selectedFiles" :key="i" class="file-chip">
-          {{ f.name }}
-          <button class="chip-remove" @click="removeFile(i)">×</button>
-        </span>
-      </div>
-      <form @submit.prevent="sendMessage" class="send-form">
-        <div v-if="availableStaffs.length" class="send-staff-row">
-          <label class="send-staff-label">Staff:</label>
-          <select class="send-staff-select" :value="topic?.current_staff_name || ''" @change="setCurrentStaff($event.target.value)">
-            <option value="">— use default —</option>
-            <option v-for="s in availableStaffs" :key="s.name" :value="s.name">@{{ s.name }}</option>
-          </select>
-        </div>
-        <div class="send-input-row">
-          <input type="file" multiple ref="fileInput" class="file-input-hidden" @change="onFilesSelected" />
-          <button type="button" class="attach-btn" @click="fileInput.click()" :disabled="sending" title="Attach files">📎</button>
-          <textarea
-            v-model="text"
-            placeholder="Type a message…"
-            rows="3"
-            :disabled="sending"
-            @keydown.enter.shift.exact.prevent="sendMessage"
-            @paste="onPaste"
-          />
-          <div class="send-side">
-            <button type="button" class="expand-btn" @click="openComposeOverlay" title="Open full-screen editor">⊞</button>
-            <button type="submit" :disabled="sending || !text.trim()">
-              {{ sending ? 'Sending…' : 'Send' }}
-            </button>
-          </div>
-        </div>
-      </form>
-      <p v-if="sendError" class="send-error">{{ sendError }}</p>
-      <p class="hint muted">Shift+Enter to send · Enter for new line · Use <code>@name</code> to address a specific staff</p>
-    </template>
-    <Teleport to="body">
-      <div v-if="composeOverlay" class="compose-overlay" @click.self="closeComposeOverlay">
-        <div class="compose-modal">
-          <div class="compose-modal-header">
-            <span class="compose-modal-title">Compose message</span>
-            <button class="compose-modal-close" @click="closeComposeOverlay" title="Close (Esc)">✕</button>
-          </div>
-          <textarea
-            class="compose-modal-textarea"
-            v-model="text"
-            placeholder="Type a message…"
-            :disabled="sending"
-            @keydown.shift.enter.exact.prevent="sendFromOverlay"
-            @paste="onPaste"
-            ref="overlayTextarea"
-          />
-          <div class="compose-modal-footer">
-            <span class="compose-modal-hint">Shift+Enter to send · Esc to close</span>
-            <div class="compose-modal-actions">
-              <button type="button" class="compose-modal-cancel" @click="closeComposeOverlay">Cancel</button>
-              <button type="button" class="compose-modal-send" @click="sendFromOverlay" :disabled="sending || !text.trim()">
-                {{ sending ? 'Sending…' : 'Send' }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Teleport>
+    <ChatInput
+      v-if="!isArchived"
+      ref="chatInputRef"
+      :sending="sending"
+      :send-error="sendError"
+      :available-staffs="availableStaffs"
+      :topic="topic"
+      :topic-id="route.params.topicId"
+      @send="sendMessage"
+      @set-staff="setCurrentStaff"
+    />
   </div>
 </template>
 
@@ -311,6 +257,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import MarkdownMessage from '../components/MarkdownMessage.vue'
+import ChatInput from '../components/ChatInput.vue'
 import { formatInTimezone } from '../utils/datetime.js'
 
 const route = useRoute()
@@ -323,32 +270,21 @@ const messages = ref([])
 const loading = ref(true)
 const configuredTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone)
 const sending = ref(false)
-const text = ref('')
 const agentStatus = ref('')
 const msgBox = ref(null)
 const rawView = ref({})
-const fileInput = ref(null)
-const selectedFiles = ref([])
 const liveStreams = ref({})
 const seenSeq = new Map()
 const availableStaffs = ref([])
-const composeOverlay = ref(false)
-const overlayTextarea = ref(null)
 const expandedMsgs = ref(new Set())
+const chatInputRef = ref(null)
+const sendError = ref('')
 
 const MSG_COLLAPSE_THRESHOLD = 600
 const MSG_COLLAPSED_PREVIEW = 300
 
 const isArchived = computed(() => !!topic.value?.archived_at)
 const isWorkspaceArchived = computed(() => !!workspace.value?.archived_at)
-const sendError = ref('')
-
-function draftKey(tid) { return `draft:${tid}` }
-function saveDraft(tid, val) {
-  if (val) localStorage.setItem(draftKey(tid), val)
-  else localStorage.removeItem(draftKey(tid))
-}
-function loadDraft(tid) { return localStorage.getItem(draftKey(tid)) || '' }
 
 function isMsgCollapsible(msg, idx) {
   if (idx !== undefined && idx >= messages.value.length - 1) return false
@@ -396,20 +332,6 @@ function scrollToBottom() {
       el.scrollTop = el.scrollHeight
     })
   })
-}
-
-function openComposeOverlay() {
-  composeOverlay.value = true
-  nextTick(() => overlayTextarea.value?.focus())
-}
-
-function closeComposeOverlay() {
-  composeOverlay.value = false
-}
-
-async function sendFromOverlay() {
-  await sendMessage()
-  if (!sendError.value) composeOverlay.value = false
 }
 
 async function setCurrentStaff(name) {
@@ -685,59 +607,6 @@ function connectWs() {
   }
 }
 
-function onFilesSelected(evt) {
-  const files = Array.from(evt.target.files || [])
-  selectedFiles.value = [...selectedFiles.value, ...files]
-  evt.target.value = ''
-}
-
-function removeFile(index) {
-  selectedFiles.value = selectedFiles.value.filter((_, i) => i !== index)
-}
-
-function mimeToExt(mime) {
-  switch (mime) {
-    case 'image/png':     return 'png'
-    case 'image/jpeg':    return 'jpg'
-    case 'image/gif':     return 'gif'
-    case 'image/webp':    return 'webp'
-    case 'image/bmp':     return 'bmp'
-    case 'image/svg+xml': return 'svg'
-    default: {
-      const m = /^image\/([a-z0-9+-]+)$/i.exec(mime)
-      if (!m) return 'png'
-      const ext = m[1].split('+')[0].replace(/[^a-z0-9]/gi, '')
-      return ext || 'png'
-    }
-  }
-}
-
-function renamePastedImage(file) {
-  const ext = mimeToExt(file.type) || 'png'
-  const ts = new Date().toISOString().replace(/[:.]/g, '-')
-  const name = `pasted-image-${ts}.${ext}`
-  return new File([file], name, { type: file.type, lastModified: file.lastModified })
-}
-
-function onPaste(evt) {
-  if (sending.value) return
-  const items = evt.clipboardData?.items
-  if (!items || !items.length) return
-
-  const pastedImages = []
-  for (const item of items) {
-    if (item.kind !== 'file') continue
-    if (!item.type || !item.type.startsWith('image/')) continue
-    const file = item.getAsFile()
-    if (!file) continue
-    pastedImages.push(renamePastedImage(file))
-  }
-
-  if (pastedImages.length === 0) return
-  evt.preventDefault()
-  selectedFiles.value = [...selectedFiles.value, ...pastedImages]
-}
-
 function formatSize(bytes) {
   if (bytes == null) return ''
   if (bytes < 1024) return `${bytes} B`
@@ -745,16 +614,14 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-async function sendMessage() {
-  const msg = text.value.trim()
-  if (!msg || sending.value) return
+async function sendMessage({ text: msgText, files }) {
+  if (!msgText || sending.value) return
   sending.value = true
   sendError.value = ''
-  const filesToSend = [...selectedFiles.value]
   try {
     const fd = new FormData()
-    fd.append('text', msg)
-    for (const f of filesToSend) {
+    fd.append('text', msgText)
+    for (const f of files) {
       fd.append('files', f)
     }
     const r = await fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages`, {
@@ -762,15 +629,13 @@ async function sendMessage() {
       body: fd,
     })
     if (r.ok) {
-      text.value = ''
-      saveDraft(topicId, '')
-      selectedFiles.value = []
+      chatInputRef.value?.reset()
       const data = await r.json()
       const localMsg = {
         id: data.message_id,
         sender: 'user',
         agent_name: null,
-        text: msg,
+        text: msgText,
         transcript: data.dispatch || null,
         attachments: data.attachments || [],
         created_at: new Date().toISOString(),
@@ -855,8 +720,6 @@ function extractToolResult(content) {
   return JSON.stringify(content, null, 2)
 }
 
-watch(text, (val) => { saveDraft(topicId, val) })
-
 watch(
   () => [route.params.wsId, route.params.topicId],
   ([newWsId, newTopicId]) => {
@@ -868,25 +731,17 @@ watch(
     liveStreams.value = {}
     seenSeq.clear()
     agentStatus.value = ''
-    text.value = loadDraft(topicId)
     load()
     if (!isArchived.value) connectWs()
   },
 )
 
-function _handleKeydown(e) {
-  if (e.key === 'Escape' && composeOverlay.value) closeComposeOverlay()
-}
-
 onMounted(async () => {
-  document.addEventListener('keydown', _handleKeydown)
-  text.value = loadDraft(topicId)
   await load()
   if (!isArchived.value) connectWs()
 })
 
 onUnmounted(() => {
-  document.removeEventListener('keydown', _handleKeydown)
   if (ws) { ws.onclose = null; ws.close() }
 })
 </script>
@@ -936,39 +791,6 @@ onUnmounted(() => {
 .tr-badge-thinking { background: #f3e8ff; color: #7c3aed; }
 .tr-thinking { display: flex; flex-direction: column; gap: 2px; }
 .tr-thinking-body { background: #1a0a2e; color: #c4b5fd; }
-.send-form { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.75rem; }
-.send-staff-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }
-.send-staff-label { font-size: 0.8em; font-weight: 600; color: #475569; white-space: nowrap; }
-.send-staff-select { flex: 1; font-size: 0.88em; padding: 0.25rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; color: #1e293b; cursor: pointer; }
-.send-input-row { display: flex; gap: 0.5rem; align-items: flex-end; }
-.send-input-row textarea { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; resize: none; font-family: inherit; font-size: 0.95rem; }
-.send-side { display: flex; flex-direction: column; gap: 0.35rem; align-items: stretch; }
-.send-side button { padding: 0.5rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
-.send-side button:disabled { opacity: 0.6; cursor: default; }
-.expand-btn { background: #f1f5f9 !important; color: #475569 !important; border: 1px solid #cbd5e1 !important; font-size: 1rem; padding: 0.3rem 0.5rem !important; }
-.expand-btn:hover { background: #e2e8f0 !important; }
-.compose-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 200; }
-.compose-modal { background: #fff; border-radius: 10px; width: 90vw; height: 85vh; display: flex; flex-direction: column; padding: 1rem; gap: 0.75rem; box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
-.compose-modal-header { display: flex; align-items: center; justify-content: space-between; }
-.compose-modal-title { font-size: 0.95em; font-weight: 600; color: #1e293b; }
-.compose-modal-close { background: none; border: none; font-size: 1.1rem; color: #94a3b8; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 4px; }
-.compose-modal-close:hover { background: #f1f5f9; color: #475569; }
-.compose-modal-textarea { flex: 1; resize: none; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.75rem; font-family: inherit; font-size: 1rem; line-height: 1.5; outline: none; }
-.compose-modal-textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 2px #2563eb26; }
-.compose-modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
-.compose-modal-hint { font-size: 0.78em; color: #94a3b8; }
-.compose-modal-actions { display: flex; gap: 0.5rem; }
-.compose-modal-cancel { padding: 0.45rem 1rem; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-size: 0.9em; }
-.compose-modal-cancel:hover { background: #e2e8f0; }
-.compose-modal-send { padding: 0.45rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 600; }
-.compose-modal-send:disabled { opacity: 0.6; cursor: default; }
-.compose-modal-send:not(:disabled):hover { background: #1d4ed8; }
-.attach-btn { background: #f1f5f9; color: #475569; padding: 0.5rem 0.6rem; font-size: 1.1rem; border: 1px solid #cbd5e1; }
-.attach-btn:hover:not(:disabled) { background: #e2e8f0; }
-.file-input-hidden { display: none; }
-.file-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
-.file-chip { display: flex; align-items: center; gap: 4px; background: #e0f2fe; color: #0369a1; border-radius: 12px; padding: 2px 10px; font-size: 0.8em; }
-.chip-remove { background: none; border: none; cursor: pointer; color: #0369a1; font-size: 0.9em; padding: 0; line-height: 1; }
 .attachment-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .attachment-img-wrap { max-width: 280px; }
 .attachment-img { max-width: 100%; border-radius: 6px; border: 1px solid #e2e8f0; }
@@ -980,8 +802,6 @@ onUnmounted(() => {
 .dispatch-cmd { font-size: 0.72em; max-height: 200px; overflow-x: auto; white-space: pre; }
 .cancel-btn { align-self: flex-start; margin-top: 4px; padding: 2px 10px; background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; border-radius: 4px; cursor: pointer; font-size: 0.78em; }
 .cancel-btn:hover { background: #fecaca; }
-.send-error { color: #dc2626; font-size: 0.85em; margin-top: 0.25rem; }
-.hint { font-size: 0.8em; text-align: right; margin-top: 0.25rem; }
 .muted { color: #64748b; }
 .center { text-align: center; }
 .cursor {
@@ -1010,9 +830,6 @@ onUnmounted(() => {
   .message { max-width: 90%; }
   .message.agent { max-width: 96%; }
   .bubble { padding: 0.5rem 0.75rem; }
-  .send-form { gap: 0.35rem; }
-  .send-form textarea { font-size: 16px; padding: 0.5rem 0.6rem; }
-  .send-form button { padding: 0.5rem 0.85rem; }
   .breadcrumb { font-size: 0.8em; word-break: break-word; }
 }
 </style>
