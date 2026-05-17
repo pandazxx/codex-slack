@@ -345,3 +345,39 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* Created `docs/knowledge-base/`, `docs/guides/runbooks/`, `docs/references/`, and `docs/manuals/` with initial stub files during v3.4 doc-writer pass.
 
 *Prevention:* When a new document layout is defined in CLAUDE.md, include a chore commit that scaffolds the required directories and stubs so agents can immediately write to them without a missing-file error.
+
+---
+
+## 2026-05-17 — Agent containers spawned without bot-entrypoint; ~/.claude never populated
+
+*Summary:* `~/.claude/settings.json` was never copied into agent containers, so MCP config was missing at runtime. Agents started without any MCP servers registered.
+
+*Root cause:* `agent_runner.py` called `containers.run()` without specifying the `entrypoint` parameter. When `MASTER_AGENT_BASE_IMAGE` is unset, the master image is used for agent containers; that image's `ENTRYPOINT` is `["/usr/bin/tini", "--"]` (no `bot-entrypoint`), so the startup script that copies `config/claude-global/` into `~/.claude/` never ran.
+
+*Fix applied:* Added `entrypoint=["/usr/bin/tini", "--", "/usr/local/bin/bot-entrypoint"]` to `containers.run()` in `agent_runner.py`.
+
+*Prevention:* Always specify `entrypoint` explicitly when spawning agent containers so the behaviour is independent of which image is used as the base.
+
+---
+
+## 2026-05-17 — MCP server command fails from project worktree cwd (`ModuleNotFoundError: No module named 'src'`)
+
+*Summary:* `python -m src.notes_mcp` raised `ModuleNotFoundError: No module named 'src'` when Claude spawned the MCP server.
+
+*Root cause:* Claude Code spawns MCP servers from the project worktree directory (not from `/opt/codex-slack`). The `src.notes_mcp` module is only resolvable when cwd is `/opt/codex-slack`. Additionally, the `env.PYTHONPATH` field in `settings.json` was never applied because Claude Code silently ignores `settings.json` validation failures in `--print` mode, so the workaround of setting `PYTHONPATH` there was ineffective.
+
+*Fix applied:* (1) Changed the MCP command to a bash wrapper: `bash -c "cd /opt/codex-slack && exec python -m src.notes_mcp"`. (2) Created `config/notes-mcp.json` and passed it via `--mcp-config /opt/codex-slack/config/notes-mcp.json` in the claude invocation in `mqtt_loop.py` — `--mcp-config` is always honoured regardless of settings validation.
+
+*Prevention:* Never rely on `settings.json` `mcpServers` in `--print` mode for MCP registration — use `--mcp-config` explicitly. Use absolute-path bash wrappers for servers whose modules live outside the project worktree cwd.
+
+---
+
+## 2026-05-17 — MCP tools deferred by Tool Search, never loaded at session start
+
+*Summary:* Even after the MCP server connected successfully, Claude reported `list_workspace_notes` as unavailable and did not use notes tools proactively.
+
+*Root cause:* Claude Code v2.x defers MCP tools by default via Tool Search. Tools are not loaded into context at startup; Claude must explicitly search for them. Memory/notes tools need to be available proactively at session start, so deferral causes them to appear unavailable in practice.
+
+*Fix applied:* Added `"alwaysLoad": true` and `"instructions"` to the server config in `notes-mcp.json`, `settings.json`, and `config.toml`. `alwaysLoad` bypasses Tool Search deferral and loads tool schemas at session start.
+
+*Prevention:* Any MCP server providing context or memory tools that Claude should use proactively must set `alwaysLoad: true`. Leave other servers on the default deferred behaviour to conserve the context window.
