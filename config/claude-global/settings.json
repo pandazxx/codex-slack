@@ -9,7 +9,7 @@
     "notes": {
       "type": "stdio",
       "command": "bash",
-      "args": ["-c", "cd /opt/codex-slack && exec python -m src.notes_mcp"],
+      "args": ["-c", "source /run/agent-env 2>/dev/null; cd /opt/codex-slack && exec python -m src.notes_mcp"],
       "alwaysLoad": true,
       "instructions": "Provides persistent key-value note storage scoped to the current workspace and topic. Use these tools to read and write memory that survives across sessions. Always call list_workspace_notes at the start of a session to recall prior context."
     }
