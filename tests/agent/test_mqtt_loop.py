@@ -598,8 +598,9 @@ def test_pong_alive_false_when_proc_not_found():
     assert payload["alive"] is False
 
 
-def test_pong_alive_false_when_proc_exited():
-    """Ping for a message whose process has already exited → pong with alive=False."""
+def test_pong_alive_true_when_proc_exited_but_still_registered():
+    """Ping for a message whose process exited but is still in _active_procs (response
+    not yet published) → pong with alive=True to prevent premature stream interruption."""
     client = MagicMock()
     userdata = {"workspace_id": "ws1", "repo_dir": ""}
 
@@ -614,7 +615,9 @@ def test_pong_alive_false_when_proc_exited():
     pong_call = next((c for c in client.publish.call_args_list if "pong" in c.args[0]), None)
     assert pong_call is not None
     payload = json.loads(pong_call.args[1])
-    assert payload["alive"] is False
+    # Proc exited but still registered: response publish is in flight.
+    # alive=True prevents the stale-stream detector from inserting "(message interrupted)".
+    assert payload["alive"] is True
 
 
 def test_publish_interrupted_all():

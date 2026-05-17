@@ -223,36 +223,31 @@ def _stream_claude_once(
                 "topic_id": topic_id,
                 "agent_name": agent_name,
             }
-        try:
-            for line in proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                events.append(event)
-                client.publish(chunk_topic, json.dumps({
-                    "message_id": reply_message_id,
-                    "agent_name": agent_name,
-                    "seq": seq,
-                    "event": event,
-                }), qos=0)
-                LOGGER.debug("agent.llm_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
-                seq += 1
-                if event.get("type") == "result":
-                    new_session_id = event.get("session_id")
-                    result_text = event.get("result") or event.get("last_response")
-                    if result_text:
-                        outputs.append(result_text)
-                    if event.get("is_error"):
-                        is_error = True
-            proc.wait()
-        finally:
-            with _active_procs_lock:
-                _active_procs.pop(reply_message_id, None)
-                _active_contexts.pop(reply_message_id, None)
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            events.append(event)
+            client.publish(chunk_topic, json.dumps({
+                "message_id": reply_message_id,
+                "agent_name": agent_name,
+                "seq": seq,
+                "event": event,
+            }), qos=0)
+            LOGGER.debug("agent.llm_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+            seq += 1
+            if event.get("type") == "result":
+                new_session_id = event.get("session_id")
+                result_text = event.get("result") or event.get("last_response")
+                if result_text:
+                    outputs.append(result_text)
+                if event.get("is_error"):
+                    is_error = True
+        proc.wait()
         output = "\n\n---\n\n".join(outputs) if outputs else None
         if not output:
             err = (proc.stderr.read() or "").strip()
@@ -362,39 +357,34 @@ def _stream_codex_once(
                 "topic_id": topic_id,
                 "agent_name": agent_name,
             }
-        try:
-            for line in proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    event = {"type": "output", "content": line}
-                events.append(event)
-                client.publish(chunk_topic, json.dumps({
-                    "message_id": reply_message_id,
-                    "agent_name": agent_name,
-                    "seq": seq,
-                    "event": event,
-                }), qos=0)
-                LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
-                seq += 1
-                ev_type = event.get("type", "")
-                if ev_type == "turn.completed":
-                    final = event.get("output_text") or event.get("last_message")
-                    if final:
-                        fallback_outputs.append(str(final))
-                elif ev_type == "turn.failed":
-                    is_error = True
-                    err_msg = (event.get("error") or {}).get("message", "")
-                    if err_msg:
-                        fallback_outputs.append(f"(codex error: {err_msg})")
-            proc.wait()
-        finally:
-            with _active_procs_lock:
-                _active_procs.pop(reply_message_id, None)
-                _active_contexts.pop(reply_message_id, None)
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                event = {"type": "output", "content": line}
+            events.append(event)
+            client.publish(chunk_topic, json.dumps({
+                "message_id": reply_message_id,
+                "agent_name": agent_name,
+                "seq": seq,
+                "event": event,
+            }), qos=0)
+            LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+            seq += 1
+            ev_type = event.get("type", "")
+            if ev_type == "turn.completed":
+                final = event.get("output_text") or event.get("last_message")
+                if final:
+                    fallback_outputs.append(str(final))
+            elif ev_type == "turn.failed":
+                is_error = True
+                err_msg = (event.get("error") or {}).get("message", "")
+                if err_msg:
+                    fallback_outputs.append(f"(codex error: {err_msg})")
+        proc.wait()
         if proc.returncode and proc.returncode != 0 and not is_error:
             is_error = True
         output = None
@@ -429,6 +419,9 @@ def _stream_codex_once(
     except Exception as exc:
         if proc is not None:
             _kill_proc_tree(proc)
+        with _active_procs_lock:
+            _active_procs.pop(reply_message_id, None)
+            _active_contexts.pop(reply_message_id, None)
         try:
             Path(output_file).unlink()
         except Exception:
@@ -532,36 +525,43 @@ def _process_prompt(
 
     LOGGER.info("agent.llm_done topic_id=%s chars=%d", topic_id, len(response_text))
 
-    client.publish(
-        _response_topic(workspace_id, topic_id),
-        json.dumps({
-            "message_id": reply_message_id,
-            "agent_name": agent_name,
-            "reply_to": message_id,
-            "last_response": response_text,
-            "transcript": transcript,
-            "session_id": new_session_id,
-        }),
-        qos=1,
-    )
-
-    if response_mode == "verdict":
-        verdict = _extract_verdict(response_text)
+    try:
         client.publish(
-            _verdict_topic(workspace_id, topic_id),
+            _response_topic(workspace_id, topic_id),
             json.dumps({
-                "reply_to": message_id,
+                "message_id": reply_message_id,
                 "agent_name": agent_name,
-                "verdict": verdict["verdict"],
-                "reason": verdict.get("reason", ""),
+                "reply_to": message_id,
+                "last_response": response_text,
+                "transcript": transcript,
+                "session_id": new_session_id,
             }),
             qos=1,
         )
-        LOGGER.info(
-            "agent.verdict_published topic_id=%s verdict=%s",
-            topic_id,
-            verdict["verdict"],
-        )
+
+        if response_mode == "verdict":
+            verdict = _extract_verdict(response_text)
+            client.publish(
+                _verdict_topic(workspace_id, topic_id),
+                json.dumps({
+                    "reply_to": message_id,
+                    "agent_name": agent_name,
+                    "verdict": verdict["verdict"],
+                    "reason": verdict.get("reason", ""),
+                }),
+                qos=1,
+            )
+            LOGGER.info(
+                "agent.verdict_published topic_id=%s verdict=%s",
+                topic_id,
+                verdict["verdict"],
+            )
+    finally:
+        # Keep proc in _active_procs until the response is queued so that
+        # the stale-stream ping returns alive=True during the post-exit window.
+        with _active_procs_lock:
+            _active_procs.pop(reply_message_id, None)
+            _active_contexts.pop(reply_message_id, None)
 
     client.publish(_status_topic(workspace_id, topic_id), json.dumps({"state": "idle"}), qos=0)
 
@@ -625,7 +625,7 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
         if message_id:
             with _active_procs_lock:
                 proc = _active_procs.get(message_id)
-            alive = proc is not None and proc.poll() is None
+            alive = proc is not None
             client.publish(
                 _pong_topic(workspace_id_ping, topic_id_ping),
                 json.dumps({"message_id": message_id, "alive": alive}),
