@@ -404,19 +404,19 @@ def _stream_codex_once(
     """
     fd, output_file = tempfile.mkstemp(suffix=".txt")
     os.close(fd)
-    use_session = bool(session_id) and session_scope != "none"
+    use_ephemeral = session_scope == "none"
     cmd = [
         "codex", "exec",
         "--json",
         "--dangerously-bypass-approvals-and-sandbox",
         "-s", "danger-full-access",
     ]
-    if not use_session:
+    if use_ephemeral:
         cmd.append("--ephemeral")
     if model:
         cmd += ["-m", model]
     cmd += ["-o", output_file]
-    if use_session and not is_new_session:
+    if not use_ephemeral and session_id and not is_new_session:
         cmd += ["resume", session_id, "-"]
     chunk_topic = _chunk_topic(workspace_id, topic_id)
     events: list[dict] = []
@@ -464,7 +464,7 @@ def _stream_codex_once(
                 ev_type = event.get("type", "")
                 if ev_type == "thread.started":
                     sid = event.get("session_id")
-                    if sid and use_session:
+                    if sid and not use_ephemeral:
                         new_session_id = sid
                 elif ev_type == "turn.completed":
                     final = event.get("output_text") or event.get("last_message")
