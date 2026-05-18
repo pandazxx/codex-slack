@@ -703,10 +703,17 @@ function buildDispatchCommand(transcript) {
     const p = JSON.parse(transcript)
     if (!p.adapter) return ''
     if (p.adapter === 'codex') {
+      const useEphemeral = (p.session_scope || 'topic') === 'none'
+      const resuming = !useEphemeral && p.session_id && !p.is_new_session
       const parts = ['codex', 'exec', '--json',
-        '--dangerously-bypass-approvals-and-sandbox', '-s', 'danger-full-access', '--ephemeral']
+        '--dangerously-bypass-approvals-and-sandbox', '-s', 'danger-full-access']
+      if (useEphemeral) parts.push('--ephemeral')
       if (p.model) parts.push('-m', JSON.stringify(p.model))
-      parts.push(JSON.stringify(p.text))
+      if (resuming) {
+        parts.push('resume', p.session_id, '-')
+      } else {
+        parts.push(JSON.stringify(p.text))
+      }
       return parts.join(' \\\n  ')
     }
     const parts = ['claude', '--print', '--verbose', '--output-format', 'stream-json', '--dangerously-skip-permissions']
