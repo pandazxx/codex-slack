@@ -158,6 +158,7 @@ def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str, repo_ref: s
 
 
 _SESSION_NOT_FOUND = "No conversation found with session ID"
+_CODEX_SESSION_NOT_FOUND = "no rollout found for thread id"
 
 _VERDICT_RE = __import__("re").compile(r'\{[^{}]+\}')
 
@@ -567,10 +568,26 @@ def _run_codex(
     is_new_session: bool = False,
     session_scope: str = "topic",
 ) -> tuple[str, str | None, str | None]:
-    output, new_session_id, transcript, _ = _stream_codex_once(
+    output, new_session_id, transcript, is_error = _stream_codex_once(
         client, workspace_id, topic_id, reply_message_id, agent_name,
         worktree, text, model, session_id, is_new_session, session_scope,
     )
+    if not is_new_session and session_id and is_error and _CODEX_SESSION_NOT_FOUND in (output or ""):
+        LOGGER.warning("agent.codex_session_expired sid=%s retrying_as_new", session_id)
+        first_event_count = len(json.loads(transcript)) if transcript else 0
+        seq = first_event_count
+        client.publish(_chunk_topic(workspace_id, topic_id), json.dumps({
+            "message_id": reply_message_id,
+            "agent_name": agent_name,
+            "seq": seq,
+            "event": {"type": "system", "subtype": "retry"},
+        }), qos=0)
+        seq += 1
+        output, new_session_id, transcript, _ = _stream_codex_once(
+            client, workspace_id, topic_id, reply_message_id, agent_name,
+            worktree, text, model, session_id, True, session_scope,
+            seq_start=seq,
+        )
     return output, new_session_id, transcript
 
 

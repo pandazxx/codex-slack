@@ -377,6 +377,34 @@ def test_run_codex_resumes_session(tmp_path):
     assert text == "continued"
 
 
+def test_run_codex_retries_as_new_on_session_not_found(tmp_path):
+    """When resume fails with 'no rollout found', _run_codex retries as a new session."""
+    error_output = "no rollout found for thread id abc-123"
+    retry_output = "hello from new session"
+    client = MagicMock()
+
+    call_count = 0
+
+    def fake_stream_codex_once(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return error_output, None, None, True
+        return retry_output, "new-sid", json.dumps([]), False
+
+    with patch("src.agent.mqtt_loop._stream_codex_once", side_effect=fake_stream_codex_once):
+        text, sid, transcript = _run_codex(
+            client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "hello", None,
+            session_id="old-sid", is_new_session=False, session_scope="topic",
+        )
+
+    assert call_count == 2
+    assert text == retry_output
+    assert sid == "new-sid"
+    published = [json.loads(c.args[1]) for c in client.publish.call_args_list]
+    assert any(p.get("event", {}).get("subtype") == "retry" for p in published)
+
+
 def test_run_codex_turn_failed_is_error(tmp_path):
     events = [{"type": "turn.failed", "error": {"message": "auth failed"}}]
     client = MagicMock()
