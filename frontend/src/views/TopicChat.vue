@@ -754,7 +754,7 @@ onUnmounted(() => {
 .archived-banner { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; color: #713f12; }
 .status-bar { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; }
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding: 0.5rem 0; }
-.message { display: flex; flex-direction: column; max-width: 72%; }
+.message { display: flex; flex-direction: column; max-width: 72%; content-visibility: auto; contain-intrinsic-size: auto 100px; }
 .message.agent { max-width: 88%; }
 .message.user { align-self: flex-end; align-items: flex-end; }
 .message.agent { align-self: flex-start; align-items: flex-start; }
