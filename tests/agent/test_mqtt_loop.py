@@ -8,6 +8,7 @@ import pytest
 import src.agent.mqtt_loop as mqtt_loop_module
 from src.agent.mqtt_loop import (
     _fetch_attachment,
+    _kill_proc_tree,
     _parse_prompt_topic,
     _process_prompt,
     _publish_interrupted_all,
@@ -17,6 +18,46 @@ from src.agent.mqtt_loop import (
     _on_connect,
     _on_message,
 )
+
+
+# --- _kill_proc_tree defensive guard ---
+
+def test_kill_proc_tree_refuses_pgid_1():
+    """pgid=1 (init/tini) -> os.killpg issues kill(-1, sig) which broadcasts.
+    Guard at src/agent/mqtt_loop.py must refuse this."""
+    proc = MagicMock()
+    proc.pid = 1
+    with patch("src.agent.mqtt_loop.os.killpg") as mock_killpg:
+        _kill_proc_tree(proc)
+    mock_killpg.assert_not_called()
+
+
+def test_kill_proc_tree_refuses_pgid_0():
+    """pgid=0 targets the caller's own process group; also self-destruct."""
+    proc = MagicMock()
+    proc.pid = 0
+    with patch("src.agent.mqtt_loop.os.killpg") as mock_killpg:
+        _kill_proc_tree(proc)
+    mock_killpg.assert_not_called()
+
+
+def test_kill_proc_tree_refuses_magicmock_pid():
+    """A bare MagicMock proc has __int__() = 1 by default — this is the exact
+    bug pattern that took down prod on 2026-05-18. The guard must catch it."""
+    proc = MagicMock()  # proc.pid is a MagicMock, int() returns 1
+    with patch("src.agent.mqtt_loop.os.killpg") as mock_killpg:
+        _kill_proc_tree(proc)
+    mock_killpg.assert_not_called()
+
+
+def test_kill_proc_tree_kills_legitimate_pgid():
+    """A normal subprocess pgid (>= 2) must still be killed."""
+    proc = MagicMock()
+    proc.pid = 12345
+    import signal
+    with patch("src.agent.mqtt_loop.os.killpg") as mock_killpg:
+        _kill_proc_tree(proc)
+    mock_killpg.assert_called_once_with(12345, signal.SIGKILL)
 
 
 # --- _parse_prompt_topic ---
@@ -172,11 +213,18 @@ def test_run_claude_timeout(tmp_path):
 
     # Simulate a timeout by making proc.stdout iteration raise TimeoutExpired
     proc = MagicMock()
+    # Belt: explicit safe pid. MagicMock().__int__() defaults to 1, which would
+    # cause os.killpg(proc.pid, SIGKILL) to issue kill(-1, SIGKILL) and broadcast
+    # SIGKILL across the whole container — 2026-05-18 prod incident root cause.
+    proc.pid = 999999
     proc.stdout = iter([])  # empty — triggers proc.wait()
     proc.stderr.read.return_value = "timed out"
     proc.wait.side_effect = sp.TimeoutExpired("claude", 300)
 
-    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=proc):
+    # Suspenders: mock os.killpg so even if the safe pid were missed, no real
+    # syscall fires.
+    with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=proc), \
+         patch("src.agent.mqtt_loop.os.killpg"):
         text, _, _t = _run_claude(client, "ws1", "t1", "reply-id", "claude", str(tmp_path), "hi", None, False, None, None, None)
     assert "timed out" in text or "claude error" in text
 
@@ -276,10 +324,12 @@ def test_run_codex_turn_failed_is_error(tmp_path):
     output_file = tmp_path / "out.txt"
     output_file.write_text("")
     proc = _make_popen_mock(events)
+    proc.pid = 999999  # see test_run_claude_timeout for rationale
     proc.returncode = 1
     with patch("src.agent.mqtt_loop.tempfile.mkstemp", return_value=(0, str(output_file))):
         with patch("src.agent.mqtt_loop.os.close"):
-            with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=proc):
+            with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=proc), \
+                 patch("src.agent.mqtt_loop.os.killpg"):
                 text, _, _ = _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "hi", None)
     assert "auth failed" in text
 
@@ -625,6 +675,7 @@ def test_publish_interrupted_all():
     client = MagicMock()
 
     proc = MagicMock()
+    proc.pid = 999999  # bare MagicMock().pid resolves to int 1 -> _kill_proc_tree guard refuses
     procs = {"msg-abc": proc}
     contexts = {
         "msg-abc": {
@@ -640,7 +691,7 @@ def test_publish_interrupted_all():
                 _publish_interrupted_all(client)
 
     import signal
-    mock_killpg.assert_called_once_with(proc.pid, signal.SIGKILL)
+    mock_killpg.assert_called_once_with(999999, signal.SIGKILL)
 
     response_calls = [c for c in client.publish.call_args_list if "response" in c.args[0]]
     assert len(response_calls) == 1
