@@ -70,7 +70,7 @@ ssh ubuntu@<prod-host> 'sudo journalctl -k --since "<HH:MM>:00" --until "<HH:MM>
 DOCKER_HOST=ssh://ubuntu@<prod-host> docker inspect <container> --format '{{.State.OOMKilled}}'
 ```
 
-If `OOMKilled=true` or the kernel log shows an OOM event: the container exceeded available memory. Look at recent memory usage in the agent (large transcript? Many subprocess instances?) — fix is to set explicit `Memory` limits in `agent_runner.spawn_agent` or scale the host.
+If `OOMKilled=true` or the kernel log shows an OOM event: the container exceeded available memory. Look at recent memory usage in the agent (large transcript? Many subprocess instances?). Agent containers carry a default `mem_limit` of `1g` (v4.15-rc8+; configurable via `MASTER_AGENT_MEM_LIMIT`). If `OOMKilled=true`, the agent hit the per-container cap — either raise the limit (`MASTER_AGENT_MEM_LIMIT=2g`) or investigate the runaway. If `OOMKilled=false` but kernel OOM fired, the kill came from host memory pressure outside this container's cgroup.
 
 ### Step 3: rule out master initiating it
 

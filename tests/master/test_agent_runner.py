@@ -162,6 +162,57 @@ def test_spawn_agent_uses_gh_token_fallback_when_none():
     assert gh and gh != "None"
 
 
+def test_spawn_agent_passes_mem_limit_when_set():
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
+        spawn_agent(
+            runtime="docker",
+            workspace_id="ws1",
+            repo_url="https://github.com/x/y",
+            image="img",
+            mqtt_host="broker",
+            mqtt_port=1883,
+            network="net",
+            mem_limit="1g",
+        )
+    _, kwargs = mock_client.containers.run.call_args
+    assert kwargs["mem_limit"] == "1g"
+
+
+def test_spawn_agent_omits_mem_limit_when_none():
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
+        spawn_agent(
+            runtime="docker",
+            workspace_id="ws1",
+            repo_url="https://github.com/x/y",
+            image="img",
+            mqtt_host="broker",
+            mqtt_port=1883,
+            network="net",
+            mem_limit=None,
+        )
+    _, kwargs = mock_client.containers.run.call_args
+    assert "mem_limit" not in kwargs
+
+
+def test_spawn_agent_omits_mem_limit_when_empty_string():
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
+        spawn_agent(
+            runtime="docker",
+            workspace_id="ws1",
+            repo_url="https://github.com/x/y",
+            image="img",
+            mqtt_host="broker",
+            mqtt_port=1883,
+            network="net",
+            mem_limit="",
+        )
+    _, kwargs = mock_client.containers.run.call_args
+    assert "mem_limit" not in kwargs
+
+
 # --- stop_agent ---
 
 def test_stop_agent_removes_container():
