@@ -112,13 +112,33 @@ async def dispatch_to_staff(
 
         # For adapters like codex whose LLM session id differs from the internal
         # session_uuid, fetch the llm_session_id persisted by the agent response handler.
+        # For workspace/global scope the session is shared across topics, so we search
+        # the broadest matching set and take the most recently updated non-null id.
         llm_session_id: str | None = None
         if not is_new_session and session_uuid:
-            row = conn.execute(
-                "SELECT llm_session_id FROM sessions"
-                " WHERE topic_id = ? AND agent_name = ?",
-                (topic_id, staff["name"]),
-            ).fetchone()
+            scope = staff["session_scope"] or "topic"
+            if scope == "workspace":
+                row = conn.execute(
+                    "SELECT s.llm_session_id FROM sessions s"
+                    " JOIN topics t ON s.topic_id = t.id"
+                    " WHERE t.workspace_id = ? AND s.agent_name = ?"
+                    " AND s.llm_session_id IS NOT NULL"
+                    " ORDER BY s.updated_at DESC LIMIT 1",
+                    (workspace_id, staff["name"]),
+                ).fetchone()
+            elif scope == "global":
+                row = conn.execute(
+                    "SELECT llm_session_id FROM sessions"
+                    " WHERE agent_name = ? AND llm_session_id IS NOT NULL"
+                    " ORDER BY updated_at DESC LIMIT 1",
+                    (staff["name"],),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT llm_session_id FROM sessions"
+                    " WHERE topic_id = ? AND agent_name = ?",
+                    (topic_id, staff["name"]),
+                ).fetchone()
             if row:
                 llm_session_id = row["llm_session_id"]
 
