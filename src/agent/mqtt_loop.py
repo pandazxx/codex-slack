@@ -29,6 +29,16 @@ _active_procs: dict[str, subprocess.Popen] = {}  # type: ignore[type-arg]
 _active_contexts: dict[str, dict] = {}  # message_id → {workspace_id, topic_id, agent_name}
 _active_procs_lock = threading.Lock()
 
+# Persisted snapshot of in-flight subprocess contexts so that a SIGKILL-survivor
+# restart can emit a real interrupt event for messages whose subprocess died
+# along with the container. Path is on the container's writable layer; survives
+# a Docker restart (same container) but not a remove+recreate, which is fine —
+# remove+recreate is master-initiated and master's stale-stream check already
+# detects "container-gone" in that path.
+_STATE_DIR = Path("/tmp/master-agent")
+_ACTIVE_PROCS_PATH = _STATE_DIR / "active_procs.json"
+_inherited_already_published = False
+
 # Deduplication: clean_session=False means the broker redelivers QoS-1 prompts when
 # the agent reconnects mid-run, which would start a second parallel LLM run and produce
 # two streaming bubbles. Track seen message_ids (bounded to 2000) and discard re-deliveries.
@@ -223,54 +233,99 @@ def _stream_claude_once(
                 "topic_id": topic_id,
                 "agent_name": agent_name,
             }
-        try:
-            for line in proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                events.append(event)
+            _persist_active_procs_locked()
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                LOGGER.warning("agent.llm_chunk_parse_error topic_id=%s line=%r", topic_id, line[:200])
+                warn_event = {"type": "system", "subtype": "parse_warning", "line": line[:200]}
                 client.publish(chunk_topic, json.dumps({
                     "message_id": reply_message_id,
                     "agent_name": agent_name,
                     "seq": seq,
-                    "event": event,
+                    "event": warn_event,
                 }), qos=0)
-                LOGGER.debug("agent.llm_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
                 seq += 1
-                if event.get("type") == "result":
-                    new_session_id = event.get("session_id")
-                    result_text = event.get("result") or event.get("last_response")
-                    if result_text:
-                        outputs.append(result_text)
-                    if event.get("is_error"):
-                        is_error = True
-            proc.wait()
-        finally:
-            with _active_procs_lock:
-                _active_procs.pop(reply_message_id, None)
-                _active_contexts.pop(reply_message_id, None)
+                continue
+            events.append(event)
+            client.publish(chunk_topic, json.dumps({
+                "message_id": reply_message_id,
+                "agent_name": agent_name,
+                "seq": seq,
+                "event": event,
+            }), qos=0)
+            LOGGER.debug("agent.llm_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+            seq += 1
+            if event.get("type") == "result":
+                new_session_id = event.get("session_id")
+                result_text = event.get("result") or event.get("last_response")
+                if result_text:
+                    outputs.append(result_text)
+                if event.get("is_error"):
+                    is_error = True
+        proc.wait()
+        rc = proc.returncode
         output = "\n\n---\n\n".join(outputs) if outputs else None
-        if not output:
-            err = (proc.stderr.read() or "").strip()
-            output = err or "(no output)"
+        stderr_tail = ""
+        if not output or rc != 0:
+            stderr_tail = (proc.stderr.read() or "").strip()
+            if not output:
+                output = stderr_tail or "(no output)"
         transcript = json.dumps(events) if events else None
+        if rc != 0:
+            # Non-zero exit without an exception — claude exited cleanly with
+            # a failure code. Surface enough postmortem to correlate with a
+            # later alive=False ping (master keeps the proc reference past
+            # this point, so the ping window is short but it exists).
+            LOGGER.warning(
+                "agent.llm_subprocess_nonzero_exit topic_id=%s message_id=%s pid=%s returncode=%d chunks=%d chars=%d stderr_tail=%r",
+                topic_id, reply_message_id, proc.pid, rc,
+                seq - seq_start, len(output), stderr_tail[-500:],
+            )
+            is_error = True
         LOGGER.info(
-            "agent.llm_done topic_id=%s chunks=%d chars=%d",
-            topic_id, seq - seq_start, len(output),
+            "agent.llm_done topic_id=%s message_id=%s pid=%s returncode=%s chunks=%d chars=%d",
+            topic_id, reply_message_id, proc.pid, rc,
+            seq - seq_start, len(output),
         )
         return output, new_session_id, transcript, is_error
     except FileNotFoundError:
+        LOGGER.error(
+            "agent.llm_cli_missing topic_id=%s message_id=%s cmd=%s",
+            topic_id, reply_message_id, cmd[0] if cmd else "claude",
+        )
         return "(claude CLI not found in agent container)", None, None, True
     except Exception as exc:
+        # Silent subprocess crashes (e.g. broken pipe on stdout, MQTT publish
+        # raising mid-stream, an OS error while reading proc.stdout) were the
+        # observed cause of "alive=False without agent.llm_done" in prod.
+        # Capture proc state BEFORE killing the tree so the postmortem is
+        # accurate, even if proc.poll() may already be None for a live proc
+        # that we're about to terminate.
+        rc = proc.poll() if proc is not None else None
+        stderr_tail = ""
+        if proc is not None and proc.stderr is not None:
+            try:
+                stderr_tail = (proc.stderr.read() or "").strip()
+            except Exception:
+                pass
+        LOGGER.exception(
+            "agent.llm_subprocess_aborted topic_id=%s message_id=%s pid=%s returncode=%s chunks=%d exc_type=%s exc=%s stderr_tail=%r",
+            topic_id, reply_message_id,
+            proc.pid if proc is not None else None,
+            rc, seq - seq_start,
+            type(exc).__name__, exc, stderr_tail[-500:],
+        )
         if proc is not None:
             _kill_proc_tree(proc)
         with _active_procs_lock:
             _active_procs.pop(reply_message_id, None)
             _active_contexts.pop(reply_message_id, None)
+            _persist_active_procs_locked()
         return f"(claude error: {exc})", None, None, True
 
 
@@ -362,40 +417,37 @@ def _stream_codex_once(
                 "topic_id": topic_id,
                 "agent_name": agent_name,
             }
-        try:
-            for line in proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    event = {"type": "output", "content": line}
-                events.append(event)
-                client.publish(chunk_topic, json.dumps({
-                    "message_id": reply_message_id,
-                    "agent_name": agent_name,
-                    "seq": seq,
-                    "event": event,
-                }), qos=0)
-                LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
-                seq += 1
-                ev_type = event.get("type", "")
-                if ev_type == "turn.completed":
-                    final = event.get("output_text") or event.get("last_message")
-                    if final:
-                        fallback_outputs.append(str(final))
-                elif ev_type == "turn.failed":
-                    is_error = True
-                    err_msg = (event.get("error") or {}).get("message", "")
-                    if err_msg:
-                        fallback_outputs.append(f"(codex error: {err_msg})")
-            proc.wait()
-        finally:
-            with _active_procs_lock:
-                _active_procs.pop(reply_message_id, None)
-                _active_contexts.pop(reply_message_id, None)
-        if proc.returncode and proc.returncode != 0 and not is_error:
+            _persist_active_procs_locked()
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                event = {"type": "output", "content": line}
+            events.append(event)
+            client.publish(chunk_topic, json.dumps({
+                "message_id": reply_message_id,
+                "agent_name": agent_name,
+                "seq": seq,
+                "event": event,
+            }), qos=0)
+            LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
+            seq += 1
+            ev_type = event.get("type", "")
+            if ev_type == "turn.completed":
+                final = event.get("output_text") or event.get("last_message")
+                if final:
+                    fallback_outputs.append(str(final))
+            elif ev_type == "turn.failed":
+                is_error = True
+                err_msg = (event.get("error") or {}).get("message", "")
+                if err_msg:
+                    fallback_outputs.append(f"(codex error: {err_msg})")
+        proc.wait()
+        rc = proc.returncode
+        if rc and rc != 0 and not is_error:
             is_error = True
         output = None
         try:
@@ -411,24 +463,57 @@ def _stream_codex_once(
                 pass
         if not output:
             output = "\n\n---\n\n".join(fallback_outputs) if fallback_outputs else None
-        if not output:
-            err = (proc.stderr.read() or "").strip()
-            output = err or "(no output)"
+        stderr_tail = ""
+        if not output or (rc is not None and rc != 0):
+            stderr_tail = (proc.stderr.read() or "").strip()
+            if not output:
+                output = stderr_tail or "(no output)"
         transcript = json.dumps(events) if events else None
+        if rc is not None and rc != 0:
+            LOGGER.warning(
+                "agent.codex_subprocess_nonzero_exit topic_id=%s message_id=%s pid=%s returncode=%d chunks=%d chars=%d stderr_tail=%r",
+                topic_id, reply_message_id, proc.pid, rc,
+                seq - seq_start, len(output), stderr_tail[-500:],
+            )
         LOGGER.info(
-            "agent.codex_done topic_id=%s chunks=%d chars=%d",
-            topic_id, seq - seq_start, len(output),
+            "agent.codex_done topic_id=%s message_id=%s pid=%s returncode=%s chunks=%d chars=%d",
+            topic_id, reply_message_id, proc.pid, rc,
+            seq - seq_start, len(output),
         )
         return output, transcript, is_error
     except FileNotFoundError:
+        LOGGER.error(
+            "agent.codex_cli_missing topic_id=%s message_id=%s cmd=%s",
+            topic_id, reply_message_id, cmd[0] if cmd else "codex",
+        )
         try:
             Path(output_file).unlink()
         except Exception:
             pass
         return "(codex CLI not found in agent container)", None, True
     except Exception as exc:
+        # See _stream_claude_once for rationale — same alive=False-without-done
+        # pattern. Capture postmortem before kill_proc_tree.
+        rc = proc.poll() if proc is not None else None
+        stderr_tail = ""
+        if proc is not None and proc.stderr is not None:
+            try:
+                stderr_tail = (proc.stderr.read() or "").strip()
+            except Exception:
+                pass
+        LOGGER.exception(
+            "agent.codex_subprocess_aborted topic_id=%s message_id=%s pid=%s returncode=%s chunks=%d exc_type=%s exc=%s stderr_tail=%r",
+            topic_id, reply_message_id,
+            proc.pid if proc is not None else None,
+            rc, seq - seq_start,
+            type(exc).__name__, exc, stderr_tail[-500:],
+        )
         if proc is not None:
             _kill_proc_tree(proc)
+        with _active_procs_lock:
+            _active_procs.pop(reply_message_id, None)
+            _active_contexts.pop(reply_message_id, None)
+            _persist_active_procs_locked()
         try:
             Path(output_file).unlink()
         except Exception:
@@ -532,36 +617,44 @@ def _process_prompt(
 
     LOGGER.info("agent.llm_done topic_id=%s chars=%d", topic_id, len(response_text))
 
-    client.publish(
-        _response_topic(workspace_id, topic_id),
-        json.dumps({
-            "message_id": reply_message_id,
-            "agent_name": agent_name,
-            "reply_to": message_id,
-            "last_response": response_text,
-            "transcript": transcript,
-            "session_id": new_session_id,
-        }),
-        qos=1,
-    )
-
-    if response_mode == "verdict":
-        verdict = _extract_verdict(response_text)
+    try:
         client.publish(
-            _verdict_topic(workspace_id, topic_id),
+            _response_topic(workspace_id, topic_id),
             json.dumps({
-                "reply_to": message_id,
+                "message_id": reply_message_id,
                 "agent_name": agent_name,
-                "verdict": verdict["verdict"],
-                "reason": verdict.get("reason", ""),
+                "reply_to": message_id,
+                "last_response": response_text,
+                "transcript": transcript,
+                "session_id": new_session_id,
             }),
             qos=1,
         )
-        LOGGER.info(
-            "agent.verdict_published topic_id=%s verdict=%s",
-            topic_id,
-            verdict["verdict"],
-        )
+
+        if response_mode == "verdict":
+            verdict = _extract_verdict(response_text)
+            client.publish(
+                _verdict_topic(workspace_id, topic_id),
+                json.dumps({
+                    "reply_to": message_id,
+                    "agent_name": agent_name,
+                    "verdict": verdict["verdict"],
+                    "reason": verdict.get("reason", ""),
+                }),
+                qos=1,
+            )
+            LOGGER.info(
+                "agent.verdict_published topic_id=%s verdict=%s",
+                topic_id,
+                verdict["verdict"],
+            )
+    finally:
+        # Keep proc in _active_procs until the response is queued so that
+        # the stale-stream ping returns alive=True during the post-exit window.
+        with _active_procs_lock:
+            _active_procs.pop(reply_message_id, None)
+            _active_contexts.pop(reply_message_id, None)
+            _persist_active_procs_locked()
 
     client.publish(_status_topic(workspace_id, topic_id), json.dumps({"state": "idle"}), qos=0)
 
@@ -578,10 +671,88 @@ def _on_connect(client: mqtt.Client, userdata, flags, reason_code, properties) -
     client.subscribe(cancel_sub, qos=1)
     client.subscribe(ping_sub, qos=0)
     LOGGER.info("agent.mqtt_connected subscribed=%s,%s,%s", prompt_sub, cancel_sub, ping_sub)
+    # Emit `(message interrupted)` for any subprocess that didn't survive the
+    # previous container life. No-op on the first start after a clean shutdown
+    # (the file was unlinked by `_publish_interrupted_all`).
+    _publish_inherited_interrupts(client)
 
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties) -> None:  # type: ignore[type-arg]
     LOGGER.warning("agent.mqtt_disconnected reason=%s", reason_code)
+
+
+def _persist_active_procs_locked() -> None:
+    """Atomically write `_active_contexts` to disk. Caller MUST hold
+    `_active_procs_lock` so the snapshot matches the in-memory state.
+
+    Failure to persist is non-fatal (logged) — the worst case is a missed
+    `agent-killed` interrupt event after a SIGKILL, which is no worse than
+    today's behavior."""
+    try:
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        snapshot = json.dumps(_active_contexts)
+        tmp = _ACTIVE_PROCS_PATH.with_suffix(".json.tmp")
+        tmp.write_text(snapshot)
+        os.replace(tmp, _ACTIVE_PROCS_PATH)
+    except Exception:
+        LOGGER.exception("agent.persist_active_procs_failed")
+
+
+def _publish_inherited_interrupts(client: mqtt.Client) -> None:
+    """Emit `(message interrupted)` with reason `agent-killed` for any
+    in-flight subprocesses that didn't survive the previous container life.
+
+    The typical trigger is the container being SIGKILL'd while a subprocess
+    was running — Python is just gone, so the SIGTERM handler never ran and
+    master can only see `alive=False` on its next ping. Without this replay,
+    master labels such messages `ping-timeout`, which is misleading.
+
+    Fires at most once per agent process (guarded by `_inherited_already_published`)
+    even if MQTT reconnects multiple times."""
+    global _inherited_already_published
+    if _inherited_already_published:
+        return
+    _inherited_already_published = True
+    try:
+        if not _ACTIVE_PROCS_PATH.exists():
+            return
+        try:
+            data = json.loads(_ACTIVE_PROCS_PATH.read_text())
+        except Exception:
+            LOGGER.exception("agent.startup_inherited_parse_failed path=%s", _ACTIVE_PROCS_PATH)
+            _ACTIVE_PROCS_PATH.unlink(missing_ok=True)
+            return
+        if not isinstance(data, dict) or not data:
+            _ACTIVE_PROCS_PATH.unlink(missing_ok=True)
+            return
+        LOGGER.warning(
+            "agent.startup_inherited_active count=%d message_ids=%s",
+            len(data), list(data.keys()),
+        )
+        for message_id, ctx in data.items():
+            if not isinstance(ctx, dict) or "workspace_id" not in ctx or "topic_id" not in ctx:
+                LOGGER.warning("agent.startup_inherited_skip_bad_entry message_id=%s ctx=%r", message_id, ctx)
+                continue
+            try:
+                client.publish(
+                    _response_topic(ctx["workspace_id"], ctx["topic_id"]),
+                    json.dumps({
+                        "message_id": message_id,
+                        "agent_name": ctx.get("agent_name"),
+                        "reply_to": None,
+                        "last_response": "(message interrupted)",
+                        "interrupt_reason": "agent-killed",
+                        "transcript": None,
+                        "session_id": None,
+                    }),
+                    qos=1,
+                )
+                LOGGER.info("agent.startup_interrupt_published message_id=%s", message_id)
+            except Exception:
+                LOGGER.exception("agent.startup_interrupt_publish_failed message_id=%s", message_id)
+        _ACTIVE_PROCS_PATH.unlink(missing_ok=True)
+    except Exception:
+        LOGGER.exception("agent.startup_inherited_unexpected")
 
 
 def _publish_interrupted_all(client: mqtt.Client) -> None:
@@ -601,6 +772,7 @@ def _publish_interrupted_all(client: mqtt.Client) -> None:
                     "agent_name": ctx["agent_name"],
                     "reply_to": None,
                     "last_response": "(message interrupted)",
+                    "interrupt_reason": "agent-shutdown",
                     "transcript": None,
                     "session_id": None,
                 }),
@@ -609,6 +781,12 @@ def _publish_interrupted_all(client: mqtt.Client) -> None:
             LOGGER.info("agent.sigterm_abort message_id=%s", message_id)
         except Exception:
             LOGGER.exception("agent.sigterm_abort_failed message_id=%s", message_id)
+    # Clear the persisted snapshot so the restart doesn't double-publish with
+    # interrupt_reason=agent-killed for the same messages we just handled.
+    try:
+        _ACTIVE_PROCS_PATH.unlink(missing_ok=True)
+    except Exception:
+        LOGGER.exception("agent.persist_active_procs_clear_failed")
 
 
 def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
@@ -625,13 +803,30 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
         if message_id:
             with _active_procs_lock:
                 proc = _active_procs.get(message_id)
-            alive = proc is not None and proc.poll() is None
+                active_count = len(_active_procs)
+            alive = proc is not None
             client.publish(
                 _pong_topic(workspace_id_ping, topic_id_ping),
                 json.dumps({"message_id": message_id, "alive": alive}),
                 qos=0,
             )
-            LOGGER.info("agent.pong message_id=%s alive=%s", message_id, alive)
+            if alive:
+                LOGGER.info(
+                    "agent.pong message_id=%s alive=True pid=%s",
+                    message_id, proc.pid,
+                )
+            else:
+                # alive=False means the proc is no longer in _active_procs.
+                # The subprocess either exited normally (look up the prior
+                # agent.llm_done / agent.codex_done line for returncode) or
+                # aborted (look up the prior agent.llm_subprocess_aborted /
+                # agent.codex_subprocess_aborted line for the exception and
+                # stderr tail). active_procs_size aids correlation when many
+                # streams are in flight.
+                LOGGER.info(
+                    "agent.pong message_id=%s alive=False active_procs_size=%d",
+                    message_id, active_count,
+                )
         return
 
     parsed_cancel = _parse_cancel_topic(msg.topic)

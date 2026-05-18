@@ -155,16 +155,22 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
         except Exception:
             LOGGER.exception("master.stale_stream_container_check_failed message_id=%s", message_id)
 
+        interrupt_reason: str | None = None
         if container_running:
             if mqtt_client is not None and ws_row:
                 workspace_id = ws_row["workspace_id"]
                 alive = _ping_for_alive(mqtt_client, app_state, workspace_id, topic_id, message_id)
                 is_stale = not alive
+                if is_stale:
+                    interrupt_reason = "ping-timeout"
             else:
                 # No mqtt client available — fall back to age timeout
                 is_stale = chunk_age > _STALE_STREAM_TIMEOUT_SECONDS
+                if is_stale:
+                    interrupt_reason = "ping-timeout"
         else:
             is_stale = True  # container not running → definitely stale
+            interrupt_reason = "container-gone"
 
         if not is_stale:
             continue
@@ -196,9 +202,9 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
                 with conn:
                     conn.execute(
                         "INSERT OR IGNORE INTO messages"
-                        " (id, topic_id, sender, agent_name, text, transcript, created_at)"
-                        " VALUES (?, ?, 'agent', ?, ?, ?, ?)",
-                        (message_id, topic_id, agent_name, "(message interrupted)", transcript_json, now_str),
+                        " (id, topic_id, sender, agent_name, text, transcript, interrupt_reason, created_at)"
+                        " VALUES (?, ?, 'agent', ?, ?, ?, ?, ?)",
+                        (message_id, topic_id, agent_name, "(message interrupted)", transcript_json, interrupt_reason, now_str),
                     )
                     conn.execute("DELETE FROM chunks WHERE message_id = ?", (message_id,))
             finally:
@@ -217,6 +223,7 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
                     "sender": "agent",
                     "agent_name": agent_name,
                     "last_response": "(message interrupted)",
+                    "interrupt_reason": interrupt_reason,
                     "transcript": transcript_json,
                 },
                 loop,

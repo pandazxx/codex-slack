@@ -2,7 +2,26 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-05-09 -->
+<!-- last updated: 2026-05-17 -->
+
+---
+
+## 2026-05-17 — Agent container SIGKILL'd mid-stream surfaces as `ping-timeout` with no diagnostic
+
+*Summary:* Prod message `cbc02192` in topic `7c4f67e9` was cut off mid-response. Master labeled it `interrupt_reason=ping-timeout`, which read as "agent unresponsive" — misleading. The actual sequence: agent container was SIGKILL'd at 08:48:03 while codex was running `git worktree add origin/pr/219`, Docker's `restart: unless-stopped` policy bounced it ~1s later, master pinged the fresh agent 4s after that, the new agent had no record of the message (in-memory `_active_procs` is empty), so it returned `alive=False`. None of the existing interrupt paths (SIGTERM handler, master `stop_agent`, container-gone detection) fit, because SIGKILL bypasses Python entirely and the container *was* running by the time master checked.
+
+*Root cause:* Two compounding gaps.
+1. **Visibility:** `docker inspect` reports the post-restart `ExitCode=0` regardless of what killed the previous run. The ground-truth `exitCode=137` only appears in `journalctl -u docker`. Operators tracking through `docker inspect` will be misled into ruling out a kill.
+2. **Recovery:** `_active_procs` was Python-memory-only. SIGKILL → restart-policy bounce loses the entire in-flight set with no signal to master beyond an opaque `alive=False`.
+
+*Fix applied:*
+- **v4.15-rc5 (`f36eee3`)** — `LOGGER.exception` in the `except Exception` branches of `_stream_claude_once` / `_stream_codex_once` carrying `pid`, `returncode`, `chunks`, `exc_type`, `exc`, `stderr_tail[-500:]`. Non-zero proc exits now emit `agent.*_subprocess_nonzero_exit` even when partial output was produced. `agent.llm_done`/`agent.codex_done` now include `message_id`/`pid`/`returncode`. `agent.pong … alive=False` now includes `active_procs_size`.
+- **v4.15-rc6 (`8b5fa1d`)** — Atomic snapshot of `_active_contexts` written to `/tmp/master-agent/active_procs.json` on every mutation under `_active_procs_lock`. On agent startup (`_on_connect` after subscribe), `_publish_inherited_interrupts` reads the snapshot and emits `(message interrupted)` with new `interrupt_reason=agent-killed` for every leftover entry, then unlinks the file. SIGTERM handler (`_publish_interrupted_all`) also clears the file so a clean stop+restart doesn't double-publish. UI badge added for `agent-killed`.
+- **Runbook** — `docs/guides/runbooks/agent-message-cutoff.md` documents the §1–§4 decision tree.
+
+*Prevention:* Two angles.
+1. Future incidents of the same shape now self-label as `agent-killed` and leave a marker (`agent.startup_inherited_active`) in the agent log. That's enough to confirm a SIGKILL+restart vs. other interrupt modes without paging the host journal.
+2. The kill *source* was never positively identified for the 2026-05-17 case — ruled out kernel OOM, master stop_agent, CD daemon, host-wide event, cron. Most plausible remaining hypothesis is tini's SIGTERM→SIGKILL escalation, but no SIGTERM source was located either. If the same pattern recurs with the new logs in place, the additional context (which message_ids, what codex was doing per the transcript, exact dockerd journal line) should narrow it.
 
 ---
 

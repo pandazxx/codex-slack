@@ -112,6 +112,7 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
             llm_session_id = payload.get("session_id")
             agent_name = payload.get("agent_name")
             message_id = payload.get("message_id") or str(uuid.uuid4())
+            interrupt_reason = payload.get("interrupt_reason")
             if transcript is None and text == "(message interrupted)":
                 chunk_rows = conn.execute(
                     "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
@@ -128,11 +129,18 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
                         transcript = json.dumps(events)
             usage_json = _extract_usage(transcript)
             with conn:
+                # If the stale-stream detector beat us here with "(message interrupted)",
+                # update it with the real response instead of silently dropping it.
+                conn.execute(
+                    "UPDATE messages SET text=?, transcript=?, usage_json=?, interrupt_reason=?"
+                    " WHERE id=? AND text=?",
+                    (text, transcript, usage_json, interrupt_reason, message_id, "(message interrupted)"),
+                )
                 conn.execute(
                     "INSERT OR IGNORE INTO messages"
-                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, created_at)"
-                    " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?)",
-                    (message_id, topic_id, agent_name, text, transcript, usage_json, _now()),
+                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, interrupt_reason, created_at)"
+                    " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?, ?)",
+                    (message_id, topic_id, agent_name, text, transcript, usage_json, interrupt_reason, _now()),
                 )
                 conn.execute(
                     "DELETE FROM chunks WHERE message_id = ?", (message_id,)
