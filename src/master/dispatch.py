@@ -101,6 +101,18 @@ async def dispatch_to_staff(
                 conn, ss_scope_type, ss_scope_id, staff["name"]
             )
 
+        # For adapters like codex whose LLM session id differs from the internal
+        # session_uuid, fetch the llm_session_id persisted by the agent response handler.
+        llm_session_id: str | None = None
+        if not is_new_session and session_uuid:
+            row = conn.execute(
+                "SELECT llm_session_id FROM sessions"
+                " WHERE topic_id = ? AND agent_name = ?",
+                (topic_id, staff["name"]),
+            ).fetchone()
+            if row:
+                llm_session_id = row["llm_session_id"]
+
         message_id = str(uuid.uuid4())
         now = _now()
         conn.execute(
@@ -135,7 +147,7 @@ async def dispatch_to_staff(
         "branch": topic["branch_name"],
         "repo_ref": topic["repo_ref"] or "",
         "base_sha": topic["base_sha"] or "",
-        "session_id": session_uuid,
+        "session_id": llm_session_id or session_uuid,
         "is_new_session": is_new_session,
         "session_scope": staff["session_scope"] or "topic",
         "model": staff["model"],
