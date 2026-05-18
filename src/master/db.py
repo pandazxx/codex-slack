@@ -467,6 +467,10 @@ def init_db(db_path: str) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_staffs_scope_name"
             " ON staffs(scope_type, COALESCE(scope_id, ''), name)"
         )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_topic_agent"
+            " ON sessions(topic_id, agent_name)"
+        )
         conn.commit()
         for migration in _MIGRATIONS:
             try:

@@ -101,6 +101,47 @@ async def dispatch_to_staff(
                 conn, ss_scope_type, ss_scope_id, staff["name"]
             )
 
+        # Ensure a sessions row exists for this topic+agent so the agent response
+        # handler's UPDATE can store llm_session_id. INSERT OR IGNORE is a no-op on
+        # subsequent turns when the row already exists.
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions (id, topic_id, agent_name, adapter, llm_session_id, updated_at)"
+            " VALUES (?, ?, ?, ?, NULL, ?)",
+            (str(uuid.uuid4()), topic_id, staff["name"], staff["adapter"], _now()),
+        )
+
+        # For adapters like codex whose LLM session id differs from the internal
+        # session_uuid, fetch the llm_session_id persisted by the agent response handler.
+        # For workspace/global scope the session is shared across topics, so we search
+        # the broadest matching set and take the most recently updated non-null id.
+        llm_session_id: str | None = None
+        if not is_new_session and session_uuid:
+            scope = staff["session_scope"] or "topic"
+            if scope == "workspace":
+                row = conn.execute(
+                    "SELECT s.llm_session_id FROM sessions s"
+                    " JOIN topics t ON s.topic_id = t.id"
+                    " WHERE t.workspace_id = ? AND s.agent_name = ?"
+                    " AND s.llm_session_id IS NOT NULL"
+                    " ORDER BY s.updated_at DESC LIMIT 1",
+                    (workspace_id, staff["name"]),
+                ).fetchone()
+            elif scope == "global":
+                row = conn.execute(
+                    "SELECT llm_session_id FROM sessions"
+                    " WHERE agent_name = ? AND llm_session_id IS NOT NULL"
+                    " ORDER BY updated_at DESC LIMIT 1",
+                    (staff["name"],),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT llm_session_id FROM sessions"
+                    " WHERE topic_id = ? AND agent_name = ?",
+                    (topic_id, staff["name"]),
+                ).fetchone()
+            if row:
+                llm_session_id = row["llm_session_id"]
+
         message_id = str(uuid.uuid4())
         now = _now()
         conn.execute(
@@ -135,7 +176,7 @@ async def dispatch_to_staff(
         "branch": topic["branch_name"],
         "repo_ref": topic["repo_ref"] or "",
         "base_sha": topic["base_sha"] or "",
-        "session_id": session_uuid,
+        "session_id": llm_session_id or session_uuid,
         "is_new_session": is_new_session,
         "session_scope": staff["session_scope"] or "topic",
         "model": staff["model"],

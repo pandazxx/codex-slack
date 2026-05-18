@@ -2613,6 +2613,128 @@ class TestSessionSharing:
         expected = _make_session_uuid("workspace", ws_id, "ws-reviewer")
         assert rows[0]["session_id"] == expected
 
+    def test_llm_session_id_stored_and_reused_topic_scope(self, tmp_path):
+        """SESS-04: llm_session_id written by _save_agent_response is passed back
+        on the next dispatch for topic-scoped sessions."""
+        import asyncio, sqlite3
+        from src.master.db import get_connection
+        from src.master.staffs import resolve_staff
+        from src.master.dispatch import dispatch_to_staff
+        from src.master.mqtt_client import _save_agent_response
+
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="codex", scope_type="global", session_scope="topic")
+
+        # Patch adapter to 'codex' so sessions row is created with the right adapter.
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE staffs SET adapter='codex' WHERE name='codex'")
+        conn.commit()
+        conn.close()
+
+        app_state = _make_app_state(db_path=db_path)
+        payloads = []
+
+        async def run():
+            app_state.event_loop = asyncio.get_running_loop()
+            conn = get_connection(db_path)
+            staff = resolve_staff(conn, "codex", ws_id, tp_id)
+            conn.close()
+
+            # First dispatch — captures the payload sent to the agent.
+            msg_id = await dispatch_to_staff(
+                app_state=app_state, workspace_id=ws_id, topic_id=tp_id,
+                staff=staff, prompt_text="hello", sender="user",
+            )
+            payloads.append(dict(app_state.mqtt.publish.call_args.args[1] if False else
+                                 __import__('json').loads(app_state.mqtt.publish.call_args[0][1])))
+
+            # Simulate agent response with a real codex thread_id.
+            _save_agent_response(db_path, tp_id, {
+                "message_id": msg_id,
+                "agent_name": "codex",
+                "last_response": "hi back",
+                "session_id": "codex-thread-abc",
+            })
+
+            # Second dispatch — should carry the codex thread_id.
+            await dispatch_to_staff(
+                app_state=app_state, workspace_id=ws_id, topic_id=tp_id,
+                staff=staff, prompt_text="follow up", sender="user",
+            )
+            payloads.append(dict(__import__('json').loads(app_state.mqtt.publish.call_args[0][1])))
+
+        asyncio.run(run())
+
+        first_payload, second_payload = payloads
+        assert first_payload.get("session_id") != "codex-thread-abc"  # new session, no llm id yet
+        assert second_payload.get("session_id") == "codex-thread-abc"  # must use the stored id
+        assert second_payload.get("is_new_session") is False
+
+    def test_llm_session_id_shared_across_topics_workspace_scope(self, tmp_path):
+        """SESS-05: workspace-scoped codex session_id from topic A is reused in topic B."""
+        import asyncio, sqlite3
+        from src.master.db import get_connection
+        from src.master.staffs import resolve_staff
+        from src.master.dispatch import dispatch_to_staff
+        from src.master.mqtt_client import _save_agent_response
+
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp1_id = _insert_workspace_and_topic(db_path, topic_subject="topic 1")
+
+        # Insert a second topic in the same workspace.
+        tp2_id = str(uuid.uuid4())
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (tp2_id, ws_id, "topic 2", "branch2", "/tmp/wt2", _NOW_UTC),
+        )
+        conn.execute("UPDATE staffs SET adapter='codex' WHERE 1")
+        conn.commit()
+        conn.close()
+        _insert_staff(db_path, name="codex-ws", scope_type="global", session_scope="workspace")
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE staffs SET adapter='codex' WHERE name='codex-ws'")
+        conn.commit()
+        conn.close()
+
+        app_state = _make_app_state(db_path=db_path)
+        payloads = []
+
+        async def run():
+            app_state.event_loop = asyncio.get_running_loop()
+            conn = get_connection(db_path)
+            staff1 = resolve_staff(conn, "codex-ws", ws_id, tp1_id)
+            staff2 = resolve_staff(conn, "codex-ws", ws_id, tp2_id)
+            conn.close()
+
+            # Dispatch to topic 1.
+            msg_id = await dispatch_to_staff(
+                app_state=app_state, workspace_id=ws_id, topic_id=tp1_id,
+                staff=staff1, prompt_text="hello from t1", sender="user",
+            )
+            # Simulate agent writing back the codex thread_id.
+            _save_agent_response(db_path, tp1_id, {
+                "message_id": msg_id, "agent_name": "codex-ws",
+                "last_response": "ok", "session_id": "ws-thread-xyz",
+            })
+
+            # Dispatch to topic 2 — should pick up ws-thread-xyz.
+            await dispatch_to_staff(
+                app_state=app_state, workspace_id=ws_id, topic_id=tp2_id,
+                staff=staff2, prompt_text="hello from t2", sender="user",
+            )
+            payloads.append(dict(__import__('json').loads(app_state.mqtt.publish.call_args[0][1])))
+
+        asyncio.run(run())
+
+        t2_payload = payloads[0]
+        assert t2_payload.get("session_id") == "ws-thread-xyz"
+        assert t2_payload.get("is_new_session") is False
+
 
 # ---------------------------------------------------------------------------
 # Area 11: Structural Input Variables
