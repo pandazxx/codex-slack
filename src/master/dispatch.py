@@ -101,6 +101,15 @@ async def dispatch_to_staff(
                 conn, ss_scope_type, ss_scope_id, staff["name"]
             )
 
+        # Ensure a sessions row exists for this topic+agent so the agent response
+        # handler's UPDATE can store llm_session_id. INSERT OR IGNORE is a no-op on
+        # subsequent turns when the row already exists.
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions (id, topic_id, agent_name, adapter, llm_session_id, updated_at)"
+            " VALUES (?, ?, ?, ?, NULL, ?)",
+            (str(uuid.uuid4()), topic_id, staff["name"], staff["adapter"], _now()),
+        )
+
         # For adapters like codex whose LLM session id differs from the internal
         # session_uuid, fetch the llm_session_id persisted by the agent response handler.
         llm_session_id: str | None = None
