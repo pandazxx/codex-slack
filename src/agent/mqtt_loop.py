@@ -321,29 +321,37 @@ def _stream_codex_once(
     worktree: str,
     text: str,
     model: str | None,
+    session_id: str | None = None,
+    is_new_session: bool = False,
+    session_scope: str = "topic",
     seq_start: int = 0,
-) -> tuple[str, str | None, bool]:
+) -> tuple[str, str | None, str | None, bool]:
     """Stream Codex stdout line by line, publishing each event as an MQTT chunk.
 
-    Returns (output, transcript, is_error).
+    Returns (output, new_session_id, transcript, is_error).
     """
     fd, output_file = tempfile.mkstemp(suffix=".txt")
     os.close(fd)
+    use_session = bool(session_id) and session_scope != "none"
     cmd = [
         "codex", "exec",
         "--json",
         "--dangerously-bypass-approvals-and-sandbox",
         "-s", "danger-full-access",
-        "--ephemeral",
-        "-o", output_file,
     ]
+    if not use_session:
+        cmd.append("--ephemeral")
     if model:
         cmd += ["-m", model]
+    cmd += ["-o", output_file]
+    if use_session and not is_new_session:
+        cmd += ["resume", session_id, "-"]
     chunk_topic = _chunk_topic(workspace_id, topic_id)
     events: list[dict] = []
     is_error = False
     seq = seq_start
     fallback_outputs: list[str] = []
+    new_session_id: str | None = None
     proc = None
     try:
         proc = subprocess.Popen(
@@ -381,7 +389,11 @@ def _stream_codex_once(
                 LOGGER.debug("agent.codex_chunk topic_id=%s seq=%d type=%s", topic_id, seq, event.get("type"))
                 seq += 1
                 ev_type = event.get("type", "")
-                if ev_type == "turn.completed":
+                if ev_type == "thread.started":
+                    sid = event.get("session_id")
+                    if sid and use_session:
+                        new_session_id = sid
+                elif ev_type == "turn.completed":
                     final = event.get("output_text") or event.get("last_message")
                     if final:
                         fallback_outputs.append(str(final))
@@ -419,13 +431,13 @@ def _stream_codex_once(
             "agent.codex_done topic_id=%s chunks=%d chars=%d",
             topic_id, seq - seq_start, len(output),
         )
-        return output, transcript, is_error
+        return output, new_session_id, transcript, is_error
     except FileNotFoundError:
         try:
             Path(output_file).unlink()
         except Exception:
             pass
-        return "(codex CLI not found in agent container)", None, True
+        return "(codex CLI not found in agent container)", None, None, True
     except Exception as exc:
         if proc is not None:
             _kill_proc_tree(proc)
@@ -433,7 +445,7 @@ def _stream_codex_once(
             Path(output_file).unlink()
         except Exception:
             pass
-        return f"(codex error: {exc})", None, True
+        return f"(codex error: {exc})", None, None, True
 
 
 def _run_codex(
@@ -445,12 +457,15 @@ def _run_codex(
     worktree: str,
     text: str,
     model: str | None,
+    session_id: str | None = None,
+    is_new_session: bool = False,
+    session_scope: str = "topic",
 ) -> tuple[str, str | None, str | None]:
-    output, transcript, _ = _stream_codex_once(
+    output, new_session_id, transcript, _ = _stream_codex_once(
         client, workspace_id, topic_id, reply_message_id, agent_name,
-        worktree, text, model,
+        worktree, text, model, session_id, is_new_session, session_scope,
     )
-    return output, None, transcript
+    return output, new_session_id, transcript
 
 
 def _process_prompt(
@@ -512,7 +527,7 @@ def _process_prompt(
     if adapter == "codex":
         response_text, new_session_id, transcript = _run_codex(
             client, workspace_id, topic_id, reply_message_id, agent_name,
-            cwd, text, model,
+            cwd, text, model, session_id, is_new_session, session_scope,
         )
     else:
         # Claude sessions are scoped to the CWD (project directory).
