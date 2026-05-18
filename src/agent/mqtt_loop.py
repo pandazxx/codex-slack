@@ -463,7 +463,7 @@ def _stream_codex_once(
                 seq += 1
                 ev_type = event.get("type", "")
                 if ev_type == "thread.started":
-                    sid = event.get("session_id")
+                    sid = event.get("thread_id") or event.get("session_id")
                     if sid and not use_ephemeral:
                         new_session_id = sid
                 elif ev_type == "turn.completed":

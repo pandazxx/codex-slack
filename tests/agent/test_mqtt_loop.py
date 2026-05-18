@@ -245,7 +245,7 @@ def test_run_codex_returns_stdout(tmp_path):
             with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)):
                 text, session, transcript = _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "do it", None)
     assert text == "codex output"
-    assert session is None  # no session_id given, ephemeral mode
+    assert session == "abc"  # thread_id captured from thread.started even on first turn
     assert transcript is not None
 
 
@@ -321,9 +321,9 @@ def test_run_codex_correct_command_flags(tmp_path):
 
 def test_run_codex_first_turn_captures_session_id(tmp_path):
     """First turn has no session_id; codex should run without --ephemeral and
-    the session_id from thread.started must be returned so master can persist it."""
+    the thread_id from thread.started must be returned so master can persist it."""
     events = [
-        {"type": "thread.started", "session_id": "first-turn-sid"},
+        {"type": "thread.started", "thread_id": "first-turn-sid"},
         {"type": "turn.completed", "output_text": "hello"},
     ]
     client = MagicMock()
@@ -360,7 +360,7 @@ def test_run_codex_ephemeral_when_scope_none(tmp_path):
 
 def test_run_codex_new_session_no_ephemeral(tmp_path):
     events = [
-        {"type": "thread.started", "session_id": "codex-sess-1"},
+        {"type": "thread.started", "thread_id": "codex-sess-1"},
         {"type": "turn.completed", "output_text": "ok"},
     ]
     client = MagicMock()
@@ -381,7 +381,7 @@ def test_run_codex_new_session_no_ephemeral(tmp_path):
 
 def test_run_codex_resumes_session(tmp_path):
     events = [
-        {"type": "thread.started", "session_id": "codex-sess-1"},
+        {"type": "thread.started", "thread_id": "codex-sess-1"},
         {"type": "turn.completed", "output_text": "continued"},
     ]
     client = MagicMock()
