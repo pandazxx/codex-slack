@@ -3,7 +3,9 @@
 Reads from environment:
   MASTER_URL    — e.g. http://master:8080
   WORKSPACE_ID  — set at container spawn time by agent_runner.py
-  TOPIC_ID      — set per-dispatch by mqtt_loop.py (optional)
+
+Topic tools accept topic_id as an explicit argument so they work regardless
+of when the MCP server process was started.
 """
 from __future__ import annotations
 
@@ -16,10 +18,12 @@ mcp = FastMCP("notes")
 
 _BASE = os.environ.get("MASTER_URL", "http://master:8080")
 _WS   = os.environ.get("WORKSPACE_ID", "")
-_TID  = os.environ.get("TOPIC_ID", "")
 
 _WS_BASE = f"{_BASE}/api/workspaces/{_WS}/notes"
-_T_BASE  = f"{_BASE}/api/workspaces/{_WS}/topics/{_TID}/notes" if _TID else ""
+
+
+def _t_base(topic_id: str) -> str:
+    return f"{_BASE}/api/workspaces/{_WS}/topics/{topic_id}/notes"
 
 
 def _client() -> httpx.Client:
@@ -85,38 +89,40 @@ def delete_workspace_note(key: str) -> str:
     return f"Deleted workspace note: {key}"
 
 
-# ── Topic-scoped tools (only registered when TOPIC_ID is set) ─────────────────
+# ── Topic-scoped tools ───────────────────────────────────────────────────────
 
-if _TID:
-    @mcp.tool()
-    def list_topic_notes(tag: str | None = None) -> list[dict]:
-        """List notes for the current topic. Pass a tag to filter."""
-        with _client() as c:
-            notes = _parse_json(c.get(_T_BASE).raise_for_status())
-        if tag:
-            notes = [n for n in notes if tag in n.get("tags", [])]
-        return notes
+@mcp.tool()
+def list_topic_notes(topic_id: str, tag: str | None = None) -> list[dict]:
+    """List notes for a topic. Pass the current TOPIC_ID env var as topic_id. Optionally filter by tag."""
+    with _client() as c:
+        notes = _parse_json(c.get(_t_base(topic_id)).raise_for_status())
+    if tag:
+        notes = [n for n in notes if tag in n.get("tags", [])]
+    return notes
 
-    @mcp.tool()
-    def create_topic_note(key: str, value: str, tags: list[str] | None = None) -> dict:
-        """Create a note scoped to the current topic."""
-        with _client() as c:
-            return _parse_json(c.post(_T_BASE, json={"key": key, "value": value, "tags": tags or []}).raise_for_status())
 
-    @mcp.tool()
-    def update_topic_note(key: str, value: str | None = None, tags: list[str] | None = None) -> dict:
-        """Update value and/or tags of an existing topic note."""
-        body: dict = {}
-        if value is not None:
-            body["value"] = value
-        if tags is not None:
-            body["tags"] = tags
-        with _client() as c:
-            return _parse_json(c.patch(f"{_T_BASE}/{key}", json=body).raise_for_status())
+@mcp.tool()
+def create_topic_note(topic_id: str, key: str, value: str, tags: list[str] | None = None) -> dict:
+    """Create a note scoped to a topic. Pass the current TOPIC_ID env var as topic_id."""
+    with _client() as c:
+        return _parse_json(c.post(_t_base(topic_id), json={"key": key, "value": value, "tags": tags or []}).raise_for_status())
 
-    @mcp.tool()
-    def delete_topic_note(key: str) -> str:
-        """Delete a topic note by key."""
-        with _client() as c:
-            c.delete(f"{_T_BASE}/{key}").raise_for_status()
-        return f"Deleted topic note: {key}"
+
+@mcp.tool()
+def update_topic_note(topic_id: str, key: str, value: str | None = None, tags: list[str] | None = None) -> dict:
+    """Update value and/or tags of an existing topic note. Pass the current TOPIC_ID env var as topic_id."""
+    body: dict = {}
+    if value is not None:
+        body["value"] = value
+    if tags is not None:
+        body["tags"] = tags
+    with _client() as c:
+        return _parse_json(c.patch(f"{_t_base(topic_id)}/{key}", json=body).raise_for_status())
+
+
+@mcp.tool()
+def delete_topic_note(topic_id: str, key: str) -> str:
+    """Delete a topic note by key. Pass the current TOPIC_ID env var as topic_id."""
+    with _client() as c:
+        c.delete(f"{_t_base(topic_id)}/{key}").raise_for_status()
+    return f"Deleted topic note: {key}"
