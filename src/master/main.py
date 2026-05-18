@@ -468,6 +468,7 @@ def _respawn_agents(settings, db_path: str) -> None:
                 dry_run=settings.dry_run,
                 master_url=settings.master_url,
                 extra_env=load_agent_env(db_path, ws_id),
+                mem_limit=settings.agent_mem_limit or None,
             )
             LOGGER.info("master.respawned container=%s workspace_id=%s", cname, ws_id)
         except Exception:

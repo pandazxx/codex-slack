@@ -39,6 +39,7 @@ def spawn_agent(
     dry_run: bool = False,
     master_url: str = "http://master:8080",
     extra_env: dict | None = None,
+    mem_limit: str | None = None,
 ) -> str:
     name = container_name(workspace_id)
 
@@ -92,8 +93,7 @@ def spawn_agent(
     except docker.errors.NotFound:
         pass
 
-    c.containers.run(
-        image,
+    run_kwargs: dict = dict(
         command=["python", "-m", "src.agent.main"],
         name=name,
         network=network,
@@ -102,7 +102,14 @@ def spawn_agent(
         restart_policy={"Name": "unless-stopped"},
         detach=True,
     )
-    LOGGER.info("agent_runner.spawned container=%s workspace_id=%s", name, workspace_id)
+    if mem_limit:
+        run_kwargs["mem_limit"] = mem_limit
+
+    c.containers.run(image, **run_kwargs)
+    LOGGER.info(
+        "agent_runner.spawned container=%s workspace_id=%s mem_limit=%s",
+        name, workspace_id, mem_limit or "(unset)",
+    )
     return name
 
 

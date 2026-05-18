@@ -139,6 +139,7 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
             ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
             dry_run=settings.dry_run,
             extra_env=load_agent_env(request.app.state.db_path, workspace_id),
+            mem_limit=settings.agent_mem_limit or None,
         )
         conn2 = get_connection(request.app.state.db_path)
         try:
@@ -284,6 +285,7 @@ def restart_workspace_agent(workspace_id: str, request: Request) -> dict:  # typ
             dry_run=settings.dry_run,
             master_url=settings.master_url,
             extra_env=load_agent_env(request.app.state.db_path, workspace_id),
+            mem_limit=settings.agent_mem_limit or None,
         )
     except Exception:
         LOGGER.exception("workspace.restart_spawn_failed workspace_id=%s", workspace_id)

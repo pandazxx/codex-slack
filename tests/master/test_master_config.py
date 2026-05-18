@@ -61,3 +61,18 @@ def test_invalid_container_runtime_raises(monkeypatch):
 def test_docker_runtime_accepted(monkeypatch):
     s = _load(monkeypatch, CONTAINER_RUNTIME="docker")
     assert s.container_runtime == "docker"
+
+
+def test_agent_mem_limit_defaults_to_1g(monkeypatch):
+    s = _load(monkeypatch)
+    assert s.agent_mem_limit == "1g"
+
+
+def test_agent_mem_limit_override(monkeypatch):
+    s = _load(monkeypatch, MASTER_AGENT_MEM_LIMIT="2g")
+    assert s.agent_mem_limit == "2g"
+
+
+def test_agent_mem_limit_empty_disables(monkeypatch):
+    s = _load(monkeypatch, MASTER_AGENT_MEM_LIMIT="")
+    assert s.agent_mem_limit == ""

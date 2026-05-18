@@ -31,6 +31,7 @@ class MasterSettings:
     master_url: str = "http://master:8080"
     agent_idle_timeout_seconds: int = 3600
     agent_auth_refresh_interval_seconds: int = 43200
+    agent_mem_limit: str = "1g"
     master_public_url: str = ""
     notify_discord_webhook_url: str = ""
     notify_telegram_bot_token: str = ""
@@ -135,6 +136,11 @@ def load_master_settings() -> MasterSettings:
     agent_auth_refresh_interval_seconds = int(os.getenv("AGENT_AUTH_REFRESH_INTERVAL_SECONDS", "43200") or "43200")
     _log_env("AGENT_AUTH_REFRESH_INTERVAL_SECONDS", os.getenv("AGENT_AUTH_REFRESH_INTERVAL_SECONDS"))
 
+    # Empty string disables the limit (no --memory flag passed). Default 1g
+    # gives OOM visibility on this host class without over-tightening.
+    agent_mem_limit = os.getenv("MASTER_AGENT_MEM_LIMIT", "1g").strip()
+    _log_env("MASTER_AGENT_MEM_LIMIT", os.getenv("MASTER_AGENT_MEM_LIMIT"))
+
     master_public_url = os.getenv("MASTER_PUBLIC_URL", "").strip()
     _log_env("MASTER_PUBLIC_URL", os.getenv("MASTER_PUBLIC_URL"))
 
@@ -179,6 +185,7 @@ def load_master_settings() -> MasterSettings:
         master_url=master_url,
         agent_idle_timeout_seconds=agent_idle_timeout_seconds,
         agent_auth_refresh_interval_seconds=agent_auth_refresh_interval_seconds,
+        agent_mem_limit=agent_mem_limit,
         master_public_url=master_public_url,
         notify_discord_webhook_url=notify_discord_webhook_url,
         notify_telegram_bot_token=notify_telegram_bot_token,
