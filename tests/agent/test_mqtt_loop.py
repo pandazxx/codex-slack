@@ -197,7 +197,7 @@ def test_run_codex_returns_stdout(tmp_path):
             with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)):
                 text, session, transcript = _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "do it", None)
     assert text == "codex output"
-    assert session is None
+    assert session is None  # no session_id given, ephemeral mode
     assert transcript is not None
 
 
@@ -268,6 +268,65 @@ def test_run_codex_correct_command_flags(tmp_path):
     assert "--dangerously-bypass-approvals-and-sandbox" in cmd
     assert "-s" in cmd and "danger-full-access" in cmd
     assert "--ephemeral" in cmd
+
+
+def test_run_codex_ephemeral_when_scope_none(tmp_path):
+    events = [{"type": "turn.completed", "output_text": "ok"}]
+    client = MagicMock()
+    output_file = tmp_path / "out.txt"
+    output_file.write_text("ok")
+    with patch("src.agent.mqtt_loop.tempfile.mkstemp", return_value=(0, str(output_file))):
+        with patch("src.agent.mqtt_loop.os.close"):
+            with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)) as mock_popen:
+                _run_codex(client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "hi", None,
+                           session_id="some-uuid", is_new_session=True, session_scope="none")
+    cmd = mock_popen.call_args.args[0]
+    assert "--ephemeral" in cmd
+    assert "resume" not in cmd
+
+
+def test_run_codex_new_session_no_ephemeral(tmp_path):
+    events = [
+        {"type": "thread.started", "session_id": "codex-sess-1"},
+        {"type": "turn.completed", "output_text": "ok"},
+    ]
+    client = MagicMock()
+    output_file = tmp_path / "out.txt"
+    output_file.write_text("ok")
+    with patch("src.agent.mqtt_loop.tempfile.mkstemp", return_value=(0, str(output_file))):
+        with patch("src.agent.mqtt_loop.os.close"):
+            with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)) as mock_popen:
+                text, session, transcript = _run_codex(
+                    client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "hi", None,
+                    session_id="my-uuid", is_new_session=True, session_scope="topic",
+                )
+    cmd = mock_popen.call_args.args[0]
+    assert "--ephemeral" not in cmd
+    assert "resume" not in cmd
+    assert session == "codex-sess-1"
+
+
+def test_run_codex_resumes_session(tmp_path):
+    events = [
+        {"type": "thread.started", "session_id": "codex-sess-1"},
+        {"type": "turn.completed", "output_text": "continued"},
+    ]
+    client = MagicMock()
+    output_file = tmp_path / "out.txt"
+    output_file.write_text("continued")
+    with patch("src.agent.mqtt_loop.tempfile.mkstemp", return_value=(0, str(output_file))):
+        with patch("src.agent.mqtt_loop.os.close"):
+            with patch("src.agent.mqtt_loop.subprocess.Popen", return_value=_make_popen_mock(events)) as mock_popen:
+                text, session, transcript = _run_codex(
+                    client, "ws1", "t1", "reply-id", "codex", str(tmp_path), "follow up", None,
+                    session_id="codex-sess-1", is_new_session=False, session_scope="topic",
+                )
+    cmd = mock_popen.call_args.args[0]
+    assert "--ephemeral" not in cmd
+    assert "resume" in cmd
+    assert "codex-sess-1" in cmd
+    assert "-" in cmd  # stdin indicator
+    assert text == "continued"
 
 
 def test_run_codex_turn_failed_is_error(tmp_path):
