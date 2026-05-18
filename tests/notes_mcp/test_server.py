@@ -173,35 +173,81 @@ def test_delete_workspace_note(server_mod):
 
 
 # ---------------------------------------------------------------------------
-# 7. topic tools registered when TOPIC_ID is set
+# 7. topic tools always registered (topic_id is an explicit argument, not env-gated)
 # ---------------------------------------------------------------------------
 
-def test_topic_tools_registered_when_topic_id_set():
-    mod = _fresh_server_module({
-        "MASTER_URL": "http://master:8080",
-        "WORKSPACE_ID": "ws1",
-        "TOPIC_ID": "t42",
-    })
-    tool_names = {t.name for t in mod.mcp._tool_manager.list_tools()}
-    assert "list_topic_notes" in tool_names
-    assert "create_topic_note" in tool_names
-    assert "update_topic_note" in tool_names
-    assert "delete_topic_note" in tool_names
+def test_topic_tools_always_registered():
+    for env in [
+        {"MASTER_URL": "http://master:8080", "WORKSPACE_ID": "ws1"},
+        {"MASTER_URL": "http://master:8080", "WORKSPACE_ID": "ws1", "TOPIC_ID": "t42"},
+    ]:
+        mod = _fresh_server_module(env)
+        tool_names = {t.name for t in mod.mcp._tool_manager.list_tools()}
+        assert "list_topic_notes" in tool_names
+        assert "create_topic_note" in tool_names
+        assert "update_topic_note" in tool_names
+        assert "delete_topic_note" in tool_names
 
 
 # ---------------------------------------------------------------------------
-# 8. topic tools NOT registered when TOPIC_ID is absent
+# 8. list_topic_notes — explicit topic_id argument
 # ---------------------------------------------------------------------------
 
-def test_topic_tools_not_registered_without_topic_id():
-    mod = _fresh_server_module({
-        "MASTER_URL": "http://master:8080",
-        "WORKSPACE_ID": "ws1",
-    })
-    # Ensure TOPIC_ID is absent from the module's captured value
-    assert mod._TID == ""
-    tool_names = {t.name for t in mod.mcp._tool_manager.list_tools()}
-    assert "list_topic_notes" not in tool_names
-    assert "create_topic_note" not in tool_names
-    assert "update_topic_note" not in tool_names
-    assert "delete_topic_note" not in tool_names
+def test_list_topic_notes(server_mod):
+    notes = [{"key": "tn1", "value": "tv1", "tags": ["memory"]}]
+    mock_resp = _make_http_response(notes)
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.return_value = mock_resp
+
+    with patch.object(server_mod, "_client", return_value=mock_client):
+        result = server_mod.list_topic_notes("t42")
+
+    assert result == notes
+    mock_client.get.assert_called_once_with(
+        "http://master:8080/api/workspaces/ws1/topics/t42/notes"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. create_topic_note
+# ---------------------------------------------------------------------------
+
+def test_create_topic_note(server_mod):
+    created = {"key": "tk1", "value": "tv1", "tags": []}
+    mock_resp = _make_http_response(created, status_code=201)
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.return_value = mock_resp
+
+    with patch.object(server_mod, "_client", return_value=mock_client):
+        result = server_mod.create_topic_note("t42", "tk1", "tv1")
+
+    assert result == created
+    mock_client.post.assert_called_once_with(
+        "http://master:8080/api/workspaces/ws1/topics/t42/notes",
+        json={"key": "tk1", "value": "tv1", "tags": []},
+    )
+
+
+# ---------------------------------------------------------------------------
+# 10. delete_topic_note
+# ---------------------------------------------------------------------------
+
+def test_delete_topic_note(server_mod):
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = mock_resp
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.delete.return_value = mock_resp
+
+    with patch.object(server_mod, "_client", return_value=mock_client):
+        result = server_mod.delete_topic_note("t42", "tk1")
+
+    assert result == "Deleted topic note: tk1"
+    mock_client.delete.assert_called_once_with(
+        "http://master:8080/api/workspaces/ws1/topics/t42/notes/tk1"
+    )
