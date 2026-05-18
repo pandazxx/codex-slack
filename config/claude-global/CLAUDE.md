@@ -23,7 +23,7 @@ Never assume the user can inspect files locally.
 Use the **`notes` MCP tools** for persistent memory — never create `memory.md` or other local files as a substitute.
 
 - `list_workspace_notes` / `create_workspace_note` / `update_workspace_note` / `delete_workspace_note` — workspace-scoped, visible across all topics.
-- `list_topic_notes` / `create_topic_note` / `update_topic_note` / `delete_topic_note` — topic-scoped (only available when a topic is active).
+- `list_topic_notes` / `create_topic_note` / `update_topic_note` / `delete_topic_note` — topic-scoped; pass `topic_id=$TOPIC_ID` as the first argument.
 
 Tag notes with `memory` so they can be injected into future prompts. When recalling context, call `list_workspace_notes(tag="memory")` at the start of a session.
 

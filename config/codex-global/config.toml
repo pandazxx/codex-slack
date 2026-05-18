@@ -9,4 +9,4 @@ command      = "bash"
 args         = ["-c", "cd /opt/codex-slack && exec python -m src.notes_mcp"]
 env_vars     = ["WORKSPACE_ID", "MASTER_URL", "TOPIC_ID"]
 always_load  = true
-instructions = "Provides persistent key-value note storage scoped to the current workspace and topic. Use these tools to read and write memory that survives across sessions. Always call list_workspace_notes at the start of a session to recall prior context."
+instructions = "Provides persistent key-value note storage scoped to the current workspace or topic. Workspace tools need no extra args. Topic tools require topic_id — pass the value of the TOPIC_ID environment variable. Always call list_workspace_notes at the start of a session to recall prior context."
