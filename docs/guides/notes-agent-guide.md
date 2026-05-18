@@ -18,14 +18,18 @@ authentication and endpoint resolution automatically.
 | `update_workspace_note(key, value?, tags?)` | Update value and/or tags of an existing note |
 | `delete_workspace_note(key)` | Delete a workspace note |
 
-### Available when a topic is active (topic scope)
+### Topic scope
+
+Topic tools are always registered and require `topic_id` as the first argument. Pass the value of the `TOPIC_ID` environment variable.
 
 | Tool | Purpose |
 |---|---|
-| `list_topic_notes(tag?)` | List notes for the current topic |
-| `create_topic_note(key, value, tags?)` | Create a note scoped to this topic |
-| `update_topic_note(key, value?, tags?)` | Update a topic note |
-| `delete_topic_note(key)` | Delete a topic note |
+| `list_topic_notes(topic_id, tag?)` | List notes for the given topic |
+| `create_topic_note(topic_id, key, value, tags?)` | Create a note scoped to a topic |
+| `update_topic_note(topic_id, key, value?, tags?)` | Update a topic note |
+| `delete_topic_note(topic_id, key)` | Delete a topic note |
+
+Example: `list_topic_notes(topic_id=$TOPIC_ID)`.
 
 **Session start:** always call `list_workspace_notes(tag="memory")` first to
 recall persistent context before replying.

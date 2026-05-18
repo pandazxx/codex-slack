@@ -372,6 +372,36 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 
 ---
 
+## 2026-05-18 — Three MCP/notes-server failure modes fixed together
+
+*Summary:* A cluster of three distinct bugs caused `json.JSONDecodeError`, missing tools, and stale environment captures in the notes MCP server. All three were fixed in the `feat(notes-mcp)` series (PR #219).
+
+### 1 — SPA catch-all returned 200 + HTML for unknown `/api/…` paths
+
+*Root cause:* The `GET /{full_path:path}` catch-all route in `src/master/main.py` served `index.html` for every unmatched path — including `/api/…` paths that do not exist. MCP clients calling a non-existent endpoint received a `200 OK` with an HTML body, which then failed `json()` decode with a raw `json.JSONDecodeError` that had no hint about what went wrong.
+
+*Fix applied:* Added a guard at the top of `spa_index`: if `full_path.startswith("api/")`, raise `HTTPException(404, "not found")` immediately. The SPA still handles all non-API routes normally.
+
+*Prevention:* Any FastAPI app that serves a SPA catch-all must guard `/api/` paths explicitly, or an accidentally malformed API URL silently returns HTML to callers that expect JSON.
+
+### 2 — Codex does not forward its process env to MCP stdio subprocesses
+
+*Root cause:* Codex spawns MCP servers as stdio subprocesses. Unlike interactive shells, it does **not** automatically forward its own process environment. Module-level reads like `os.environ.get("WORKSPACE_ID")` in the MCP server therefore returned empty strings, causing API requests to route to a malformed URL.
+
+*Fix applied:* Added `env_vars = ["WORKSPACE_ID", "MASTER_URL", "TOPIC_ID"]` to the `[mcp_servers.notes]` block in `config/codex-global/config.toml`. The `env_vars` key is the Codex-specific mechanism for explicitly copying named vars from the Codex process env into the subprocess env before exec.
+
+*Prevention:* For any MCP server that needs runtime environment variables when run under Codex, list those vars in `env_vars` in `config.toml`. Do not assume the subprocess inherits the caller's environment. Claude interactive sessions use a bash wrapper that expands the variables inline (`WORKSPACE_ID=$WORKSPACE_ID exec python -m ...`).
+
+### 3 — `alwaysLoad: true` captures env at startup, not at dispatch time
+
+*Root cause:* `alwaysLoad: true` causes Codex/Claude to start the MCP server process once before any dispatch. Module-level code that reads `TOPIC_ID` (e.g. `_TID = os.environ.get("TOPIC_ID", "")`) captured the value at import time. When the same MCP process was reused across multiple topics, it always used the topic ID from the first session, silently operating on the wrong scope.
+
+*Fix applied:* Removed the module-level `_TID` / `_T_BASE` variables and the conditional tool registration (`if _TID:`). All four topic tools (`list_topic_notes`, `create_topic_note`, `update_topic_note`, `delete_topic_note`) are now **always registered** and accept `topic_id` as an explicit first argument. The caller (the agent) is instructed to pass `$TOPIC_ID` at call time. The `_t_base(topic_id)` helper constructs the URL per-call.
+
+*Prevention:* With `alwaysLoad: true`, treat the MCP server process as long-lived and session-agnostic. Never read per-session or per-dispatch values at module level. Push all session-context into explicit tool arguments instead.
+
+---
+
 ## 2026-05-17 — MCP tools deferred by Tool Search, never loaded at session start
 
 *Summary:* Even after the MCP server connected successfully, Claude reported `list_workspace_notes` as unavailable and did not use notes tools proactively.

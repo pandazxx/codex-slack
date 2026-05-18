@@ -288,6 +288,73 @@ Valid adapters: `"claude-code"`, `"codex"`.
 }
 ```
 
+### Notes
+
+Notes are key-value pairs with optional tags, stored at workspace or topic scope. See `docs/guides/notes-agent-guide.md` for agent usage.
+
+#### Workspace-scoped notes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/workspaces/{wid}/notes` | List all workspace notes. |
+| `GET` | `/api/workspaces/{wid}/notes/{key}` | Get a single workspace note by key. Returns `404` if not found. |
+| `POST` | `/api/workspaces/{wid}/notes` | Create a workspace note. Returns `201`. Returns `409` if `key` already exists in this scope. |
+| `PATCH` | `/api/workspaces/{wid}/notes/{key}` | Update `value` and/or `tags` of an existing workspace note. `key` is immutable. Returns the updated note. |
+| `DELETE` | `/api/workspaces/{wid}/notes/{key}` | Delete a workspace note permanently. Returns `204`. |
+
+#### Topic-scoped notes
+
+Same endpoints, prefixed under the topic path:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/workspaces/{wid}/topics/{tid}/notes` | List all notes for a topic. |
+| `GET` | `/api/workspaces/{wid}/topics/{tid}/notes/{key}` | Get a single topic note by key. |
+| `POST` | `/api/workspaces/{wid}/topics/{tid}/notes` | Create a topic note. Returns `201`. Returns `409` if `key` already exists in this topic scope. |
+| `PATCH` | `/api/workspaces/{wid}/topics/{tid}/notes/{key}` | Update `value` and/or `tags`. `key` is immutable. |
+| `DELETE` | `/api/workspaces/{wid}/topics/{tid}/notes/{key}` | Delete a topic note. Returns `204`. |
+
+**POST …/notes — request body (`NoteIn`):**
+
+```json
+{
+  "key": "project-goal",
+  "value": "Ship v1 by end of Q2.",
+  "tags": ["memory", "context"]
+}
+```
+
+`key` must be a unique URL-safe slug within the scope. `tags` defaults to `[]`.
+
+**PATCH …/notes/{key} — request body (`NotePatch`):**
+
+```json
+{
+  "value": "Updated text.",
+  "tags": ["memory"]
+}
+```
+
+Either field may be omitted to leave it unchanged. `key` is not accepted (rejected with 422).
+
+**Note response shape (`NoteOut`):**
+
+```json
+{
+  "key": "project-goal",
+  "value": "Ship v1 by end of Q2.",
+  "tags": ["memory", "context"],
+  "scope_type": "workspace",
+  "scope_id": "<workspace-or-topic-uuid>",
+  "created_at": "2026-05-15T09:00:00",
+  "updated_at": "2026-05-15T09:00:00"
+}
+```
+
+All write endpoints (POST, PATCH) return the note object. DELETE returns `204 No Content`.
+
+**Prompt injection markers:** workspace notes tagged with a given tag can be injected into staff system prompts and event-action templates using `{ws:note:notes:<tag>}` (key: value lines) or `{ws:note:keys:<tag>}` (key names only). See `docs/design/notes.md` for details.
+
 ### Utility Endpoints
 
 | Method | Path | Description |

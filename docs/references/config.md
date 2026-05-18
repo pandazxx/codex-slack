@@ -152,3 +152,58 @@ The CD daemon (`src/cd/`) reads these environment variables.
 | `CD_DRY_RUN` | No | `false` | Disable side effects |
 | `CD_NOTIFY_SLACK_WEBHOOK_URL` | No | unset | Slack incoming-webhook URL for deploy/rollback notifications |
 | `CD_NOTIFY_DISCORD_WEBHOOK_URL` | No | unset | Discord incoming-webhook URL for deploy/rollback notifications |
+
+## Notes MCP Server
+
+The notes MCP server (`src/notes_mcp/`) is configured in two places: one for Codex sessions and one for Claude interactive sessions.
+
+### Codex — `config/codex-global/config.toml`
+
+```toml
+[mcp_servers.notes]
+command      = "bash"
+args         = ["-c", "cd /opt/codex-slack && exec python -m src.notes_mcp"]
+env_vars     = ["WORKSPACE_ID", "MASTER_URL", "TOPIC_ID"]
+always_load  = true
+instructions = "..."
+```
+
+| Field | Purpose |
+|-------|---------|
+| `command` / `args` | Launches the MCP server as a stdio subprocess. The `cd /opt/codex-slack` prefix ensures `src.notes_mcp` is importable regardless of the cwd set by Codex for the active worktree. |
+| `env_vars` | Names of variables to copy from the Codex process environment into the subprocess env before exec. Codex does **not** automatically forward its process env to stdio subprocesses — `env_vars` is the required mechanism. Must include `WORKSPACE_ID`, `MASTER_URL`, and `TOPIC_ID`. |
+| `always_load` | When `true`, the tool schemas are loaded into the context window at session start instead of being deferred via Tool Search. Required for memory/context tools that must be available proactively. |
+| `instructions` | Natural-language guidance injected alongside the tool schemas. Instructs the agent to call `list_workspace_notes` at session start and to pass `$TOPIC_ID` as the `topic_id` argument to topic tools. |
+
+### Claude interactive sessions — `config/notes-mcp.json` and `config/claude-global/settings.json`
+
+Both files carry an equivalent `mcpServers.notes` block:
+
+```json
+{
+  "mcpServers": {
+    "notes": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["-c", "cd /opt/codex-slack && WORKSPACE_ID=$WORKSPACE_ID MASTER_URL=$MASTER_URL TOPIC_ID=$TOPIC_ID exec python -m src.notes_mcp"],
+      "alwaysLoad": true,
+      "instructions": "..."
+    }
+  }
+}
+```
+
+Because Claude does not have a `env_vars` equivalent, the bash inline expansion (`WORKSPACE_ID=$WORKSPACE_ID …`) is used to copy each variable into the subprocess env at exec time. The variables are resolved from the shell that launches Claude, so they must be set in the agent container's process environment (which `agent_runner.py` ensures via the standard env-forwarding path).
+
+`config/notes-mcp.json` is passed to claude via `--mcp-config /opt/codex-slack/config/notes-mcp.json` in `src/agent/mqtt_loop.py`. `config/claude-global/settings.json` is the fallback for interactive Claude Code sessions not launched via the agent.
+
+### Runtime environment variables read by the server
+
+The server itself reads these at import time:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MASTER_URL` | `http://master:8080` | Base URL of the master API |
+| `WORKSPACE_ID` | `""` | Workspace UUID; used to construct workspace-scoped API paths |
+
+`TOPIC_ID` is **not** read at module level. Topic tools accept `topic_id` as an explicit call-time argument to avoid stale captures (see lessons learned).
