@@ -2,7 +2,23 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-05-17 -->
+<!-- last updated: 2026-05-18 -->
+
+---
+
+## 2026-05-18 — Second SIGKILL of agent container on same workspace; pre-flight signal handler added to distinguish SIGTERM-escalation vs. direct SIGKILL
+
+*Summary:* Prod message `587031aa` in topic `7c4f67e9` (same workspace `e6d8e527` as the 2026-05-17 cbc02192 incident) was cut off mid-response at 00:56:00 UTC. v4.15-rc6 worked as designed: the agent self-labeled the message `interrupt_reason=agent-killed`, master log carried `agent.startup_inherited_active count=2 message_ids=[ad22b3cc-…, 587031aa-…]`, and the dockerd journal confirmed `exitCode=137 manualRestart=false`. All ruleouts from the runbook §2 Steps 1–6 came back clean (no OOM, no master `idle_stop`, no CD deploy, no other container restart in the same minute, no `item.started` without matching `item.completed` in the transcript). The kill happened ~57 s after a healthy `agent.pong … alive=True` at 00:55:03 — no exception, no warning, no shutdown trace.
+
+*Root cause:* Same as 2026-05-17 — unidentified external SIGKILL. Two incidents in 24 h on the same workspace is a pattern, not coincidence. Reviewed `docker-compose.staging.yml` (the file used in prod): master is capped at `memory: 1g cpus: 1.0`; mosquitto at `128m / 0.25`; **agent containers have no resource limits at all** because they're spawned imperatively by `src/master/agent_runner.py:spawn_agent` with no `mem_limit` argument. That rules out cgroup-OOM on the agent (host kernel log also clean).
+
+*Fix applied:*
+- **v4.15-rc7** — `src/agent/main.py` now installs a pre-flight diagnostic signal handler for SIGTERM/SIGINT/SIGHUP/SIGQUIT before `run_worker` is reached. Each captured signal logs `agent.signal_received signum=N name=<NAME> phase=pre-mqtt-loop` immediately, then raises `SystemExit(128+signum)`. The MQTT loop's existing `_sigterm_handler` (which also publishes interrupt events) replaces this in-place once it registers. Tests in `tests/agent/test_main.py` verify all four signals are wired, unknown signums don't crash the handler, unsupported signals on the platform are swallowed, and `main()` installs the handler before `run_worker`.
+- **Runbook §2 Step 7** updated: now distinguishes "signal was delivered to Python" (`agent.signal_received` present → hunt the SIGTERM source) from "Python never got a chance" (line absent → direct SIGKILL or signal-to-tini-PID-1). Renamed the old "things that bypass" content to §2 Step 8.
+
+*Prevention:* The next incident of this shape will tell us *which* of three branches it's on: (a) Python saw SIGTERM and was escalated by tini, (b) Python saw a non-SIGTERM signal, or (c) Python saw nothing (direct SIGKILL or signal to PID 1). Each branch has a different next-step investigation in the updated runbook. Open questions for follow-up if the pattern continues:
+- Should agent containers carry an explicit `mem_limit` so future OOMs are *visible* (`docker inspect OOMKilled=true`) rather than ambiguous? Currently no limit means OOM is host-wide-only and our diagnostic is "kernel journal."
+- Should we bump tini's `stop_grace_period` (currently default 10 s) so a legitimate SIGTERM has time for the Python shutdown handler to run to completion before tini escalates?
 
 ---
 

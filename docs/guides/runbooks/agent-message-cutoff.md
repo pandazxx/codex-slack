@@ -120,15 +120,28 @@ for e in events[-10:]:
 
 The last `item.started` (without matching `item.completed`) is the command the model was running when it died. If it correlates with shell commands that allocate memory, write to disk, or fork heavily, that's a strong signal.
 
-### Step 7: if all the above are clean
+### Step 7: did the agent see a signal before dying?
 
-You have an unexplained SIGKILL. Possibilities to investigate next:
+v4.15-rc7+ installs a pre-flight signal handler in `src/agent/main.py` that logs receipt of SIGTERM/SIGINT/SIGHUP/SIGQUIT immediately. Check the *killed* agent's log lines (preserved in the container log across restart):
 
-- **Tini SIGTERM→SIGKILL escalation.** Default 10s grace. Look upstream for whoever sent the original SIGTERM — could be a host-level systemd unit, container manager extension, or security tool.
+```bash
+DOCKER_HOST=ssh://ubuntu@<prod-host> docker logs codex-agent-<workspace-id> --since 24h 2>&1 \
+  | grep -E "agent\.(signal_received|sigterm_received)"
+```
+
+Three outcomes:
+
+- **`agent.signal_received signum=15 name=SIGTERM phase=pre-mqtt-loop`** OR **`agent.sigterm_received active=N`** → something delivered SIGTERM to Python. Most likely tini's escalation path: 10 s later SIGKILL = exitCode 137. *Hunt for the SIGTERM source* — host-level systemd unit, container manager extension, security tool. Run `ssh <host> 'sudo journalctl --since "<HH:MM-1min>" --until "<HH:MM>"'` and look for anything that touches Docker or container cgroups.
+- **`agent.signal_received` with a non-SIGTERM name** (SIGINT/SIGHUP/SIGQUIT) → unusual; document and dig into who sent it.
+- **No `agent.signal_received` line at all** → the signal was delivered to tini (PID 1) directly *or* the agent was SIGKILL'd outright. Python was never given a chance to log. Move on to:
+
+### Step 8: things that bypass the Python handler
+
 - **Disk pressure** (overlay2 ENOSPC, write rejected). `ssh ubuntu@<host> df -h /` near the incident time; pull `journalctl` for disk-related kernel messages.
 - **Codex CLI doing something fatal.** The CLI runs with `--dangerously-bypass-approvals-and-sandbox` and can run any shell command the model picks. In principle the model could issue `kill -9 1` against tini. Inspect the transcript for any such command.
+- **Host-level cgroup manager** (`systemd-oomd`, security agent, custom unit) — these can send signals directly to container processes outside dockerd's view. Check `sudo systemctl list-units --all | grep -iE "oom|kill"` on the host.
 
-If still unidentified, file the incident with the full timeline + ruled-out items. The new logs at least give you a marker — `agent.startup_inherited_active count=N message_ids=[...]` — so you can correlate future incidents.
+If still unidentified, file the incident with the full timeline + ruled-out items. The diagnostic logs at least give you markers — `agent.startup_inherited_active count=N message_ids=[...]` and (rc7+) `agent.signal_received` presence/absence — so you can correlate future incidents.
 
 ## §3 — ping-timeout
 
