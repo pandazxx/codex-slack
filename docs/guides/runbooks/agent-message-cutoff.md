@@ -135,10 +135,55 @@ Three outcomes:
 - **`agent.signal_received` with a non-SIGTERM name** (SIGINT/SIGHUP/SIGQUIT) → unusual; document and dig into who sent it.
 - **No `agent.signal_received` line at all** → the signal was delivered to tini (PID 1) directly *or* the agent was SIGKILL'd outright. Python was never given a chance to log. Move on to:
 
-### Step 8: things that bypass the Python handler
+### Step 8: who called `kill()` — auditd lookup
 
-- **Disk pressure** (overlay2 ENOSPC, write rejected). `ssh ubuntu@<host> df -h /` near the incident time; pull `journalctl` for disk-related kernel messages.
-- **Codex CLI doing something fatal.** The CLI runs with `--dangerously-bypass-approvals-and-sandbox` and can run any shell command the model picks. In principle the model could issue `kill -9 1` against tini. Inspect the transcript for any such command.
+Prod host has auditd installed (see `docs/knowledge-base/lessons-learned.md` 2026-05-18 entry) with a rule that captures every `kill(*, SIGKILL)`, `tkill(*, SIGKILL)`, `tgkill(*, *, SIGKILL)` syscall. After a SIGKILL incident, this is the *most direct* identification of the killer:
+
+```bash
+ssh ubuntu@<prod-host> 'sudo grep "key=\"sigkill\"" /var/log/audit/audit.log* \
+  | grep "a1=9\|a2=9"' | tail -40
+```
+
+(`ausearch -k sigkill` works too in principle but has been observed to return `<no matches>` on Ubuntu 24.04 even when entries exist; grep is the reliable path.)
+
+Each hit decodes as:
+
+```
+type=SYSCALL ... a0=<TARGET_PID_HEX> a1=9 ... pid=<KILLER_PID> auid=<LOGIN_UID> uid=<EFFECTIVE_UID>
+   comm="<KILLER_COMM>" exe="<KILLER_BINARY>" key="sigkill" ARCH=x86_64 SYSCALL=kill
+```
+
+- `a0` (hex) — target PID that received SIGKILL
+- `pid` — PID that issued the kill
+- `comm` / `exe` — name + full path of the killer binary
+- `auid` — login UID (the user that originally logged in; survives sudo/su; `4294967295` if no login)
+- `uid` — effective UID at kill time
+
+To match a specific incident, narrow by timestamp:
+
+```bash
+ssh ubuntu@<prod-host> 'sudo grep "key=\"sigkill\"" /var/log/audit/audit.log \
+  | awk -F"audit\\\\(" "/audit\\\\(/ {ts=\$2; sub(/[.:].*/, \"\", ts); print ts, \$0}" \
+  | awk -v start=$(date -u -d "<HH:MM-1min>" +%s) -v end=$(date -u -d "<HH:MM+1min>" +%s) \
+        "\$1 >= start && \$1 <= end"'
+```
+
+Or simpler: search by the target's container-PID. Note PIDs in audit.log are *host* PIDs, not container PIDs. To map: grab `docker inspect <container> --format '{{.State.Pid}}'` while the container is alive, or correlate by `comm="python"` / `comm="tini"` plus timestamp.
+
+If audit has a hit: that's the answer. Cross-reference the killer's `exe` and `auid` against expected processes. If `auid` is a real user (1000+), an interactive shell did it. If `auid=4294967295`, it was a daemon.
+
+If audit has no hit in the incident window: kill bypassed the syscall audit somehow (eBPF? kernel-internal? container kill via `cgroup.kill` write — which doesn't trigger the `kill` syscall). Proceed to Step 9.
+
+### Step 9: things that bypass even the audit log
+
+The audit rule traces the `kill` / `tkill` / `tgkill` syscalls only. Several termination paths skip those entirely:
+
+- **cgroup v2 `cgroup.kill` write.** A privileged process writing `1` to `/sys/fs/cgroup/<cgroup>/cgroup.kill` kills every PID in that cgroup with SIGKILL via the kernel — no `kill()` syscall ever happens. To check whether *something* is doing this, monitor with `inotifywait` on the `cgroup.kill` paths under the container's cgroup tree, or check for writers via `lsof +D /sys/fs/cgroup/<scope>` near the next incident. `systemd-oomd` uses this path internally.
+- **eBPF kill helpers.** A loaded eBPF program with `bpf_send_signal()` can deliver SIGKILL from the kernel. Check `sudo bpftool prog list 2>/dev/null | head` for any unexpected loaded programs.
+- **`pidfd_send_signal` syscall.** Modern alternative to `kill()`; our audit rule does **not** cover it. To extend: add `-S pidfd_send_signal` to `/etc/audit/rules.d/50-sigkill.rules` (note `pidfd_send_signal` does not have an inline signal-arg filter — the rule would log all signals, increasing log volume; add an `-F a1=9` style filter only if the syscall ABI supports it on your kernel).
+- **Kernel-internal kill** (OOM killer, kernel panic of a subsystem, kernel page-allocator backpressure). `journalctl -k` would normally surface these; we've ruled them out for past incidents but check fresh each time.
+- **Disk pressure** (overlay2 ENOSPC, write rejected). `ssh ubuntu@<host> df -h /` near the incident time; pull `journalctl` for disk-related kernel messages. A failed write inside the container can sometimes manifest as the container abort path without a clean signal trace.
+- **Codex CLI doing something fatal.** The CLI runs with `--dangerously-bypass-approvals-and-sandbox` and can run any shell command the model picks. In principle the model could issue `kill -9 1` against tini *from inside the container* — this **would** show up in the audit log because the kill syscall is host-visible (PID namespaces don't hide syscalls from auditd). Inspect the transcript for any such command.
 - **Host-level cgroup manager** (`systemd-oomd`, security agent, custom unit) — these can send signals directly to container processes outside dockerd's view. Check `sudo systemctl list-units --all | grep -iE "oom|kill"` on the host.
 
 If still unidentified, file the incident with the full timeline + ruled-out items. The diagnostic logs at least give you markers — `agent.startup_inherited_active count=N message_ids=[...]` and (rc7+) `agent.signal_received` presence/absence — so you can correlate future incidents.
