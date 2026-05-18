@@ -62,7 +62,23 @@ def _kill_proc_tree(proc: subprocess.Popen) -> None:  # type: ignore[type-arg]
     pgid == pid and killing the group only affects that subprocess tree.
     """
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        pgid = int(proc.pid)
+    except (TypeError, ValueError):
+        LOGGER.warning("agent.kill_proc_tree_invalid_pid pid=%r", proc.pid)
+        return
+    # Refuse pgid <= 1. killpg(N, sig) issues kill(-N, sig); kill(-1, sig)
+    # broadcasts SIGKILL to every process the caller can signal (which inside
+    # a container is the whole namespace). kill(0, sig) targets the caller's
+    # own process group. Either is a self-destruct, not a child-subprocess
+    # kill. Legitimate subprocess pgids are always >= 2 in a tini-PID-1
+    # container. This guard exists because MagicMock().__int__() returns 1,
+    # so an under-mocked test that hits this path would kill its own process
+    # tree — see docs/knowledge-base/lessons-learned.md (2026-05-18).
+    if pgid <= 1:
+        LOGGER.warning("agent.kill_proc_tree_refused_unsafe_pgid pgid=%d", pgid)
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
     except ProcessLookupError:
         pass
     except Exception:
