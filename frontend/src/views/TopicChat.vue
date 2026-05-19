@@ -125,7 +125,7 @@
               <span class="tr-badge tr-badge-interrupted">{{ interruptLabel(m) }}</span>
             </div>
             <template v-else-if="isMsgCollapsible(m, msgIdx) && !isMsgExpanded(m.id)">
-              <MarkdownMessage :text="collapsedPreview(m.text)" />
+              <MarkdownMessage :text="collapsedPreview(m.text)" :fullText="m.text" />
               <button class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show more ▾</button>
             </template>
             <template v-else>
@@ -135,7 +135,7 @@
             <span v-if="m.streaming" class="cursor">▍</span>
           </template>
           <template v-else-if="isMsgCollapsible(m, msgIdx) && !isMsgExpanded(m.id)">
-            <MarkdownMessage :text="collapsedPreview(m.text)" />
+            <MarkdownMessage :text="collapsedPreview(m.text)" :fullText="m.text" />
             <button class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show more ▾</button>
           </template>
           <template v-else>
