@@ -345,3 +345,69 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* Created `docs/knowledge-base/`, `docs/guides/runbooks/`, `docs/references/`, and `docs/manuals/` with initial stub files during v3.4 doc-writer pass.
 
 *Prevention:* When a new document layout is defined in CLAUDE.md, include a chore commit that scaffolds the required directories and stubs so agents can immediately write to them without a missing-file error.
+
+---
+
+## 2026-05-17 — Agent containers spawned without bot-entrypoint; ~/.claude never populated
+
+*Summary:* `~/.claude/settings.json` was never copied into agent containers, so MCP config was missing at runtime. Agents started without any MCP servers registered.
+
+*Root cause:* `agent_runner.py` called `containers.run()` without specifying the `entrypoint` parameter. When `MASTER_AGENT_BASE_IMAGE` is unset, the master image is used for agent containers; that image's `ENTRYPOINT` is `["/usr/bin/tini", "--"]` (no `bot-entrypoint`), so the startup script that copies `config/claude-global/` into `~/.claude/` never ran.
+
+*Fix applied:* Added `entrypoint=["/usr/bin/tini", "--", "/usr/local/bin/bot-entrypoint"]` to `containers.run()` in `agent_runner.py`.
+
+*Prevention:* Always specify `entrypoint` explicitly when spawning agent containers so the behaviour is independent of which image is used as the base.
+
+---
+
+## 2026-05-17 — MCP server command fails from project worktree cwd (`ModuleNotFoundError: No module named 'src'`)
+
+*Summary:* `python -m src.notes_mcp` raised `ModuleNotFoundError: No module named 'src'` when Claude spawned the MCP server.
+
+*Root cause:* Claude Code spawns MCP servers from the project worktree directory (not from `/opt/codex-slack`). The `src.notes_mcp` module is only resolvable when cwd is `/opt/codex-slack`. Additionally, the `env.PYTHONPATH` field in `settings.json` was never applied because Claude Code silently ignores `settings.json` validation failures in `--print` mode, so the workaround of setting `PYTHONPATH` there was ineffective.
+
+*Fix applied:* (1) Changed the MCP command to a bash wrapper: `bash -c "cd /opt/codex-slack && exec python -m src.notes_mcp"`. (2) Created `config/notes-mcp.json` and passed it via `--mcp-config /opt/codex-slack/config/notes-mcp.json` in the claude invocation in `mqtt_loop.py` — `--mcp-config` is always honoured regardless of settings validation.
+
+*Prevention:* Never rely on `settings.json` `mcpServers` in `--print` mode for MCP registration — use `--mcp-config` explicitly. Use absolute-path bash wrappers for servers whose modules live outside the project worktree cwd.
+
+---
+
+## 2026-05-18 — Three MCP/notes-server failure modes fixed together
+
+*Summary:* A cluster of three distinct bugs caused `json.JSONDecodeError`, missing tools, and stale environment captures in the notes MCP server. All three were fixed in the `feat(notes-mcp)` series (PR #219).
+
+### 1 — SPA catch-all returned 200 + HTML for unknown `/api/…` paths
+
+*Root cause:* The `GET /{full_path:path}` catch-all route in `src/master/main.py` served `index.html` for every unmatched path — including `/api/…` paths that do not exist. MCP clients calling a non-existent endpoint received a `200 OK` with an HTML body, which then failed `json()` decode with a raw `json.JSONDecodeError` that had no hint about what went wrong.
+
+*Fix applied:* Added a guard at the top of `spa_index`: if `full_path.startswith("api/")`, raise `HTTPException(404, "not found")` immediately. The SPA still handles all non-API routes normally.
+
+*Prevention:* Any FastAPI app that serves a SPA catch-all must guard `/api/` paths explicitly, or an accidentally malformed API URL silently returns HTML to callers that expect JSON.
+
+### 2 — Codex does not forward its process env to MCP stdio subprocesses
+
+*Root cause:* Codex spawns MCP servers as stdio subprocesses. Unlike interactive shells, it does **not** automatically forward its own process environment. Module-level reads like `os.environ.get("WORKSPACE_ID")` in the MCP server therefore returned empty strings, causing API requests to route to a malformed URL.
+
+*Fix applied:* Added `env_vars = ["WORKSPACE_ID", "MASTER_URL", "TOPIC_ID"]` to the `[mcp_servers.notes]` block in `config/codex-global/config.toml`. The `env_vars` key is the Codex-specific mechanism for explicitly copying named vars from the Codex process env into the subprocess env before exec.
+
+*Prevention:* For any MCP server that needs runtime environment variables when run under Codex, list those vars in `env_vars` in `config.toml`. Do not assume the subprocess inherits the caller's environment. Claude interactive sessions use a bash wrapper that expands the variables inline (`WORKSPACE_ID=$WORKSPACE_ID exec python -m ...`).
+
+### 3 — `alwaysLoad: true` captures env at startup, not at dispatch time
+
+*Root cause:* `alwaysLoad: true` causes Codex/Claude to start the MCP server process once before any dispatch. Module-level code that reads `TOPIC_ID` (e.g. `_TID = os.environ.get("TOPIC_ID", "")`) captured the value at import time. When the same MCP process was reused across multiple topics, it always used the topic ID from the first session, silently operating on the wrong scope.
+
+*Fix applied:* Removed the module-level `_TID` / `_T_BASE` variables and the conditional tool registration (`if _TID:`). All four topic tools (`list_topic_notes`, `create_topic_note`, `update_topic_note`, `delete_topic_note`) are now **always registered** and accept `topic_id` as an explicit first argument. The caller (the agent) is instructed to pass `$TOPIC_ID` at call time. The `_t_base(topic_id)` helper constructs the URL per-call.
+
+*Prevention:* With `alwaysLoad: true`, treat the MCP server process as long-lived and session-agnostic. Never read per-session or per-dispatch values at module level. Push all session-context into explicit tool arguments instead.
+
+---
+
+## 2026-05-17 — MCP tools deferred by Tool Search, never loaded at session start
+
+*Summary:* Even after the MCP server connected successfully, Claude reported `list_workspace_notes` as unavailable and did not use notes tools proactively.
+
+*Root cause:* Claude Code v2.x defers MCP tools by default via Tool Search. Tools are not loaded into context at startup; Claude must explicitly search for them. Memory/notes tools need to be available proactively at session start, so deferral causes them to appear unavailable in practice.
+
+*Fix applied:* Added `"alwaysLoad": true` and `"instructions"` to the server config in `notes-mcp.json`, `settings.json`, and `config.toml`. `alwaysLoad` bypasses Tool Search deferral and loads tool schemas at session start.
+
+*Prevention:* Any MCP server providing context or memory tools that Claude should use proactively must set `alwaysLoad: true`. Leave other servers on the default deferred behaviour to conserve the context window.
