@@ -10,7 +10,7 @@
     <div v-if="expanded" class="md-overlay" @click.self="expanded = false">
       <div class="md-dialog">
         <button class="md-close" @click="expanded = false" title="Close (Esc)">✕</button>
-        <div class="md-dialog-body" ref="dialogContainer" v-html="rendered"></div>
+        <div class="md-dialog-body" ref="dialogContainer" v-html="renderedFull"></div>
       </div>
     </div>
   </Teleport>
@@ -92,6 +92,7 @@ async function copyText() {
 }
 
 const rendered = computed(() => marked.parse(props.text || ''))
+const renderedFull = computed(() => marked.parse(props.fullText || props.text || ''))
 
 async function renderMermaid(el) {
   const blocks = Array.from(
