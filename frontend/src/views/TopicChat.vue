@@ -24,14 +24,21 @@
       Agent: <em>{{ agentStatus }}</em>
     </div>
 
+    <div class="chat-toolbar">
+      <label class="verbose-toggle" :title="verboseMode ? 'Hide action messages' : 'Show hidden action messages'">
+        <input type="checkbox" v-model="verboseMode" />
+        Verbose
+      </label>
+    </div>
+
     <div class="messages" ref="msgBox">
       <p v-if="loading" class="muted center">Loading…</p>
-      <p v-else-if="!messages.length" class="muted center">No messages yet. Send one below.</p>
+      <p v-else-if="!filteredMessages.length" class="muted center">No messages yet. Send one below.</p>
       <div
-        v-for="(m, msgIdx) in messages"
+        v-for="(m, msgIdx) in filteredMessages"
         :key="m.id"
         class="message"
-        :class="m.sender === 'user' ? 'user' : 'agent'"
+        :class="[m.sender === 'user' ? 'user' : 'agent', m.silent ? 'message-silent' : '']"
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
         <div class="bubble" :class="{
@@ -287,6 +294,7 @@ const availableStaffs = ref([])
 const expandedMsgs = ref(new Set())
 const chatInputRef = ref(null)
 const sendError = ref('')
+const verboseMode = ref(false)
 
 const MSG_COLLAPSE_THRESHOLD = 600
 const MSG_COLLAPSED_PREVIEW = 300
@@ -294,8 +302,12 @@ const MSG_COLLAPSED_PREVIEW = 300
 const isArchived = computed(() => !!topic.value?.archived_at)
 const isWorkspaceArchived = computed(() => !!workspace.value?.archived_at)
 
+const filteredMessages = computed(() =>
+  verboseMode.value ? messages.value : messages.value.filter(m => !m.silent)
+)
+
 function isMsgCollapsible(msg, idx) {
-  if (idx !== undefined && idx >= messages.value.length - 1) return false
+  if (idx !== undefined && idx >= filteredMessages.value.length - 1) return false
   return !msg.streaming && (msg.text || '').length > MSG_COLLAPSE_THRESHOLD
 }
 function isMsgExpanded(id) { return expandedMsgs.value.has(id) }
@@ -545,6 +557,7 @@ function finaliseMessage(data) {
     traceRows: transcriptToRows(data.transcript) || existing?.traceRows || [],
     attachments: data.attachments ?? existing?.attachments ?? [],
     interrupt_reason: data.interrupt_reason ?? existing?.interrupt_reason ?? null,
+    silent: data.silent ?? existing?.silent ?? false,
     traceOpen: false, streaming: false,
     created_at: existing?.created_at || new Date().toISOString(),
   }
@@ -569,6 +582,7 @@ async function load() {
     const rawMsgs = await msgsRes.json()
     messages.value = rawMsgs.map(m => ({
       ...m,
+      silent: m.silent ?? false,
       traceRows: transcriptToRows(m.transcript),
       traceOpen: false,
       streaming: false,
@@ -767,6 +781,7 @@ watch(
     liveStreams.value = {}
     seenSeq.clear()
     agentStatus.value = ''
+    verboseMode.value = false
     load()
     if (!isArchived.value) connectWs()
   },
@@ -784,6 +799,10 @@ onUnmounted(() => {
 
 <style scoped>
 .chat-layout { display: flex; flex-direction: column; height: calc(100vh - 110px); }
+.chat-toolbar { display: flex; align-items: center; justify-content: flex-end; padding: 2px 0; min-height: 22px; }
+.verbose-toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 0.78em; color: #94a3b8; cursor: pointer; user-select: none; }
+.verbose-toggle input { cursor: pointer; }
+.message-silent .bubble { opacity: 0.55; border-style: dashed; }
 .breadcrumb { font-size: 0.9em; color: #64748b; margin-bottom: 0.5rem; }
 .topic-settings-link { color: #94a3b8; text-decoration: none; margin-left: 0.5rem; font-size: 1em; }
 .topic-settings-link:hover { color: #475569; }

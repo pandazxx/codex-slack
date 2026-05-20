@@ -57,6 +57,7 @@ class EventActionIn(BaseModel):
     cron_expr: str | None = None
     enabled: bool = True
     structured_output: bool = False
+    silent: bool = True
 
     @model_validator(mode="after")
     def validate_event_type_fields(self) -> "EventActionIn":
@@ -95,6 +96,7 @@ class EventActionOut(BaseModel):
     last_run_output: str | None
     enabled: bool
     structured_output: bool
+    silent: bool
     created_at: str
     updated_at: str
 
@@ -108,6 +110,7 @@ class EventActionPatch(BaseModel):
     cron_expr: str | None = None
     enabled: bool | None = None
     structured_output: bool | None = None
+    silent: bool | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -177,6 +180,7 @@ def _row_to_out(row) -> EventActionOut:
         last_run_output=row["last_run_output"],
         enabled=bool(row["enabled"]),
         structured_output=bool(row["structured_output"]),
+        silent=bool(row["silent"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -203,6 +207,7 @@ class WorkspaceEventActionIn(BaseModel):
     timing: Literal["before", "after"] | None = None
     enabled: bool = True
     structured_output: bool = False
+    silent: bool = True
 
     @model_validator(mode="after")
     def validate_event_type_fields(self) -> "WorkspaceEventActionIn":
@@ -256,8 +261,8 @@ def create_event_action(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, last_fired_at, last_run_at, last_run_status,"
-            "  last_run_output, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, ?, 'topic', ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?)",
+            "  last_run_output, enabled, structured_output, silent, created_at, updated_at)"
+            " VALUES (?, ?, 'topic', ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)",
             (
                 action_id,
                 body.event_type,
@@ -268,6 +273,7 @@ def create_event_action(
                 body.cron_expr,
                 1 if body.enabled else 0,
                 1 if body.structured_output else 0,
+                1 if body.silent else 0,
                 now,
                 now,
             ),
@@ -325,7 +331,7 @@ def patch_event_action(
         # (e.g. patching a topic_archived row's timing back to null). The non-nullable
         # fields (staff_name, prompt_template, enabled) reject explicit null with 422.
         sent = body.model_dump(exclude_unset=True)
-        for field in ("staff_name", "prompt_template", "enabled", "structured_output"):
+        for field in ("staff_name", "prompt_template", "enabled", "structured_output", "silent"):
             if field in sent and sent[field] is None:
                 raise HTTPException(422, f"{field} cannot be null")
         new_staff = sent["staff_name"] if "staff_name" in sent else existing["staff_name"]
@@ -334,6 +340,7 @@ def patch_event_action(
         new_cron = sent["cron_expr"] if "cron_expr" in sent else existing["cron_expr"]
         new_enabled = (1 if sent["enabled"] else 0) if "enabled" in sent else existing["enabled"]
         new_structured_output = (1 if sent["structured_output"] else 0) if "structured_output" in sent else existing["structured_output"]
+        new_silent = (1 if sent["silent"] else 0) if "silent" in sent else existing["silent"]
 
         _validate_merged_state(
             event_type=existing["event_type"],
@@ -345,9 +352,9 @@ def patch_event_action(
         conn.execute(
             "UPDATE event_actions"
             "   SET staff_name=?, prompt_template=?, timing=?, cron_expr=?, enabled=?,"
-            "       structured_output=?, updated_at=?"
+            "       structured_output=?, silent=?, updated_at=?"
             " WHERE id=?",
-            (new_staff, new_template, new_timing, new_cron, new_enabled, new_structured_output, now, action_id),
+            (new_staff, new_template, new_timing, new_cron, new_enabled, new_structured_output, new_silent, now, action_id),
         )
         conn.commit()
         row = conn.execute(
@@ -411,8 +418,8 @@ def create_workspace_event_action(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, last_fired_at, last_run_at, last_run_status,"
-            "  last_run_output, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, ?, 'workspace', ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?)",
+            "  last_run_output, enabled, structured_output, silent, created_at, updated_at)"
+            " VALUES (?, ?, 'workspace', ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)",
             (
                 action_id,
                 body.event_type,
@@ -422,6 +429,7 @@ def create_workspace_event_action(
                 body.timing,
                 1 if body.enabled else 0,
                 1 if body.structured_output else 0,
+                1 if body.silent else 0,
                 now,
                 now,
             ),
@@ -473,7 +481,7 @@ def patch_workspace_event_action(
             raise HTTPException(404, "event action not found")
 
         sent = body.model_dump(exclude_unset=True)
-        for field in ("staff_name", "prompt_template", "enabled", "structured_output"):
+        for field in ("staff_name", "prompt_template", "enabled", "structured_output", "silent"):
             if field in sent and sent[field] is None:
                 raise HTTPException(422, f"{field} cannot be null")
         new_staff = sent["staff_name"] if "staff_name" in sent else existing["staff_name"]
@@ -482,6 +490,7 @@ def patch_workspace_event_action(
         new_cron = sent["cron_expr"] if "cron_expr" in sent else existing["cron_expr"]
         new_enabled = (1 if sent["enabled"] else 0) if "enabled" in sent else existing["enabled"]
         new_structured_output = (1 if sent["structured_output"] else 0) if "structured_output" in sent else existing["structured_output"]
+        new_silent = (1 if sent["silent"] else 0) if "silent" in sent else existing["silent"]
 
         _validate_merged_state(
             event_type=existing["event_type"],
@@ -493,9 +502,9 @@ def patch_workspace_event_action(
         conn.execute(
             "UPDATE event_actions"
             "   SET staff_name=?, prompt_template=?, timing=?, cron_expr=?, enabled=?,"
-            "       structured_output=?, updated_at=?"
+            "       structured_output=?, silent=?, updated_at=?"
             " WHERE id=?",
-            (new_staff, new_template, new_timing, new_cron, new_enabled, new_structured_output, now, action_id),
+            (new_staff, new_template, new_timing, new_cron, new_enabled, new_structured_output, new_silent, now, action_id),
         )
         conn.commit()
         row = conn.execute(

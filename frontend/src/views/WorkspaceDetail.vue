@@ -243,6 +243,12 @@
               <code>{"silent": true, "log": "optional log"}</code>
             </p>
           </div>
+
+          <label>Silent</label>
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="actionForm.silent" />
+            Hide action messages from chat by default
+          </label>
         </div>
         <div class="form-actions">
           <button class="btn-primary" @click="saveAction" :disabled="savingAction">{{ savingAction ? 'Saving…' : 'Save' }}</button>
@@ -262,6 +268,7 @@
             <span class="action-type-badge" :class="actionTypeBadgeClass(a.event_type)">{{ a.event_type }}</span>
             <span v-if="a.timing" class="timing-badge">{{ a.timing }}</span>
             <span v-if="a.structured_output" class="structured-badge" title="Expects JSON response">JSON</span>
+            <span v-if="a.silent" class="silent-badge" title="Messages hidden from chat by default">silent</span>
             <span class="action-staff">@{{ a.staff_name }}</span>
             <span class="action-preview muted">{{ a.prompt_template.slice(0, 60) }}{{ a.prompt_template.length > 60 ? '…' : '' }}</span>
             <div class="action-btns">
@@ -364,6 +371,7 @@ const emptyActionForm = () => ({
   timing: 'after',
   enabled: true,
   structured_output: false,
+  silent: true,
 })
 const actionForm = ref(emptyActionForm())
 
@@ -652,6 +660,7 @@ function startEditAction(a) {
     timing: a.timing ?? null,
     enabled: a.enabled,
     structured_output: a.structured_output,
+    silent: a.silent,
   }
   showActionForm.value = true
   actionError.value = ''
@@ -673,6 +682,7 @@ async function saveAction() {
       prompt_template: actionForm.value.prompt_template,
       enabled: actionForm.value.enabled,
       structured_output: actionForm.value.structured_output,
+      silent: actionForm.value.silent,
     }
     if (!isEdit) {
       body.event_type = actionForm.value.event_type
@@ -953,6 +963,7 @@ section { margin-bottom: 2rem; }
 .badge-archiving { background: #fee2e2; color: #991b1b; }
 .timing-badge { background: #f1f5f9; color: #475569; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; }
 .structured-badge { background: #ecfdf5; color: #065f46; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 600; }
+.silent-badge { background: #f1f5f9; color: #64748b; border-radius: 10px; padding: 1px 8px; font-size: 0.78em; font-weight: 600; }
 .action-staff { font-weight: 600; font-size: 0.9em; }
 .action-preview { font-size: 0.82em; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .action-btns { margin-left: auto; display: flex; gap: 0.25rem; white-space: nowrap; }

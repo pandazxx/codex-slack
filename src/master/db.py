@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS messages (
     usage_json       TEXT,
     attachments_json TEXT,
     event_action_id  TEXT,
+    silent           INTEGER NOT NULL DEFAULT 0,
     created_at       TEXT NOT NULL
 );
 
@@ -140,6 +141,7 @@ CREATE TABLE IF NOT EXISTS event_actions (
     last_run_output   TEXT,
     enabled           INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
     structured_output INTEGER NOT NULL DEFAULT 0 CHECK (structured_output IN (0, 1)),
+    silent            INTEGER NOT NULL DEFAULT 1 CHECK (silent IN (0, 1)),
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
 
@@ -193,6 +195,8 @@ _MIGRATIONS = [
     "ALTER TABLE topics ADD COLUMN current_staff_name TEXT",
     "ALTER TABLE messages ADD COLUMN interrupt_reason TEXT",
     "ALTER TABLE workspaces ADD COLUMN repo_ref TEXT NOT NULL DEFAULT 'master'",
+    "ALTER TABLE event_actions ADD COLUMN silent INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE messages ADD COLUMN silent INTEGER NOT NULL DEFAULT 0",
 ]
 
 
