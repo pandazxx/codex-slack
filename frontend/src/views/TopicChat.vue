@@ -125,7 +125,7 @@
               <span class="tr-badge tr-badge-interrupted">{{ interruptLabel(m) }}</span>
             </div>
             <template v-else-if="isMsgCollapsible(m, msgIdx) && !isMsgExpanded(m.id)">
-              <MarkdownMessage :text="collapsedPreview(m.text)" />
+              <MarkdownMessage :text="collapsedPreview(m.text)" :fullText="m.text" />
               <button class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show more ▾</button>
             </template>
             <template v-else>
@@ -135,7 +135,7 @@
             <span v-if="m.streaming" class="cursor">▍</span>
           </template>
           <template v-else-if="isMsgCollapsible(m, msgIdx) && !isMsgExpanded(m.id)">
-            <MarkdownMessage :text="collapsedPreview(m.text)" />
+            <MarkdownMessage :text="collapsedPreview(m.text)" :fullText="m.text" />
             <button class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show more ▾</button>
           </template>
           <template v-else>
@@ -306,7 +306,15 @@ function toggleMsgExpand(id) {
   expandedMsgs.value = s
 }
 function collapsedPreview(text) {
-  return text.slice(0, MSG_COLLAPSED_PREVIEW) + '…'
+  const slice = text.slice(0, MSG_COLLAPSED_PREVIEW)
+  // If the slice cuts inside a code fence (odd number of ``` fence openers),
+  // trim back to just before the unclosed fence to avoid broken mermaid/code rendering.
+  const fenceCount = (slice.match(/^```/gm) || []).length
+  if (fenceCount % 2 !== 0) {
+    const cutIdx = slice.lastIndexOf('\n```')
+    return (cutIdx > 0 ? slice.slice(0, cutIdx) : slice) + '…'
+  }
+  return slice + '…'
 }
 
 function interruptLabel(m) {

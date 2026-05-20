@@ -10,7 +10,7 @@
     <div v-if="expanded" class="md-overlay" @click.self="expanded = false">
       <div class="md-dialog">
         <button class="md-close" @click="expanded = false" title="Close (Esc)">✕</button>
-        <div class="md-dialog-body" ref="dialogContainer" v-html="rendered"></div>
+        <div class="md-dialog-body" ref="dialogContainer" v-html="renderedFull"></div>
       </div>
     </div>
   </Teleport>
@@ -65,6 +65,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 
 const props = defineProps({
   text: { type: String, required: true },
+  fullText: { type: String, default: null },
 })
 
 const container = ref(null)
@@ -73,12 +74,13 @@ const expanded = ref(false)
 const copied = ref(false)
 
 async function copyText() {
+  const textToCopy = props.fullText ?? props.text
   try {
-    await navigator.clipboard.writeText(props.text)
+    await navigator.clipboard.writeText(textToCopy)
   } catch {
     // Fallback for non-secure (HTTP) contexts where clipboard API is unavailable
     const ta = document.createElement('textarea')
-    ta.value = props.text
+    ta.value = textToCopy
     ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
     document.body.appendChild(ta)
     ta.select()
@@ -90,6 +92,7 @@ async function copyText() {
 }
 
 const rendered = computed(() => marked.parse(props.text || ''))
+const renderedFull = computed(() => marked.parse(props.fullText || props.text || ''))
 
 async function renderMermaid(el) {
   const blocks = Array.from(
