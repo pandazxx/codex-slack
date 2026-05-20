@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 import docker
 import docker.errors
@@ -14,6 +20,72 @@ _GH_TOKEN_FALLBACK = "public-repo-no-auth-needed"
 
 def container_name(workspace_id: str) -> str:
     return f"codex-agent-{workspace_id}"
+
+
+def _inject_token(repo_url: str, gh_token: str | None) -> str:
+    """Embed a GitHub token into an HTTPS clone URL."""
+    if not gh_token:
+        return repo_url
+    m = re.match(r"(https?://)github\.com/(.+)", repo_url.strip())
+    if m:
+        return f"{m.group(1)}x-access-token:{gh_token}@github.com/{m.group(2)}"
+    return repo_url
+
+
+def resolve_agent_image(
+    *,
+    workspace_id: str,
+    repo_url: str,
+    repo_ref: str = "master",
+    default_image: str,
+    gh_token: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Return the image tag to use for this workspace's agent container.
+
+    Shallow-clones the repo, checks for .prj_assistant/image/Dockerfile, and
+    builds a project-specific image when the file is present. Falls back to
+    default_image if the clone fails or the Dockerfile is absent.
+    """
+    if dry_run:
+        return default_image
+
+    clone_url = _inject_token(repo_url, gh_token)
+    tmp_root = tempfile.mkdtemp(prefix="prj-image-resolve-")
+    clone_dest = os.path.join(tmp_root, "repo")
+    try:
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", "--branch", repo_ref, clone_url, clone_dest],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            LOGGER.warning(
+                "agent_runner.project_image_clone_failed workspace_id=%s ref=%s error=%s",
+                workspace_id, repo_ref, result.stderr.strip(),
+            )
+            return default_image
+
+        dockerfile = Path(clone_dest) / ".prj_assistant" / "image" / "Dockerfile"
+        if not dockerfile.exists():
+            LOGGER.info(
+                "agent_runner.project_dockerfile_absent workspace_id=%s using_default=%s",
+                workspace_id, default_image,
+            )
+            return default_image
+
+        image_tag = f"codex-agent-{workspace_id}:latest"
+        context_dir = str(Path(clone_dest) / ".prj_assistant" / "image")
+        LOGGER.info("agent_runner.building_project_image workspace_id=%s tag=%s", workspace_id, image_tag)
+        c = _client()
+        c.images.build(path=context_dir, dockerfile="Dockerfile", tag=image_tag, pull=True, rm=True)
+        LOGGER.info("agent_runner.built_project_image workspace_id=%s tag=%s", workspace_id, image_tag)
+        return image_tag
+    except Exception as exc:
+        LOGGER.exception("agent_runner.project_image_failed workspace_id=%s error=%s", workspace_id, exc)
+        raise
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def _client() -> docker.DockerClient:

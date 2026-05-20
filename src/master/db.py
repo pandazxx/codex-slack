@@ -192,6 +192,7 @@ _MIGRATIONS = [
     "ALTER TABLE topics ADD COLUMN veto_reason TEXT",
     "ALTER TABLE topics ADD COLUMN current_staff_name TEXT",
     "ALTER TABLE messages ADD COLUMN interrupt_reason TEXT",
+    "ALTER TABLE workspaces ADD COLUMN repo_ref TEXT NOT NULL DEFAULT 'master'",
 ]
 
 
