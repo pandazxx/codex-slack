@@ -282,6 +282,32 @@ def test_resolve_agent_image_falls_back_on_clone_failure():
     assert result == "base:latest"
 
 
+def test_resolve_agent_image_falls_back_to_main_when_master_absent():
+    """If --branch master fails, resolve_agent_image retries with --branch main."""
+    tried_refs: list[str] = []
+
+    def conditional_clone(args, **kwargs):
+        ref = args[5]  # git clone --depth 1 --branch <ref> <url> <dest>
+        tried_refs.append(ref)
+        clone_dest = args[-1]
+        if ref == "master":
+            return subprocess.CompletedProcess(args=args, returncode=128, stdout="", stderr="fatal: not found")
+        # main succeeds, but no Dockerfile — just verifying fallback works
+        os.makedirs(clone_dest, exist_ok=True)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    with patch("src.master.agent_runner.subprocess.run", side_effect=conditional_clone):
+        result = resolve_agent_image(
+            workspace_id="ws1",
+            repo_url="https://github.com/x/y",
+            repo_ref="master",
+            default_image="base:latest",
+        )
+
+    assert tried_refs == ["master", "main"]
+    assert result == "base:latest"  # no Dockerfile → still returns default
+
+
 def test_resolve_agent_image_returns_default_when_no_dockerfile():
     with patch("src.master.agent_runner.subprocess.run", side_effect=_ok_clone()):
         result = resolve_agent_image(

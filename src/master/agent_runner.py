@@ -54,15 +54,29 @@ def resolve_agent_image(
     tmp_root = tempfile.mkdtemp(prefix="prj-image-resolve-")
     clone_dest = os.path.join(tmp_root, "repo")
     try:
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", repo_ref, clone_url, clone_dest],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
+        refs_to_try = [repo_ref]
+        if repo_ref == "master":
+            refs_to_try.append("main")
+        elif repo_ref == "main":
+            refs_to_try.append("master")
+
+        clone_ok = False
+        for candidate_ref in refs_to_try:
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", "--branch", candidate_ref, clone_url, clone_dest],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                clone_ok = True
+                break
+            if os.path.exists(clone_dest):
+                shutil.rmtree(clone_dest)
+
+        if not clone_ok:
             LOGGER.warning(
-                "agent_runner.project_image_clone_failed workspace_id=%s ref=%s error=%s",
-                workspace_id, repo_ref, result.stderr.strip(),
+                "agent_runner.project_image_clone_failed workspace_id=%s refs=%s error=%s",
+                workspace_id, refs_to_try, result.stderr.strip(),
             )
             return default_image
 
