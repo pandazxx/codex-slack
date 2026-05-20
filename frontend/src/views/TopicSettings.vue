@@ -74,6 +74,15 @@
             Fire this action when the event occurs
           </label>
 
+          <label>Silent</label>
+          <div>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="form.silent" />
+              Hide messages from this action in the topic chat by default
+            </label>
+            <p class="form-hint">When checked, messages are stored but hidden unless "Show silent messages" is enabled in the chat.</p>
+          </div>
+
           <label>Structured output</label>
           <div>
             <label class="checkbox-label">
@@ -164,6 +173,7 @@ const emptyForm = () => ({
   timing: 'after',
   cron_expr: '',
   enabled: true,
+  silent: true,
   structured_output: false,
 })
 const form = ref(emptyForm())
@@ -236,6 +246,7 @@ function startEdit(a) {
     timing: a.timing ?? null,
     cron_expr: a.cron_expr ?? '',
     enabled: a.enabled,
+    silent: a.silent,
     structured_output: a.structured_output,
   }
   showForm.value = true
@@ -259,6 +270,7 @@ async function saveAction() {
       staff_name: form.value.staff_name.trim(),
       prompt_template: form.value.prompt_template,
       enabled: form.value.enabled,
+      silent: form.value.silent,
       structured_output: form.value.structured_output,
     }
     if (!isEdit) {

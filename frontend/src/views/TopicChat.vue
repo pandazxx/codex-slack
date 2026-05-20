@@ -23,6 +23,12 @@
     <div class="status-bar" v-if="agentStatus && !isArchived">
       Agent: <em>{{ agentStatus }}</em>
     </div>
+    <div class="verbose-bar">
+      <label class="verbose-label">
+        <input type="checkbox" v-model="verbose" />
+        Show silent messages
+      </label>
+    </div>
 
     <div class="messages" ref="msgBox">
       <p v-if="loading" class="muted center">Loading…</p>
@@ -276,6 +282,7 @@ const topic = ref(null)
 const workspace = ref(null)
 const messages = ref([])
 const loading = ref(true)
+const verbose = ref(false)
 const configuredTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone)
 const sending = ref(false)
 const agentStatus = ref('')
@@ -527,6 +534,14 @@ function handleChunk({ message_id, agent_name, seq, event }) {
 }
 
 function finaliseMessage(data) {
+  if (data.hidden && !verbose.value) {
+    // Remove any streaming bubble that accumulated chunks for this hidden message
+    const retractIdx = messages.value.findIndex(m => m.id === data.message_id)
+    if (retractIdx >= 0) messages.value.splice(retractIdx, 1)
+    delete liveStreams.value[data.message_id]
+    seenSeq.delete(data.message_id)
+    return
+  }
   const idx = messages.value.findIndex(m => m.id === data.message_id)
   const existing = idx >= 0 ? messages.value[idx] : null
   const finalMsg = {
@@ -537,6 +552,7 @@ function finaliseMessage(data) {
     traceRows: transcriptToRows(data.transcript) || existing?.traceRows || [],
     attachments: data.attachments ?? existing?.attachments ?? [],
     interrupt_reason: data.interrupt_reason ?? existing?.interrupt_reason ?? null,
+    hidden: !!data.hidden,
     traceOpen: false, streaming: false,
     created_at: existing?.created_at || new Date().toISOString(),
   }
@@ -547,12 +563,44 @@ function finaliseMessage(data) {
   scrollToBottom()
 }
 
+async function reloadMessages() {
+  const url = verbose.value
+    ? `/api/workspaces/${wsId}/topics/${topicId}/messages?verbose=true`
+    : `/api/workspaces/${wsId}/topics/${topicId}/messages`
+  const msgsRes = await fetch(url)
+  const rawMsgs = await msgsRes.json()
+  messages.value = rawMsgs.map(m => ({
+    ...m,
+    traceRows: transcriptToRows(m.transcript),
+    traceOpen: false,
+    streaming: false,
+  }))
+  for (const [mid, live] of Object.entries(liveStreams.value)) {
+    const existing = messages.value.find(m => m.id === mid)
+    if (!existing) {
+      messages.value.push({
+        id: mid, sender: 'agent',
+        agent_name: live.agent_name,
+        text: live.text, rows: live.rows,
+        streaming: true, traceOpen: false,
+        created_at: new Date().toISOString(),
+      })
+    } else if (!existing.streaming) {
+      delete liveStreams.value[mid]
+      seenSeq.delete(mid)
+    }
+  }
+  scrollToBottom()
+}
+
 async function load() {
   loading.value = true
   try {
     const [topicRes, msgsRes, wsRes, tzRes, staffsRes] = await Promise.all([
       fetch(`/api/workspaces/${wsId}/topics/${topicId}`),
-      fetch(`/api/workspaces/${wsId}/topics/${topicId}/messages`),
+      fetch(verbose.value
+        ? `/api/workspaces/${wsId}/topics/${topicId}/messages?verbose=true`
+        : `/api/workspaces/${wsId}/topics/${topicId}/messages`),
       fetch(`/api/workspaces/${wsId}`),
       fetch('/api/config/system-settings'),
       fetch(`/api/workspaces/${wsId}/staffs`),
@@ -748,6 +796,8 @@ function extractToolResult(content) {
   return JSON.stringify(content, null, 2)
 }
 
+watch(verbose, reloadMessages)
+
 watch(
   () => [route.params.wsId, route.params.topicId],
   ([newWsId, newTopicId]) => {
@@ -781,6 +831,8 @@ onUnmounted(() => {
 .topic-settings-link:hover { color: #475569; }
 .archived-banner { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; color: #713f12; }
 .status-bar { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; }
+.verbose-bar { display: flex; justify-content: flex-end; margin-bottom: 0.25rem; }
+.verbose-label { font-size: 0.8em; color: #64748b; cursor: pointer; display: flex; align-items: center; gap: 0.3rem; user-select: none; }
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding: 0.5rem 0; }
 .message { display: flex; flex-direction: column; max-width: 72%; content-visibility: auto; contain-intrinsic-size: auto 100px; }
 .message.agent { max-width: 88%; }

@@ -3102,7 +3102,7 @@ class TestStructuredOutput:
         # Track what post_message_direct receives
         posted = {}
 
-        async def fake_post_direct(*, app_state, topic_id, text, sender="agent", agent_name=None):
+        async def fake_post_direct(*, app_state, topic_id, text, sender="agent", agent_name=None, hidden=False):
             posted["text"] = text
             posted["agent_name"] = agent_name
             return str(uuid.uuid4())

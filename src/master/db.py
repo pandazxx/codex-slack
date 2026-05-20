@@ -84,7 +84,8 @@ CREATE TABLE IF NOT EXISTS messages (
     usage_json       TEXT,
     attachments_json TEXT,
     event_action_id  TEXT,
-    created_at       TEXT NOT NULL
+    created_at       TEXT NOT NULL,
+    hidden           INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS attachments (
@@ -140,6 +141,7 @@ CREATE TABLE IF NOT EXISTS event_actions (
     last_run_output   TEXT,
     enabled           INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
     structured_output INTEGER NOT NULL DEFAULT 0 CHECK (structured_output IN (0, 1)),
+    silent            INTEGER NOT NULL DEFAULT 1,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
 
@@ -192,6 +194,7 @@ _MIGRATIONS = [
     "ALTER TABLE topics ADD COLUMN veto_reason TEXT",
     "ALTER TABLE topics ADD COLUMN current_staff_name TEXT",
     "ALTER TABLE messages ADD COLUMN interrupt_reason TEXT",
+    "ALTER TABLE messages ADD COLUMN hidden INTEGER DEFAULT 0",
 ]
 
 
@@ -361,9 +364,14 @@ def _migrate_event_actions_v3(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if row is None or "'workspace'" in (row[0] or ""):
         return
+    legacy_cols = {r[1] for r in conn.execute("PRAGMA table_info(event_actions)")}
+    structured_output_select = (
+        "structured_output" if "structured_output" in legacy_cols else "0 AS structured_output"
+    )
+    silent_select = "silent" if "silent" in legacy_cols else "1 AS silent"
     LOGGER.info("db.migration_start event_actions_v3")
     conn.execute("PRAGMA foreign_keys = OFF")
-    conn.executescript("""
+    conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS event_actions_new (
             id              TEXT PRIMARY KEY,
             event_type      TEXT NOT NULL CHECK (event_type IN (
@@ -392,6 +400,7 @@ def _migrate_event_actions_v3(conn: sqlite3.Connection) -> None:
             last_run_output   TEXT,
             enabled           INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
             structured_output INTEGER NOT NULL DEFAULT 0 CHECK (structured_output IN (0, 1)),
+            silent            INTEGER NOT NULL DEFAULT 1,
             created_at        TEXT NOT NULL,
             updated_at        TEXT NOT NULL,
             CHECK (
@@ -403,8 +412,16 @@ def _migrate_event_actions_v3(conn: sqlite3.Connection) -> None:
                                                       AND cron_expr IS NULL     AND (timing IS NULL OR timing = 'after'))
             )
         );
-        INSERT OR IGNORE INTO event_actions_new
-            SELECT * FROM event_actions;
+        INSERT OR IGNORE INTO event_actions_new (
+            id, event_type, scope_type, scope_id, staff_name, prompt_template,
+            timing, cron_expr, last_fired_at, last_run_at, last_run_status,
+            last_run_output, enabled, structured_output, silent, created_at, updated_at
+        )
+            SELECT id, event_type, scope_type, scope_id, staff_name, prompt_template,
+                   timing, cron_expr, last_fired_at, last_run_at, last_run_status,
+                   last_run_output, enabled, {structured_output_select}, {silent_select},
+                   created_at, updated_at
+            FROM event_actions;
         DROP TABLE event_actions;
         ALTER TABLE event_actions_new RENAME TO event_actions;
         CREATE INDEX IF NOT EXISTS idx_event_actions_scope_event
@@ -415,6 +432,20 @@ def _migrate_event_actions_v3(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.commit()
     LOGGER.info("db.migration_done event_actions_v3")
+
+
+def _migrate_event_actions_v4(conn: sqlite3.Connection) -> None:
+    """Add silent column to event_actions for databases that already completed v3.
+
+    Idempotent: skips if silent is already present.
+    """
+    existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(event_actions)")}
+    if "silent" in existing_cols:
+        return
+    LOGGER.info("db.migration_start event_actions_v4")
+    conn.execute("ALTER TABLE event_actions ADD COLUMN silent INTEGER NOT NULL DEFAULT 1")
+    conn.commit()
+    LOGGER.info("db.migration_done event_actions_v4")
 
 
 def _migrate_staffs_session_scope_none(conn: sqlite3.Connection) -> None:
@@ -481,6 +512,7 @@ def init_db(db_path: str) -> None:
         _migrate_agents_to_staffs(conn)
         _migrate_event_actions_v2(conn)
         _migrate_event_actions_v3(conn)
+        _migrate_event_actions_v4(conn)
         _migrate_staffs_session_scope_none(conn)
         conn.commit()
     finally:

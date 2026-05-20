@@ -71,6 +71,7 @@ async def dispatch_to_staff(
     attachments: list[dict] | None = None,
     event_action_id: str | None = None,
     response_mode: str | None = None,
+    hidden: bool = False,
 ) -> str:
     """Insert a message row, build the MQTT dispatch payload, broadcast on the hub, and publish.
 
@@ -146,9 +147,9 @@ async def dispatch_to_staff(
         now = _now()
         conn.execute(
             "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, event_action_id, created_at)"
-            " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?)",
-            (message_id, topic_id, sender, raw_text, event_action_id, now),
+            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, event_action_id, hidden, created_at)"
+            " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?)",
+            (message_id, topic_id, sender, raw_text, event_action_id, 1 if hidden else 0, now),
         )
         if sender == "user":
             conn.execute(
@@ -207,6 +208,7 @@ async def dispatch_to_staff(
         "text": raw_text,
         "transcript": payload,
         "attachments": attachments,
+        "hidden": hidden,
     })
 
     settings = app_state.settings
@@ -237,6 +239,7 @@ async def post_message_direct(
     text: str,
     sender: str = "agent",
     agent_name: str | None = None,
+    hidden: bool = False,
 ) -> str:
     """Insert a message row and broadcast it on the hub without MQTT dispatch.
 
@@ -249,9 +252,9 @@ async def post_message_direct(
         now = _now()
         conn.execute(
             "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, event_action_id, created_at)"
-            " VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)",
-            (message_id, topic_id, sender, agent_name, text, now),
+            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, event_action_id, hidden, created_at)"
+            " VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)",
+            (message_id, topic_id, sender, agent_name, text, 1 if hidden else 0, now),
         )
         conn.commit()
     finally:
@@ -265,5 +268,6 @@ async def post_message_direct(
         "text": text,
         "transcript": None,
         "attachments": [],
+        "hidden": hidden,
     })
     return message_id

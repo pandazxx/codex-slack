@@ -5,7 +5,7 @@ import uuid
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from .db import get_connection
@@ -56,6 +56,7 @@ class MessageOut(BaseModel):
     transcript: str | None
     usage_json: str | None = None
     interrupt_reason: str | None = None
+    hidden: bool = False
     created_at: str
     attachments: list[AttachmentMeta] = []
 
@@ -229,7 +230,12 @@ async def cancel_message(
 
 
 @router.get("", response_model=list[MessageOut])
-def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[MessageOut]:
+def list_messages(
+    workspace_id: str,
+    topic_id: str,
+    request: Request,
+    verbose: bool = Query(default=False),
+) -> list[MessageOut]:
     conn = get_connection(request.app.state.db_path)
     try:
         if conn.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone() is None:
@@ -239,12 +245,14 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
         ).fetchone() is None:
             raise HTTPException(404, "topic not found")
         rows = conn.execute(
-            "SELECT id, sender, agent_name, text, transcript, usage_json, interrupt_reason, created_at FROM messages"
-            " WHERE topic_id = ? ORDER BY created_at",
+            "SELECT id, sender, agent_name, text, transcript, usage_json, interrupt_reason, hidden, created_at"
+            " FROM messages WHERE topic_id = ? ORDER BY created_at",
             (topic_id,),
         ).fetchall()
         result = []
         for r in rows:
+            if r["hidden"] and not verbose:
+                continue
             att_rows = conn.execute(
                 "SELECT id, filename, mime_type, size_bytes FROM attachments WHERE message_id = ? ORDER BY created_at",
                 (r["id"],),
@@ -260,7 +268,7 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
                 MessageOut(
                     id=r["id"], sender=r["sender"], agent_name=r["agent_name"],
                     text=r["text"], transcript=r["transcript"], usage_json=r["usage_json"],
-                    interrupt_reason=r["interrupt_reason"],
+                    interrupt_reason=r["interrupt_reason"], hidden=bool(r["hidden"]),
                     created_at=r["created_at"], attachments=attachments,
                 )
             )

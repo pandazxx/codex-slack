@@ -276,6 +276,7 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
             return
 
         structured_output = bool(row["structured_output"])
+        silent = bool(row["silent"]) if "silent" in row.keys() else True
         try:
             message_id = await asyncio.wait_for(
                 dispatch_to_staff(
@@ -287,6 +288,7 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
                     sender="event",
                     raw_text=prompt,
                     event_action_id=row["id"] if structured_output else None,
+                    hidden=silent,
                 ),
                 timeout=DISPATCH_TIMEOUT_S,
             )
@@ -407,6 +409,7 @@ async def run_gate_actions(
 
         fut: asyncio.Future = loop.create_future()
 
+        gate_silent = bool(row["silent"]) if "silent" in row.keys() else True
         try:
             message_id = await asyncio.wait_for(
                 dispatch_to_staff(
@@ -418,6 +421,7 @@ async def run_gate_actions(
                     sender="event",
                     raw_text=prompt,
                     event_action_id=row["id"],
+                    hidden=gate_silent,
                 ),
                 timeout=DISPATCH_TIMEOUT_S,
             )
