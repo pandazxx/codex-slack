@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from .agent_runner import get_container_status, refresh_auth, spawn_agent, stop_agent, container_name
+from .agent_runner import get_container_status, refresh_auth, resolve_agent_image, spawn_agent, stop_agent, container_name
 from .db import get_connection
 from .runtime_config import load_agent_env
 from .staffs import StaffOut, _SELECT_COLS as _STAFF_COLS, _row_to_out as _staff_row_to_out
@@ -100,9 +100,9 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
     try:
         try:
             conn.execute(
-                "INSERT INTO workspaces (id, name, repo_url, container_name, created_at)"
-                " VALUES (?, ?, ?, NULL, ?)",
-                (workspace_id, body.name.strip(), body.repo_url.strip(), now),
+                "INSERT INTO workspaces (id, name, repo_url, repo_ref, container_name, created_at)"
+                " VALUES (?, ?, ?, ?, NULL, ?)",
+                (workspace_id, body.name.strip(), body.repo_url.strip(), body.repo_ref.strip(), now),
             )
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail="workspace name already exists")
@@ -122,12 +122,22 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
 
     settings = request.app.state.settings
     try:
+        db_env = load_agent_env(request.app.state.db_path, workspace_id)
+        resolved_gh_token = settings.gh_token or db_env.get("GH_TOKEN")
+        image = resolve_agent_image(
+            workspace_id=workspace_id,
+            repo_url=body.repo_url.strip(),
+            repo_ref=body.repo_ref.strip(),
+            default_image=settings.agent_base_image,
+            gh_token=resolved_gh_token,
+            dry_run=settings.dry_run,
+        )
         name = spawn_agent(
             runtime=settings.container_runtime,
             workspace_id=workspace_id,
             repo_url=body.repo_url.strip(),
             repo_ref=body.repo_ref.strip(),
-            image=settings.agent_base_image,
+            image=image,
             mqtt_host=settings.mqtt_host,
             mqtt_port=settings.mqtt_port,
             network=settings.agent_network,
@@ -138,7 +148,7 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
             ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
             ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
             dry_run=settings.dry_run,
-            extra_env=load_agent_env(request.app.state.db_path, workspace_id),
+            extra_env=db_env,
             mem_limit=settings.agent_mem_limit or None,
         )
         conn2 = get_connection(request.app.state.db_path)
@@ -251,13 +261,14 @@ def restart_workspace_agent(workspace_id: str, request: Request) -> dict:  # typ
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id, repo_url, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
+            "SELECT id, repo_url, repo_ref, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
             (workspace_id,),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
         cname = row["container_name"] or container_name(workspace_id)
         repo_url = row["repo_url"]
+        repo_ref = row["repo_ref"] or "master"
     finally:
         conn.close()
 
@@ -268,11 +279,22 @@ def restart_workspace_agent(workspace_id: str, request: Request) -> dict:  # typ
         LOGGER.exception("workspace.restart_stop_failed container=%s", cname)
 
     try:
+        db_env = load_agent_env(request.app.state.db_path, workspace_id)
+        resolved_gh_token = settings.gh_token or db_env.get("GH_TOKEN")
+        image = resolve_agent_image(
+            workspace_id=workspace_id,
+            repo_url=repo_url,
+            repo_ref=repo_ref,
+            default_image=settings.agent_base_image,
+            gh_token=resolved_gh_token,
+            dry_run=settings.dry_run,
+        )
         spawn_agent(
             runtime=settings.container_runtime,
             workspace_id=workspace_id,
             repo_url=repo_url,
-            image=settings.agent_base_image,
+            repo_ref=repo_ref,
+            image=image,
             mqtt_host=settings.mqtt_host,
             mqtt_port=settings.mqtt_port,
             network=settings.agent_network,
@@ -284,7 +306,7 @@ def restart_workspace_agent(workspace_id: str, request: Request) -> dict:  # typ
             ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
             dry_run=settings.dry_run,
             master_url=settings.master_url,
-            extra_env=load_agent_env(request.app.state.db_path, workspace_id),
+            extra_env=db_env,
             mem_limit=settings.agent_mem_limit or None,
         )
     except Exception:
