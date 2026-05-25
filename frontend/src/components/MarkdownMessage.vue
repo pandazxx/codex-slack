@@ -129,8 +129,10 @@ watch(expanded, (val) => {
   }
 })
 
-onMounted(() => nextTick(() => renderMermaid(container.value)))
-watch(rendered, () => nextTick(() => renderMermaid(container.value)))
+// Skip mermaid rendering on the collapsed bubble (fullText present = preview mode).
+// The dialog uses renderedFull and renders mermaid correctly when opened.
+onMounted(() => { if (!props.fullText) nextTick(() => renderMermaid(container.value)) })
+watch(rendered, () => { if (!props.fullText) nextTick(() => renderMermaid(container.value)) })
 onUnmounted(() => document.removeEventListener('keydown', onEsc))
 </script>
 
