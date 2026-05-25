@@ -150,6 +150,21 @@
             <button v-if="isMsgCollapsible(m, msgIdx)" class="expand-msg-btn" @click="toggleMsgExpand(m.id)">Show less ▴</button>
           </template>
         </div>
+        <div
+          v-if="m.text && m.text !== '(message interrupted)' && !m.streaming"
+          class="msg-actions-bar"
+        >
+          <button
+            class="action-btn"
+            @click="copyMsgText(m)"
+            :title="copiedMsgId === m.id ? 'Copied!' : 'Copy raw text'"
+          >{{ copiedMsgId === m.id ? '✓' : '⎘' }}</button>
+          <button
+            class="action-btn"
+            @click="expandedMsg = m"
+            title="Expand message"
+          >⛶</button>
+        </div>
         <button
           v-if="m.sender === 'agent' && m.streaming"
           class="cancel-btn"
@@ -254,6 +269,17 @@
       </div>
     </div>
 
+    <Teleport to="body">
+      <div v-if="expandedMsg" class="md-overlay" @click.self="expandedMsg = null">
+        <div class="md-dialog">
+          <button class="md-close" @click="expandedMsg = null" title="Close (Esc)">✕</button>
+          <div class="md-dialog-body">
+            <MarkdownMessage :text="expandedMsg.text" />
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <ChatInput
       v-if="!isArchived"
       ref="chatInputRef"
@@ -295,6 +321,8 @@ const expandedMsgs = ref(new Set())
 const chatInputRef = ref(null)
 const sendError = ref('')
 const verboseMode = ref(false)
+const expandedMsg = ref(null)
+const copiedMsgId = ref(null)
 
 const MSG_COLLAPSE_THRESHOLD = 600
 const MSG_COLLAPSED_PREVIEW = 300
@@ -317,6 +345,26 @@ function toggleMsgExpand(id) {
   else s.add(id)
   expandedMsgs.value = s
 }
+async function copyMsgText(m) {
+  const text = m.text
+  try { await navigator.clipboard.writeText(text) }
+  catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    ta.remove()
+  }
+  copiedMsgId.value = m.id
+  setTimeout(() => { copiedMsgId.value = null }, 1500)
+}
+
+function onEscExpand(e) {
+  if (e.key === 'Escape') expandedMsg.value = null
+}
+
 function collapsedPreview(text) {
   const slice = text.slice(0, MSG_COLLAPSED_PREVIEW)
   // If the slice cuts inside a code fence (odd number of ``` fence openers),
@@ -790,10 +838,12 @@ watch(
 onMounted(async () => {
   await load()
   if (!isArchived.value) connectWs()
+  document.addEventListener('keydown', onEscExpand)
 })
 
 onUnmounted(() => {
   if (ws) { ws.onclose = null; ws.close() }
+  document.removeEventListener('keydown', onEscExpand)
 })
 </script>
 
@@ -858,6 +908,15 @@ onUnmounted(() => {
 .dispatch-cmd { font-size: 0.72em; max-height: 200px; overflow-x: auto; white-space: pre; }
 .cancel-btn { align-self: flex-start; margin-top: 4px; padding: 2px 10px; background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; border-radius: 4px; cursor: pointer; font-size: 0.78em; }
 .cancel-btn:hover { background: #fecaca; }
+.msg-actions-bar { display: flex; gap: 4px; margin-top: 4px; opacity: 0; transition: opacity 0.15s; }
+.message:hover .msg-actions-bar { opacity: 1; }
+.action-btn { background: rgba(255,255,255,0.92); border: 1px solid #e2e8f0; border-radius: 4px; padding: 1px 6px; font-size: 0.85rem; line-height: 1.5; cursor: pointer; color: #64748b; }
+.action-btn:hover { background: #f1f5f9; color: #1e293b; }
+.md-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9999; display: flex; align-items: flex-start; justify-content: center; padding: 5vh 5vw; overflow-y: auto; }
+.md-dialog { position: relative; background: #fff; border-radius: 10px; width: 100%; max-width: 880px; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 64px rgba(0,0,0,0.35); }
+.md-close { position: absolute; top: 10px; right: 14px; z-index: 1; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 6px; padding: 3px 10px; font-size: 0.85rem; cursor: pointer; color: #475569; }
+.md-close:hover { background: #e2e8f0; color: #1e293b; }
+.md-dialog-body { padding: 2rem 2.5rem; overflow-y: auto; flex: 1; }
 .muted { color: #64748b; }
 .center { text-align: center; }
 .cursor {
