@@ -564,6 +564,7 @@ async def veto_dispatch(
                     sender="event",
                     raw_text=prompt,
                     response_mode="verdict",
+                    silent=bool(row["silent"]),
                 ),
                 timeout=DISPATCH_TIMEOUT_S,
             )
