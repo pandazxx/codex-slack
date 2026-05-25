@@ -101,7 +101,9 @@ def _save_chunk(db_path: str, topic_id: str, payload: dict) -> None:  # type: ig
         LOGGER.exception("mqtt.save_chunk_error topic_id=%s", topic_id)
 
 
-def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  # type: ignore[type-arg]
+def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  # type: ignore[type-arg]
+    """Save agent response and return the silent flag inherited from the prompt message."""
+    silent = False
     try:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -113,6 +115,7 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
             agent_name = payload.get("agent_name")
             message_id = payload.get("message_id") or str(uuid.uuid4())
             interrupt_reason = payload.get("interrupt_reason")
+            reply_to = payload.get("reply_to", "")
             if transcript is None and text == "(message interrupted)":
                 chunk_rows = conn.execute(
                     "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
@@ -128,6 +131,13 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
                     if events:
                         transcript = json.dumps(events)
             usage_json = _extract_usage(transcript)
+            # Inherit silent flag from the prompt message so the reply is also hidden.
+            if reply_to:
+                prompt_row = conn.execute(
+                    "SELECT silent FROM messages WHERE id = ?", (reply_to,)
+                ).fetchone()
+                if prompt_row is not None:
+                    silent = bool(prompt_row["silent"])
             with conn:
                 # If the stale-stream detector beat us here with "(message interrupted)",
                 # update it with the real response instead of silently dropping it.
@@ -138,9 +148,9 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
                 )
                 conn.execute(
                     "INSERT OR IGNORE INTO messages"
-                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, interrupt_reason, created_at)"
-                    " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?, ?)",
-                    (message_id, topic_id, agent_name, text, transcript, usage_json, interrupt_reason, _now()),
+                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, interrupt_reason, silent, created_at)"
+                    " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?, ?, ?)",
+                    (message_id, topic_id, agent_name, text, transcript, usage_json, interrupt_reason, 1 if silent else 0, _now()),
                 )
                 conn.execute(
                     "DELETE FROM chunks WHERE message_id = ?", (message_id,)
@@ -155,6 +165,7 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> None:  #
             conn.close()
     except Exception:
         LOGGER.exception("mqtt.save_agent_response_error topic_id=%s", topic_id)
+    return silent
 
 
 def _prompt_was_event_dispatched(db_path: str, reply_to: str) -> bool:
@@ -404,7 +415,8 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
                 _handle_structured_response(db_path, action, topic_id, payload, userdata)
                 return
 
-            _save_agent_response(db_path, topic_id, payload)
+            silent = _save_agent_response(db_path, topic_id, payload)
+            message["silent"] = silent
             _record_agent_response(db_path, topic_id)
             notify.notify_reply(
                 db_path=db_path,

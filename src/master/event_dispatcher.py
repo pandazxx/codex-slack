@@ -287,6 +287,7 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
                     sender="event",
                     raw_text=prompt,
                     event_action_id=row["id"] if structured_output else None,
+                    silent=bool(row["silent"]),
                 ),
                 timeout=DISPATCH_TIMEOUT_S,
             )
@@ -418,6 +419,7 @@ async def run_gate_actions(
                     sender="event",
                     raw_text=prompt,
                     event_action_id=row["id"],
+                    silent=bool(row["silent"]),
                 ),
                 timeout=DISPATCH_TIMEOUT_S,
             )
@@ -562,6 +564,7 @@ async def veto_dispatch(
                     sender="event",
                     raw_text=prompt,
                     response_mode="verdict",
+                    silent=bool(row["silent"]),
                 ),
                 timeout=DISPATCH_TIMEOUT_S,
             )
