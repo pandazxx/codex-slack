@@ -17,6 +17,7 @@
         title="Export conversation as JSON Lines"
         download
       >&#8615;</a>
+      <GraphHeaderToggle :wsId="wsId" :topicId="topicId" activeView="chat" class="breadcrumb-toggle" />
     </p>
 
     <div v-if="isArchived" class="archived-banner">This topic is archived — read only</div>
@@ -37,8 +38,9 @@
       <div
         v-for="(m, msgIdx) in filteredMessages"
         :key="m.id"
+        :id="`msg-${m.id}`"
         class="message"
-        :class="[m.sender === 'user' ? 'user' : 'agent', m.silent ? 'message-silent' : '']"
+        :class="[m.sender === 'user' ? 'user' : 'agent', m.silent ? 'message-silent' : '', highlightedMsgId === m.id ? 'message-highlighted' : '']"
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
         <div class="bubble" :class="{
@@ -299,6 +301,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import MarkdownMessage from '../components/MarkdownMessage.vue'
 import ChatInput from '../components/ChatInput.vue'
+import GraphHeaderToggle from '../components/GraphHeaderToggle.vue'
 import { formatInTimezone } from '../utils/datetime.js'
 
 const route = useRoute()
@@ -323,6 +326,7 @@ const sendError = ref('')
 const verboseMode = ref(false)
 const expandedMsg = ref(null)
 const copiedMsgId = ref(null)
+const highlightedMsgId = ref(null)
 
 const MSG_COLLAPSE_THRESHOLD = 600
 const MSG_COLLAPSED_PREVIEW = 300
@@ -363,6 +367,19 @@ async function copyMsgText(m) {
 
 function onEscExpand(e) {
   if (e.key === 'Escape') expandedMsg.value = null
+}
+
+function scrollToHashMsg() {
+  const hash = location.hash
+  if (!hash.startsWith('#msg-')) return
+  const msgId = hash.slice(5)
+  nextTick(() => {
+    const el = document.getElementById(`msg-${msgId}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    highlightedMsgId.value = msgId
+    setTimeout(() => { highlightedMsgId.value = null }, 2000)
+  })
 }
 
 function collapsedPreview(text) {
@@ -839,6 +856,7 @@ onMounted(async () => {
   await load()
   if (!isArchived.value) connectWs()
   document.addEventListener('keydown', onEscExpand)
+  scrollToHashMsg()
 })
 
 onUnmounted(() => {
@@ -849,6 +867,8 @@ onUnmounted(() => {
 
 <style scoped>
 .chat-layout { display: flex; flex-direction: column; height: calc(100vh - 110px); }
+.breadcrumb-toggle { margin-left: auto; }
+.message-highlighted .bubble { box-shadow: 0 0 0 2px #2563eb80; transition: box-shadow 0.3s; }
 .chat-toolbar { display: flex; align-items: center; justify-content: flex-end; padding: 2px 0; min-height: 22px; }
 .verbose-toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 0.78em; color: #94a3b8; cursor: pointer; user-select: none; }
 .verbose-toggle input { cursor: pointer; }
