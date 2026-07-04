@@ -158,13 +158,11 @@ describe('HP-03: tool_use/tool_result pairing (Glob)', () => {
     expect(trNode).toBeDefined()
   })
 
-  it('invokes edge exists from tool-use to tool-result', () => {
+  it('contains edge exists from tool-use to tool-result', () => {
     const tuNode = graph.nodes.find(n => n.kind === NodeKind.TOOL_USE && n.data.toolUseId === 'toolu_glob_001')
     const trNode = graph.nodes.find(n => n.kind === NodeKind.TOOL_RESULT && n.data.toolUseId === 'toolu_glob_001')
-    // tool-result parentId should be the tool-use node id
     expect(trNode.parentId).toBe(tuNode.id)
-    // an edge of any kind connects them
-    const edge = graph.edges.find(e => e.source === tuNode.id && e.target === trNode.id)
+    const edge = graph.edges.find(e => e.source === tuNode.id && e.target === trNode.id && e.kind === 'contains')
     expect(edge).toBeDefined()
   })
 })
