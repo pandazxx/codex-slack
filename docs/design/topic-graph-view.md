@@ -11,6 +11,8 @@ The current topic view (`frontend/src/views/TopicChat.vue`) renders a linear cha
 
 Users want a complementary view of the same data that surfaces this structure graphically: a timeline flow where the vertical spine is the user/agent turn sequence, and each agent turn can be expanded to reveal its internal thinking / tool_use / tool_result / subagent subtree. The graph view is read-only and reuses the existing messages endpoint.
 
+The authoritative input contract for the parser is [`docs/references/schemas/topic-transcript-events.md`](../references/schemas/topic-transcript-events.md), derived from analysis of four real topic logs. Any shape not documented there is treated by the parser as unknown and routed through the diagnostics path — this doc's data model tracks that schema.
+
 A later phase will add an LLM-driven summarization pipeline that produces summary artifacts (topic-level, message-level, potentially per-node) to be rendered as overlays or side panels in this same view. The v1 data model must define attachment points for these artifacts so the pipeline can produce them without further schema churn.
 
 ## Goals
@@ -77,7 +79,8 @@ type NodeKind =
   | 'tool-use'           // one per assistant tool_use block; carries name + input
   | 'tool-result'        // one per user tool_result block; linked to its tool-use by tool_use_id
   | 'subagent'           // synthetic container for a subagent invocation — wraps the child subtree
-  | 'task-event'         // system/task_started | task_progress | task_notification
+  | 'task-event'         // system/task_started | task_progress | task_notification | task_updated
+  | 'compaction'         // system/compact_boundary (folds transient system/status compacting events)
   | 'rate-limit'         // rate_limit_event
   | 'system-init'        // system/init (usually collapsed)
   | 'parse-warning'      // malformed transcript line (defensive)
@@ -149,7 +152,7 @@ interface SummaryArtifact {
 
 interface Diagnostic {
   level: 'warn' | 'error'
-  code: string              // e.g. 'orphan_tool_result', 'unknown_event_type'
+  code: string              // e.g. 'orphan_tool_result', 'orphan_tool_use', 'orphan_task_event', 'unknown_event_type'
   message: string
   messageId?: string
   eventIndex?: number
@@ -160,16 +163,17 @@ Kind-specific `data` payloads (the parser copies the minimum needed for renderin
 
 - `topic`: `{ subject, workspaceName }`
 - `user-message`: `{ text, attachments, dispatch }` — `dispatch` is the parsed dispatch payload (adapter, agent_name, subagent, model, session_id, etc.) as `TopicChat.vue`'s `parseDispatch` produces.
-- `agent-message`: `{ agentName, text, silent, interruptReason, model, hasTranscript }` — `text` is the final message text. `model` is drawn from `system/init` when present.
-- `result-rollup`: `{ isError, cost, durationMs, numTurns, usage }` — extracted from the `result/success` event.
+- `agent-message`: `{ agentName, text, silent, interrupted, interruptReason, model, hasTranscript }` — `text` is the final message text (`"(message interrupted)"` when interrupted). `interrupted` is true iff the source record's `transcript` is `null`; in that case no inner nodes and no `result-rollup` child are emitted. `model` is drawn from `system/init` when present; when a message contains multiple `system/init` events (session restart), the **last** one wins.
+- `result-rollup`: `{ isError, cost, durationMs, numTurns, usage }` — extracted from the `result/success` event. Absent for interrupted messages.
 - `thinking`: `{ text }` — the `thinking` block string.
 - `text`: `{ text }` — the assistant text block.
-- `tool-use`: `{ toolName, input, toolUseId, label }` — `label` is what `toolUseLabel()` in `TopicChat.vue` would render (kept centralized in the parser to avoid Vue components computing it).
-- `tool-result`: `{ toolUseId, contentText, isError, agentType?, totalDurationMs?, totalTokens?, totalToolUseCount? }` — the `agentType` and derived counters come from `tool_use_result` when this is a Task result.
-- `subagent`: `{ agentType, prompt, model?, summary? }` — synthesized from the sibling `system/task_*` events keyed by the same `tool_use_id`. Wraps all events whose `parent_tool_use_id` equals this id.
-- `task-event`: `{ subtype, description, subagentType, toolUseId }`.
+- `tool-use`: `{ toolName, input, toolUseId, label, mcpServer?, mcpTool? }` — `label` is what `toolUseLabel()` in `TopicChat.vue` would render (kept centralized in the parser to avoid Vue components computing it). For MCP tools whose `toolName` matches `mcp__<server>__<tool>`, the parser splits the parts into `mcpServer` and `mcpTool` so the node card can badge them independently; `toolName` is preserved verbatim.
+- `tool-result`: `{ toolUseId, contentText, isError, agentType?, totalDurationMs?, totalTokens?, totalToolUseCount? }` — `isError` mirrors `tool_result.is_error` (defaulting to `false`). The `agentType` and derived counters come from `tool_use_result` when this is a Task result.
+- `subagent`: `{ agentType, prompt, model?, summary? }` — synthesized from the sibling `system/task_*` events keyed by the same `tool_use_id`. Wraps all events whose `parent_tool_use_id` equals this id. Only created for `Agent` tool_uses (`task_type: "local_agent"`); `local_bash` tasks do **not** get a `subagent` container — their `task-event` nodes attach directly to the spawning `Bash` tool_use.
+- `task-event`: `{ subtype, taskId, taskType, description, subagentType?, prompt?, toolUseId, patch?, status?, endTime?, usage?, isBackgrounded? }` — covers all `system/task_*` subtypes including `task_updated`. `taskType` is `"local_agent"` or `"local_bash"` (from `task_started`, propagated to later events by `taskId`). `subagent_type` and `prompt` live at the event root of `task_started` (not nested) and are only populated for `local_agent`. `patch` is copied verbatim from `task_updated` events; `status`, `endTime`, `isBackgrounded` are convenience projections of common patch keys for renderers that don't want to introspect the raw patch.
+- `compaction`: `{ trigger, preTokens, postTokens, durationMs, compactResult? }` — one node per `system/compact_boundary` event, attached to the enclosing `agent-message`. Any `system/status` events with `status: "compacting"` / `compact_result` **fold into** the following `compact_boundary` node (they do not produce their own nodes). If a `system/status` compacting event has no following `compact_boundary` in the same message (partial data), the parser emits a `compaction` node with whatever fields it has and `compactResult` populated from the status event.
 - `rate-limit`: `{ tier?, resetsAt? }`.
-- `system-init`: `{ model, tools?, cwd? }`.
+- `system-init`: `{ model, tools?, cwd?, sessionId? }` — a message may contain more than one; each produces its own node.
 - `parse-warning`: `{ line }`.
 
 **Why this shape:**
@@ -191,38 +195,37 @@ export function buildTopicGraph({ workspaceId, topicId, topicSubject, workspaceN
 Algorithm (single pass per message; O(N) in total events):
 
 1. Emit the `topic` root node. Push a synthetic edge from `topic` to each spine node as it's added.
-2. For each `MessageOut` in `messages` (already sorted by `created_at`):
+2. For each `MessageOut` in `messages` (already sorted by `created_at`) — no alternation is assumed; consecutive `user` or `agent` records are supported:
    - If `sender === 'user'`: emit a `user-message` node with parsed dispatch payload; attach as child of `topic`. Advance `sequence`.
-   - If `sender === 'agent'`: emit an `agent-message` node as child of `topic`. Then walk `JSON.parse(message.transcript)` events in order, maintaining:
+   - If `sender === 'agent'`: emit an `agent-message` node as child of `topic`. If `message.transcript` is `null` (interrupted message), set `data.interrupted = true`, `data.hasTranscript = false`, do not emit any inner nodes or a `result-rollup`, and continue with the next message. Otherwise walk `JSON.parse(message.transcript)` events in order, maintaining:
      - `sequence` — monotonic across the whole graph.
      - `toolUseIndex: Map<toolUseId, GraphNode>` — every `tool_use` block seen so far, keyed for pairing with `tool_result`.
+     - `toolResultIndex: Set<toolUseId>` — every `tool_use_id` a `tool_result` has been observed for; used to detect orphan `tool_use` blocks after the walk.
      - `subagentIndex: Map<toolUseId, GraphNode>` — every `subagent` container created so far (a `tool_use` with `name === 'Agent'` gets a paired `subagent` child).
+     - `taskIndex: Map<taskId, {taskType, toolUseId}>` — every `system/task_started` seen so far; used to route later `task_progress` / `task_updated` / `task_notification` events that only carry `task_id`.
      - `parentStack` — a lookup from `parent_tool_use_id` to the enclosing `subagent` node (or the `agent-message` for `null`).
+     - `pendingCompactStatus` — the most recent unresolved `system/status` compacting payload for this message, folded into the next `compact_boundary`.
    - For each event:
      - `assistant` with `thinking` block → `thinking` node under the current parent.
      - `assistant` with `text` block → `text` node under the current parent.
-     - `assistant` with `tool_use` block → `tool-use` node; if `name === 'Agent'`, also synthesize a `subagent` child (with `invokes` edge from tool-use → subagent) and register it in `subagentIndex[toolUseId]`. Register the `tool-use` itself in `toolUseIndex[toolUseId]`.
-     - `user` with `tool_result` block → `tool-result` node. Attach as child of the paired `tool-use`. If the paired `tool-use` isn't found (orphan), emit under the current message with a `Diagnostic{code:'orphan_tool_result'}`. When the enclosing `tool_use` was an Agent invocation, also copy `tool_use_result.agentType|totalDurationMs|totalTokens|totalToolUseCount` onto the sibling `subagent` node's `data`.
-     - `system/task_started|task_progress|task_notification` → `task-event` node under the matching `subagent` (looked up by `event.tool_use_id`). If no match — attach to the current top-level agent-message with a diagnostic.
-     - `system/init` → `system-init` node under the agent-message. Extract model into agent-message.data.
+     - `assistant` with `tool_use` block → `tool-use` node; if `name === 'Agent'`, also synthesize a `subagent` child (with `invokes` edge from tool-use → subagent) and register it in `subagentIndex[toolUseId]`. If `name` matches `mcp__<server>__<tool>`, populate `data.mcpServer` / `data.mcpTool`; `toolName` is stored verbatim. Register the `tool-use` itself in `toolUseIndex[toolUseId]`.
+     - `user` with `tool_result` block → `tool-result` node with `data.isError = block.is_error === true`. Attach as child of the paired `tool-use` and record `tool_use_id` in `toolResultIndex`. If the paired `tool-use` isn't found (orphan), emit under the current message with a `Diagnostic{code:'orphan_tool_result'}`. When the enclosing `tool_use` was an Agent invocation, also copy `tool_use_result.agentType|totalDurationMs|totalTokens|totalToolUseCount` onto the sibling `subagent` node's `data`.
+     - `system/task_started` → `task-event` node with `subtype: 'task_started'`, `taskId`, `taskType` (`local_agent` or `local_bash`), and, for `local_agent`, `subagentType` and `prompt` **read from the event root** (not from any nested object). Attach: for `local_agent`, under the matching `subagent` (looked up by `event.tool_use_id`); for `local_bash`, under the matching `tool-use` (typically a `Bash` node — same lookup key). Register `(taskId → {taskType, toolUseId})` in `taskIndex`. If no matching `tool-use`/`subagent` — attach to the current agent-message with `Diagnostic{code:'orphan_task_event'}`.
+     - `system/task_progress` | `system/task_updated` | `system/task_notification` → `task-event` node with the corresponding `subtype`. Route via `taskIndex[task_id]` to the same parent as the originating `task_started`. For `task_updated`, copy `event.patch` into `data.patch` verbatim and additionally project common patch keys (`status`, `end_time`, `is_backgrounded`) into `data.status`, `data.endTime`, `data.isBackgrounded` for renderer convenience. Missing `taskIndex` entry → attach to the current agent-message with `Diagnostic{code:'orphan_task_event'}`.
+     - `system/status` → **no node emitted**. If `event.status === 'compacting'` or `event.compact_result` is set, capture the payload in `pendingCompactStatus` for the next `compact_boundary` to absorb.
+     - `system/compact_boundary` → `compaction` node under the agent-message, with `trigger|preTokens|postTokens|durationMs` copied from `compact_metadata` and `compactResult` inherited from `pendingCompactStatus` if present. Clear `pendingCompactStatus`.
+     - `system/init` → `system-init` node under the agent-message. Set `agent-message.data.model = event.model` — subsequent `system/init` events in the same message overwrite it (**last init wins**). Both nodes are still emitted (see IE-03 in the test plan).
      - `rate_limit_event` → `rate-limit` node under the agent-message.
      - `result/success` → `result-rollup` node under the agent-message.
      - Anything unknown → skipped, `Diagnostic{code:'unknown_event_type'}` recorded.
    - Determine parent by consulting `parent_tool_use_id`: `null` → the agent-message itself (for top-level events) or the subagent whose `tool_use_id` matches. This is what allows nested subagent → subagent to work.
+   - After the walk: for every `tool_use_id` in `toolUseIndex` that is not present in `toolResultIndex`, emit `Diagnostic{code:'orphan_tool_use'}`. The `tool-use` node is kept; no synthetic `tool-result` is fabricated. If `pendingCompactStatus` is still set (a `compacting` status with no matching boundary), emit a `compaction` node carrying only the status fields.
 3. Return the `Graph`. Empty `summaries` / `messageSummaries`.
 
 Determinism and testability:
 
 - No `Date.now()` inside — `generatedAt` is passed in by the caller (defaults to caller-provided timestamp; tests can pin it).
-- Given the same `messages` array, the parser always produces byte-identical output. Tested by fixture: check in the sample `home-network-ansible-templates-20260704.jsonl` (converted to `MessageOut[]` shape) and one canonical parsed `Graph` JSON alongside it under `frontend/src/lib/__tests__/fixtures/`.
-
-Tests (`frontend/src/lib/__tests__/transcriptGraph.test.js`):
-
-- Empty topic → single `topic` node, no edges.
-- One user + one short agent message → 2 spine nodes + inner nodes.
-- Agent tool_use → subagent → nested Task events all attach correctly (checked against the sample fixture).
-- Orphan `tool_result` → diagnostic emitted, node still rendered.
-- Malformed `transcript` JSON → `parse-warning` node + diagnostic, other messages still parsed.
+- Given the same `messages` array, the parser always produces byte-identical output. Tested against the synthetic fixtures under `tests/fixtures/topic-graph/` — see the test plan `docs/test-plans/topic-graph-view.md` for the case list.
 
 ### 4. Layout algorithm — timeline flow
 
@@ -275,6 +278,7 @@ frontend/src/components/graph/
   SubagentNode.vue
   ResultRollupNode.vue
   TaskEventNode.vue
+  CompactionNode.vue         — renders pre/post token counts, trigger, duration
   SystemInitNode.vue         — visually minimal
   RateLimitNode.vue
   ParseWarningNode.vue
@@ -299,14 +303,15 @@ Selecting any node opens the detail panel. Contents per kind:
 
 - `topic`: subject, workspace, message count, total tool_use count, aggregate cost/tokens (summed from `result-rollup` nodes). If `graph.summaries.length`, render `<SummaryOverlay scope="topic">`.
 - `user-message`: full text (markdown), attachments as thumbnails/links, dispatch metadata (agent_name, adapter, subagent, model, session_id, is_new_session). "Open in chat" link → `/workspaces/:wsId/topics/:topicId#msg-<id>` in a new tab.
-- `agent-message`: full final text (markdown), interrupt reason if any, model, aggregate cost/tokens for that message. `messageSummaries[messageId]` rendered if present. "Open in chat" link.
+- `agent-message`: full final text (markdown), interrupt reason if any, model, aggregate cost/tokens for that message. When `data.interrupted` is true, the card and detail panel show an amber "interrupted" badge, the body renders `"(message interrupted)"`, and no subtree / rollup section is rendered. `messageSummaries[messageId]` rendered if present. "Open in chat" link.
 - `thinking`: full thinking text, monospace, purple-tinted (matches chat view).
 - `text`: full text.
-- `tool-use`: tool name, full input as pretty JSON (uses `tr-json` styling), link to the paired `tool-result` node.
-- `tool-result`: full result content, `isError` badge, link to the paired `tool-use`.
+- `tool-use`: tool name, full input as pretty JSON (uses `tr-json` styling), link to the paired `tool-result` node. For MCP tools the card shows two badges — server (`data.mcpServer`) and tool (`data.mcpTool`) — while the detail panel keeps the full `mcp__<server>__<tool>` name for copy-paste.
+- `tool-result`: full result content, `isError` badge (red border + error icon when `data.isError` is true; identical treatment to the `error` state used by chat bubbles), link to the paired `tool-use`.
 - `subagent`: `agentType`, prompt, aggregate `totalDurationMs`/`totalTokens`/`totalToolUseCount`, summary field if the pipeline populated one. Buttons "Expand subtree" / "Collapse subtree".
 - `result-rollup`: cost, duration, turn count, usage table. `isError` badge.
-- `task-event`: description, subtype, subagent type.
+- `task-event`: description, subtype (`task_started` / `task_progress` / `task_updated` / `task_notification`), `taskType` (`local_agent` / `local_bash`), `subagentType` for `local_agent`, `patch` block for `task_updated`, `status` / `endTime` when set.
+- `compaction`: `trigger`, `preTokens` → `postTokens` (with a percentage reduction), `durationMs`, `compactResult`. Rendered as a slim horizontal divider on the agent-message subtree with a chip label so it visually reads as a boundary.
 - others: raw JSON.
 
 **Keyboard:** `Esc` clears selection and closes the panel. `→` / `←` navigate to next/previous node by `sequence`. `Space` toggles collapsed state of the selected node.
