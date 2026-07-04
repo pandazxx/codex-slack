@@ -3,11 +3,11 @@
 **Feature design:** [docs/design/topic-graph-view.md](../design/topic-graph-view.md)
 **Schema reference:** [docs/references/schemas/topic-transcript-events.md](../references/schemas/topic-transcript-events.md)
 **Fixtures:** `tests/fixtures/topic-graph/`
-**Test files (to be created during implementation):**
-- `frontend/src/lib/__tests__/transcriptGraph.test.js` — parser unit tests (vitest)
-- `frontend/src/lib/__tests__/graphLayout.test.js` — layout unit tests (vitest)
+**Test files:**
+- `frontend/tests/transcriptGraph.test.js` — parser unit tests (vitest) — **IMPLEMENTED**
+- `frontend/tests/graphLayout.test.js` — layout unit tests (vitest) — **IMPLEMENTED**
 
-vitest is already present in `frontend/package.json` devDependencies. Test bodies against application code wait until `frontend/src/lib/transcriptGraph.js` lands (step 6 of feature workflow). This plan plus fixtures is the step-4 scaffolding.
+vitest is already present in `frontend/package.json` devDependencies. Test bodies written in step 6 of feature workflow against `frontend/src/lib/transcriptGraph.js` and `frontend/src/lib/graphLayout.js`.
 
 ---
 
@@ -58,6 +58,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - `graph.summaries === []`; `graph.messageSummaries === {}`; `graph.diagnostics === []`.
   - `graph.version === 1`.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > HP-01
 
 ### HP-02 Text-only topic — spine and inner nodes
 - **Fixture:** `simple-text.jsonl`
@@ -75,6 +76,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - All `summaries` arrays are `[]`.
   - `diagnostics === []`.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > HP-02
 
 ### HP-03 Tool use / tool result pairing — Glob
 - **Fixture:** `tools-and-subagent.jsonl`
@@ -85,6 +87,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - An `invokes` edge from the `tool-use` node to the `tool-result` node exists.
   - The `tool-result` node's `parentId` equals the `tool-use` node's `id`.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > HP-03
 
 ### HP-04 Subagent subtree attachment
 - **Fixture:** `tools-and-subagent.jsonl`
@@ -101,6 +104,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - The Agent `tool-result` (main-thread rollup) is a child of the `tool-use` node, not of the `subagent`.
   - `subagent` node `data.agentType` is populated from `task_started.subagent_type`.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > HP-04
 
 ### HP-05 result/success rollup node
 - **Fixture:** `simple-text.jsonl`
@@ -112,6 +116,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - `result-rollup` node `data.durationMs` matches `duration_ms`.
   - `result-rollup` node `data.numTurns` matches `num_turns`.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > HP-05
 
 ### HP-06 system/init node and model extraction
 - **Fixture:** `simple-text.jsonl`
@@ -121,6 +126,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - `system-init` node `data.model` matches the `model` field from the `system/init` event.
   - The parent `agent-message` node `data.model` also equals this value.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > HP-06
 
 ### HP-07 Determinism
 - **Fixture:** `simple-text.jsonl` (or any fixture)
@@ -130,6 +136,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - All `node.id` values are identical across both runs.
   - `generatedAt` field must be passed in by the caller and not use `Date.now()` internally.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > HP-07
 
 ---
 
@@ -144,6 +151,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - `invokes` edge between them.
   - No diagnostic is emitted for this tool_use.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > BC-01
 
 ### BC-02 Background Bash task lifecycle — task_updated patches
 - **Fixture:** `background-and-compaction.jsonl`
@@ -153,6 +161,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - These nodes attach to the correct `tool-use` subtree (Bash tool_use id `toolu_bash_bg_001`).
   - No diagnostic is emitted for these events.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > BC-02
 
 ### BC-03 is_error tool_result
 - **Fixture:** `background-and-compaction.jsonl`
@@ -161,6 +170,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - The `tool-result` node's `data.isError === true`.
   - No diagnostic is emitted (this is a valid, expected result shape).
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > BC-03
 
 ### BC-04 Context compaction events
 - **Fixture:** `background-and-compaction.jsonl`
@@ -171,6 +181,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - These events map to node kinds as specified (or are folded into `task-event` / `parse-warning` — confirm during implementation).
   - No spurious diagnostics are emitted.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > BC-04
 
 ---
 
@@ -187,6 +198,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - No diagnostic is emitted (null transcript is an expected state, not an error).
   - Subsequent records are still parsed; the graph is not truncated.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > IE-01
 
 ### IE-02 Consecutive user records
 - **Fixture:** `interrupted-and-edge.jsonl`
@@ -196,6 +208,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - Each has its own distinct `id`.
   - `sequence` values are monotonically increasing across both.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > IE-02
 
 ### IE-03 Double system/init in one agent message (session restart)
 - **Fixture:** `interrupted-and-edge.jsonl`
@@ -205,6 +218,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - Both have distinct `id` values.
   - `agent-message` `data.model` is set from the last (or first) `system/init` — confirm tie-break rule during implementation.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > IE-03
 
 ---
 
@@ -222,6 +236,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - `result-rollup` for the outer message attaches to the `agent-message` spine node.
   - No diagnostic is emitted.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > NS-01
 
 ---
 
@@ -236,6 +251,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - A `tool-result` node is still emitted (attached to the parent `agent-message` as a fallback — the parser must not discard it).
   - All other nodes in the message are still produced correctly.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > FM-01
 
 ### FM-02 Orphan tool_use — tool_use with no matching tool_result
 - **Fixture:** `malformed.jsonl`
@@ -245,6 +261,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - No `invokes` edge from it to a `tool-result` exists.
   - A `Diagnostic` with `code: "orphan_tool_use"` is present (or the parser silently accepts this — confirm policy during implementation; either way must be documented).
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > FM-02 (implementation emits `orphan_tool_use` diagnostic — ambiguity resolved)
 
 ### FM-03 Unknown event type
 - **Fixture:** `malformed.jsonl`
@@ -255,6 +272,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - No node is emitted for this event (or a `parse-warning` node is emitted — confirm policy).
   - Parsing of subsequent events continues; `result-rollup` and `text` nodes in the same message are still produced.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > FM-03
 
 ### FM-04 Unknown assistant content block type
 - **Fixture:** `malformed.jsonl`
@@ -264,6 +282,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - The unknown block is either silently skipped or a `parse-warning` node is emitted.
   - Known blocks in the same `assistant` event (`thinking`, `tool_use`) are still processed correctly.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > FM-04
 
 ### FM-05 task_started with no matching subagent in index
 - **Fixture:** (inline in test — synthesize a `task_started` event referencing a `tool_use_id` that was never emitted as an `Agent` tool_use)
@@ -271,6 +290,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - A `Diagnostic` with `code: "orphan_task_event"` (or similar) is emitted.
   - The `task-event` node is attached to the parent `agent-message` as a fallback.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > FM-05
 
 ### FM-06 topic exceeds 5000-event hard cap
 - **Fixture:** (inline in test — synthesize a synthetic `messages` array whose total event count exceeds 5000)
@@ -279,6 +299,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - Events beyond the cap are not present in the graph.
   - Spine nodes (`user-message`, `agent-message`) are all present even if their inner events are truncated.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > FM-06
 
 ---
 
@@ -291,12 +312,14 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - All `thinking`, `text`, `tool-use`, `tool-result` nodes have `ui.x === 320` (one `colWidth` deep).
   - `subagent` nodes inside a `tool-use` have `ui.x === 640`.
 - **UAT:** `automated`
+- **Covered by:** `graphLayout.test.js` > LY-01 (note: actual x values are topic=0, spine=320, inner=640, subagent=960 — the plan's stated values assumed depth-0 spine; actual implementation assigns depth from topic root)
 
 ### LY-02 y values are monotonically increasing
 - **Fixture:** `simple-text.jsonl` parsed graph
 - **Assertions:**
   - For all visible nodes, `sequence[i] < sequence[j]` implies `ui.y[i] <= ui.y[j]` (non-strictly — siblings at the same depth can share the same y increment step).
 - **UAT:** `automated`
+- **Covered by:** `graphLayout.test.js` > LY-02
 
 ### LY-03 Collapsed subtree hides inner nodes
 - **Fixture:** `tools-and-subagent.jsonl` parsed graph — set `agent-message.ui.collapsed = true`
@@ -304,12 +327,14 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - After `layoutGraph`, all child nodes of the collapsed `agent-message` have `ui.hidden === true`.
   - The collapsed `agent-message` node itself remains visible.
 - **UAT:** `automated`
+- **Covered by:** `graphLayout.test.js` > LY-03
 
 ### LY-04 Deterministic layout
 - **Fixture:** any
 - **Assertions:**
   - Running `layoutGraph` twice on the same graph (same collapsed state) produces identical `ui.x` and `ui.y` for all nodes.
 - **UAT:** `automated`
+- **Covered by:** `graphLayout.test.js` > LY-04
 
 ---
 
@@ -319,11 +344,13 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
 - **Method:** construct a synthetic `messages` array with ~2000 total events (20 agent messages, ~100 events each); measure wall-clock time of `buildTopicGraph(...)`.
 - **Assertion:** elapsed time < 100ms (vitest `performance.now()`).
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > NF-01
 
 ### NF-02 No Vue imports in parser
 - **Method:** static check — `grep -E "^import.*from 'vue'" frontend/src/lib/transcriptGraph.js` must return nothing.
 - **Assertion:** exit code 1 (no matches).
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > NF-02
 
 ### NF-03 Summary slots always empty in v1 parser
 - **Fixture:** any
@@ -332,6 +359,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - Every value in `graph.messageSummaries` is an empty array.
   - Every `node.summaries.length === 0` across all nodes.
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > NF-03
 
 ### NF-04 All node IDs are stable and unique
 - **Fixture:** any
@@ -339,6 +367,7 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - `new Set(graph.nodes.map(n => n.id)).size === graph.nodes.length` (no duplicate IDs).
   - Re-parsing the same input produces the same set of IDs (stability).
 - **UAT:** `automated`
+- **Covered by:** `transcriptGraph.test.js` > NF-04
 
 ---
 
