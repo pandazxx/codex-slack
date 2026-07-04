@@ -30,15 +30,21 @@ _CODEX_MODELS_FALLBACK = [
 ]
 
 
-async def _fetch_claude_models(api_key: str | None) -> list[str]:
-    if not api_key:
+async def _fetch_claude_models(api_key: str | None, oauth_token: str | None = None) -> list[str]:
+    # Build auth headers: prefer explicit API key, fall back to OAuth token (claude -p mode).
+    headers: dict[str, str] = {"anthropic-version": "2023-06-01"}
+    if api_key:
+        headers["x-api-key"] = api_key
+    elif oauth_token:
+        headers["Authorization"] = f"Bearer {oauth_token}"
+    else:
         return _CLAUDE_MODELS_FALLBACK
     try:
         import httpx
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(
                 "https://api.anthropic.com/v1/models",
-                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                headers=headers,
                 params={"limit": 100},
             )
             if r.is_success:
@@ -54,7 +60,15 @@ async def _fetch_claude_models(api_key: str | None) -> list[str]:
     return _CLAUDE_MODELS_FALLBACK
 
 
-async def _fetch_codex_models(api_key: str | None) -> list[str]:
+async def _fetch_codex_models(api_key: str | None, codex_auth_json: str | None = None) -> list[str]:
+    # Fall back to extracting a token from CODEX_AUTH_JSON (codex CLI auth file content).
+    if not api_key and codex_auth_json:
+        try:
+            import json as _json
+            auth = _json.loads(codex_auth_json)
+            api_key = auth.get("token") or auth.get("api_key") or auth.get("key")
+        except Exception:
+            pass
     if not api_key:
         return _CODEX_MODELS_FALLBACK
     try:
@@ -321,10 +335,12 @@ async def list_adapter_models(request: Request, adapter: str = "claude-code") ->
     global_env = load_global_env(db_path)
     if adapter == "claude-code":
         api_key = settings.anthropic_api_key or global_env.get("ANTHROPIC_API_KEY")
-        models = await _fetch_claude_models(api_key)
+        oauth_token = settings.claude_code_oauth_token or global_env.get("CLAUDE_CODE_OAUTH_TOKEN")
+        models = await _fetch_claude_models(api_key, oauth_token)
     else:
         api_key = settings.openai_api_key or global_env.get("OPENAI_API_KEY")
-        models = await _fetch_codex_models(api_key)
+        codex_auth_json = global_env.get("CODEX_AUTH_JSON")
+        models = await _fetch_codex_models(api_key, codex_auth_json)
     return {"adapter": adapter, "models": models}
 
 
