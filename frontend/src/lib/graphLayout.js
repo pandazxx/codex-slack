@@ -41,8 +41,11 @@ export function layoutGraph(graph, {
   }
 
   let runningY = 0
+  const visited = new Set()
 
   function visit(node, depth, collapsedAncestorY) {
+    if (visited.has(node.id)) return false
+    visited.add(node.id)
     const isHidden = collapsedAncestorY !== null
     node.ui.hidden = isHidden
     node.ui.x = depth * colWidth

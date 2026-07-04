@@ -54,7 +54,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, shallowRef, triggerRef, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -91,7 +91,7 @@ const topicId = route.params.topicId
 
 const topic = ref(null)
 const workspace = ref(null)
-const graph = ref(null)
+const graph = shallowRef(null)
 const loading = ref(true)
 const loadError = ref('')
 const selectedNodeId = ref(route.query.node ?? null)
@@ -189,6 +189,7 @@ function saveMinimapPref() {
 function recomputeLayout() {
   if (!graph.value) return
   layoutGraph(graph.value)
+  triggerRef(graph)
 }
 
 function toggleCollapse(nodeOrData) {
@@ -285,7 +286,10 @@ async function load() {
     const messages = await msgsRes.json()
     if (wsRes.ok) workspace.value = await wsRes.json()
 
-    const maxEvents = route.query.maxEvents ? Number(route.query.maxEvents) : undefined
+    const parsedMaxEvents = Number(route.query.maxEvents)
+    const maxEvents = Number.isFinite(parsedMaxEvents) && parsedMaxEvents > 0
+      ? parsedMaxEvents
+      : undefined
     const built = buildTopicGraph({
       workspaceId: wsId,
       topicId,
@@ -293,10 +297,11 @@ async function load() {
       workspaceName: workspace.value?.name ?? '',
       messages,
       generatedAt: new Date().toISOString(),
-      ...(maxEvents != null ? { maxEvents } : {}),
+      ...(maxEvents !== undefined ? { maxEvents } : {}),
     })
     layoutGraph(built)
     graph.value = built
+    triggerRef(graph)
 
     if (selectedNodeId.value) {
       const exists = built.nodes.some(n => n.id === selectedNodeId.value)
@@ -307,10 +312,6 @@ async function load() {
   } finally {
     loading.value = false
   }
-}
-
-function onHashScroll() {
-  // no-op for graph view; hash-based deep links are handled via ?node=
 }
 
 onMounted(async () => {

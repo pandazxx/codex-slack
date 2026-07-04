@@ -2,6 +2,7 @@
  * Shared styles for graph node cards.
  * Import this from each node component's <style> block.
  */
+@import '../../styles/trace.css';
 
 .gn-card {
   background: #fff;
