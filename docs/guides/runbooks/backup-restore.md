@@ -26,21 +26,21 @@ Run all steps on the **source host** (or from a machine with `DOCKER_HOST` point
 
 ### Step 1 — list workspace IDs
 
-Get workspace IDs from the running master container:
+Use a temporary sidecar container with sqlite3 to query the database volume:
 
 ```bash
-docker exec codex-slack-master \
-  sqlite3 /opt/codex-slack/data/master/master_data.db \
-  "SELECT id FROM workspaces;"
+docker run --rm \
+  -v master_data:/data:ro \
+  alpine sqlite3 /data/master_data.db "SELECT id FROM workspaces;"
 ```
 
 Save the output — you need this list for step 3.
 
-If master is not running, copy the DB to a local path first and query it there:
+Alternatively, if you prefer not to query, you can skip this step and back up all Claude volumes that exist on the host:
 
 ```bash
-docker cp codex-slack-master:/opt/codex-slack/data/master/master_data.db /tmp/master_data.db
-sqlite3 /tmp/master_data.db "SELECT id FROM workspaces;"
+# List all claude-session volumes currently on the host
+docker volume ls -q | grep "^codex-claude-"
 ```
 
 ### Step 2 — back up the SQLite database
@@ -56,7 +56,7 @@ docker cp codex-slack-master:/opt/codex-slack/data/master/master_data.db \
 
 ### Step 3 — back up Claude session volumes
 
-Repeat for every workspace ID from step 1:
+**Option A** — if you have workspace IDs from step 1:
 
 ```bash
 WORKSPACE_IDS="ws-id-1 ws-id-2 ws-id-3"   # fill in from step 1
@@ -64,6 +64,19 @@ WORKSPACE_IDS="ws-id-1 ws-id-2 ws-id-3"   # fill in from step 1
 for WID in $WORKSPACE_IDS; do
   docker run --rm \
     -v codex-claude-${WID}:/data:ro \
+    -v $(pwd)/codex-backup:/backup \
+    alpine tar czf /backup/claude-sessions-${WID}.tar.gz /data
+  echo "backed up claude sessions for workspace ${WID}"
+done
+```
+
+**Option B** — automatically back up all claude-session volumes on the host:
+
+```bash
+docker volume ls -q | grep "^codex-claude-" | while read VOL; do
+  WID=${VOL#codex-claude-}
+  docker run --rm \
+    -v ${VOL}:/data:ro \
     -v $(pwd)/codex-backup:/backup \
     alpine tar czf /backup/claude-sessions-${WID}.tar.gz /data
   echo "backed up claude sessions for workspace ${WID}"
@@ -142,16 +155,19 @@ docker run --rm \
 
 ### Step 4 — restore Claude session volumes
 
-```bash
-WORKSPACE_IDS="ws-id-1 ws-id-2 ws-id-3"   # same list as backup step 1
+Automatically restore all Claude backup archives found in `./codex-backup/`:
 
-for WID in $WORKSPACE_IDS; do
-  docker volume create codex-claude-${WID}
-  docker run --rm \
-    -v codex-claude-${WID}:/restore \
-    -v $(pwd)/codex-backup:/backup:ro \
-    alpine tar xzf /backup/claude-sessions-${WID}.tar.gz -C /restore --strip-components=1
-  echo "restored claude sessions for workspace ${WID}"
+```bash
+for ARCHIVE in ./codex-backup/claude-sessions-*.tar.gz; do
+  if [ -f "$ARCHIVE" ]; then
+    WID=$(basename "$ARCHIVE" | sed 's/claude-sessions-//; s/.tar.gz//')
+    docker volume create codex-claude-${WID}
+    docker run --rm \
+      -v codex-claude-${WID}:/restore \
+      -v $(pwd)/codex-backup:/backup:ro \
+      alpine tar xzf /backup/claude-sessions-${WID}.tar.gz -C /restore --strip-components=1
+    echo "restored claude sessions for workspace ${WID}"
+  fi
 done
 ```
 
