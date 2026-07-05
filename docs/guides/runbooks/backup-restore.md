@@ -11,8 +11,10 @@
 | Component | State | Backup needed? |
 |-----------|-------|---------------|
 | `master_data` Docker volume (SQLite) | Durable | Yes — all workspaces, topics, messages, staff configs |
-| `codex-claude-{workspace_id}` volumes | Durable | Yes — Claude Code session state per workspace |
+| `codex-claude-{workspace_id}` volumes | Durable | Yes — Claude Code LLM session state per workspace |
+| `codex-codex-{workspace_id}` volumes | Durable | Yes (optional) — Codex agent config and auth per workspace |
 | `.env` file | Durable | Yes — API keys and secrets |
+| Workspace git clones + worktrees | Ephemeral | No — live in agent container writable layer; re-cloned from GitHub on respawn |
 | `mosquitto` container | Ephemeral | No — `persistence false`, no durable state |
 | Agent containers (`codex-agent-*`) | Ephemeral | No — master respawns them on demand |
 | Docker images | Registry-sourced | No — pulled from registry at deploy time |
@@ -56,6 +58,8 @@ docker cp codex-slack-master:/opt/codex-slack/data/master/master_data.db \
 
 ### Step 3 — back up Claude session volumes
 
+LLM conversation context is preserved in `codex-claude-{workspace_id}` volumes. Back these up:
+
 **Option A** — if you have workspace IDs from step 1:
 
 ```bash
@@ -80,6 +84,21 @@ docker volume ls -q | grep "^codex-claude-" | while read VOL; do
     -v $(pwd)/codex-backup:/backup \
     alpine tar czf /backup/claude-sessions-${WID}.tar.gz /data
   echo "backed up claude sessions for workspace ${WID}"
+done
+```
+
+### Step 3b — (optional) back up Codex config volumes
+
+Agent configuration for Codex is stored in `codex-codex-{workspace_id}` volumes. This is optional — if not backed up, Codex agents will be re-initialized on first use:
+
+```bash
+docker volume ls -q | grep "^codex-codex-" | while read VOL; do
+  WID=${VOL#codex-codex-}
+  docker run --rm \
+    -v ${VOL}:/data:ro \
+    -v $(pwd)/codex-backup:/backup \
+    alpine tar czf /backup/codex-config-${WID}.tar.gz /data
+  echo "backed up codex config for workspace ${WID}"
 done
 ```
 
@@ -171,6 +190,24 @@ for ARCHIVE in ./codex-backup/claude-sessions-*.tar.gz; do
 done
 ```
 
+### Step 4b — (optional) restore Codex config volumes
+
+If you backed up Codex config volumes in step 3b, restore them:
+
+```bash
+for ARCHIVE in ./codex-backup/codex-config-*.tar.gz; do
+  if [ -f "$ARCHIVE" ]; then
+    WID=$(basename "$ARCHIVE" | sed 's/codex-config-//; s/.tar.gz//')
+    docker volume create codex-codex-${WID}
+    docker run --rm \
+      -v codex-codex-${WID}:/restore \
+      -v $(pwd)/codex-backup:/backup:ro \
+      alpine tar xzf /backup/codex-config-${WID}.tar.gz -C /restore --strip-components=1
+    echo "restored codex config for workspace ${WID}"
+  fi
+done
+```
+
 ### Step 5 — pull images and start
 
 ```bash
@@ -198,7 +235,7 @@ docker compose ps
 - **UI shows all data immediately.** Workspaces, topics, and message history load from the restored SQLite DB.
 - **Agent containers are not running.** This is normal — master spawns them on first use when a user sends a message to a workspace. There is no manual step required.
 - **Claude sessions resume.** LLM conversation context is preserved from the restored volumes; agents pick up where they left off.
-- **Git worktrees are re-created automatically.** Each topic has a `branch_name` and `worktree_path` in the DB. When an agent container respawns, it re-clones the repo from GitHub and re-creates worktrees. Branches are preserved on GitHub — nothing is lost.
+- **Git worktrees are re-created on first use.** Agent containers don't persist git clones or worktrees (they live in the container's ephemeral layer). When an agent container starts, it re-clones the repo from GitHub and re-creates the topic worktrees based on metadata in SQLite. All branches and commits are safe on GitHub — nothing is lost. Worktree re-creation is automatic and transparent; no manual steps are needed.
 
 ---
 
