@@ -116,22 +116,15 @@ curl http://master-host:8080/health
 
 Local and non-tagged CI builds report `version: "dev"`, which is an unambiguous signal that the image was not produced by a tagged RC build.
 
-## Data Backup
+## Data Backup and Restore
 
-The entire state (workspaces, topics, messages, sessions) is in the SQLite file:
+All durable state lives in:
 
-```bash
-docker cp codex-slack-master:/opt/codex-slack/data/master/master_data.db ./backup-$(date +%Y%m%d).db
-```
+- `master_data` Docker volume — SQLite DB (workspaces, topics, messages, sessions, staff configs)
+- `codex-claude-{workspace_id}` Docker volumes — per-workspace Claude Code session state
 
-Claude session state (resumes across container restarts) lives in named volumes `codex-claude-{workspace_id}`. Back these up with:
-
-```bash
-docker run --rm \
-  -v codex-claude-<workspace_id>:/data:ro \
-  -v $(pwd)/backup:/backup \
-  alpine tar czf /backup/claude-sessions-<workspace_id>.tar.gz /data
-```
+For full backup and restore procedures, including migrating to a new Docker host, see:
+[`docs/guides/runbooks/backup-restore.md`](../guides/runbooks/backup-restore.md)
 
 ## Related References
 
@@ -139,4 +132,5 @@ docker run --rm \
 - [`docs/references/api.md`](../references/api.md) — REST API, WebSocket, MQTT reference
 - [`docs/guides/runbooks/master-agent.md`](../guides/runbooks/master-agent.md) — operational runbook for production operation
 - [`docs/guides/runbooks/cd-daemon.md`](../guides/runbooks/cd-daemon.md) — automated deployment (CD daemon)
+- [`docs/guides/runbooks/backup-restore.md`](../guides/runbooks/backup-restore.md) — backup and restore (including host migration)
 - `docs/releases/` — release-specific changes and migration notes
