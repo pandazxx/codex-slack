@@ -27,6 +27,15 @@ size of this project (single-host docker compose, one master container per
 env) and it makes issue #245's "one entry point" goal impossible without
 first collapsing shapes.
 
+The target model is **three environment levels, two shapes**. Dev is the
+multi-tenant, multi-stack, disposable environment where developers and code
+agents each run one stack per ongoing branch — built from the current
+commit, no tagging, routed by Traefik. Staging and prod are exactly the
+same shape: a single long-lived stack per host, deployed only from frozen
+CI-built image tags, master published on host port 8080. This ADR changes
+nothing about the dev level — it collapses the two competing staging
+shapes into the prod shape.
+
 ## Decision Drivers
 
 - Reduce the number of staging topologies from two to one. Two topologies

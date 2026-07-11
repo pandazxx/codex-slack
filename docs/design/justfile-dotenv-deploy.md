@@ -82,22 +82,40 @@ published on a fixed port. The tooling has to respect that split — see
 
 ## Proposed Design
 
-### Environment shapes (invariant)
+### Environments: three levels, two shapes (invariant)
 
-The environments have two topologies, not three. The tooling must preserve the
-split — a recipe that flattened them into one would break either the dev
-workflow (which needs many stacks per host) or the staging/prod workflow
-(which expects a single, host-port-published stack).
+The project runs **three environment levels** — dev, staging, prod:
 
-| Aspect | Dev (`DEV_DOCKER_HOST`) | Staging / Prod (`STAGING_DOCKER_HOST`, `PROD_DOCKER_HOST`) |
-|---|---|---|
-| Instances per host | N (one per branch) | 1 (singleton) |
-| Compose project name | Branch slug (`<branch>-master`) | Fixed per env (`codex-slack`) |
-| Host port publication | None | `${MASTER_PORT:-8080}:8080` on the host |
-| Ingress | Traefik on `sre-traefik-public`, routed by `master.<slug>.<ip-dashed>.nip.io` | Direct host port; no Traefik dependency |
-| Image | Built from source (`target: dev`) per branch | Pulled by digest (`${MASTER_RUNTIME_IMAGE}@${IMAGE_DIGEST}`) |
-| Compose files | `docker-compose.yml` + `docker-compose.override.yml` | `docker-compose.yml` + **new** `docker-compose.deploy.yml` |
-| Upgrade path | `build` + `up -d` under branch-slug project | `up -d` under fixed project name replaces the running container in place |
+- **Dev** is the multi-tenant working environment used by developers and
+  code agents. It hosts many stacks at once — one per ongoing development
+  branch/build — each built from the *current commit* of its branch. There
+  is no tagging and no registry round-trip; stacks are continuously
+  replaced and disposable. Traefik exists precisely to route between the
+  coexisting stacks (`master.<branch-slug>.<ip-dashed>.nip.io`).
+- **Staging** and **prod** are *exactly the same shape*. Each runs a single
+  stack per host, deployed only from a frozen, CI-built image tag (resolved
+  to an immutable digest), with the master published on host port
+  `${MASTER_PORT:-8080}`. The only differences between the two are the
+  target host (`STAGING_DOCKER_HOST` vs `PROD_DOCKER_HOST`) and which tags
+  typically land there (`master` / `v*-rc*` on staging, `v*` on prod).
+
+So: three levels, two shapes. The tooling must preserve the split — a recipe
+that flattened the shapes into one would break either the dev workflow
+(which needs many stacks per host) or the staging/prod workflow (which
+expects a single, host-port-published stack).
+
+| Aspect | Dev (`DEV_DOCKER_HOST`) | Staging (`STAGING_DOCKER_HOST`) | Prod (`PROD_DOCKER_HOST`) |
+|---|---|---|---|
+| Instances per host | N (one per branch/build) | 1 (singleton) | 1 (singleton) |
+| Tenancy & lifetime | Multi-tenant, continuously progressing, disposable | Long-lived | Long-lived |
+| Compose project name | Branch slug (`<branch>-master`) | Fixed (`codex-slack`) | Fixed (`codex-slack`) |
+| Host port publication | None | `${MASTER_PORT:-8080}:8080` | `${MASTER_PORT:-8080}:8080` |
+| Ingress | Traefik on `sre-traefik-public`, routed by `master.<slug>.<ip-dashed>.nip.io` | Direct host port; no Traefik | Direct host port; no Traefik |
+| Image | Built from current commit (`target: dev`), per branch — no tags | Frozen CI tag, pulled by digest | Frozen CI tag, pulled by digest |
+| Typical tags | — (branch-based) | `master`, `v*-rc*` | `v*` |
+| Compose files | `docker-compose.yml` + `docker-compose.override.yml` | `docker-compose.yml` + **new** `docker-compose.deploy.yml` | `docker-compose.yml` + **new** `docker-compose.deploy.yml` |
+| Deploy recipe | `just dev-up [branch]` | `just deploy staging <tag>` | `just deploy prod <tag>` |
+| Upgrade path | rebuild + `up -d` under branch-slug project | `up -d` under fixed project name replaces in place | same as staging |
 
 There is no separate "staging-UAT" shape. Pre-merge UAT of a release
 candidate happens by deploying the `v*-rc*` tag to the staging singleton
@@ -121,7 +139,7 @@ table — they are retired along with `docker-compose.staging.yml`.
 
 | Recipe | Shape | Purpose | Args | Runbook it backs |
 |---|---|---|---|---|
-| `just dev-up [branch]` | Traefik / dev | Build dev stage on `DEV_DOCKER_HOST`, bring up, wait for health. Defaults `branch` to current git branch. | `branch?` | `env-up.md` |
+| `just dev-up [branch]` | Traefik / dev | **Issue #245's dev path:** deploy the *current commit* to the dev env with Traefik access. Builds the dev stage on `DEV_DOCKER_HOST` from the working tree, brings the branch stack up alongside other branches' stacks, waits for health. Defaults `branch` to current git branch. | `branch?` | `env-up.md` |
 | `just dev-down [branch]` | Traefik / dev | Tear down dev env for a branch. | `branch?` | `env-down.md` |
 | `just deploy <env> <tag>` | Singleton | **New for #245.** Resolve `<tag>` to a digest, pull, `up -d` on `<env>_DOCKER_HOST` using `docker-compose.yml` + **new** `docker-compose.deploy.yml`. Fixed project name `codex-slack` per env. Publishes `${MASTER_PORT:-8080}:8080` on the host. Replaces the running singleton in place. `<env>` in {`staging`,`prod`}. | `env`, `tag` | `deploy.md` (new) |
 | `just undeploy <env>` | Singleton | **New for #245.** `down` the fixed-name compose project on `<env>_DOCKER_HOST`. Takes no tag — there is only one instance to bring down. | `env` | `undeploy.md` (new) |
@@ -395,6 +413,30 @@ recipe to wrap.
 - CI is unaffected — CI workflows call `docker compose` directly (per
   ADR-0005), not the runbook scripts. If CI later wants to reuse a recipe,
   install `just` in the workflow step.
+
+### Sequence example: `just dev-up feat-auth`
+
+Dev shape. Deploys the current commit of `feat-auth` to the multi-tenant dev
+host — the new stack coexists with every other branch's stack, and Traefik
+routes to it by hostname. No tags, no registry.
+
+```mermaid
+sequenceDiagram
+    participant U as Developer/code agent
+    participant J as justfile
+    participant D as docker CLI (local)
+    participant H as DEV_DOCKER_HOST
+
+    U->>J: just dev-up feat-auth
+    J->>J: load .env and export DOCKER_HOST from DEV_DOCKER_HOST
+    J->>J: compute BRANCH_SLUG, HOST_IP_DASHED, APP_VERSION from git
+    J->>D: docker compose -p feat-auth -f base -f override build master
+    D->>H: build dev image from current commit via SSH
+    J->>D: docker compose -p feat-auth -f base -f override up -d
+    D->>H: start branch stack, join sre-traefik-public
+    J->>D: healthcheck poll via Traefik hostname
+    J->>U: print http URL master.feat-auth.ip-dashed.nip.io
+```
 
 ### Sequence example: `just deploy staging v4.19-rc1`
 
