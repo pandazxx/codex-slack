@@ -3,7 +3,7 @@
 **Status:** draft
 **Author:** architect
 **Date:** 2026-07-11
-**Related ADRs:** ADR-0005 (CI/CD Pipeline Design), issue #245
+**Related ADRs:** ADR-0005 (CI/CD Pipeline Design — superseded in part by ADR-0016), ADR-0016 (Singleton tag-based staging/prod deploys), issue #245
 
 ## Problem Statement
 
@@ -15,6 +15,13 @@ variables belong to which script, export them by hand, and know which
 "deploy this version to *that* environment" — staging is hardwired to
 `STAGING_DOCKER_HOST` and production has no path at all.
 
+In parallel, ADR-0005's pull-based CD daemon (`src/cd/`) has proven to be more
+machinery than we need for a single-host project with an already-explicit
+promotion pipeline. Its polling lag, its own `.env` generator
+(`scripts/gen-env.sh`), and its coexistence footprint on every staging/prod
+host add operational surface that a single `just deploy` command replaces
+cleanly. Issue #245 is the trigger to consolidate.
+
 Issue #245 asks us to:
 
 1. Make `docker-compose.yml` variables and per-environment Docker host endpoints
@@ -24,7 +31,7 @@ Issue #245 asks us to:
    current commit for dev.
 
 The environments do not share a topology. Dev runs many stacks per host behind
-Traefik (one per branch); staging and prod run a single stack per host
+Traefik (one per branch); staging and prod each run a single stack per host
 published on a fixed port. The tooling has to respect that split — see
 "Environment shapes (invariant)" below.
 
@@ -38,16 +45,24 @@ published on a fixed port. The tooling has to respect that split — see
 - Per-environment singleton deploys are generic: `just deploy <env> <tag>`
   works for `staging` today and `prod` the day a `PROD_DOCKER_HOST` is
   populated. The two envs share one recipe body because they share a shape.
-- Preserve ADR-0005 immutability guarantees for staging/prod: recipes accept a
-  human tag, resolve to a digest, deploy by digest.
+- Preserve ADR-0005's immutability guarantees for staging/prod: recipes accept
+  a human tag, resolve to a digest, deploy by digest.
 - Dev flow keeps its build-from-source-per-commit shape, N-per-host, and
   Traefik hostname routing.
-- Staging-UAT flow (feature-branch staging + canonical staging refresh)
-  keeps its multi-version Traefik shape unchanged; `staging-up`/`staging-down`
-  recipes replace the shell scripts but preserve semantics exactly.
-- Existing runbook contracts (`.sre/operations/*.md`) keep working for the
-  `sre` agent with minimal churn — recipes are the new implementation but the
-  named operations, inputs, and outputs are unchanged.
+- **Retire the CD daemon.** `just deploy <env> <tag>` is the only staging/prod
+  deploy path going forward. `src/cd/`, `Dockerfile.cd-daemon`,
+  `docker-compose.cd-daemon.example.yml`, `scripts/gen-env.sh`, the
+  `cd-daemon.md` runbook, and the `build-cd-daemon` CI job are removed. This
+  supersedes ADR-0005 §2 and §4 — see ADR-0016.
+- **Retire the multi-version Traefik staging shape.** The feature-branch
+  staging UAT flow (`.sre/operations/staging-up.md` /
+  `staging-down.md`, `docker-compose.staging.yml`, `VERSION_SLUG`-based
+  hostnames on `STAGING_DOCKER_HOST`) is removed. Staging becomes a
+  singleton, matching production.
+- Existing dev-side runbook contracts (`env-up`, `env-down`, `status`,
+  `logs`, `shell`, `test`) keep working for the `sre` agent with minimal
+  churn — recipes are the new implementation but the named operations,
+  inputs, and outputs are unchanged.
 - Real shell environment continues to override `.env` so CI, the `sre` agent's
   exported vars, and one-off overrides still win.
 
@@ -57,22 +72,22 @@ published on a fixed port. The tooling has to respect that split — see
   running host — no `PROD_DOCKER_HOST` is provisioned here.
 - Reintroducing implicit local-Docker fallback. `DEV_DOCKER_HOST=unix://...` is
   the supported way to target a local socket; the recipes never guess.
-- Replacing the CD daemon or ADR-0005's promotion flow. Justfile is a
-  *manual/agent* deploy tool; CD daemon still owns staging/prod on the merged
-  main line.
-- Consolidating `scripts/gen-env.sh` (CD-daemon runtime `.env` generator) into
-  this new `.env`. Different concern, different consumer; kept separate.
-- Rewriting the Slack bot config or Master runtime settings. Only compose-visible
-  variables are in scope.
+- Rewriting the Slack bot config or Master runtime settings. Only
+  compose-visible variables are in scope.
+- Changing ADR-0005's CI build/tag/promotion flow. `build-push.yml`'s
+  `build-master`, `build-agent-minimal`, and `promote` jobs — plus the
+  `:sha-<hash>` / `:v*-rc*` / `:rc` / `:v*` tagging strategy — remain as
+  ADR-0005 specified. Only the CD-daemon-related job (`build-cd-daemon`) and
+  the CD-daemon-based deploy model are removed.
 
 ## Proposed Design
 
 ### Environment shapes (invariant)
 
-The three environments have fundamentally different topologies. The tooling
-must preserve this split — a recipe that flattens the two shapes into one
-would break either the dev workflow (which needs many stacks per host) or the
-staging/prod workflow (which expects a single, host-port-published stack).
+The environments have two topologies, not three. The tooling must preserve the
+split — a recipe that flattened them into one would break either the dev
+workflow (which needs many stacks per host) or the staging/prod workflow
+(which expects a single, host-port-published stack).
 
 | Aspect | Dev (`DEV_DOCKER_HOST`) | Staging / Prod (`STAGING_DOCKER_HOST`, `PROD_DOCKER_HOST`) |
 |---|---|---|
@@ -84,61 +99,50 @@ staging/prod workflow (which expects a single, host-port-published stack).
 | Compose files | `docker-compose.yml` + `docker-compose.override.yml` | `docker-compose.yml` + **new** `docker-compose.deploy.yml` |
 | Upgrade path | `build` + `up -d` under branch-slug project | `up -d` under fixed project name replaces the running container in place |
 
-There is a second staging shape used *only* for the SRE UAT flow — the
-feature-branch and canonical staging envs behind Traefik that back
-`.sre/operations/staging-up.md` (see ADR-0005 and `docs/sre.md`). That shape
-is multi-version by design: several tags coexist on `STAGING_DOCKER_HOST`,
-each on `master.<version-slug>.<ip-dashed>.nip.io`, so reviewers can compare
-versions during UAT. It is backed by the existing `docker-compose.staging.yml`
-and is **not** what `just deploy` targets. `just deploy` is the
-production-style singleton path introduced for issue #245.
+There is no separate "staging-UAT" shape. Pre-merge UAT of a release
+candidate happens by deploying the `v*-rc*` tag to the staging singleton
+(one candidate at a time). Branch-level exploratory testing stays in the dev
+shape. See "Workflow implication" below.
 
 Recipes must preserve this split:
 
 - Dev recipes (`dev-up`, `dev-down`) — Traefik shape, project name = branch
   slug, N-per-host.
-- Staging-UAT recipes (`staging-up`, `staging-down`, `post-merge-cleanup`) —
-  Traefik shape, project name = version slug, N-per-host.
 - Deploy recipes (`deploy`, `undeploy`) — singleton shape, fixed project
   name per env, 1-per-host, published on `${MASTER_PORT:-8080}`.
 
 ### Recipe surface (justfile)
 
-Recipes stay 1-to-1 with `.sre/operations/*.md` names so runbook rewrites are
+Recipes stay aligned with `.sre/operations/*.md` names so runbook rewrites are
 mechanical. Positional args match the current script signatures where possible.
 
-The table below groups recipes by which of the two shapes they target. The
-Traefik-based flows (dev, staging-UAT) and the singleton flow (`deploy`/
-`undeploy`) are separate paths; a host runs either shape, not both.
+The staging-UAT recipes (`staging-up`, `staging-down`) do not appear in this
+table — they are retired along with `docker-compose.staging.yml`.
 
 | Recipe | Shape | Purpose | Args | Runbook it backs |
 |---|---|---|---|---|
 | `just dev-up [branch]` | Traefik / dev | Build dev stage on `DEV_DOCKER_HOST`, bring up, wait for health. Defaults `branch` to current git branch. | `branch?` | `env-up.md` |
 | `just dev-down [branch]` | Traefik / dev | Tear down dev env for a branch. | `branch?` | `env-down.md` |
-| `just staging-up <tag>` | Traefik / staging-UAT | Resolve `<tag>` → digest, pull, up on `STAGING_DOCKER_HOST` using `docker-compose.staging.yml`. Multi-version; project name = `<version-slug>`. Same semantics as `.sre/staging-up.sh` today. | `tag` | `staging-up.md` |
-| `just staging-down <tag>` | Traefik / staging-UAT | Bring down the version-slug staging project on `STAGING_DOCKER_HOST`. | `tag` | `staging-down.md` |
-| `just deploy <env> <tag>` | Singleton | **New for #245.** Resolve `<tag>` → digest, pull, `up -d` on `<env>_DOCKER_HOST` using `docker-compose.yml` + **new** `docker-compose.deploy.yml`. Fixed project name `codex-slack` per env. Publishes `${MASTER_PORT:-8080}:8080` on the host. Replaces the running singleton in place. `<env>` in {`staging`,`prod`}. | `env`, `tag` | (new — no legacy runbook) |
-| `just undeploy <env>` | Singleton | **New for #245.** `down` the fixed-name compose project on `<env>_DOCKER_HOST`. Takes no tag — there is only one instance to bring down. | `env` | (new — no legacy runbook) |
+| `just deploy <env> <tag>` | Singleton | **New for #245.** Resolve `<tag>` to a digest, pull, `up -d` on `<env>_DOCKER_HOST` using `docker-compose.yml` + **new** `docker-compose.deploy.yml`. Fixed project name `codex-slack` per env. Publishes `${MASTER_PORT:-8080}:8080` on the host. Replaces the running singleton in place. `<env>` in {`staging`,`prod`}. | `env`, `tag` | `deploy.md` (new) |
+| `just undeploy <env>` | Singleton | **New for #245.** `down` the fixed-name compose project on `<env>_DOCKER_HOST`. Takes no tag — there is only one instance to bring down. | `env` | `undeploy.md` (new) |
 | `just status` | — | List active compose projects on all configured hosts. | — | `status.md` |
-| `just logs <env> <service> [key]` | — | Stream logs for a service. `env` in {`dev`,`staging`,`prod`}. `key` is branch slug (dev) or version slug (staging-UAT); ignored for singleton `deploy` targets. | `env`, `service`, `key?` | `logs.md` |
+| `just logs <env> <service> [key]` | — | Stream logs for a service. `env` in {`dev`,`staging`,`prod`}. `key` is branch slug for dev; ignored for singleton `deploy` targets. | `env`, `service`, `key?` | `logs.md` |
 | `just shell <env> <service> [key]` | — | Exec interactive shell. Same `key` semantics as `logs`. | `env`, `service`, `key?` | `shell.md` |
 | `just test [pattern]` | — | Build test stage and run pytest on `DEV_DOCKER_HOST`. | `pattern?` | `test.md` |
-| `just post-merge-cleanup <branch> <tag>` | Traefik / staging-UAT | Refresh canonical staging (Traefik shape, `staging-up main`) + tear down feature-branch staging (`staging-down <tag>`). Unchanged from today. | `branch`, `tag` | `post-merge-cleanup.md` |
+| `just post-merge-cleanup <branch> [tag]` | Mixed | Refresh the staging singleton with the new master image (`deploy staging <tag>`, default `<tag>=master`) and tear down any dev env for `<branch>`. | `branch`, `tag?` | `post-merge-cleanup.md` |
 
-Note that `deploy`/`undeploy` are the singleton, port-8080 path introduced by
-issue #245; they do **not** replace `staging-up`/`staging-down`. The
-staging-UAT flow (feature-branch staging behind Traefik, canonical staging
-refresh on merge) continues to use the Traefik-shape recipes and their
-runbooks unchanged.
+`deploy`/`undeploy` are the singleton, port-8080 path introduced by
+issue #245. There is no longer a Traefik multi-version staging path.
 
 Composite/private helpers (leading `_`) hold shared logic so recipes stay flat:
 
-- `_slug SLUG_INPUT` — the branch/tag slug transform (`tr '/_.' '-' | lower`).
-- `_host-ip DOCKER_HOST` — extract and dash the host IP for `.nip.io`.
+- `_slug SLUG_INPUT` — the branch slug transform (`tr '/_.' '-' | lower`).
+- `_host-ip DOCKER_HOST` — extract and dash the host IP for `.nip.io` (dev
+  only).
 - `_docker-gid DOCKER_HOST` — the remote `stat -c '%g' /var/run/docker.sock`
   probe used by `env-up.sh` today.
-- `_resolve-digest IMAGE_REF` — `docker buildx imagetools inspect` or
-  `docker manifest inspect` to turn a tag into a `sha256:...`.
+- `_resolve-digest IMAGE_REF` — `docker buildx imagetools inspect` to turn a
+  tag into a `sha256:...`.
 
 ### Environment layering
 
@@ -163,15 +167,13 @@ Two layers, made explicit:
    - Dev (Traefik): `MASTER_RUNTIME_IMAGE`, `DOCKER_GID`, `BRANCH_SLUG`,
      `HOST_IP_DASHED`, `APP_VERSION`, `MASTER_SSH_AUTH_SOCK_PATH`,
      `DOCKER_HOST`.
-   - Staging-UAT (Traefik): `MASTER_RUNTIME_IMAGE`, `DOCKER_GID`,
-     `VERSION_SLUG`, `HOST_IP_DASHED`, `IMAGE_DIGEST`, `DOCKER_HOST`.
    - Singleton `deploy` (staging/prod): `MASTER_RUNTIME_IMAGE`, `DOCKER_GID`,
-     `IMAGE_DIGEST`, `MASTER_PORT`, `DOCKER_HOST`. No `BRANCH_SLUG`,
-     `VERSION_SLUG`, or `HOST_IP_DASHED` — the singleton overlay has no
-     Traefik labels or hostname routing.
+     `IMAGE_DIGEST`, `MASTER_PORT`, `DOCKER_HOST`. No `BRANCH_SLUG` or
+     `HOST_IP_DASHED` — the singleton overlay has no Traefik labels or
+     hostname routing.
 
    Compose reads these from the process environment. This mirrors what
-   `.sre/*.sh` do today for the Traefik shapes; the singleton set is new.
+   `.sre/*.sh` do today for the dev shape; the singleton set is new.
 2. **`.env` file** — carries the values that are stable per-machine (secrets,
    host endpoints, registry). `just` loads them into its own environment before
    the recipe body runs, so compose picks them up transitively.
@@ -185,14 +187,13 @@ export from the recipe is unambiguous and matches current script behaviour.
 
 ### New overlay: `docker-compose.deploy.yml`
 
-The singleton path needs its own overlay because `docker-compose.staging.yml`
-is Traefik-shaped and multi-version. `docker-compose.deploy.yml` sits next to
-`docker-compose.yml` and `docker-compose.staging.yml`, and is used only by
-`just deploy` / `just undeploy`. Sketch:
+The singleton path needs its own overlay. It sits next to `docker-compose.yml`
+and is used only by `just deploy` / `just undeploy`. `docker-compose.staging.yml`
+is deleted (see Implementation Plan). Sketch:
 
 ```yaml
 # Singleton overlay for `just deploy <env> <tag>`. One master per host,
-# published on the host port. No Traefik labels; no external Traefik network.
+# published on the host port. No Traefik labels, no external Traefik network.
 services:
   master:
     image: ${MASTER_RUNTIME_IMAGE:?MASTER_RUNTIME_IMAGE must be set}@${IMAGE_DIGEST:?IMAGE_DIGEST must be set}
@@ -215,7 +216,7 @@ services:
           cpus: "0.25"
 ```
 
-Key differences from `docker-compose.staging.yml`:
+Key differences from the (retired) `docker-compose.staging.yml`:
 
 - No `traefik.*` labels.
 - No `sre-traefik-public` network.
@@ -226,9 +227,7 @@ Key differences from `docker-compose.staging.yml`:
 The fixed compose project name (`-p codex-slack`) is what makes `up -d`
 behave as an in-place replacement: `docker compose` compares the running
 containers against the desired spec (which now points at a new digest), and
-recreates the master container. That is the deploy = upgrade path. This is
-the same singleton shape the CD daemon expects
-(`docker-compose.cd-daemon.example.yml` fixes `CD_CONTAINER_NAME=codex-slack-master`).
+recreates the master container. That is the deploy = upgrade path.
 
 ### Variable inventory
 
@@ -239,12 +238,12 @@ Split by *who computes it* and *whose secret it is*.
 | Variable | Purpose | Example | Notes |
 |---|---|---|---|
 | `DEV_DOCKER_HOST` | Dev host endpoint | `ssh://ubuntu@10.10.10.238` | Required for `dev-up`, `test`, `logs dev`, `shell dev`. `unix:///var/run/docker.sock` allowed. |
-| `STAGING_DOCKER_HOST` | Staging endpoint | `ssh://ubuntu@10.10.10.227` | Required for `staging-up`, `staging-down`, `deploy staging`, `undeploy staging`. |
+| `STAGING_DOCKER_HOST` | Staging endpoint | `ssh://ubuntu@10.10.10.227` | Required for `deploy staging`, `undeploy staging`. |
 | `PROD_DOCKER_HOST` | Prod endpoint | `ssh://ubuntu@prod.example.com` | Reserved. Recipes check for presence before `deploy prod`. |
 | `REGISTRY` | Image namespace for staging/prod pulls | `ghcr.io/pandazxx` | Same semantics as today. |
 | `REGISTRY_TOKEN` | Registry auth (non-GHCR) | (secret) | Optional. GHCR uses shell `GITHUB_TOKEN` per current setup. |
 | `DOCKER_GID` | Host docker group GID | `988` | Optional; recipe probes if unset (same behaviour as `env-up.sh`). |
-| `MASTER_PORT` | Host port for singleton `deploy` targets | `8080` | Optional (default `8080`). Per-machine; only meaningful for the singleton `deploy` shape. Ignored by Traefik-shape recipes. |
+| `MASTER_PORT` | Host port for singleton `deploy` targets | `8080` | Optional (default `8080`). Per-machine; only meaningful for the singleton `deploy` shape. Ignored by the dev shape. |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN` | Agent runtime secrets consumed by the `master` service via `docker-compose.yml` interpolation. | (secret) | Optional individually; the running app decides what's required. |
 | `MASTER_SSH_AUTH_SOCK_PATH` | Path to host ssh-agent socket to bind into master | `/run/user/1000/ssh-agent.sock` | Optional; has recipe default. |
 | `MASTER_CODEX_AUTH_JSON_PATH`, `MASTER_SSH_KNOWN_HOSTS_PATH`, `MASTER_GIT_USER_NAME`, `MASTER_GIT_USER_EMAIL`, `MASTER_AGENT_BASE_IMAGE`, `MASTER_DRY_RUN`, `AGENT_IDLE_TIMEOUT_SECONDS`, `AGENT_AUTH_REFRESH_INTERVAL_SECONDS` | Compose interpolation pass-through | — | Optional; documented for completeness. |
@@ -254,23 +253,23 @@ Split by *who computes it* and *whose secret it is*.
 | Variable | How derived | Used by | Shape |
 |---|---|---|---|
 | `BRANCH_SLUG` | `_slug` on branch name | `docker-compose.override.yml` labels, project name | Dev only |
-| `HOST_IP_DASHED` | `_host-ip` on the target `DOCKER_HOST` | Traefik host rule | Dev + staging-UAT only (not `deploy`) |
+| `HOST_IP_DASHED` | `_host-ip` on the target `DOCKER_HOST` | Traefik host rule | Dev only |
 | `APP_VERSION` | git branch + short SHA + dirty flag | Dockerfile build arg (dev) | Dev only |
-| `VERSION_SLUG` | `_slug` on image tag | `docker-compose.staging.yml` labels, project name | Staging-UAT only (not `deploy`) |
-| `IMAGE_DIGEST` | `_resolve-digest` on `<registry>/<image>:<tag>` | `docker-compose.staging.yml` / `docker-compose.deploy.yml` `image:` | Staging-UAT + singleton `deploy` |
-| `MASTER_RUNTIME_IMAGE` | dev: `${BRANCH_SLUG}-master:dev`; staging-UAT + `deploy`: `${REGISTRY}/codex-slack-master:<tag>` | Compose `image:` | All |
-| `MASTER_AGENT_NETWORK` | Dev: `${BRANCH_SLUG}_internal`; staging-UAT: `${VERSION_SLUG}_internal`; singleton `deploy`: `codex-slack_internal` | Master runtime | All |
+| `IMAGE_DIGEST` | `_resolve-digest` on `<registry>/<image>:<tag>` | `docker-compose.deploy.yml` `image:` | Singleton `deploy` |
+| `MASTER_RUNTIME_IMAGE` | dev: `${BRANCH_SLUG}-master:dev`; `deploy`: `${REGISTRY}/codex-slack-master:<tag>` | Compose `image:` | All |
+| `MASTER_AGENT_NETWORK` | Dev: `${BRANCH_SLUG}_internal`; singleton `deploy`: `codex-slack_internal` | Master runtime | All |
 | `DOCKER_HOST` | Selected from `.env` by target env | All compose calls | All |
+
+`VERSION_SLUG` is gone — it existed only for the retired multi-version
+staging shape.
 
 #### Not in scope for `.env` (kept elsewhere)
 
-- CD daemon settings (`CD_*`) — separate `.env` written by
-  `scripts/gen-env.sh` for the on-host daemon; do not merge.
 - CI-only variables — GitHub Actions handles those via workflow secrets.
 
 ### `.env.example` layout
 
-The committed `.env.example` at repo root is reorganised into three sections
+The committed `.env.example` at repo root is reorganised into two sections
 with clear ownership markers:
 
 ```
@@ -299,14 +298,10 @@ CLAUDE_CODE_OAUTH_TOKEN=
 GH_TOKEN=
 # MASTER_DRY_RUN=false
 # ...
-
-# ============================================================================
-# SECTION C — CD daemon (unchanged; kept for compatibility)
-# ============================================================================
-# CD_IMAGE=ghcr.io/<org>/codex-slack-master
-# CD_IMAGE_TAG=v1.2.3
-# ... (existing content preserved)
 ```
+
+The CD-daemon `.env` section (previously written by `scripts/gen-env.sh`) is
+gone with the daemon.
 
 `.env` is already gitignored (`.gitignore` line 17). No change there.
 
@@ -318,16 +313,6 @@ GH_TOKEN=
   docker-compose.override.yml build master && up -d`, then healthcheck poll
   against `master.<slug>.<ip-dashed>.nip.io`. Identical to `env-up.sh`
   semantics.
-- `just staging-up <tag>` — Traefik-shape, multi-version. Resolves
-  `${REGISTRY}/codex-slack-master:<tag>` to a digest, exports `IMAGE_DIGEST`,
-  `VERSION_SLUG`, `HOST_IP_DASHED`, `MASTER_RUNTIME_IMAGE`,
-  `DOCKER_HOST=$STAGING_DOCKER_HOST`, then `docker compose -p <version-slug>
-  -f docker-compose.yml -f docker-compose.staging.yml up -d`, then
-  healthcheck poll against `master.<version-slug>.<ip-dashed>.nip.io`.
-  Identical to `.sre/staging-up.sh` semantics. Backs the SRE UAT flow —
-  several tags coexist on the host so reviewers can compare versions.
-- `just staging-down <tag>` — brings down the version-slug project on
-  `STAGING_DOCKER_HOST`. Same semantics as `.sre/staging-down.sh`.
 - `just deploy <env> <tag>` — **new for #245**, singleton shape. Resolves
   `${REGISTRY}/codex-slack-master:<tag>` to a digest, exports `IMAGE_DIGEST`,
   `MASTER_RUNTIME_IMAGE`, `MASTER_PORT` (default `8080`),
@@ -336,29 +321,69 @@ GH_TOKEN=
   project name (`codex-slack`) means `up -d` replaces the running master
   container in place — that is the upgrade path. Healthcheck polls
   `http://<host>:${MASTER_PORT:-8080}/health` (no `nip.io` URL, no Traefik).
-  Does not export `BRANCH_SLUG`, `VERSION_SLUG`, or `HOST_IP_DASHED`. Aborts
-  with a clear error if `<env>=prod` and `PROD_DOCKER_HOST` is empty.
+  Does not export `BRANCH_SLUG` or `HOST_IP_DASHED`. Aborts with a clear
+  error if `<env>=prod` and `PROD_DOCKER_HOST` is empty.
 - `just undeploy <env>` — **new for #245**. `docker compose -p codex-slack
   -f docker-compose.yml -f docker-compose.deploy.yml down` on
   `$<ENV>_DOCKER_HOST`. Takes no tag argument — the singleton project name
   is fixed, so there is nothing to disambiguate.
-- `just post-merge-cleanup <branch> <tag>` — thin wrapper around the
-  Traefik-shape recipes: calls `staging-up main` (canonical staging refresh
-  under `main` version slug) then `staging-down <tag>` for the merged
-  feature branch. Unchanged from today; **does not** touch the singleton
-  `deploy` shape.
+- `just post-merge-cleanup <branch> [tag]` — thin wrapper: calls
+  `deploy staging <tag>` (default `<tag>=master` — CI publishes
+  `codex-slack-master:master` on every master push per
+  `.github/workflows/build-push.yml`) to refresh the staging singleton, then
+  tears down the dev env for `<branch>` if one exists. There is no
+  feature-branch staging env to tear down anymore.
+
+### Workflow implication: RC UAT is serialized
+
+Retiring the multi-version staging shape has one honest process consequence
+that has to be called out.
+
+Under the old design, several `v*-rc*` tags could run in parallel on
+`STAGING_DOCKER_HOST` under different `VERSION_SLUG`s, so reviewers could
+compare candidates side by side and multiple PRs could be in UAT at the same
+time. That is gone.
+
+Going forward:
+
+- Pre-merge UAT for a release candidate happens by running
+  `just deploy staging v1.2.3-rcN`. Only one candidate can occupy the
+  staging singleton at a time. UAT is serialized across in-flight PRs.
+- Branch-level exploratory testing that used to be run against a
+  feature-branch staging env stays in the dev shape (`just dev-up`) — that
+  path is unchanged and still supports N branches in parallel per host.
+- The tradeoff: UAT throughput drops when multiple RCs are queued; teams
+  coordinate on who holds staging. The saved complexity (no `VERSION_SLUG`
+  hostname routing, no per-tag project juggling, no CD-daemon polling model
+  to reason about) is judged worth it for a project of this size.
+
+`docs/sre.md` and `.claude/CLAUDE.md` currently describe the multi-version
+UAT flow as if it were still the norm. The Implementation Plan below has a
+docs step to bring those in line. Those edits are intentionally deferred to
+the implementation PR so this design can be reviewed independently of the
+prose rewrite.
 
 ### Runbook migration
 
-Each `.sre/operations/*.md` is edited to replace the "Run `.sre/<script>.sh
-...`" step with "Run `just <recipe> ...`". Inputs, pre-conditions, on-failure
-handling, and output-passthrough contracts stay identical, so the `sre` agent
-follows the same shape. The mechanical rewrite is small and testable.
+- `.sre/operations/env-up.md`, `env-down.md`, `status.md`, `logs.md`,
+  `shell.md`, `test.md` — each has its "Run `.sre/<script>.sh ...`" step
+  replaced with "Run `just <recipe> ...`". Inputs, pre-conditions,
+  on-failure handling, and output-passthrough contracts stay identical.
+- `.sre/operations/staging-up.md` and `.sre/operations/staging-down.md` are
+  **replaced** by new `.sre/operations/deploy.md` and
+  `.sre/operations/undeploy.md`. The named operations, arguments, and
+  behaviour differ (singleton, not multi-version), so this is a runbook
+  swap, not a rename. The `sre` agent's operation set changes at the same
+  time as the code.
+- `.sre/operations/post-merge-cleanup.md` — updated to describe the
+  singleton refresh flow (`deploy staging master`) plus dev-env teardown for
+  the merged branch.
 
-`.sre/*.sh` scripts become thin wrappers around `just` for one release cycle
-(they `exec just <recipe> "$@"`) so any external caller has a deprecation
-window. They are removed once no callers remain in-repo and one green
-canonical staging refresh has confirmed the runbooks work end-to-end.
+`.sre/*.sh` scripts for the dev-shape recipes become thin wrappers around
+`just` for one release cycle (they `exec just <recipe> "$@"`) so any
+external caller has a deprecation window. `.sre/staging-up.sh` and
+`.sre/staging-down.sh` are deleted outright — there is no equivalent
+recipe to wrap.
 
 ### `just` availability
 
@@ -375,8 +400,8 @@ canonical staging refresh has confirmed the runbooks work end-to-end.
 
 Singleton shape. Fixed compose project name `codex-slack`, published on host
 port `${MASTER_PORT:-8080}`, no Traefik. Mermaid note: message text below
-avoids `;` characters (they terminate mermaid statements and break rendering
-on GitHub — this has bitten us before).
+contains no `;` characters (they terminate mermaid statements and break
+rendering on GitHub — this has bitten us before).
 
 ```mermaid
 sequenceDiagram
@@ -387,8 +412,8 @@ sequenceDiagram
     participant H as STAGING_DOCKER_HOST
 
     U->>J: just deploy staging v4.19-rc1
-    J->>J: load .env and export DOCKER_HOST=$STAGING_DOCKER_HOST
-    J->>J: MASTER_RUNTIME_IMAGE=$REGISTRY/codex-slack-master:v4.19-rc1
+    J->>J: load .env and export DOCKER_HOST from STAGING_DOCKER_HOST
+    J->>J: MASTER_RUNTIME_IMAGE=REGISTRY/codex-slack-master tag v4.19-rc1
     J->>R: docker manifest inspect resolves to sha256 digest
     J->>J: export IMAGE_DIGEST and MASTER_PORT (default 8080)
     J->>D: docker compose -p codex-slack -f base -f deploy pull
@@ -397,7 +422,7 @@ sequenceDiagram
     D->>H: replace running master container in place
     J->>D: healthcheck poll against http://host:8080/health
     D->>H: exec curl on host port
-    J->>U: print deployed digest and http://host:8080 URL
+    J->>U: print deployed digest and http URL
 ```
 
 ## Alternatives Considered
@@ -442,16 +467,26 @@ Pros: obvious names. Cons: duplicates recipe bodies; adding an env means
 editing justfile *and* runbooks. Generic `just deploy <env> <tag>` is
 cheaper to extend and matches how `<env>_DOCKER_HOST` scales.
 
-### F. Reuse `docker-compose.staging.yml` for the singleton `deploy` path
+### F. Keep the CD daemon; add `just deploy` for manual overrides only
 
-Pros: one fewer compose file. Cons: `docker-compose.staging.yml` is
-Traefik-shaped and multi-version by design — it keys everything off
-`VERSION_SLUG` so several tags can coexist. Retrofitting host-port
-publication and singleton behaviour onto it would either break the
-staging-UAT flow or require conditional compose fields (which don't exist)
-plus a chain of `${VAR:-fallback}` gymnastics. A separate
-`docker-compose.deploy.yml` is smaller and keeps the two shapes honest.
-Rejected.
+Pros: preserves ADR-0005's pull-based model. Cons: two ways to deploy the
+same singleton container that will fight each other on the same host; two
+sources of `.env` truth (repo-root `.env` for `just`, generated
+`gen-env.sh` output for the daemon); two runbook trees; the daemon's polling
+lag stays in the loop even when a human explicitly deploys. The whole
+motivation for `just deploy` was to make deploys explicit and
+digest-transparent — keeping the daemon undoes that. Rejected. See ADR-0016.
+
+### G. Keep the multi-version Traefik staging shape for pre-merge UAT
+
+Pros: parallel RC UAT stays possible. Cons: two staging topologies to
+document, two overlays to maintain (`docker-compose.staging.yml` +
+`docker-compose.deploy.yml`), `VERSION_SLUG` plumbing on top of the
+singleton plumbing, and the mental model "staging is one thing… except
+when it's several things" becomes the largest permanent complexity in the
+tree. Rejected in favour of a one-shape staging with serialized RC UAT,
+accepting the throughput tradeoff called out in "Workflow implication"
+above. See ADR-0016.
 
 ## Open Questions
 
@@ -461,39 +496,21 @@ want any changed.
 - [ ] **Recipe surface is fine?** Are the recipe names/args above the right
   surface, or do we want e.g. `just up staging <tag>` / `just down` style
   verbs? *Recommended:* keep the runbook-aligned names above so
-  `.sre/operations/*.md` filenames and recipe names line up 1-to-1. Note
-  that `deploy`/`undeploy` intentionally do **not** map to existing runbook
-  filenames — they are new operations for issue #245 and need new runbooks
-  (e.g. `.sre/operations/deploy.md`, `undeploy.md`).
-- [ ] **Should canonical staging move to the singleton shape?** Today the
-  canonical `main` staging env is refreshed by `staging-up main` (Traefik
-  shape). It could in principle be redeployed as a singleton on
-  `MASTER_PORT` instead. *Recommended:* out of scope for this design.
-  Canonical staging shares a host with feature-branch staging envs during
-  UAT, so it must stay Traefik-shaped for coexistence. Revisit only if the
-  UAT topology changes. Owner: senior-sre.
-- [ ] **Interaction with the CD daemon on the same host.** `just deploy`
-  and the CD daemon (`docker-compose.cd-daemon.example.yml`) both target
-  the singleton `codex-slack-master` container. If both are active on the
-  same host they will fight over the container — the daemon will try to
-  roll back what `deploy` just pushed, or vice versa. *Recommended:*
-  document that a given host is managed **either** by the CD daemon
-  **or** by manual `just deploy`, never both. Add a check in the `deploy`
-  recipe that fails fast if `codex-slack-cd-daemon` is running on the
-  target host. Reference ADR-0005 for the CD daemon's ownership contract.
-  Owner: engineer + senior-sre.
+  `.sre/operations/*.md` filenames and recipe names line up. `deploy` and
+  `undeploy` are new operations for issue #245 with matching new runbooks.
 - [ ] **Justfile as source of truth vs. thin wrapper?** *Recommended:* source
-  of truth. `.sre/*.sh` become one-line wrappers for a single release cycle,
-  then are removed. Owner: engineer implementing.
+  of truth. Dev-shape `.sre/*.sh` become one-line wrappers for a single
+  release cycle then are removed. Staging-shape `.sre/*.sh` are deleted
+  outright. Owner: engineer implementing.
 - [ ] **First-class prod today or reserved slot only?** *Recommended:*
   reserved slot — `PROD_DOCKER_HOST` is documented in `.env.example`,
   recipes work when it is set, but no `senior-sre` bootstrap of a prod host
   is part of this change.
 - [ ] **`.env` vs. `.env.deploy`?** Do we want deploy config in the same
-  `.env` as CD-daemon and Master runtime settings, or a dedicated
-  `.env.deploy`? *Recommended:* single `.env` with sectioned
-  `.env.example`. Two files split the user's mental model without solving a
-  real problem — they'd both be gitignored and both loaded by `just`.
+  `.env` as Master runtime settings, or a dedicated `.env.deploy`?
+  *Recommended:* single `.env` with sectioned `.env.example`. Two files
+  split the user's mental model without solving a real problem — they'd
+  both be gitignored and both loaded by `just`.
 - [ ] **Precedence: shell overrides `.env`.** *Recommended:* yes — matches
   `just`'s default `dotenv-load` behaviour and preserves the current
   contract where the `sre` agent's exported vars win. Owner: doc-writer to
@@ -502,10 +519,9 @@ want any changed.
   `docker manifest inspect` vs `crane digest`. *Recommended:*
   `docker buildx imagetools inspect --format '{{json .Manifest.Digest}}'` —
   already available wherever docker is, no extra tool. Owner: engineer.
-- [ ] **How aggressively to consolidate `.env.example`?** Merge with existing
-  CD-daemon `.env.example` content vs. keep three sections in one file vs.
-  split into `.env.example` + `.env.cd.example`. *Recommended:* one file,
-  three labelled sections (as sketched above). Owner: doc-writer.
+- [ ] **How aggressively to consolidate `.env.example`?** *Recommended:* one
+  file, two labelled sections as sketched above. The CD-daemon section is
+  gone with the daemon. Owner: doc-writer.
 - [ ] **Local docker host wording in docs/sre.md.** The issue mentions "local
   or remote docker host". *Recommended:* keep the existing rule — no
   implicit local fallback; `DEV_DOCKER_HOST=unix:///var/run/docker.sock` is
@@ -514,43 +530,55 @@ want any changed.
   install `just`? *Recommended:* `senior-sre` in the same PR as the
   justfile so the agent's first `just` invocation cannot fail on a missing
   binary.
-- [ ] **Wrapper deprecation window.** How long do `.sre/*.sh` remain as
-  wrappers before removal? *Recommended:* one merge cycle — remove after
-  the first canonical staging refresh through the new recipes has been
-  observed green.
+- [ ] **Dev-shape wrapper deprecation window.** How long do the dev-shape
+  `.sre/*.sh` remain as wrappers before removal? *Recommended:* one merge
+  cycle — remove after the first canonical staging refresh through the new
+  recipes has been observed green.
 
 ## Implementation Plan
 
 1. **Justfile scaffold + dotenv loading.** Land `justfile` at repo root with
    recipes above, `set dotenv-load := true`, and private helpers. Rewrite
-   `.env.example` (Section A now includes `MASTER_PORT`). Add `just` to the
+   `.env.example` into the two-section layout (Section A now includes
+   `MASTER_PORT`; the CD-daemon section is deleted). Add `just` to the
    agent container image (senior-sre).
-2. **Recipe bodies — Traefik shapes.** Port `env-up.sh`, `env-down.sh`,
-   `staging-up.sh`, `staging-down.sh`, `env-status.sh`, `run-tests.sh` into
-   `dev-up`, `dev-down`, `staging-up`, `staging-down`, `status`, `test`.
-   Preserve healthcheck poll, DOCKER_GID probe, APP_VERSION derivation
-   verbatim so behaviour is unchanged. The staging-UAT flow is untouched
-   from a user perspective.
+2. **Recipe bodies — dev shape.** Port `env-up.sh`, `env-down.sh`,
+   `env-status.sh`, `run-tests.sh` into `dev-up`, `dev-down`, `status`,
+   `test`. Preserve healthcheck poll, DOCKER_GID probe, APP_VERSION
+   derivation verbatim so behaviour is unchanged.
 3. **New singleton deploy overlay.** Add `docker-compose.deploy.yml` as
    sketched above — no Traefik, no external network, publishes
    `${MASTER_PORT:-8080}:8080`, pins `${MASTER_RUNTIME_IMAGE}@${IMAGE_DIGEST}`.
 4. **New singleton recipes.** Implement `just deploy <env> <tag>` and
    `just undeploy <env>` against the new overlay with fixed project name
    `codex-slack`. Wire staging first, prod behind a `PROD_DOCKER_HOST`
-   presence check. Add the CD-daemon-conflict guard.
+   presence check.
 5. **New runbooks.** Author `.sre/operations/deploy.md` and
-   `.sre/operations/undeploy.md` — these are new operations, not rewrites.
-6. **Wrapper scripts.** Replace each existing `.sre/*.sh` body with
-   `exec just <recipe> "$@"` so existing callers still work.
-7. **Existing runbook rewrite.** Update `.sre/operations/env-up.md`,
-   `env-down.md`, `staging-up.md`, `staging-down.md`, `status.md`,
-   `logs.md`, `shell.md`, `test.md`, `post-merge-cleanup.md` to invoke
-   recipes. Verify each end-to-end with the `sre` agent on a scratch branch.
-8. **Docs.** Update `docs/sre.md` env-var table to point at `.env` +
-   `.env.example` and add `MASTER_PORT`. Add `just` install note to
-   `docs/guides/onboarding.md`. Add a short section to `docs/sre.md`
-   documenting the two shapes and which recipes back which shape.
-9. **Post-adoption cleanup.** After one green canonical staging refresh via
-   the new `staging-up`/`staging-down` recipes, delete `.sre/env-up.sh`,
-   `env-down.sh`, `staging-up.sh`, `staging-down.sh`, `env-status.sh`,
-   `run-tests.sh`. Runbooks and justfile remain.
+   `.sre/operations/undeploy.md`. Delete `.sre/operations/staging-up.md`
+   and `.sre/operations/staging-down.md` — they no longer describe an
+   operation that exists.
+6. **Dev-shape wrapper scripts.** Replace each surviving dev-shape
+   `.sre/*.sh` body with `exec just <recipe> "$@"` so existing callers
+   still work.
+7. **Retire the staging-UAT shape.** Delete `docker-compose.staging.yml`,
+   `.sre/staging-up.sh`, and `.sre/staging-down.sh`. Update any repo-wide
+   references (README, docs, comments) that mention the old shape.
+8. **Retire the CD daemon.** Delete `src/cd/`, `Dockerfile.cd-daemon`,
+   `docker-compose.cd-daemon.example.yml`, `scripts/gen-env.sh`, and
+   `docs/guides/runbooks/cd-daemon.md`. Remove the `build-cd-daemon` job
+   from `.github/workflows/build-push.yml` (leave `build-master`,
+   `build-agent-minimal`, and `promote` intact). Remove any lingering
+   `CD_*` references from tests/config. See ADR-0016.
+9. **Existing runbook rewrite.** Update `.sre/operations/env-up.md`,
+   `env-down.md`, `status.md`, `logs.md`, `shell.md`, `test.md`,
+   `post-merge-cleanup.md` to invoke recipes. Verify each end-to-end with
+   the `sre` agent on a scratch branch.
+10. **Docs.** Update `docs/sre.md` and `.claude/CLAUDE.md` so their SRE
+    workflow prose describes the two-shape topology, the serialized RC UAT
+    flow, and the removal of the CD daemon. Update env-var table to point
+    at `.env` + `.env.example` and add `MASTER_PORT`. Add `just` install
+    note to `docs/guides/onboarding.md`.
+11. **Post-adoption cleanup.** After one green canonical staging refresh via
+    `just deploy staging master`, delete the surviving dev-shape wrapper
+    scripts (`.sre/env-up.sh`, `env-down.sh`, `env-status.sh`,
+    `run-tests.sh`). Runbooks and justfile remain.
