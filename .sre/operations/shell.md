@@ -1,28 +1,27 @@
 # Operation: Open a shell in a service
 
 ## Inputs
-- `<branch>` — git branch name
+- `<env>` — `dev`, `staging`, or `prod`
 - `<service>` — `master` or `mosquitto`
-- `<env>` — `dev` or `staging` (default: `dev`)
+- `<key>` — branch slug (dev only); omit for singleton envs (`staging`, `prod`)
 
 ## Required env vars
 - `DEV_DOCKER_HOST` (if env=dev)
 - `STAGING_DOCKER_HOST` (if env=staging)
+- `PROD_DOCKER_HOST` (if env=prod)
 
 ## Pre-conditions
 - Env is running.
 
 ## Steps
-1. Compute `BRANCH_SLUG=$(echo <branch> | tr '/_' '-' | tr '[:upper:]' '[:lower:]')`
-2. Set `DOCKER_HOST` based on `<env>`.
-3. For `master` service:
+
+1. Run:
    ```
-   DOCKER_HOST=<host> docker compose -p <BRANCH_SLUG> exec master bash
+   just shell <env> <service> [<key>]
    ```
-   For `mosquitto` service:
-   ```
-   DOCKER_HOST=<host> docker compose -p <BRANCH_SLUG> exec mosquitto sh
-   ```
+   For `env=dev`: `<key>` is the branch slug; defaults to the current git branch slug if omitted.
+   For `env=staging` or `env=prod`: `<key>` is not needed.
+   The recipe opens an interactive bash session in the named service container.
 
 ## On failure
 - "no such container": confirm the env is up, then escalate.
