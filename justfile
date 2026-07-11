@@ -188,6 +188,9 @@ deploy env tag:
 
     HOST_ADDR="${TARGET_HOST#ssh://}"
     HOST_IP="${HOST_ADDR##*@}"
+    # unix:// targets leave a socket path here; the singleton publishes on
+    # the local host in that case, so probe localhost instead.
+    case "$HOST_IP" in /*) HOST_IP="localhost" ;; esac
 
     if [ -z "${DOCKER_GID:-}" ]; then
         DOCKER_GID="$(DOCKER_HOST="$TARGET_HOST" docker run --rm \
