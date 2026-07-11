@@ -113,7 +113,7 @@ expects a single, host-port-published stack).
 | Ingress | Traefik on `sre-traefik-public`, routed by `master.<slug>.<ip-dashed>.nip.io` | Direct host port; no Traefik | Direct host port; no Traefik |
 | Image | Built from current commit (`target: dev`), per branch — no tags | Frozen CI tag, pulled by digest | Frozen CI tag, pulled by digest |
 | Typical tags | — (branch-based) | `master`, `v*-rc*` | `v*` |
-| Compose files | `docker-compose.yml` + `docker-compose.override.yml` | `docker-compose.yml` + **new** `docker-compose.deploy.yml` | `docker-compose.yml` + **new** `docker-compose.deploy.yml` |
+| Compose files | `docker-compose.yml` + `docker-compose.dev.yml` (renamed from `override`) | `docker-compose.yml` + **new** `docker-compose.deploy.yml` | `docker-compose.yml` + **new** `docker-compose.deploy.yml` |
 | Deploy recipe | `just dev-up [branch]` | `just deploy staging <tag>` | `just deploy prod <tag>` |
 | Upgrade path | rebuild + `up -d` under branch-slug project | `up -d` under fixed project name replaces in place | same as staging |
 
@@ -203,11 +203,35 @@ and its `.env` search would collide with ours in confusing ways. Explicit
 export from the recipe is unambiguous and matches current script behaviour.
 `--env-file` is not used for the same reason (adds a fourth precedence layer).
 
-### New overlay: `docker-compose.deploy.yml`
+### Compose file layout: one base, one overlay per shape
 
-The singleton path needs its own overlay. It sits next to `docker-compose.yml`
-and is used only by `just deploy` / `just undeploy`. `docker-compose.staging.yml`
-is deleted (see Implementation Plan). Sketch:
+Compose layering follows the documented best practice: **the base file holds
+the shared intersection, and overlays only ever add** — no overlay removes or
+resets anything from the base (avoiding `!reset` and its Compose-version
+floor), and nothing merges implicitly.
+
+- **`docker-compose.yml`** (base) — the invariant shared by every
+  environment: service definitions, env-var interpolation, `internal`
+  network, volumes. **No `build:`, no `ports:`, no digest pin.** The
+  `build:` section that lives in the base today moves into the dev overlay —
+  staging/prod never build.
+- **`docker-compose.dev.yml`** — the dev overlay, **renamed from
+  `docker-compose.override.yml`** so Compose stops auto-merging it on bare
+  `docker compose` invocations. Adds `build:` (`target: dev`, current
+  commit), Traefik labels, the `sre-traefik-public` network, the branch-slug
+  agent network, and dev resource limits.
+- **`docker-compose.deploy.yml`** — the singleton overlay, shared by staging
+  and prod (same shape, different `<ENV>_DOCKER_HOST`). Used only by
+  `just deploy` / `just undeploy`.
+
+Each environment is base + exactly one overlay, mirroring "three levels, two
+shapes" 1-to-1. A bare `docker compose up` against the base alone is
+intentionally not a complete environment (no published port, no pinned
+image); the justfile recipes are the entry points and always pass explicit
+`-f` pairs. `docker-compose.staging.yml` is deleted (see Implementation
+Plan).
+
+Sketch of `docker-compose.deploy.yml`:
 
 ```yaml
 # Singleton overlay for `just deploy <env> <tag>`. One master per host,
@@ -270,7 +294,7 @@ Split by *who computes it* and *whose secret it is*.
 
 | Variable | How derived | Used by | Shape |
 |---|---|---|---|
-| `BRANCH_SLUG` | `_slug` on branch name | `docker-compose.override.yml` labels, project name | Dev only |
+| `BRANCH_SLUG` | `_slug` on branch name | `docker-compose.dev.yml` labels, project name | Dev only |
 | `HOST_IP_DASHED` | `_host-ip` on the target `DOCKER_HOST` | Traefik host rule | Dev only |
 | `APP_VERSION` | git branch + short SHA + dirty flag | Dockerfile build arg (dev) | Dev only |
 | `IMAGE_DIGEST` | `_resolve-digest` on `<registry>/<image>:<tag>` | `docker-compose.deploy.yml` `image:` | Singleton `deploy` |
@@ -328,7 +352,7 @@ gone with the daemon.
 - `just dev-up [branch]` — sets `DOCKER_HOST=$DEV_DOCKER_HOST`, computes
   `BRANCH_SLUG`, `HOST_IP_DASHED`, `APP_VERSION`, probes `DOCKER_GID` if
   unset, then `docker compose -p <slug> -f docker-compose.yml -f
-  docker-compose.override.yml build master && up -d`, then healthcheck poll
+  docker-compose.dev.yml build master && up -d`, then healthcheck poll
   against `master.<slug>.<ip-dashed>.nip.io`. Identical to `env-up.sh`
   semantics.
 - `just deploy <env> <tag>` — **new for #245**, singleton shape. Resolves
@@ -430,9 +454,9 @@ sequenceDiagram
     U->>J: just dev-up feat-auth
     J->>J: load .env and export DOCKER_HOST from DEV_DOCKER_HOST
     J->>J: compute BRANCH_SLUG, HOST_IP_DASHED, APP_VERSION from git
-    J->>D: docker compose -p feat-auth -f base -f override build master
+    J->>D: docker compose -p feat-auth -f base -f dev build master
     D->>H: build dev image from current commit via SSH
-    J->>D: docker compose -p feat-auth -f base -f override up -d
+    J->>D: docker compose -p feat-auth -f base -f dev up -d
     D->>H: start branch stack, join sre-traefik-public
     J->>D: healthcheck poll via Traefik hostname
     J->>U: print http URL master.feat-auth.ip-dashed.nip.io
@@ -530,6 +554,20 @@ tree. Rejected in favour of a one-shape staging with serialized RC UAT,
 accepting the throughput tradeoff called out in "Workflow implication"
 above. See ADR-0016.
 
+### H. Base file *is* the prod shape; dev subtracts from it
+
+Make `docker-compose.yml` alone deployable to staging/prod (ports, digest
+pin, limits in the base) and have the dev overlay strip what it doesn't
+want. Pros: the base file is a self-contained deployable artifact, one
+fewer overlay. Cons: overlays subtracting from the base is the documented
+Compose anti-pattern — removing the host port for dev requires
+`ports: !reset []`, which pins a hard Compose ≥ 2.24 version floor and
+makes merge behaviour non-obvious; every future base addition must be
+audited for "does dev need to un-do this?". The chosen layout (neutral base
+holding the shared intersection + one additive overlay per shape) keeps
+every merge additive and mirrors "three levels, two shapes" 1-to-1.
+Rejected.
+
 ## Open Questions
 
 The recommended answers below are proposals; call them out in review if you
@@ -588,39 +626,43 @@ want any changed.
    `env-status.sh`, `run-tests.sh` into `dev-up`, `dev-down`, `status`,
    `test`. Preserve healthcheck poll, DOCKER_GID probe, APP_VERSION
    derivation verbatim so behaviour is unchanged.
-3. **New singleton deploy overlay.** Add `docker-compose.deploy.yml` as
+3. **Restructure compose files.** Rename `docker-compose.override.yml` →
+   `docker-compose.dev.yml` (no more implicit auto-merge) and move the
+   `build:` section out of `docker-compose.yml` into it — the base becomes
+   the pure shared intersection (no `build:`, no `ports:`, no digest pin).
+4. **New singleton deploy overlay.** Add `docker-compose.deploy.yml` as
    sketched above — no Traefik, no external network, publishes
    `${MASTER_PORT:-8080}:8080`, pins `${MASTER_RUNTIME_IMAGE}@${IMAGE_DIGEST}`.
-4. **New singleton recipes.** Implement `just deploy <env> <tag>` and
+5. **New singleton recipes.** Implement `just deploy <env> <tag>` and
    `just undeploy <env>` against the new overlay with fixed project name
    `codex-slack`. Wire staging first, prod behind a `PROD_DOCKER_HOST`
    presence check.
-5. **New runbooks.** Author `.sre/operations/deploy.md` and
+6. **New runbooks.** Author `.sre/operations/deploy.md` and
    `.sre/operations/undeploy.md`. Delete `.sre/operations/staging-up.md`
    and `.sre/operations/staging-down.md` — they no longer describe an
    operation that exists.
-6. **Dev-shape wrapper scripts.** Replace each surviving dev-shape
+7. **Dev-shape wrapper scripts.** Replace each surviving dev-shape
    `.sre/*.sh` body with `exec just <recipe> "$@"` so existing callers
    still work.
-7. **Retire the staging-UAT shape.** Delete `docker-compose.staging.yml`,
+8. **Retire the staging-UAT shape.** Delete `docker-compose.staging.yml`,
    `.sre/staging-up.sh`, and `.sre/staging-down.sh`. Update any repo-wide
    references (README, docs, comments) that mention the old shape.
-8. **Retire the CD daemon.** Delete `src/cd/`, `Dockerfile.cd-daemon`,
+9. **Retire the CD daemon.** Delete `src/cd/`, `Dockerfile.cd-daemon`,
    `docker-compose.cd-daemon.example.yml`, `scripts/gen-env.sh`, and
    `docs/guides/runbooks/cd-daemon.md`. Remove the `build-cd-daemon` job
    from `.github/workflows/build-push.yml` (leave `build-master`,
    `build-agent-minimal`, and `promote` intact). Remove any lingering
    `CD_*` references from tests/config. See ADR-0016.
-9. **Existing runbook rewrite.** Update `.sre/operations/env-up.md`,
-   `env-down.md`, `status.md`, `logs.md`, `shell.md`, `test.md`,
-   `post-merge-cleanup.md` to invoke recipes. Verify each end-to-end with
-   the `sre` agent on a scratch branch.
-10. **Docs.** Update `docs/sre.md` and `.claude/CLAUDE.md` so their SRE
+10. **Existing runbook rewrite.** Update `.sre/operations/env-up.md`,
+    `env-down.md`, `status.md`, `logs.md`, `shell.md`, `test.md`,
+    `post-merge-cleanup.md` to invoke recipes. Verify each end-to-end with
+    the `sre` agent on a scratch branch.
+11. **Docs.** Update `docs/sre.md` and `.claude/CLAUDE.md` so their SRE
     workflow prose describes the two-shape topology, the serialized RC UAT
     flow, and the removal of the CD daemon. Update env-var table to point
     at `.env` + `.env.example` and add `MASTER_PORT`. Add `just` install
     note to `docs/guides/onboarding.md`.
-11. **Post-adoption cleanup.** After one green canonical staging refresh via
+12. **Post-adoption cleanup.** After one green canonical staging refresh via
     `just deploy staging master`, delete the surviving dev-shape wrapper
     scripts (`.sre/env-up.sh`, `env-down.sh`, `env-status.sh`,
     `run-tests.sh`). Runbooks and justfile remain.

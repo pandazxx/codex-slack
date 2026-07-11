@@ -76,6 +76,12 @@ respective `.env` generators and runbooks.
 
 ### Consequences
 
+- *Good:* the compose tree becomes one neutral base plus one additive
+  overlay per shape: `docker-compose.yml` (shared intersection — no
+  `build:`, no `ports:`, no digest pin) + `docker-compose.dev.yml`
+  (renamed from `docker-compose.override.yml`, so nothing auto-merges
+  implicitly) + `docker-compose.deploy.yml`. Overlays only add — no
+  `!reset` subtraction, no Compose-version floor.
 - *Good:* one staging shape, one overlay (`docker-compose.deploy.yml`), one
   deploy command, one place `.env` lives. `sre` agent's operation set
   shrinks (staging-up/staging-down runbooks retired, replaced by
@@ -117,7 +123,9 @@ respective `.env` generators and runbooks.
   `docker-compose.staging.yml`, `docs/guides/runbooks/cd-daemon.md`,
   `.sre/operations/staging-up.md`, and `.sre/operations/staging-down.md` no
   longer exist in the tree. `.sre/operations/deploy.md` and
-  `.sre/operations/undeploy.md` do.
+  `.sre/operations/undeploy.md` do. `docker-compose.override.yml` is
+  renamed to `docker-compose.dev.yml`, and `docker-compose.yml` contains
+  no `build:`, `ports:`, or image digest pin.
 - First canonical staging refresh via `just deploy staging master` after
   the implementation PR merges is observed green.
 
