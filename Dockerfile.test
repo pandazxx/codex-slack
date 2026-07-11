@@ -26,5 +26,11 @@ COPY --chown=appuser:appuser config ./config
 COPY --chown=appuser:appuser Dockerfile.agent-minimal ./
 COPY --chown=appuser:appuser docker ./docker
 
+# Deploy-contract fixtures: tests/deploy_contract asserts on these files.
+COPY --chown=appuser:appuser justfile .env.example \
+    docker-compose.yml docker-compose.dev.yml docker-compose.deploy.yml ./
+COPY --chown=appuser:appuser .sre ./.sre
+COPY --chown=appuser:appuser .github/workflows/build-push.yml ./.github/workflows/build-push.yml
+
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["pytest", "-vv", "tests/", "--tb=short"]
