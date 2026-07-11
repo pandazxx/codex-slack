@@ -247,7 +247,7 @@ sequenceDiagram
     participant H as STAGING_DOCKER_HOST
 
     U->>J: just deploy staging v4.19-rc1
-    J->>J: load .env; export DOCKER_HOST=$STAGING_DOCKER_HOST
+    J->>J: load .env, export DOCKER_HOST=$STAGING_DOCKER_HOST
     J->>J: MASTER_RUNTIME_IMAGE=$REGISTRY/codex-slack-master:v4.19-rc1
     J->>R: docker manifest inspect ... -> sha256:...
     J->>J: export IMAGE_DIGEST, VERSION_SLUG=v4-19-rc1, HOST_IP_DASHED
