@@ -74,6 +74,7 @@ def deploy_image(
     image_ref: str,
     compose_binary: str,
     compose_file: str,
+    compose_override_file: str | None,
     compose_service: str,
     env_file: str | None,
     dry_run: bool,
@@ -89,6 +90,11 @@ def deploy_image(
         return True
 
     base_cmd = [*compose_binary.split(), "-f", compose_file]
+    if compose_override_file:
+        if os.path.isfile(compose_override_file):
+            base_cmd.extend(["-f", compose_override_file])
+        else:
+            LOGGER.warning("cd.override_file_missing path=%s skipping", compose_override_file)
     if env_file:
         if os.path.isfile(env_file):
             base_cmd.extend(["--env-file", env_file])
@@ -122,6 +128,7 @@ def force_recreate_container(
     image_ref: str,
     compose_binary: str,
     compose_file: str,
+    compose_override_file: str | None,
     compose_service: str,
     env_file: str | None,
     dry_run: bool,
@@ -137,6 +144,7 @@ def force_recreate_container(
         image_ref=image_ref,
         compose_binary=compose_binary,
         compose_file=compose_file,
+        compose_override_file=compose_override_file,
         compose_service=compose_service,
         env_file=env_file,
         dry_run=dry_run,
@@ -196,6 +204,7 @@ def rollback_image(
     image_ref: str,
     compose_binary: str,
     compose_file: str,
+    compose_override_file: str | None,
     compose_service: str,
     env_file: str | None,
     dry_run: bool,
@@ -222,6 +231,7 @@ def rollback_image(
         image_ref=image_ref,
         compose_binary=compose_binary,
         compose_file=compose_file,
+        compose_override_file=compose_override_file,
         compose_service=compose_service,
         env_file=env_file,
         dry_run=dry_run,

@@ -31,6 +31,8 @@ class CdSettings:
     compose_service: str
     # Compose binary to invoke, e.g. "docker compose" or "podman-compose".
     compose_binary: str
+    # Optional second compose file applied after the base via a second -f flag.
+    compose_override_file: str | None
     # Optional .env file passed to compose via --env-file.
     env_file: str | None
     # JSON file where the daemon persists its deploy state across restarts.
@@ -61,6 +63,7 @@ def load_cd_settings() -> CdSettings:
     image_tag = os.getenv("CD_IMAGE_TAG", "latest").strip() or "latest"
     container_name = os.getenv("CD_CONTAINER_NAME", "codex-slack-master").strip()
     compose_file = os.getenv("CD_COMPOSE_FILE", "docker-compose.yml").strip()
+    compose_override_file = os.getenv("CD_COMPOSE_OVERRIDE_FILE", "").strip() or None
     compose_service = os.getenv("CD_COMPOSE_SERVICE", "master").strip()
     compose_binary = os.getenv("CD_COMPOSE_BINARY", "docker compose").strip()
     env_file = os.getenv("CD_ENV_FILE", "").strip() or None
@@ -76,6 +79,7 @@ def load_cd_settings() -> CdSettings:
     _log("CD_IMAGE_TAG", image_tag)
     _log("CD_CONTAINER_NAME", container_name)
     _log("CD_COMPOSE_FILE", compose_file)
+    _log("CD_COMPOSE_OVERRIDE_FILE", compose_override_file)
     _log("CD_COMPOSE_SERVICE", compose_service)
     _log("CD_COMPOSE_BINARY", compose_binary)
     _log("CD_ENV_FILE", env_file)
@@ -93,6 +97,7 @@ def load_cd_settings() -> CdSettings:
         image_tag=image_tag,
         container_name=container_name,
         compose_file=compose_file,
+        compose_override_file=compose_override_file,
         compose_service=compose_service,
         compose_binary=compose_binary,
         env_file=env_file,

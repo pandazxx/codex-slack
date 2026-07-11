@@ -54,6 +54,12 @@ services:
       # Path to the compose file, as seen from inside this container.
       # Defaults to the file baked into the image at build time.
       CD_COMPOSE_FILE: ${CD_COMPOSE_FILE:-/opt/codex-slack/docker-compose.yml}
+      # Optional second compose file applied after CD_COMPOSE_FILE via a second
+      # -f flag (same semantics as docker compose -f base.yml -f override.yml).
+      # Use this to add Traefik labels, extra port bindings, or resource limits
+      # without rebuilding the daemon image.  Mount the file into this container
+      # via the volumes section below and set this to its in-container path.
+      CD_COMPOSE_OVERRIDE_FILE: ${CD_COMPOSE_OVERRIDE_FILE:-}
       # Service name inside the compose file.
       CD_COMPOSE_SERVICE: ${CD_COMPOSE_SERVICE:-master}
       # Compose binary: "docker compose" (default) or "docker-compose" (v1).
