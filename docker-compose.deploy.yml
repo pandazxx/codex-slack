@@ -1,0 +1,26 @@
+# Singleton overlay for `just deploy <env> <tag>`.
+# One master per host, published on the host port. No Traefik labels,
+# no external Traefik network. Used for both staging and prod.
+# The fixed compose project name (-p codex-slack) makes `up -d` an
+# in-place replacement: docker compose recreates master when the digest changes.
+services:
+  master:
+    image: ${MASTER_RUNTIME_IMAGE:?MASTER_RUNTIME_IMAGE must be set}@${IMAGE_DIGEST:?IMAGE_DIGEST must be set}
+    environment:
+      MASTER_AGENT_NETWORK: "codex-slack_internal"
+    ports:
+      - "${MASTER_PORT:-8080}:8080"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+    networks:
+      - internal
+
+  mosquitto:
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
