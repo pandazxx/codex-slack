@@ -82,14 +82,17 @@ DOCKER_HOST=ssh://ubuntu@<prod-host> docker logs codex-slack-master --since 1h 2
 
 Any hit here means master code stopped the agent. The most common case is `master.idle_stop` (idle timeout reached). Cross-reference with `MASTER_AGENT_IDLE_TIMEOUT_SECONDS`.
 
-### Step 4: rule out CD daemon
+### Step 4: rule out a recent deploy
+
+Check whether `just deploy staging master` or `just deploy prod <tag>` ran in the window before the kill. A deploy replaces the master container in place — a master restart can ripple into agent state.
 
 ```bash
-DOCKER_HOST=ssh://ubuntu@<prod-host> docker logs codex-slack-cd-daemon --since 1h 2>&1 \
-  | grep -E "cd\.deploy_start|cd\.force_recreate|cd\.new_image" | tail -10
+# Check master container age on the target host
+DOCKER_HOST=ssh://ubuntu@<prod-host> docker inspect codex-slack-master \
+  | grep -E '"StartedAt"|"FinishedAt"'
 ```
 
-If a deploy fired right before the kill: that's the source. CD daemon only restarts the master container — but a master restart can ripple into agent state.
+The CD daemon was retired (ADR-0016); `codex-slack-cd-daemon` no longer runs.
 
 ### Step 5: rule out host-wide event
 
@@ -240,7 +243,7 @@ The row predates PR #222 / v4.14. No diagnostic information was captured. There'
 | Agent persisted `_active_procs` snapshot (v4.15-rc6+) | `/tmp/master-agent/active_procs.json` inside the agent container |
 | Master logs | `docker logs codex-slack-master` |
 | Agent logs | `docker logs codex-agent-<workspace-id>` |
-| CD daemon logs | `docker logs codex-slack-cd-daemon` |
+| Recent deploy check | `docker inspect codex-slack-master` — see `StartedAt` vs kill timestamp |
 | Host journal | `journalctl -u docker` and `journalctl -k` |
 
 ## Reference case

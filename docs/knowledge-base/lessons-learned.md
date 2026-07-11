@@ -2,7 +2,31 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-05-18 -->
+<!-- last updated: 2026-07-11 -->
+
+---
+
+## 2026-07-11 — CD daemon retired; singleton `just deploy` is the only staging/prod path (ADR-0016)
+
+*Summary:* The CD daemon (`src/cd/`, `Dockerfile.cd-daemon`, `scripts/gen-env.sh`) was retired in full. The multi-version Traefik staging shape (`docker-compose.staging.yml`, `staging-up.md`, `staging-down.md`, `VERSION_SLUG` routing) was retired at the same time. Both are replaced by `just deploy <env> <tag>` backed by `docker-compose.deploy.yml` — a singleton overlay that publishes master on `${MASTER_PORT:-8080}:8080` and pins the image by digest. The `docker-compose.override.yml` was renamed to `docker-compose.dev.yml` so Compose's auto-merge no longer applies. A `.env` at repo root (loaded by `set dotenv-load` in the justfile) is now the single source for per-machine configuration.
+
+*Root cause (why this happened):* Two staging topologies (multi-version Traefik UAT + singleton CD-daemon) coexisted with separate overlay files, separate `.env` generators, separate runbooks, and different variable sets. Issue #245 asked for `just deploy <env> <tag>` as a single entry point, which forced the choice: collapse the shapes or maintain three parallel deploy paths. ADR-0016 accepted the serialized RC UAT tradeoff in exchange for a single shape, single overlay, single command.
+
+*Fix applied:* Justfile at repo root with all ops recipes (`dev-up`, `dev-down`, `deploy`, `undeploy`, `status`, `logs`, `shell`, `test`, `post-merge-cleanup`). New runbooks `deploy.md` and `undeploy.md` replace `staging-up.md` and `staging-down.md`. Dev-shape `.sre/*.sh` scripts are now one-release-cycle `exec just <recipe>` wrappers. Rollback is `just deploy <env> <previous-tag>`.
+
+*Prevention / lesson for future maintainers:* When two deploy paths target the same host and container, they will fight each other — the daemon rolls back what the human just deployed. The presence of a CD daemon alongside an explicit deploy command requires a hard "either/or per host" guard that adds its own operational rules. If you feel the pull to add automation back around `just deploy` (polling, webhook trigger, etc.), do it as a thin caller of `just deploy` rather than a separate deploy system.
+
+---
+
+## 2026-07-11 — Mermaid sequence diagrams: semicolons inside message text break GitHub rendering
+
+*Summary:* Mermaid sequence diagram syntax treats `;` as a statement terminator. A semicolon appearing inside a message label (the text after `->>`) terminates the Mermaid statement mid-label and causes the entire diagram to fail to render on GitHub (blank diagram or parse error). This is silent — no warning is shown in the Markdown preview.
+
+*Root cause:* Mermaid's lexer does not distinguish between `;` in string context and `;` as a statement terminator. There is no string-escaping mechanism for this character in message text.
+
+*Fix applied:* Rewrote all message text in sequence diagrams to avoid semicolons. Used conjunctions ("and", "then") or restructured the sentence to avoid the character entirely.
+
+*Prevention:* Never include `;` in mermaid sequence diagram message text (the part after `->>`, `-->>`, `->`, `->`). Audit any mermaid diagram that fails to render on GitHub by checking for semicolons in message labels first.
 
 ---
 

@@ -573,47 +573,57 @@ Rejected.
 The recommended answers below are proposals; call them out in review if you
 want any changed.
 
-- [ ] **Recipe surface is fine?** Are the recipe names/args above the right
+- [x] **Recipe surface is fine?** Are the recipe names/args above the right
   surface, or do we want e.g. `just up staging <tag>` / `just down` style
   verbs? *Recommended:* keep the runbook-aligned names above so
   `.sre/operations/*.md` filenames and recipe names line up. `deploy` and
   `undeploy` are new operations for issue #245 with matching new runbooks.
-- [ ] **Justfile as source of truth vs. thin wrapper?** *Recommended:* source
+  (resolved: implemented as specified — `just dev-up`, `just deploy <env> <tag>`, etc.)
+- [x] **Justfile as source of truth vs. thin wrapper?** *Recommended:* source
   of truth. Dev-shape `.sre/*.sh` become one-line wrappers for a single
   release cycle then are removed. Staging-shape `.sre/*.sh` are deleted
   outright. Owner: engineer implementing.
-- [ ] **First-class prod today or reserved slot only?** *Recommended:*
+  (resolved: justfile is source of truth; dev-shape `.sre/*.sh` are `exec just <recipe> "$@"` wrappers.)
+- [x] **First-class prod today or reserved slot only?** *Recommended:*
   reserved slot — `PROD_DOCKER_HOST` is documented in `.env.example`,
   recipes work when it is set, but no `senior-sre` bootstrap of a prod host
   is part of this change.
-- [ ] **`.env` vs. `.env.deploy`?** Do we want deploy config in the same
+  (resolved: `PROD_DOCKER_HOST` reserved in `.env.example`; `just deploy prod` aborts with a clear error if unset.)
+- [x] **`.env` vs. `.env.deploy`?** Do we want deploy config in the same
   `.env` as Master runtime settings, or a dedicated `.env.deploy`?
   *Recommended:* single `.env` with sectioned `.env.example`. Two files
   split the user's mental model without solving a real problem — they'd
   both be gitignored and both loaded by `just`.
-- [ ] **Precedence: shell overrides `.env`.** *Recommended:* yes — matches
+  (resolved: single `.env`, two-section `.env.example` as designed.)
+- [x] **Precedence: shell overrides `.env`.** *Recommended:* yes — matches
   `just`'s default `dotenv-load` behaviour and preserves the current
   contract where the `sre` agent's exported vars win. Owner: doc-writer to
   call out in `docs/sre.md`.
-- [ ] **Digest resolution tool?** `docker buildx imagetools inspect` vs
+  (resolved: `set dotenv-load := true` in justfile; documented in `docs/sre.md`.)
+- [x] **Digest resolution tool?** `docker buildx imagetools inspect` vs
   `docker manifest inspect` vs `crane digest`. *Recommended:*
   `docker buildx imagetools inspect --format '{{json .Manifest.Digest}}'` —
   already available wherever docker is, no extra tool. Owner: engineer.
-- [ ] **How aggressively to consolidate `.env.example`?** *Recommended:* one
+  (resolved: `docker buildx imagetools inspect --format '{{"{{"}}json .Manifest.Digest{{"}}"}}' | tr -d '"'` implemented in justfile.)
+- [x] **How aggressively to consolidate `.env.example`?** *Recommended:* one
   file, two labelled sections as sketched above. The CD-daemon section is
   gone with the daemon. Owner: doc-writer.
-- [ ] **Local docker host wording in docs/sre.md.** The issue mentions "local
+  (resolved: `.env.example` reorganised into Section A (justfile/deploy) and Section B (runtime secrets).)
+- [x] **Local docker host wording in docs/sre.md.** The issue mentions "local
   or remote docker host". *Recommended:* keep the existing rule — no
   implicit local fallback; `DEV_DOCKER_HOST=unix:///var/run/docker.sock` is
   the explicit local target. Owner: doc-writer.
-- [ ] **`just` in the agent container.** Who lands the Dockerfile change to
+  (resolved: `docs/sre.md` explicitly states no local fallback and documents the `unix://` form.)
+- [x] **`just` in the agent container.** Who lands the Dockerfile change to
   install `just`? *Recommended:* `senior-sre` in the same PR as the
   justfile so the agent's first `just` invocation cannot fail on a missing
   binary.
-- [ ] **Dev-shape wrapper deprecation window.** How long do the dev-shape
+  (resolved: `just` installed in the agent container image in the same PR.)
+- [x] **Dev-shape wrapper deprecation window.** How long do the dev-shape
   `.sre/*.sh` remain as wrappers before removal? *Recommended:* one merge
   cycle — remove after the first canonical staging refresh through the new
   recipes has been observed green.
+  (resolved: wrappers in place for one release cycle; removal after first successful `just deploy staging master`.)
 
 ## Implementation Plan
 

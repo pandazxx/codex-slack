@@ -18,7 +18,6 @@ The project name reflects its v2 origin as a Slack/Discord bridge. v3 dropped ch
 | `master` | FastAPI app: REST API + Vue 3 SPA + WebSocket hub + MQTT client | 8080 |
 | `mosquitto` | MQTT broker (Eclipse Mosquitto 2) | 1883 (internal only) |
 | agent containers | One per workspace; runs `src/agent/mqtt_loop.py`, invokes `claude` / `codex` CLI | none |
-| `cd` daemon (optional) | Polls a registry tag and redeploys master/agent images on change | none |
 
 State lives in two places:
 - `master_data` Docker volume (SQLite at `/opt/codex-slack/data/master/master_data.db`) — workspaces, topics, messages, sessions, agent configs.
@@ -116,7 +115,6 @@ The default fallback `999` is a Linux convention that is **not** correct on most
 
 - `MASTER_PUBLIC_URL` — externally reachable base URL of the web UI; used by the optional notification webhooks to build deep links into topics.
 - `MASTER_NOTIFY_DISCORD_WEBHOOK_URL`, `MASTER_NOTIFY_TELEGRAM_BOT_TOKEN` + `_CHAT_ID` — agent-reply notification destinations. (Discord here is a webhook destination, not a chat-platform frontend; that was removed in v3.)
-- `CD_NOTIFY_SLACK_WEBHOOK_URL`, `CD_NOTIFY_DISCORD_WEBHOOK_URL` — same idea but for the optional CD daemon's deploy/rollback notifications.
 
 For the full list with types and defaults, see [`docs/references/config.md`](docs/references/config.md). For Podman, SSH forwarding, and other runtime concerns, see [`docs/guides/container-runtime.md`](docs/guides/container-runtime.md).
 
@@ -126,8 +124,7 @@ For the full list with types and defaults, see [`docs/references/config.md`](doc
 .
 ├── src/                          # Application source
 │   ├── master/                   #   FastAPI app, MQTT hub, container orchestration
-│   ├── agent/                    #   Agent worker (MQTT loop, CLI adapter)
-│   └── cd/                       #   CD daemon for image-tag-driven redeploys
+│   └── agent/                    #   Agent worker (MQTT loop, CLI adapter)
 ├── frontend/                     # Vue 3 SPA (built into src/master/static/ during image build)
 ├── tests/                        # Automated tests (mirrors src/ structure)
 ├── scripts/                      # Bootstrap and utility scripts
@@ -144,18 +141,17 @@ For the full list with types and defaults, see [`docs/references/config.md`](doc
 ├── .claude/                      # Claude Code agent framework (CLAUDE.md, subagents, slash commands)
 ├── .agents/                      # Codex repo-local skills
 ├── .github/workflows/            # CI: image build, RC promotion, on-demand builds
-├── Dockerfile                    # Master image (FastAPI + frontend)
+├── justfile                      # All ops recipes: dev-up, deploy, undeploy, logs, shell, test, …
+├── Dockerfile                    # Master image (FastAPI + frontend); stages: prod, dev, test
 ├── Dockerfile.agent-minimal      # Lean base image for agent containers
-├── Dockerfile.cd-daemon          # CD daemon image
-├── Dockerfile.dev                # Dev image (bind-mount source, live reload)
-├── Dockerfile.test               # Test runner image (CI pytest)
-├── docker-compose.yml            # Master + mosquitto baseline
-├── docker-compose.override.yml   # Dev override: bind-mount source, live reload
-├── docker-compose.ssh.yml        # SSH agent forwarding override
+├── docker-compose.yml            # Neutral base: shared service definitions, no build/ports/digest
+├── docker-compose.dev.yml        # Dev overlay: build target dev, Traefik labels, sre-traefik-public
+├── docker-compose.deploy.yml     # Singleton overlay: used by `just deploy`; host port, digest pin
+├── docker-compose.ssh.yml        # SSH agent forwarding overlay
 ├── docker-compose.ci.yml         # CI compose for the test image
-├── docker-compose.cd-daemon.example.yml      # CD daemon example
 ├── docker-compose.master-agent.example.yml   # Master+agent example
 ├── docker-compose.multi-agent.example.yml    # Multi-agent example
+├── .env.example                  # Annotated template for .env (Section A: deploy; Section B: runtime)
 ├── BUILD.md                      # Compatibility pointer to the ops manual
 └── USAGE.md                      # Compatibility pointer to the user manual
 ```
@@ -168,7 +164,6 @@ For the full list with types and defaults, see [`docs/references/config.md`](doc
 - [`docs/guides/onboarding.md`](docs/guides/onboarding.md) — contributor onboarding
 - [`docs/guides/event-actions.md`](docs/guides/event-actions.md) — event-based staff actions (scheduler, message hooks, archive hooks)
 - [`docs/guides/runbooks/master-agent.md`](docs/guides/runbooks/master-agent.md) — master/agent operational runbook
-- [`docs/guides/runbooks/cd-daemon.md`](docs/guides/runbooks/cd-daemon.md) — CD daemon runbook
 - [`docs/references/api.md`](docs/references/api.md) — REST API, WebSocket, and MQTT reference
 - [`docs/references/config.md`](docs/references/config.md) — configuration keys and defaults
 - [`docs/decisions/0005-v3-system-architecture.md`](docs/decisions/0005-v3-system-architecture.md) — v3 architecture ADR

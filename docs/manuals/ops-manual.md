@@ -138,5 +138,5 @@ docker run --rm \
 - [`docs/references/config.md`](../references/config.md) — full configuration key reference
 - [`docs/references/api.md`](../references/api.md) — REST API, WebSocket, MQTT reference
 - [`docs/guides/runbooks/master-agent.md`](../guides/runbooks/master-agent.md) — operational runbook for production operation
-- [`docs/guides/runbooks/cd-daemon.md`](../guides/runbooks/cd-daemon.md) — automated deployment (CD daemon)
+- [`docs/sre.md`](../sre.md) — SRE reference: deploy recipes, compose files, env vars, runbooks
 - `docs/releases/` — release-specific changes and migration notes

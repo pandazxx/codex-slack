@@ -44,11 +44,12 @@ Map the user's request to a runbook file. Read the file, follow its steps in ord
 |---|---|
 | "Spin up a dev env for `<branch>`" | `.sre/operations/env-up.md` |
 | "Tear down dev env for `<branch>`" | `.sre/operations/env-down.md` |
-| "Spin up staging for `<branch>` at `<version>`" / "Deploy `<version>` to staging for `<branch>`" / "Refresh `main` staging" | `.sre/operations/staging-up.md` |
-| "Tear down staging for `<branch>`" | `.sre/operations/staging-down.md` |
-| "Tail logs for `<branch>`" | `.sre/operations/logs.md` |
-| "Open shell in `<service>` on `<branch>`" | `.sre/operations/shell.md` |
+| "Deploy `<version>` to staging" / "Deploy `<version>` to prod" / "Refresh staging" | `.sre/operations/deploy.md` |
+| "Undeploy staging" / "Tear down staging" / "Undeploy prod" | `.sre/operations/undeploy.md` |
+| "Tail logs for `<env>` / `<branch>`" | `.sre/operations/logs.md` |
+| "Open shell in `<service>` on `<env>`" | `.sre/operations/shell.md` |
 | "What's running?" / "What's running on dev?" / "What's running on staging?" | `.sre/operations/status.md` |
+| "Run the tests" / "Run tests matching `<pattern>`" | `.sre/operations/test.md` |
 | "Post-merge cleanup for `<branch>`" | `.sre/operations/post-merge-cleanup.md` |
 
 If the request doesn't match any of the above, escalate: *"Request doesn't map to a known operation. Invoke `senior-sre` if this should be supported."*

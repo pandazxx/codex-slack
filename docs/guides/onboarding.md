@@ -8,6 +8,10 @@ Getting started as a new contributor to the codex-slack v3 project.
 - Docker or Podman (with Compose support)
 - Node.js 18+ and npm (for building the frontend)
 - `claude` CLI (Claude Code) or `codex` CLI installed and authenticated on the host
+- `just` — the command runner used for all ops recipes
+  - macOS: `brew install just`
+  - Linux (Debian/Ubuntu): `apt install just` or the official static installer at `https://just.systems/install.sh`
+  - The agent container image already ships a pinned `just` binary
 - Basic familiarity with FastAPI and Vue 3
 
 ## What this project is
