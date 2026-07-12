@@ -1,7 +1,7 @@
-# Dev override — selected by docker-compose.override.yml auto-merge.
-# Builds the dev stage of Dockerfile against DEV_DOCKER_HOST.
-# No source bind-mounts; source is baked into the image at build time.
-# Edit → docker compose build master && docker compose up -d master
+# Dev overlay — selected explicitly by `just dev-up` and `just dev-down`.
+# Extends docker-compose.yml with the build section (target: dev), Traefik
+# labels, and the sre-traefik-public network. Never auto-merged; always
+# passed via -f so multiple branch stacks can coexist on the same host.
 services:
   master:
     build:

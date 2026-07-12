@@ -6,11 +6,10 @@ Operational reference for the v3 container runtime: image roles, mounts, sockets
 
 | Image | Purpose |
 |---|---|
-| `Dockerfile` | Master image. FastAPI app + Vue 3 SPA build + `podman` / `gh` / `jq` / `make` for orchestration. |
+| `Dockerfile` (stage `prod`) | Master image. FastAPI app + Vue 3 SPA build + `podman` / `gh` / `jq` / `make` for orchestration. |
+| `Dockerfile` (stage `dev`) | Dev image, built from `prod`. Used by `docker-compose.dev.yml` via `just dev-up`. |
+| `Dockerfile` (stage `test`) | Test runner image. Used by CI via `docker-compose.ci.yml` and `just test`. |
 | `Dockerfile.agent-minimal` | Lean agent base image. Python 3.11, `claude` CLI, `codex` CLI, `git`, `openssh-client`, agent entrypoint. Published to GHCR for project-specific extension. |
-| `Dockerfile.cd-daemon` | CD daemon image. Polls a registry tag and redeploys when the digest changes. |
-| `Dockerfile.dev` | Dev image with bind-mounted source for live reload. Used by `docker-compose.override.yml`. |
-| `Dockerfile.test` | Test runner image. Used by CI via `docker-compose.ci.yml`. |
 
 The minimal agent image intentionally omits master-only tooling (`podman`, `gh`, `jq`, `make`).
 
@@ -48,8 +47,11 @@ See [`docs/references/config.md`](../references/config.md) for the complete list
 
 ## Starting the stack
 
+The standard entry point is `just dev-up` (see `docs/sre.md`). Direct `docker compose` calls are for diagnostic use only.
+
 ```bash
-docker compose up --build -d
+# Direct compose (diagnostic — use just dev-up in normal ops)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
 docker compose logs -f master
 ```
 
@@ -59,7 +61,7 @@ For Podman rootless:
 export CONTAINER_RUNTIME=podman
 export CONTAINER_SOCKET_PATH=/run/user/$(id -u)/podman/podman.sock
 export DOCKER_GID="$(stat -c '%g' "$CONTAINER_SOCKET_PATH")"
-podman compose up --build -d
+podman compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
 ```
 
 ## SSH agent forwarding (no private key inside the image)
@@ -75,17 +77,22 @@ ssh-add -l
 echo "$SSH_AUTH_SOCK"
 ```
 
-Bring up the stack with the SSH override:
+Bring up the dev stack with the SSH overlay:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ssh.yml up --build -d
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.dev.yml \
+  -f docker-compose.ssh.yml \
+  up --build -d
 ```
 
-For Podman, layer all three files:
+For Podman, layer all four files:
 
 ```bash
 podman compose \
   -f docker-compose.yml \
+  -f docker-compose.dev.yml \
   -f docker-compose.podman.yml \
   -f docker-compose.ssh.yml \
   up --build -d

@@ -1,8 +1,11 @@
+# Base compose file — the shared intersection for every environment.
+# No build:, no ports:, no image digest pin.
+# Always paired with exactly one overlay:
+#   dev      → docker-compose.dev.yml    (via `just dev-up`)
+#   staging  → docker-compose.deploy.yml (via `just deploy staging <tag>`)
+#   prod     → docker-compose.deploy.yml (via `just deploy prod <tag>`)
 services:
   master:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: ${MASTER_RUNTIME_IMAGE:-codex-slack-master:latest}
     working_dir: /opt/codex-slack
     command: ["python", "-m", "uvicorn", "src.master.main:app", "--host", "0.0.0.0", "--port", "8080"]
@@ -43,9 +46,8 @@ services:
 
   mosquitto:
     image: eclipse-mosquitto:2.0.21
-    # Write config inline so no host-side file bind-mount is required.
-    # This allows the CD daemon to drive compose without a project directory
-    # present on the host.
+    # Config written inline so no host-side file bind-mount is needed;
+    # this keeps the stack self-contained on remote DOCKER_HOST targets.
     entrypoint:
       - sh
       - -c

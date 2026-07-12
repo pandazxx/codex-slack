@@ -2,33 +2,31 @@
 
 ## Inputs
 - `<merged-branch>` — the feature branch that was just merged to master
-- `<image-ref>` — image reference for the new master build (from CI build-push output)
-- `<image-digest>` — sha256 digest for the new master build
+- `<tag>` — image tag to deploy to staging (default: `master`); CI publishes `codex-slack-master:master` on every push to master
 
 ## Required env vars
 - `STAGING_DOCKER_HOST`
 - `REGISTRY`
-- `DEV_DOCKER_HOST` (for dev env teardown confirmation)
+- `DEV_DOCKER_HOST` (for dev env teardown)
 
 ## Pre-conditions
-- CI build-push workflow has completed for the merge commit on master.
-- `image-ref` and `image-digest` are available from the workflow output.
+- CI `build-push.yml` `build-master` job has completed for the merge commit.
+- `STAGING_DOCKER_HOST` is set and reachable.
 
 ## Steps
-1. Refresh canonical staging (master):
-   `.sre/staging-up.sh master <image-ref> <image-digest>`
-   - This updates the running `master` slug staging env in-place.
-2. Tear down the merged feature-branch staging env:
-   `.sre/staging-down.sh <feature-image-ref>`
-   where `<feature-image-ref>` is the image reference used when the feature-branch staging env was spun up (same value passed to `staging-up.sh` at spin-up time — the script derives the project name from the image tag).
-   - If no staging env exists for that version slug, skip silently.
-3. Report dev env teardown note:
-   "Dev env for `<merged-branch>` is the developer's responsibility to tear down.
-    Run: `.sre/env-down.sh <merged-branch>` when ready."
+
+1. Run:
+   ```
+   just post-merge-cleanup <merged-branch> [<tag>]
+   ```
+   The recipe:
+   - Refreshes the staging singleton: runs `just deploy staging <tag>` (default `<tag>=master`), which resolves the tag to a digest and replaces the running singleton in place.
+   - Checks if a dev env for `<merged-branch>` is running on `DEV_DOCKER_HOST`. If found, tears it down via `just dev-down <merged-branch>`.
+   - If no dev env exists for the branch, skips silently.
 
 ## On failure
-- Step 1 failure: stop and escalate. Do not proceed to step 2.
-- Step 2 failure: escalate; the master env is already refreshed so this is non-critical.
+- Deploy step failure: stop and escalate. The staging singleton may be in a degraded state — investigate before retrying.
+- Dev teardown failure: escalate; staging is already refreshed so this is non-critical.
 
 ## Output
-The script's stdout is the user-facing output. Pass through verbatim.
+The recipe's stdout is the user-facing output. Pass through verbatim.

@@ -10,14 +10,14 @@ The project has been onboarded to a containerized SRE workflow. All infrastructu
 
 ## What Was Set Up
 
-### 1. Dev Environment (Local Development)
+### 1. Dev Environment
 
 **Files:**
 
-- `docker-compose.override.yml` — Dev overrides with bind-mounts.
-- `Dockerfile.dev` — Dev image with live-reload optimizations.
-- `.sre/env-up.sh` — Spin up isolated dev env (idempotent).
-- `.sre/env-down.sh` — Tear down dev env.
+- `docker-compose.dev.yml` — Dev overlay: build target `dev`, Traefik labels, `sre-traefik-public` network.
+- `justfile` — All ops recipes including `dev-up`, `dev-down`, `deploy`, `undeploy`, `test`, etc.
+- `.sre/env-up.sh` — Thin wrapper: `exec just dev-up "$@"` (one-release-cycle deprecation window).
+- `.sre/env-down.sh` — Thin wrapper: `exec just dev-down "$@"`.
 
 **Usage:**
 
@@ -31,27 +31,22 @@ The project has been onboarded to a containerized SRE workflow. All infrastructu
 
 **Features:**
 
-- Source code bind-mounted → changes reflect immediately (no rebuild).
-- Python uvicorn reloads on file changes.
-- Frontend build runs in container and watches for changes.
-- Isolated from other branches (separate Compose projects).
+- Built from current commit at `DEV_DOCKER_HOST` (no source bind-mounts — source changes require `just dev-up`).
+- Isolated from other branches (separate Compose projects, one per branch slug).
+- Traefik routing via `master.<branch-slug>.<host-ip-dashed>.nip.io`.
 - Healthchecks on all services.
-- Exposed ports: 8080 (master API), etc.
 
 **Access:**
 
 ```bash
-# Web UI:
-curl http://localhost:8080
-
-# API docs:
-curl http://localhost:8080/docs
+# Web UI (Traefik hostname):
+curl http://master.feat-auth.<host-ip-dashed>.nip.io
 
 # Logs:
-docker compose -p $USER-feat-auth logs -f master
+DOCKER_HOST=$DEV_DOCKER_HOST docker compose -p feat-auth logs -f master
 
 # Shell:
-docker compose -p $USER-feat-auth exec -it master bash
+DOCKER_HOST=$DEV_DOCKER_HOST docker compose -p feat-auth exec master bash
 ```
 
 ### 2. Test Environment (CI & Local Testing)
@@ -98,16 +93,18 @@ docker compose -p $USER-feat-auth exec -it master bash
 - CI caches images via GitHub Actions cache.
 - Test output is logged to GitHub Actions UI.
 
-### 4. SRE Scripts
+### 4. Justfile & SRE Scripts
 
-All scripts in `.sre/` are called by the SRE subagent; humans use them for manual control:
+`justfile` at repo root is the single entry point for all ops. Scripts in `.sre/` are one-release-cycle wrappers that `exec just <recipe> "$@"`.
 
-| Script | Purpose |
+| Entry point | Purpose |
 |---|---|
-| `env-up.sh` | Spin up dev env (idempotent). |
-| `env-down.sh` | Tear down dev env. |
-| `test.sh` | Run tests locally. |
-| `setup-repo-protection.sh` | Apply branch protection rules to `main`. |
+| `just dev-up [branch]` | Spin up dev env (idempotent). |
+| `just dev-down [branch]` | Tear down dev env. |
+| `just deploy <env> <tag>` | Deploy singleton stack to staging or prod. |
+| `just undeploy <env>` | Tear down singleton stack. |
+| `just test [pattern]` | Run tests. |
+| `.sre/setup-repo-protection.sh` | Apply branch protection rules to `main` (not wrapped — one-time admin task). |
 
 **Permissions:** All scripts are executable.
 
@@ -115,10 +112,10 @@ All scripts in `.sre/` are called by the SRE subagent; humans use them for manua
 
 **SRE-facing:**
 
-- `docs/guides/sre.md` — Complete SRE workflow guide. Covers dev env, testing, staging, secret handling, troubleshooting.
-- `docs/guides/repo-harness.md` — Branch protection rules, merge requirements, CODEOWNERS.
-- `docs/guides/deploy-prod.md` — Production deployment runbook. How to use the artifact, verify, rollback.
-- `docs/sre-decisions/2025-05-06-containerized-dev-workflow.md` — ADR explaining the decision, rationale, consequences.
+- `docs/sre.md` — Authoritative SRE reference. Env vars, shapes, compose files, recipe surface, runbooks.
+- `docs/guides/sre.md` — SRE workflow guide. Covers dev env, staging deploy, secrets, troubleshooting.
+- `docs/repo-harness.md` — Compose layering, justfile recipes, branch protection, CI workflows.
+- `docs/decisions/0016-singleton-justfile-deploys.md` — singleton deploy model and CD-daemon retirement rationale.
 
 **Developer-facing:**
 
@@ -127,30 +124,31 @@ All scripts in `.sre/` are called by the SRE subagent; humans use them for manua
 ### 6. Project Layout
 
 ```
-.sre/
-├── env-up.sh                    # Spin up dev env
-├── env-down.sh                  # Tear down dev env
-├── test.sh                       # Run tests
-└── setup-repo-protection.sh     # Configure branch protection
+justfile                          # All ops recipes (dev-up, deploy, undeploy, test, …)
 
-Dockerfile*
-├── Dockerfile                    # Prod image (with HEALTHCHECK added)
-├── Dockerfile.dev               # Dev image (live reload)
-└── Dockerfile.test              # Test image (pytest)
+.sre/
+├── env-up.sh                    # Wrapper: exec just dev-up "$@"
+├── env-down.sh                  # Wrapper: exec just dev-down "$@"
+├── test.sh                      # Wrapper: exec just test "$@"
+└── setup-repo-protection.sh     # Configure branch protection (admin, not wrapped)
+
+Dockerfile                        # Multi-stage: prod, dev, test
 
 docker-compose*
-├── docker-compose.yml           # Base (unchanged)
-├── docker-compose.override.yml  # Dev overrides (new)
-└── docker-compose.ci.yml        # CI test config (new)
+├── docker-compose.yml           # Neutral base (no build/ports/digest)
+├── docker-compose.dev.yml       # Dev overlay (renamed from override.yml)
+├── docker-compose.deploy.yml    # Singleton overlay for staging/prod
+└── docker-compose.ci.yml        # CI test config
 
 docs/guides/
 ├── sre.md                       # SRE workflow guide
-├── repo-harness.md              # Branch protection
-├── deploy-prod.md               # Prod deployment runbook
-└── sre-onboarding-summary.md    # This file
+├── sre-onboarding-summary.md    # This file
+└── onboarding.md                # Contributor onboarding (includes just install)
 
-docs/sre-decisions/
-└── 2025-05-06-containerized-dev-workflow.md  # ADR
+docs/sre.md                      # Authoritative SRE reference (env vars, shapes, runbooks)
+docs/repo-harness.md             # Compose layering, justfile recipes, branch protection
+docs/decisions/
+└── 0016-singleton-justfile-deploys.md  # ADR for this change
 
 .github/
 ├── workflows/
@@ -165,14 +163,16 @@ docs/sre-decisions/
 
 Before running SRE operations, verify these are set in your shell:
 
+All variables are set in `.env` at the repo root; the justfile loads them automatically.
+
 | Variable | Required for | Example |
 |---|---|---|
-| `DEV_DOCKER_HOST` | Remote dev env (optional; uses local Docker if unset) | `ssh://ubuntu@dev.tail-scale.ts.net` |
-| `STAGING_DOCKER_HOST` | Staging deploys | `ssh://ubuntu@staging.tail-scale.ts.net` |
-| `REGISTRY` | Building/pushing images | `ghcr.io/myorg` |
-| `REGISTRY_TOKEN` | Pushing images | (from secret manager) |
+| `DEV_DOCKER_HOST` | Dev env spin-up, tests, logs, shell | `ssh://ubuntu@dev.tail-scale.ts.net` |
+| `STAGING_DOCKER_HOST` | Staging deploys, undeploys | `ssh://ubuntu@staging.tail-scale.ts.net` |
+| `REGISTRY` | Staging/prod image pulls | `ghcr.io/pandazxx` |
+| `REGISTRY_TOKEN` | Pushing images to non-GHCR registries | (from secret manager) |
 
-**Local development:** `DEV_DOCKER_HOST` is optional; the SRE agent uses the local Docker daemon if unset.
+**No local Docker fallback.** `DEV_DOCKER_HOST` must always be set. For local Docker, set `DEV_DOCKER_HOST=unix:///var/run/docker.sock` explicitly.
 
 ## Supported Operations
 
@@ -190,19 +190,19 @@ Before running SRE operations, verify these are set in your shell:
    - SRE removes containers and volumes.
 
 4. **"Deploy `v1.2.3` to staging"**
-   - SRE deploys to `STAGING_DOCKER_HOST` by image digest.
-   - Runs smoke tests; auto-rollback if failed.
+   - SRE runs `just deploy staging v1.2.3`, resolves the tag to a digest, and deploys the singleton stack on `STAGING_DOCKER_HOST`. Rollback = `just deploy staging <previous-tag>`.
 
 5. **"What's running on staging"**
-   - SRE lists canonical and feature-branch staging envs.
+   - SRE runs `just status` to list active compose projects on all configured hosts.
 
-### Or run manually:
+### Or run manually via justfile:
 
 ```bash
-.sre/env-up.sh feat-auth        # Spin up dev env
-.sre/env-down.sh feat-auth      # Tear down
-.sre/test.sh                     # Run tests
-.sre/test.sh -k test_image       # Run specific tests
+just dev-up feat-auth           # Spin up dev env
+just dev-down feat-auth         # Tear down
+just test                        # Run tests
+just test test_image             # Run specific tests
+just deploy staging v1.2.3      # Deploy to staging
 ```
 
 ## File Ownership
@@ -212,25 +212,26 @@ Before running SRE operations, verify these are set in your shell:
 | `Dockerfile` | Engineer | Prod image; SRE edits only safe additions (healthchecks, non-root user). |
 | `Dockerfile.dev`, `Dockerfile.test` | SRE | Dev/test images; SRE owns outright. |
 | `docker-compose.yml` | Shared | Base topology; engineer-proposed changes require SRE review. |
-| `docker-compose.override.yml`, `docker-compose.ci.yml` | SRE | Dev/test compose configs; SRE owns. |
+| `docker-compose.dev.yml`, `docker-compose.deploy.yml`, `docker-compose.ci.yml` | SRE | Dev/deploy/CI compose overlays; SRE owns. |
 | `.sre/` | SRE | SRE implementation scripts. |
 | `.github/workflows/` | SRE | CI/CD pipeline. |
 | `docs/sre*.md`, `docs/guides/sre.md`, `docs/guides/repo-harness.md` | SRE | SRE documentation. |
 | Application source, tests, migrations | Engineer | Off-limits to SRE unless domain-coupled issue. |
 
-## No Breaking Changes
+## Summary of Changes (2026-07-11 update)
 
-- Prod `Dockerfile` is nearly unchanged (only added HEALTHCHECK).
-- Base `docker-compose.yml` is unchanged.
-- No impact on existing deploys or CI (ci-pr.yml now uses containers, which is safer).
-- Existing `docker-compose.yml`, example files (`.example.yml`) are untouched.
+- `docker-compose.override.yml` renamed to `docker-compose.dev.yml` — no more implicit auto-merge.
+- `docker-compose.staging.yml` and `docker-compose.cd-daemon.example.yml` removed. `docker-compose.deploy.yml` is the new singleton overlay for staging and prod.
+- CD daemon (`src/cd/`, `Dockerfile.cd-daemon`) retired. `just deploy <env> <tag>` is the only staging/prod deploy path.
+- `justfile` added at repo root with all ops recipes.
+- `.env.example` reorganised into two sections (Section A: justfile/deploy config; Section B: master runtime secrets).
 
 ## Next Steps (For Team)
 
 1. **Verify the setup:**
-   - Clone or pull the branch with these changes.
-   - Run `.sre/test.sh` to verify tests run.
-   - Run `.sre/env-up.sh` to spin up a dev env (requires Docker).
+   - Copy `.env.example` to `.env` and fill in `DEV_DOCKER_HOST`, `STAGING_DOCKER_HOST`, and `REGISTRY`.
+   - Run `just test` to verify tests run.
+   - Run `just dev-up` to spin up a dev env.
 
 2. **Update team docs/onboarding:**
    - Point new developers to `.claude/CLAUDE.md` (SRE Workflow section).
@@ -241,37 +242,33 @@ Before running SRE operations, verify these are set in your shell:
    - Requires `gh` CLI authenticated.
 
 4. **Address "Address before going to prod" items:**
-   - **Secrets in CI:** Review `.github/workflows/` to ensure no credentials are hardcoded. Use GitHub Actions secrets and pass as env vars at runtime.
-   - **Prod artifact & rollback:** When deploying to prod, implement the artifact pattern described in `docs/guides/deploy-prod.md` (build-prod-artifact.yml workflow with `deploy.sh`, `rollback.sh`, `verify.sh`).
-   - **Staging UAT:** Establish a formal UAT process before prod releases. Use feature-branch staging envs for high-risk features.
+   - **Secrets in CI:** Review `.github/workflows/` to ensure no credentials are hardcoded. Use GitHub Actions secrets.
+   - **Staging deploy:** Set `STAGING_DOCKER_HOST` and run `just deploy staging master` to verify end-to-end.
    - **Data backup:** Ensure production data volumes are regularly backed up (off-host).
 
 5. **Iterate & improve:**
    - As the workflow settles, update decision records if tradeoffs change.
-   - If new pain points emerge (e.g., "tests are too slow"), raise them and SRE will optimize.
+   - If new pain points emerge, raise them and SRE will optimize.
 
 ## Troubleshooting
 
 ### "Docker daemon not responding"
 
 ```bash
-docker ps
-# If it fails, start Docker or check DEV_DOCKER_HOST is reachable.
+DOCKER_HOST="$DEV_DOCKER_HOST" docker ps
+# If it fails, check DEV_DOCKER_HOST is reachable and SSH keys are loaded.
 ```
 
-### "env-up.sh: command not found"
+### "just: command not found"
 
-```bash
-chmod +x .sre/env-up.sh
-.sre/env-up.sh
-```
+Install `just`: macOS: `brew install just`; Linux: see `docs/guides/onboarding.md`.
 
-### "Health check timeout on env-up"
+### "Health check timeout on dev-up"
 
 Check the logs:
 
 ```bash
-docker compose -p $USER-<branch> logs master
+DOCKER_HOST="$DEV_DOCKER_HOST" docker compose -p <branch-slug> logs master
 ```
 
 Common causes: missing API keys, port conflict, network issue.
@@ -294,10 +291,10 @@ This should be rare now (containerized parity). If it happens:
 ## Related Documentation
 
 - **Project instructions:** `.claude/CLAUDE.md` — agent workflows, git conventions, knowledge persistence.
-- **SRE workflow:** `docs/guides/sre.md` — full operational guide.
-- **Repository harness:** `docs/guides/repo-harness.md` — branch protection, merge rules.
-- **Production deployment:** `docs/guides/deploy-prod.md` — how to deploy to prod.
-- **Decision record:** `docs/sre-decisions/2025-05-06-containerized-dev-workflow.md` — rationale and consequences.
+- **SRE reference:** `docs/sre.md` — authoritative env vars, shapes, compose files, runbooks, CI/CD.
+- **SRE workflow guide:** `docs/guides/sre.md` — how-to for supported operations.
+- **Repository harness:** `docs/repo-harness.md` — branch protection, merge rules, justfile recipe map.
+- **ADR-0016:** `docs/decisions/0016-singleton-justfile-deploys.md` — singleton deploy model, CD-daemon retirement.
 
 ---
 
