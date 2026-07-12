@@ -35,24 +35,22 @@ codex-slack v3 is a self-hosted chat platform for LLM coding agents. There is no
 git clone https://github.com/<org>/codex-slack.git
 cd codex-slack
 
-# 2. Create an env file with your secrets
-cat > .env <<EOF
-ANTHROPIC_API_KEY=sk-ant-...
-GH_TOKEN=ghp_...
-MASTER_GIT_USER_NAME=Your Name
-MASTER_GIT_USER_EMAIL=you@example.com
-CONTAINER_RUNTIME=docker
-CONTAINER_SOCKET_PATH=/var/run/docker.sock
-EOF
+# 2. Create an env file from the example and fill in your secrets
+cp .env.example .env
+# Set at minimum: ANTHROPIC_API_KEY, GH_TOKEN, and
+# DEV_DOCKER_HOST=unix:///var/run/docker.sock (for a local Docker socket)
 
-# 3. Build and start
-docker compose up --build -d
+# 3. Create the shared Traefik network once (dev stacks route through it)
+docker network create sre-traefik-public
 
-# 4. Open the UI
-open http://localhost:8080
+# 4. Build and start the dev stack for the current branch
+just dev-up
+
+# 5. Open the UI at the URL printed by dev-up:
+#    http://master.<branch-slug>.<host-ip-dashed>.nip.io
 ```
 
-The compose file (`docker-compose.yml`) starts `master` and `mosquitto`. Agent containers are spawned by master when you create a workspace in the UI.
+The base compose file (`docker-compose.yml`) is a neutral shared layer — it has no `build:` and publishes no ports, so it is never used alone. `just dev-up` pairs it with `docker-compose.dev.yml` (builds from your working tree, routes via Traefik); `just deploy <env> <tag>` pairs it with `docker-compose.deploy.yml` (CI-built image pinned by digest, published on host port 8080). Both start `master` and `mosquitto`; agent containers are spawned by master when you create a workspace in the UI. Dev-shape routing requires the host Traefik harness — see [`docs/sre.md`](../sre.md).
 
 ## Compose Configuration
 

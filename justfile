@@ -244,6 +244,7 @@ deploy env tag:
     echo "  url:    http://${HOST_IP}:${MASTER_PORT}"
 
 # Bring down the singleton codex-slack stack on <env>_DOCKER_HOST.
+# Preserves named volumes (master_data) — use `just destroy <env>` to wipe them.
 # env: staging | prod
 undeploy env:
     #!/usr/bin/env bash
@@ -279,9 +280,56 @@ undeploy env:
         -p codex-slack \
         -f "${PROJECT_ROOT}/docker-compose.yml" \
         -f "${PROJECT_ROOT}/docker-compose.deploy.yml" \
+        down --remove-orphans
+
+    echo "==> ${ENV} stack torn down (volumes preserved)."
+
+# DESTRUCTIVE: bring down the singleton stack AND delete its named volumes,
+# including master_data (application SQLite). Requires typing the env name
+# to confirm. env: staging | prod
+destroy env:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ENV="{{ env }}"
+
+    case "$ENV" in
+        staging)
+            : "${STAGING_DOCKER_HOST:?STAGING_DOCKER_HOST must be set for destroy staging}"
+            TARGET_HOST="$STAGING_DOCKER_HOST"
+            ;;
+        prod)
+            : "${PROD_DOCKER_HOST:?PROD_DOCKER_HOST must be set for destroy prod}"
+            TARGET_HOST="$PROD_DOCKER_HOST"
+            ;;
+        *)
+            echo "ERROR: env must be 'staging' or 'prod', got: ${ENV}" >&2
+            exit 1
+            ;;
+    esac
+
+    echo "WARNING: this deletes ALL named volumes for ${ENV}, including master_data."
+    printf "Type '%s' to confirm: " "$ENV"
+    read -r CONFIRM
+    if [ "$CONFIRM" != "$ENV" ]; then
+        echo "Aborted."
+        exit 1
+    fi
+
+    PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+
+    export DOCKER_HOST="$TARGET_HOST"
+    export MASTER_RUNTIME_IMAGE="${MASTER_RUNTIME_IMAGE:-placeholder}"
+    export IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}"
+
+    echo "==> destroy: env=${ENV} host=${TARGET_HOST}"
+    docker compose \
+        -p codex-slack \
+        -f "${PROJECT_ROOT}/docker-compose.yml" \
+        -f "${PROJECT_ROOT}/docker-compose.deploy.yml" \
         down --volumes --remove-orphans
 
-    echo "==> ${ENV} stack torn down."
+    echo "==> ${ENV} stack and volumes destroyed."
 
 # List active compose projects on all configured hosts.
 status:
@@ -399,7 +447,9 @@ shell env service key="":
     esac
 
     export DOCKER_HOST="$TARGET_HOST"
-    docker compose -p "${PROJECT_NAME}" "${COMPOSE_FILES[@]}" exec "$SERVICE" bash
+    # Not every image ships bash (mosquitto is sh-only) — fall back to sh.
+    docker compose -p "${PROJECT_NAME}" "${COMPOSE_FILES[@]}" exec "$SERVICE" \
+        sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'
 
 # Build the test stage and run pytest on DEV_DOCKER_HOST.
 # Optional pattern filters tests via pytest -k.
