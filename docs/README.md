@@ -11,7 +11,6 @@ This directory is the canonical home for repository documentation.
 
 - [`docs/guides/onboarding.md`](guides/onboarding.md) — contributor onboarding (v3)
 - [`docs/guides/runbooks/master-agent.md`](guides/runbooks/master-agent.md) — master-agent operational runbook (v3)
-- [`docs/guides/runbooks/cd-daemon.md`](guides/runbooks/cd-daemon.md) — CD daemon operational runbook
 - [`docs/guides/container-runtime.md`](guides/container-runtime.md) — container runtime, Podman socket, and mounts (v3)
 - [`docs/guides/project-agent-image.md`](guides/project-agent-image.md) — project-specific agent images
 - [`docs/guides/sre.md`](guides/sre.md) — SRE-managed dev/staging workflow
@@ -42,8 +41,7 @@ This directory is the canonical home for repository documentation.
 - [`docs/design/cicd-pipeline.md`](design/cicd-pipeline.md) — CI/CD pipeline design
 - [`docs/design/containers/master-container-design.md`](design/containers/master-container-design.md) — master container startup, interfaces, lifecycle, storage
 - [`docs/design/containers/agent-container-design.md`](design/containers/agent-container-design.md) — agent container entrypoint and runtime contract
-- [`docs/design/containers/cd-container-design.md`](design/containers/cd-container-design.md) — CD daemon container startup, deploy loop, rollback
-- [`docs/design/containers/environment-variable-passdown-design.md`](design/containers/environment-variable-passdown-design.md) — env var loading and passdown across CD, master, and agent
+- [`docs/design/containers/environment-variable-passdown-design.md`](design/containers/environment-variable-passdown-design.md) — env var loading and passdown across master and agent
 - [`docs/design/agent-container-runtime-design.md`](design/agent-container-runtime-design.md) — canonical runtime contract for agent containers
 - [`docs/design/agent-runtime-cleanup-detailed-design.md`](design/agent-runtime-cleanup-detailed-design.md) — cleanup of transitional agent runtime startup behavior
 - [`docs/design/agent-provisioning-detailed-design.md`](design/agent-provisioning-detailed-design.md) — detailed design for agent/channel/repo provisioning
@@ -68,6 +66,7 @@ This directory is the canonical home for repository documentation.
 - [`docs/decisions/0011-system-vs-user-config-panel.md`](decisions/0011-system-vs-user-config-panel.md) — system vs user config panel
 - [`docs/decisions/0011-version-display.md`](decisions/0011-version-display.md) — version display
 - [`docs/decisions/0012-streaming-agent-reply.md`](decisions/0012-streaming-agent-reply.md) — streaming agent reply
+- [`docs/decisions/0016-singleton-justfile-deploys.md`](decisions/0016-singleton-justfile-deploys.md) — singleton justfile deploys; CD daemon and multi-version staging retired
 
 ## Test Plans
 

@@ -8,6 +8,10 @@ ENV APP_VERSION=${APP_VERSION}
 
 RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
 
+ARG JUST_VERSION=1.40.0
+RUN curl --proto '=https' --tlsv1.2 -fsSL https://just.systems/install.sh \
+    | bash -s -- --tag "${JUST_VERSION}" --to /usr/local/bin
+
 USER appuser
 WORKDIR /opt/codex-slack
 

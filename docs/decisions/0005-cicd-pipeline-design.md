@@ -1,6 +1,6 @@
 # 0005 CI/CD Pipeline Design
 
-- Status: accepted
+- Status: accepted (superseded in part by ADR-0016 on 2026-07-11 — sections 2 and 4's CD-daemon-based staging/prod deploy model are retired; the CI build/tag/promotion flow in sections 1, 3, 5, and 6 remains in force)
 - Date: 2026-05-04
 
 ## Context

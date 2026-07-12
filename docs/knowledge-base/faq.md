@@ -87,6 +87,6 @@ Master will detect the missing container and respawn it. If the workspace is arc
 
 ---
 
-**Q: Can I run the CD daemon for automated deployments?**
+**Q: How do I deploy a new image to staging or production?**
 
-Yes. See [`docs/guides/runbooks/cd-daemon.md`](../guides/runbooks/cd-daemon.md) for the full setup guide. The CD daemon polls GHCR for a new image digest, redeploys master via compose, and rolls back automatically if health check fails.
+Use `just deploy <env> <tag>`. The recipe resolves the tag to a digest, pulls the image to the target host, and replaces the running singleton stack in place. Rollback = `just deploy <env> <previous-tag>`. See `docs/sre.md` for the full recipe reference and `.sre/operations/deploy.md` for the operator runbook. The CD daemon was retired in ADR-0016; `just deploy` is the only staging/prod path.

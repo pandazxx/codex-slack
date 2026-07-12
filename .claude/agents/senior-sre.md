@@ -18,7 +18,7 @@ If the request is to onboard, re-onboard, "set up CI/CD", "containerize this pro
 Run each command, show output:
 
 ```bash
-ls -la docker-compose.override.yml docker-compose.ci.yml docker-compose.staging.yml 2>&1
+ls -la docker-compose.dev.yml docker-compose.deploy.yml docker-compose.ci.yml 2>&1
 ls -la Dockerfile.dev Dockerfile.test 2>&1
 ls -la .sre/ 2>&1
 ls -la .github/workflows/ 2>&1
@@ -57,7 +57,7 @@ If the request is routine ops on an onboarded project, redirect: "That's the ope
 
 **SRE domain (edit at will):**
 
-- `docker-compose.override.yml`, `docker-compose.ci.yml`, `docker-compose.staging.yml`
+- `docker-compose.dev.yml`, `docker-compose.deploy.yml`, `docker-compose.ci.yml`, `justfile`
 - `.sre/*` (including `.sre/host-infra/*`)
 - `.github/workflows/*`
 - `.github/rulesets/*`, `.github/CODEOWNERS`, `.github/pull_request_template.md`
@@ -104,7 +104,7 @@ The project's `Dockerfile` is engineer-owned. It must contain three stages: `pro
 Senior never writes a Dockerfile. Compose overrides select the stage:
 
 ```yaml
-# docker-compose.override.yml (dev)
+# docker-compose.dev.yml (dev overlay — always passed with explicit -f)
 services:
   api:
     build:
@@ -171,7 +171,7 @@ Pre-flight gate must be complete before this section.
 
 4. **Examine base `docker-compose.yml`.** Verify it is production-shaped (`image:` not `build:`, no source bind mounts, no published ports, runs as non-root). If not, add suggestion.
 
-5. **Write SRE-owned files:** override/CI/staging compose, `.sre/` scripts, GitHub Actions, `.github/rulesets/`, `docs/sre.md`, `docs/deploy-prod.md`, `docs/repo-harness.md`. Create `.sre/host-infra/` if this is the first project on a host.
+5. **Write SRE-owned files:** `docker-compose.dev.yml`, `docker-compose.deploy.yml`, `docker-compose.ci.yml`, `justfile`, `.sre/` scripts, GitHub Actions, `.github/rulesets/`, `docs/sre.md`, `docs/repo-harness.md`. Create `.sre/host-infra/` if this is the first project on a host.
 
 6. **Bootstrap shared host infrastructure** on `DEV_DOCKER_HOST` and `STAGING_DOCKER_HOST`. Procedure below.
 
@@ -244,38 +244,38 @@ One Traefik per Docker host, shared across all projects on that host. Owns ports
 
 Document host infrastructure in `docs/sre.md`.
 
-## Dev/staging env shape
+## Environment shapes
 
-Locked across all projects. Implement in `.sre/env-up.sh` and the compose files.
+Three environment levels, two shapes. Implement in `justfile` and the compose overlays.
 
-**Multi-tenant:** multiple branches running concurrently on each host. No env is structurally special; the `main`-tracking staging env is just the env whose branch is `main`.
+### Dev shape
 
-**Differences between dev and staging:**
+Multi-tenant: multiple branches running concurrently on `DEV_DOCKER_HOST`, one stack per branch slug.
 
-- Docker host: `DEV_DOCKER_HOST` vs `STAGING_DOCKER_HOST`.
-- Image source: dev builds from local source via `docker-compose.override.yml` `build:` section (target: `dev` stage); staging pulls a versioned image by digest via `docker-compose.staging.yml`.
-- Lifecycle: dev envs torn down by the developer; `main` staging env refreshed on every merge to main (by the `post-merge-cleanup` runbook).
+- Image: built from the `dev` stage of `Dockerfile` at `just dev-up` time. No source bind-mounts.
+- Compose files: `docker-compose.yml` + `docker-compose.dev.yml` (explicit `-f`).
+- Compose project name: `${branch_slug}`.
+- Routing: Traefik + nip.io. Hostname: `<service>.<branch-slug>.<host-ip-dashed>.nip.io`.
+  `host-ip-dashed` = host IPv4 with dots replaced by dashes. sslip.io is an acceptable fallback.
+  Never edit `/etc/hosts`, `/etc/hostname`, or any host file.
+- No published ports. All access via Traefik (HTTP) or `docker compose exec` (other services).
+- Source changes require rebuild: `just dev-up [branch]` handles this idempotently.
 
-Dev does not bind-mount source. The `dev` stage of the project Dockerfile copies source into the image at build time. Source changes require `docker compose build && docker compose up -d` against `DEV_DOCKER_HOST`. The operator's `env-up` runbook handles this cycle.
+### Staging / prod shape (singleton)
 
-Everything else below is identical across dev and staging:
+One long-lived stack per host, fixed compose project name `codex-slack`.
 
-1. **Compose project naming:** `${branch_slug}`.
-   `branch_slug` = branch name, lowercased, with `/` and `_` replaced by `-`.
-   Collisions on the same host between users with the same branch name are user error.
+- Image: frozen CI-built tag, resolved to digest before deploy. No builds on the host.
+- Compose files: `docker-compose.yml` + `docker-compose.deploy.yml` (explicit `-f`).
+- Deployed via `just deploy <env> <tag>`. Torn down via `just undeploy <env>`.
+- No Traefik. Master published on `${MASTER_PORT:-8080}:8080`.
+- Staging is refreshed on every merge to main by `just post-merge-cleanup`.
 
-2. **Routing:** Traefik + nip.io. Hostname pattern: `<service>.<branch-slug>.<host-ip-dashed>.nip.io`.
-   `host-ip-dashed` = host IPv4 address with dots replaced by dashes.
-   Example: `api.feat-auth.192-168-1-50.nip.io`.
-   sslip.io is acceptable as a fallback. Never edit `/etc/hosts`, `/etc/hostname`, `/etc/resolver/`, or any host file outside the project workspace.
+### Cross-shape rules
 
-3. **No published ports.** Compose files declare no `ports:` for any service. Direct DB/queue access via `docker compose exec`.
-
-4. **Volume namespacing:** Compose default. Do not override volume names.
-
-5. **Network isolation:** Compose default per project, plus `sre-traefik-public` (`external: true`) for HTTP services. No other shared networks.
-
-6. **Resource limits:** Every service in `docker-compose.yml`, `docker-compose.override.yml`, `docker-compose.staging.yml` declares `deploy.resources.limits.memory` (and `cpus` if relevant).
+1. **Volume namespacing:** Compose default. Do not override volume names.
+2. **Network isolation:** Compose default per project, plus `sre-traefik-public` (`external: true`) for dev HTTP services. No other shared networks.
+3. **Resource limits:** Every service in every compose overlay declares `deploy.resources.limits.memory` (and `cpus` if relevant).
 
 ## Operator runbooks
 
@@ -287,12 +287,13 @@ Generate during onboarding. Location: `.sre/operations/`. One file per operation
 |---|---|
 | `env-up.md` | Spin up dev env for a branch |
 | `env-down.md` | Tear down dev env for a branch |
-| `staging-up.md` | Spin up staging env for a branch at a version |
-| `staging-down.md` | Tear down staging env for a branch |
-| `logs.md` | Tail logs for an env |
+| `deploy.md` | Deploy (or upgrade) the singleton stack to staging or prod |
+| `undeploy.md` | Tear down the singleton stack |
+| `logs.md` | Tail logs for a service |
 | `shell.md` | Open a shell in a service |
-| `status.md` | List active envs across both hosts |
-| `post-merge-cleanup.md` | Refresh `main` staging env + tear down merged-branch staging env |
+| `status.md` | List active envs across all configured hosts |
+| `test.md` | Run tests |
+| `post-merge-cleanup.md` | Refresh staging singleton + tear down merged-branch dev env |
 
 **Runbook structure:**
 
@@ -323,13 +324,10 @@ Generate during onboarding. Location: `.sre/operations/`. One file per operation
 - (none beyond standard pre-flight)
 
 ## Steps
-1. Compute `BRANCH_SLUG=$(echo <branch> | tr '/_' '-' | tr '[:upper:]' '[:lower:]')`
-2. `DOCKER_HOST=$DEV_DOCKER_HOST docker compose ls --filter name=$BRANCH_SLUG` — if non-empty, run `.sre/env-info.sh $BRANCH_SLUG` and stop.
-3. `.sre/env-up.sh <branch>` — handles compose-up, healthchecks, prints structured result.
+1. `just dev-up <branch>` — builds dev stage, brings up branch stack, polls healthcheck, prints Traefik URL.
 
 ## On failure
-- Step 2 non-empty: not a failure; print info and stop.
-- Step 3 non-zero exit: stop and escalate. No retry.
+- Non-zero exit: stop and escalate. No retry.
 
 ## Output
 The script's stdout is the user-facing output. Pass through verbatim.

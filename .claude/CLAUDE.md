@@ -33,7 +33,7 @@ Runbooks are in `.sre/operations/`. The `sre` operator reads and follows them ex
 - "Run the tests" / "Run tests matching `test_image_contract`"
 - "Tail logs for `feat-auth`"
 - "Open a shell in the `master` service on `feat-auth`"
-- "Deploy `v1.2.3` to staging for `feat-auth`"
+- "Deploy `v1.2.3` to staging"
 - "Tear down dev env for `feat-billing`"
 - "Post-merge cleanup for `feat-auth`"
 
@@ -56,10 +56,11 @@ Ask `sre` to run tests: "Run the tests" or "Run tests matching `<pattern>`". The
 
 ### Staging & UAT
 
-- **Canonical staging** — tracks `main` on `STAGING_DOCKER_HOST`, refreshed by the `post-merge-cleanup` runbook after every merge.
-- **Feature-branch staging** — parallel env for high-risk features; ask `sre` to spin it up.
+- **Canonical staging** — singleton stack on `STAGING_DOCKER_HOST`, refreshed by the `post-merge-cleanup` runbook after every merge via `just deploy staging master`.
+- **RC UAT** — serializes on the staging singleton: `just deploy staging v*-rc*` replaces the running instance. Only one RC can occupy staging at a time.
+- **Branch-level exploratory testing** — use the dev shape (`just dev-up`); N branches run in parallel per host behind Traefik.
 
-Both are image-based (deployed by digest). See `.sre/operations/staging-up.md`.
+All staging deploys are image-based (tag resolved to a digest). Delegate to `sre`, which follows `.sre/operations/deploy.md`.
 
 ## Git Workflow
 
@@ -163,8 +164,8 @@ Slash commands referenced: `/commit` (incremental commit on the current branch),
 13. *CI gate.* Wait for CI to pass (`gh run view`). Two failure modes:
     - *Normal failure* (test, lint, build) → `engineer` fixes and pushes; CI re-runs.
     - *`SRE-BLOCK` failure* → not a bug fix. `engineer` reads the block's decision record, then either resolves the underlying issue or explicitly removes the block in the diff with rationale. The block's removal is itself reviewable in the PR.
-14. *Feature-branch staging spin-up.* `tester` asks `sre` to spin up a feature-branch staging env from the latest CI-built image. Staging is image-based (digests), not code-mounted — it mirrors what would actually deploy. This catches "works in dev, fails when built" issues before UAT.
-15. *UAT execution.* `tester` runs all UAT cases against the feature-branch staging env (not the dev env). Posts a signoff table as a PR comment:
+14. *RC staging deploy.* `tester` asks `sre` to deploy the latest RC image to the staging singleton (`just deploy staging <rc-tag>`). Staging is image-based (digest-resolved), not code-mounted — it mirrors what would actually go to prod. This catches "works in dev, fails when built" issues before UAT. Only one RC can occupy staging at a time; coordinate with other in-flight PRs.
+15. *UAT execution.* `tester` runs all UAT cases against the staging singleton (not the dev env). Posts a signoff table as a PR comment:
     - `✅ pass` — executed and verified automatically.
     - `⏭ needs-human` — requires human interaction (real Slack message, visual check, external credential); described clearly so the user knows exactly what to do.
     - `❌ fail` — executed and failed; handed off to `engineer`.
@@ -174,7 +175,7 @@ Slash commands referenced: `/commit` (incremental commit on the current branch),
     - Design-level change (scope, contract, new tradeoff) → loop to step 3; `architect` updates the design and ADR before any further implementation.
 17. *Human UAT signoff.* User reviews `⏭ needs-human` cases in the PR and replies with ✅ or ❌ per row. UAT is complete when all cases are signed off.
 18. *Merge.* User reviews and merges. No squashing without explicit instruction — preserve commit history.
-19. *Post-merge cleanup.* `sre` refreshes canonical staging from `main` and tears down the feature-branch staging env. The branch's dev env teardown is up to the developer (ask `sre` to "tear down dev env for `feat/<short-desc>`" when done).
+19. *Post-merge cleanup.* `sre` runs `just post-merge-cleanup <branch>`, which refreshes the staging singleton with the new master image and tears down the dev env for the merged branch.
 ---
  
 ### Bug / issue fix
@@ -199,11 +200,11 @@ The bug-fix workflow is shorter than feature development because (a) the design 
 10. *Open PR.* Use `/pr`. Link the GitHub issue. PR description should include: brief root cause, the fix in one or two sentences, link to the regression test, and a note if the fix changes any documented behavior.
 11. *CI gate.* Same as feature workflow — normal failures get fixed and pushed; `SRE-BLOCK` failures get the architectural-decision treatment.
 12. *UAT (proportional to risk).* The default for bug fixes is *no full UAT cycle*. The regression test is the primary verification. Two exceptions:
-    - *Fix touches a critical path* (auth, payments, data integrity) → spin up feature-branch staging via `sre`, run focused UAT on the affected paths only, post signoff in the PR.
-    - *Fix changes user-visible behavior* → user sanity-checks in feature-branch staging before merge.
+    - *Fix touches a critical path* (auth, payments, data integrity) → ask `sre` to deploy an RC to the staging singleton (`just deploy staging <rc-tag>`), run focused UAT on the affected paths, post signoff in the PR.
+    - *Fix changes user-visible behavior* → user sanity-checks in staging before merge.
     - Otherwise the regression test plus standard CI is sufficient.
 13. *Merge.* User reviews and merges. Preserve commit history.
-14. *Post-merge cleanup.* If a feature-branch staging env was spun up in step 12, `sre` tears it down. Canonical staging refreshes from `main`. Dev env teardown is up to the developer.
+14. *Post-merge cleanup.* `sre` runs `just post-merge-cleanup <branch>` to refresh the staging singleton and tear down the dev env for the merged branch.
 15. *Close the issue.* Reference the merged PR in the GitHub issue and close it. If the bug surfaced gaps in test coverage or monitoring, file follow-up issues rather than expanding the scope of this fix.
 ---
  
