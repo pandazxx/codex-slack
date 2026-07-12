@@ -2,7 +2,19 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-07-11 -->
+<!-- last updated: 2026-07-12 -->
+
+---
+
+## 2026-07-12 — `just` interpolation cannot be nested inside bash `${...}` expansions; regex-based file tests cannot catch parse errors
+
+*Summary:* The justfile shipped with `HOST_ADDR="${{ docker_host }#ssh://}"` in the `_host-ip` helper — `{{ }}` interpolation nested inside a bash parameter expansion. `just` parses `{{ }}` before the shell ever sees the line and rejects the stray `}`, so the entire file failed to parse: every recipe and even `just --list` errored. CI was green the whole time because the contract tests only regexed the justfile text for recipe names.
+
+*Root cause:* Two template languages on one line. `just` performs `{{ }}` substitution at parse time; bash performs `${...}` at run time. Mixing them (`${{ param }#pattern}`) produces tokens neither parser accepts. The test suite validated the file's *contents* but never invoked its *parser*.
+
+*Fix applied:* Assign the recipe parameter to a shell variable first, then apply bash string operations: `HOST_ADDR="{{ docker_host }}"` followed by `HOST_ADDR="${HOST_ADDR#ssh://}"`. Added `test_justfile_parses_with_just` (runs `just --list` via subprocess) and installed the pinned `just` binary in `Dockerfile.test` so CI enforces it.
+
+*Prevention:* In justfile recipe bodies, always copy `{{ param }}` into a plain shell variable before applying any `${...}` expansion, quoting, or pattern stripping. Any file with its own parser (justfile, compose, workflow YAML) needs at least one test that runs the real parser — content regexes silently pass on syntactically dead files.
 
 ---
 
