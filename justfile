@@ -12,7 +12,8 @@ _slug input:
 _host-ip docker_host:
     #!/usr/bin/env bash
     set -euo pipefail
-    HOST_ADDR="${{ docker_host }#ssh://}"
+    HOST_ADDR="{{ docker_host }}"
+    HOST_ADDR="${HOST_ADDR#ssh://}"
     HOST_ADDR="${HOST_ADDR##*@}"
     HOST_IP="$(getent hosts "$HOST_ADDR" 2>/dev/null | awk '{print $1}' || echo "$HOST_ADDR")"
     echo "${HOST_IP//./-}"

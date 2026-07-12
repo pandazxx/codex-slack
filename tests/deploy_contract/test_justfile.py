@@ -10,7 +10,11 @@ Rules under test:
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 JUSTFILE = REPO_ROOT / "justfile"
@@ -33,6 +37,25 @@ EXPECTED_RECIPES = [
 
 def _text() -> str:
     return JUSTFILE.read_text(encoding="utf-8")
+
+
+def test_justfile_parses_with_just() -> None:
+    """SC-32: `just --list` must parse the justfile without errors.
+
+    Regex checks below cannot catch syntax errors such as `{{ }}`
+    interpolation nested inside bash `${...}` expansions, so run the real
+    parser. Skipped when the `just` binary is unavailable (the CI test
+    image installs it, so CI always enforces this).
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just binary not installed")
+    result = subprocess.run(
+        ["just", "--list", "--justfile", str(JUSTFILE)],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, f"just --list failed:\n{result.stderr}"
 
 
 def test_justfile_sets_dotenv_load() -> None:

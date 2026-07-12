@@ -5,6 +5,10 @@ ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code
 
 RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
 
+ARG JUST_VERSION=1.40.0
+RUN curl --proto '=https' --tlsv1.2 -fsSL https://just.systems/install.sh \
+    | bash -s -- --tag "${JUST_VERSION}" --to /usr/local/bin
+
 WORKDIR /opt/codex-slack
 
 # Install Python deps globally so pytest and other entrypoints land in
