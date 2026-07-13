@@ -2,8 +2,8 @@
   <div class="gn-card" :class="{ selected: data.selected }" @click="$emit('select', data)">
     <div class="gn-header">
       <span class="gn-kind-badge gn-badge-user">you</span>
-      <span class="gn-label">{{ preview }}</span>
     </div>
+    <div class="gn-preview">{{ preview }}</div>
   </div>
 </template>
 
@@ -13,7 +13,7 @@ import { computed } from 'vue'
 const props = defineProps({ data: { type: Object, required: true } })
 defineEmits(['select'])
 
-const preview = computed(() => (props.data.data.text || '').slice(0, 80) || '(no text)')
+const preview = computed(() => (props.data.data.text || '').slice(0, 160) || '(no text)')
 </script>
 
 <style scoped>

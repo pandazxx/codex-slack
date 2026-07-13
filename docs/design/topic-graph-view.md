@@ -81,7 +81,6 @@ type NodeKind =
   | 'subagent'           // synthetic container for a subagent invocation — wraps the child subtree
   | 'task-event'         // system/task_started | task_progress | task_notification | task_updated
   | 'compaction'         // system/compact_boundary (folds transient system/status compacting events)
-  | 'rate-limit'         // rate_limit_event
   | 'system-init'        // system/init (usually collapsed)
   | 'parse-warning'      // malformed transcript line (defensive)
 
@@ -168,11 +167,10 @@ Kind-specific `data` payloads (the parser copies the minimum needed for renderin
 - `thinking`: `{ text }` — the `thinking` block string.
 - `text`: `{ text }` — the assistant text block.
 - `tool-use`: `{ toolName, input, toolUseId, label, mcpServer?, mcpTool? }` — `label` is what `toolUseLabel()` in `TopicChat.vue` would render (kept centralized in the parser to avoid Vue components computing it). For MCP tools whose `toolName` matches `mcp__<server>__<tool>`, the parser splits the parts into `mcpServer` and `mcpTool` so the node card can badge them independently; `toolName` is preserved verbatim.
-- `tool-result`: `{ toolUseId, contentText, isError, agentType?, totalDurationMs?, totalTokens?, totalToolUseCount? }` — `isError` mirrors `tool_result.is_error` (defaulting to `false`). The `agentType` and derived counters come from `tool_use_result` when this is a Task result.
+- `tool-result`: `{ toolUseId, contentText, isError, agentType?, totalDurationMs?, totalTokens?, totalToolUseCount? }` — `isError` mirrors `tool_result.is_error` (defaulting to `false`). The `agentType` and derived counters come from `tool_use_result` when this is a Task result. **Compact-view folding (#249):** when a `tool-result` is the *sole* child of its `tool-use`, the parser folds it into the tool-use as `data.result` (same payload) and emits no separate node; results stay separate nodes when the tool-use has other children (subagent, task events) or is an orphan.
 - `subagent`: `{ agentType, prompt, model?, summary? }` — synthesized from the sibling `system/task_*` events keyed by the same `tool_use_id`. Wraps all events whose `parent_tool_use_id` equals this id. Only created for `Agent` tool_uses (`task_type: "local_agent"`); `local_bash` tasks do **not** get a `subagent` container — their `task-event` nodes attach directly to the spawning `Bash` tool_use.
 - `task-event`: `{ subtype, taskId, taskType, description, subagentType?, prompt?, toolUseId, patch?, status?, endTime?, usage?, isBackgrounded? }` — covers all `system/task_*` subtypes including `task_updated`. `taskType` is `"local_agent"` or `"local_bash"` (from `task_started`, propagated to later events by `taskId`). `subagent_type` and `prompt` live at the event root of `task_started` (not nested) and are only populated for `local_agent`. `patch` is copied verbatim from `task_updated` events; `status`, `endTime`, `isBackgrounded` are convenience projections of common patch keys for renderers that don't want to introspect the raw patch.
 - `compaction`: `{ trigger, preTokens, postTokens, durationMs, compactResult? }` — one node per `system/compact_boundary` event, attached to the enclosing `agent-message`. Any `system/status` events with `status: "compacting"` / `compact_result` **fold into** the following `compact_boundary` node (they do not produce their own nodes). If a `system/status` compacting event has no following `compact_boundary` in the same message (partial data), the parser emits a `compaction` node with whatever fields it has and `compactResult` populated from the status event.
-- `rate-limit`: `{ tier?, resetsAt? }`.
 - `system-init`: `{ model, tools?, cwd?, sessionId? }` — a message may contain more than one; each produces its own node.
 - `parse-warning`: `{ line }`.
 
@@ -207,7 +205,7 @@ Algorithm (single pass per message; O(N) in total events):
      - `pendingCompactStatus` — the most recent unresolved `system/status` compacting payload for this message, folded into the next `compact_boundary`.
    - For each event:
      - `assistant` with `thinking` block → `thinking` node under the current parent.
-     - `assistant` with `text` block → `text` node under the current parent.
+     - `assistant` with `text` block → `text` node under the current parent. Empty/whitespace-only `thinking` and `text` blocks emit **no node** (#249 — blank cards).
      - `assistant` with `tool_use` block → `tool-use` node; if `name === 'Agent'`, also synthesize a `subagent` child (with `invokes` edge from tool-use → subagent) and register it in `subagentIndex[toolUseId]`. If `name` matches `mcp__<server>__<tool>`, populate `data.mcpServer` / `data.mcpTool`; `toolName` is stored verbatim. Register the `tool-use` itself in `toolUseIndex[toolUseId]`.
      - `user` with `tool_result` block → `tool-result` node with `data.isError = block.is_error === true`. Attach as child of the paired `tool-use` and record `tool_use_id` in `toolResultIndex`. If the paired `tool-use` isn't found (orphan), emit under the current message with a `Diagnostic{code:'orphan_tool_result'}`. When the enclosing `tool_use` was an Agent invocation, also copy `tool_use_result.agentType|totalDurationMs|totalTokens|totalToolUseCount` onto the sibling `subagent` node's `data`.
      - `system/task_started` → `task-event` node with `subtype: 'task_started'`, `taskId`, `taskType` (`local_agent` or `local_bash`), and, for `local_agent`, `subagentType` and `prompt` **read from the event root** (not from any nested object). Attach: for `local_agent`, under the matching `subagent` (looked up by `event.tool_use_id`); for `local_bash`, under the matching `tool-use` (typically a `Bash` node — same lookup key). Register `(taskId → {taskType, toolUseId})` in `taskIndex`. If no matching `tool-use`/`subagent` — attach to the current agent-message with `Diagnostic{code:'orphan_task_event'}`.
@@ -215,7 +213,7 @@ Algorithm (single pass per message; O(N) in total events):
      - `system/status` → **no node emitted**. If `event.status === 'compacting'` or `event.compact_result` is set, capture the payload in `pendingCompactStatus` for the next `compact_boundary` to absorb.
      - `system/compact_boundary` → `compaction` node under the agent-message, with `trigger|preTokens|postTokens|durationMs` copied from `compact_metadata` and `compactResult` inherited from `pendingCompactStatus` if present. Clear `pendingCompactStatus`.
      - `system/init` → `system-init` node under the agent-message. Set `agent-message.data.model = event.model` — subsequent `system/init` events in the same message overwrite it (**last init wins**). Both nodes are still emitted (see IE-03 in the test plan).
-     - `rate_limit_event` → `rate-limit` node under the agent-message.
+     - `rate_limit_event` → **no node emitted** — telemetry noise (#249).
      - `result/success` → `result-rollup` node under the agent-message.
      - Anything unknown → skipped, `Diagnostic{code:'unknown_event_type'}` recorded.
    - Determine parent by consulting `parent_tool_use_id`: `null` → the agent-message itself (for top-level events) or the subagent whose `tool_use_id` matches. This is what allows nested subagent → subagent to work.
@@ -280,7 +278,6 @@ frontend/src/components/graph/
   TaskEventNode.vue
   CompactionNode.vue         — renders pre/post token counts, trigger, duration
   SystemInitNode.vue         — visually minimal
-  RateLimitNode.vue
   ParseWarningNode.vue
   NodeDetailPanel.vue        — side panel that renders the currently selected node's full payload
   SummaryOverlay.vue         — v2 stub in v1; renders SummaryArtifact[] for topic / message / node
@@ -395,7 +392,7 @@ Modified:
 ## Open Questions
 
 - [ ] Should tool-uses spawned by subagents (nested Task) render as a `subagent-in-subagent` visual box, or flatten with a depth indicator? Design assumes the former (arbitrary nesting via `parent_tool_use_id`). Confirm during first review of a nested-Task real fixture.
-- [ ] `system/init` and `rate_limit_event` are usually noise. Design has them as separate node kinds but visually minimal; alternative is to fold them into an `agent-message`-attached "meta" chip. Owner: engineer during implementation, defer to what looks better in practice.
+- [x] `system/init` and `rate_limit_event` are usually noise. Resolved in #249: `rate_limit_event` emits no node at all; `system/init` remains a visually minimal node.
 - [ ] Should the graph view respect the `verboseMode` toggle from chat view (hiding silent messages)? Design says yes — silent user-messages default hidden with a small "3 hidden" affordance to reveal. Confirm with user.
 - [ ] Cost/duration aggregation on the `topic` node — sum over all `result-rollup`s, or just show the count and let the user click through? Design sums, but the aggregation may confuse (multiple subagents contribute). Revisit after seeing the numbers on real data.
 - [ ] Long transcripts hitting the 5000-event truncation cap — is a hard truncation acceptable in v1, or should we page the events (e.g. "Load next 500")? Depends on how often real topics cross that line; the sample tops out at 134 events per message.

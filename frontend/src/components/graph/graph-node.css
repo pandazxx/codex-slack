@@ -59,9 +59,32 @@
   font-size: 0.88em;
   margin-top: 3px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
+
+.gn-result-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
+}
+.gn-result-text {
+  color: #475569;
+  font-size: 0.85em;
+  font-family: monospace;
+  overflow: hidden;
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.gn-result-error .gn-result-text { color: #b91c1c; }
 
 .gn-chevron {
   background: none;

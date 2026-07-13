@@ -4,17 +4,17 @@
       <span class="gn-kind-badge gn-badge-subagent">subagent</span>
       <span v-if="data.data.agentType" class="gn-label">{{ data.data.agentType }}</span>
       <span v-else class="gn-label">Agent</span>
-      <button class="gn-chevron" @click.stop="$emit('expand-toggle', data)">
+      <button v-if="data.hasChildren" class="gn-chevron" @click.stop="data.onExpandToggle && data.onExpandToggle()">
         {{ data.ui.collapsed ? '▶' : '▼' }}
       </button>
     </div>
-    <div v-if="data.data.prompt" class="gn-preview">{{ (data.data.prompt || '').slice(0, 60) }}</div>
+    <div v-if="data.data.prompt" class="gn-preview">{{ (data.data.prompt || '').slice(0, 160) }}</div>
   </div>
 </template>
 
 <script setup>
 defineProps({ data: { type: Object, required: true } })
-defineEmits(['select', 'expand-toggle'])
+defineEmits(['select'])
 </script>
 
 <style scoped>

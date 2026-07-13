@@ -2,7 +2,7 @@
  * @fileoverview Pure parser: MessageOut[] → Graph IR.
  * No Vue imports, no DOM, no side effects.
  *
- * @typedef {'topic'|'user-message'|'agent-message'|'result-rollup'|'thinking'|'text'|'tool-use'|'tool-result'|'subagent'|'task-event'|'compaction'|'rate-limit'|'system-init'|'parse-warning'} NodeKind
+ * @typedef {'topic'|'user-message'|'agent-message'|'result-rollup'|'thinking'|'text'|'tool-use'|'tool-result'|'subagent'|'task-event'|'compaction'|'system-init'|'parse-warning'} NodeKind
  * @typedef {'contains'|'invokes'|'follows'|'summarizes'} EdgeKind
  * @typedef {'warn'|'error'} DiagnosticLevel
  */
@@ -19,7 +19,6 @@ export const NodeKind = /** @type {const} */ ({
   SUBAGENT: 'subagent',
   TASK_EVENT: 'task-event',
   COMPACTION: 'compaction',
-  RATE_LIMIT: 'rate-limit',
   SYSTEM_INIT: 'system-init',
   PARSE_WARNING: 'parse-warning',
 })
@@ -231,6 +230,9 @@ function walkEvents(events, messageId, agentMessageNodeId, agentMessageNode, sta
       const content = event.message?.content ?? []
       for (const block of content) {
         if (!block || typeof block !== 'object') continue
+        // Empty thinking/text blocks would render as blank cards — skip them.
+        if (block.type === 'thinking' && !(block.thinking ?? '').trim()) continue
+        if (block.type === 'text' && !(block.text ?? '').trim()) continue
         const seq = state.seq++
         const id = nodeId(messageId, seq)
         const parentId = resolveParent(parentToolUseId)
@@ -488,13 +490,7 @@ function walkEvents(events, messageId, agentMessageNodeId, agentMessageNode, sta
     }
 
     if (evType === 'rate_limit_event') {
-      const seq = state.seq++
-      const id = nodeId(messageId, seq)
-      const info = event.rate_limit_info ?? {}
-      const node = makeNode(id, NodeKind.RATE_LIMIT, agentMessageNodeId, messageId, seq, null,
-        { tier: info.tier ?? null, resetsAt: info.resets_at ?? null })
-      state.nodes.push(node)
-      state.edges.push(makeEdge(agentMessageNodeId, id, 'contains'))
+      // Telemetry only — rendering it as a node adds noise (#249).
       continue
     }
 
@@ -637,13 +633,35 @@ export function buildTopicGraph({
       `Unknown message sender/type: ${msg.sender ?? msg.type}`, msgId))
   }
 
+  // Compact view (#249): fold a tool_result that is the sole child of its
+  // tool_use into the tool-use node so the pair renders as a single card.
+  const nodeById = new Map(nodes.map(n => [n.id, n]))
+  const childCounts = new Map()
+  for (const n of nodes) {
+    if (n.parentId != null) childCounts.set(n.parentId, (childCounts.get(n.parentId) ?? 0) + 1)
+  }
+  const foldedIds = new Set()
+  for (const n of nodes) {
+    if (n.kind !== NodeKind.TOOL_RESULT) continue
+    const parent = nodeById.get(n.parentId)
+    if (parent?.kind === NodeKind.TOOL_USE && childCounts.get(parent.id) === 1) {
+      parent.data.result = n.data
+      parent.ui.collapsed = false
+      foldedIds.add(n.id)
+    }
+  }
+  const finalNodes = foldedIds.size ? nodes.filter(n => !foldedIds.has(n.id)) : nodes
+  const finalEdges = foldedIds.size
+    ? edges.filter(e => !foldedIds.has(e.source) && !foldedIds.has(e.target))
+    : edges
+
   return {
     version: 1,
     topicId: topicId ?? '',
     workspaceId: workspaceId ?? '',
     generatedAt: at,
-    nodes,
-    edges,
+    nodes: finalNodes,
+    edges: finalEdges,
     summaries: [],
     messageSummaries,
     diagnostics,

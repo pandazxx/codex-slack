@@ -41,7 +41,6 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
 | `tool-result` | `user` event content block `type: "tool_result"` |
 | `subagent` | Synthetic, one per `Agent` tool_use |
 | `task-event` | `system/task_started`, `system/task_progress`, `system/task_notification` |
-| `rate-limit` | `rate_limit_event` |
 | `system-init` | `system/init` |
 | `parse-warning` | Malformed / unrecognised event |
 
@@ -67,8 +66,8 @@ Out of scope for this plan: the LLM summarization pipeline; live WebSocket updat
   - 1 `topic` node + 2 `user-message` nodes + 2 `agent-message` nodes on the spine. 5 spine nodes total.
   - First `user-message` node: `data.dispatch.is_new_session === true`; `data.dispatch.model === "claude-opus-4-7"`.
   - Second `user-message` node: `data.dispatch.is_new_session === false`.
-  - First `agent-message` subtree: 1 `system-init` + 1 `rate-limit` + 1 `thinking` + 1 `text` + 1 `result-rollup`. Total inner nodes: 5.
-  - Second `agent-message` subtree: 1 `rate-limit` + 1 `thinking` + 1 `text` + 1 `result-rollup`. Total inner nodes: 4.
+  - First `agent-message` subtree: 1 `system-init` + 1 `thinking` + 1 `text` + 1 `result-rollup`. Total inner nodes: 4 (`rate_limit_event` emits no node, #249).
+  - Second `agent-message` subtree: 1 `thinking` + 1 `text` + 1 `result-rollup`. Total inner nodes: 3.
   - `system-init` node `data.model === "claude-opus-4-7"`.
   - `agent-message` node `data.model === "claude-opus-4-7"` (extracted from `system/init`).
   - Every node has a non-null `id`; all `id` values are unique.

@@ -78,32 +78,30 @@ describe('HP-02: simple-text.jsonl spine and inner nodes', () => {
     expect(userMsgs[1].data.dispatch.is_new_session).toBe(false)
   })
 
-  it('first agent-message subtree: system-init + rate-limit + thinking + text + result-rollup', () => {
+  it('first agent-message subtree: system-init + thinking + text + result-rollup (no rate-limit node, #249)', () => {
     const agentMsgs = graph.nodes.filter(n => n.kind === NodeKind.AGENT_MESSAGE)
     const firstMsgId = agentMsgs[0].messageId
     const children = graph.nodes.filter(n => n.messageId === firstMsgId && n.kind !== NodeKind.AGENT_MESSAGE)
 
     const kinds = children.map(n => n.kind)
     expect(kinds).toContain(NodeKind.SYSTEM_INIT)
-    expect(kinds).toContain(NodeKind.RATE_LIMIT)
     expect(kinds).toContain(NodeKind.THINKING)
     expect(kinds).toContain(NodeKind.TEXT)
     expect(kinds).toContain(NodeKind.RESULT_ROLLUP)
-    expect(children).toHaveLength(5)
+    expect(children).toHaveLength(4)
   })
 
-  it('second agent-message subtree: rate-limit + thinking + text + result-rollup (no system-init)', () => {
+  it('second agent-message subtree: thinking + text + result-rollup (no system-init, no rate-limit)', () => {
     const agentMsgs = graph.nodes.filter(n => n.kind === NodeKind.AGENT_MESSAGE)
     const secondMsgId = agentMsgs[1].messageId
     const children = graph.nodes.filter(n => n.messageId === secondMsgId && n.kind !== NodeKind.AGENT_MESSAGE)
 
     const kinds = children.map(n => n.kind)
     expect(kinds).not.toContain(NodeKind.SYSTEM_INIT)
-    expect(kinds).toContain(NodeKind.RATE_LIMIT)
     expect(kinds).toContain(NodeKind.THINKING)
     expect(kinds).toContain(NodeKind.TEXT)
     expect(kinds).toContain(NodeKind.RESULT_ROLLUP)
-    expect(children).toHaveLength(4)
+    expect(children).toHaveLength(3)
   })
 
   it('system-init node data.model = claude-opus-4-7', () => {
@@ -153,17 +151,21 @@ describe('HP-03: tool_use/tool_result pairing (Glob)', () => {
     expect(tuNode.data.toolName).toBe('Glob')
   })
 
-  it('tool-result node exists with toolUseId=toolu_glob_001', () => {
-    const trNode = graph.nodes.find(n => n.kind === NodeKind.TOOL_RESULT && n.data.toolUseId === 'toolu_glob_001')
-    expect(trNode).toBeDefined()
-  })
-
-  it('contains edge exists from tool-use to tool-result', () => {
+  it('sole-child tool-result is folded into the tool-use node (#249)', () => {
     const tuNode = graph.nodes.find(n => n.kind === NodeKind.TOOL_USE && n.data.toolUseId === 'toolu_glob_001')
     const trNode = graph.nodes.find(n => n.kind === NodeKind.TOOL_RESULT && n.data.toolUseId === 'toolu_glob_001')
-    expect(trNode.parentId).toBe(tuNode.id)
-    const edge = graph.edges.find(e => e.source === tuNode.id && e.target === trNode.id && e.kind === 'contains')
-    expect(edge).toBeDefined()
+    expect(trNode).toBeUndefined()
+    expect(tuNode.data.result).toBeDefined()
+    expect(tuNode.data.result.toolUseId).toBe('toolu_glob_001')
+    expect(tuNode.data.result.isError).toBe(false)
+  })
+
+  it('no dangling edges reference the folded tool-result', () => {
+    const nodeIds = new Set(graph.nodes.map(n => n.id))
+    for (const e of graph.edges) {
+      expect(nodeIds.has(e.source)).toBe(true)
+      expect(nodeIds.has(e.target)).toBe(true)
+    }
   })
 })
 
@@ -334,17 +336,12 @@ describe('BC-01: MCP tool call', () => {
     expect(mcpNode).toBeDefined()
   })
 
-  it('matching tool-result for the MCP call exists', () => {
+  it('MCP result is folded into the tool-use node (#249)', () => {
     const mcpNode = graph.nodes.find(n => n.kind === NodeKind.TOOL_USE && n.data.toolName === 'mcp__notes__list_workspace_notes')
     const trNode = graph.nodes.find(n => n.kind === NodeKind.TOOL_RESULT && n.data.toolUseId === mcpNode.data.toolUseId)
-    expect(trNode).toBeDefined()
-  })
-
-  it('edge connects MCP tool-use to its result', () => {
-    const mcpNode = graph.nodes.find(n => n.kind === NodeKind.TOOL_USE && n.data.toolName === 'mcp__notes__list_workspace_notes')
-    const trNode = graph.nodes.find(n => n.kind === NodeKind.TOOL_RESULT && n.data.toolUseId === mcpNode.data.toolUseId)
-    const edge = graph.edges.find(e => e.source === mcpNode.id && e.target === trNode.id)
-    expect(edge).toBeDefined()
+    expect(trNode).toBeUndefined()
+    expect(mcpNode.data.result).toBeDefined()
+    expect(mcpNode.data.result.toolUseId).toBe(mcpNode.data.toolUseId)
   })
 
   it('no diagnostic emitted for MCP tool_use', () => {
@@ -963,5 +960,98 @@ describe('RG-01: MessageOut API row shape with sender field', () => {
   it('export-log shape with type field still works', () => {
     const graph = build([{ type: 'user', timestamp: '2026-01-01T00:00:00Z', text: 'hi', transcript: { message_id: 'x', text: 'hi', attachments: [] } }])
     expect(graph.nodes.filter(n => n.kind === NodeKind.USER_MESSAGE)).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// RG-02 Compact view regressions (#249)
+// ---------------------------------------------------------------------------
+describe('RG-02: compact view (#249)', () => {
+  function agentRow(events) {
+    return {
+      id: 'm2', sender: 'agent', agent_name: 'claude', text: 'done',
+      created_at: '2026-01-01T00:01:00Z',
+      transcript: JSON.stringify(events),
+    }
+  }
+
+  it('empty thinking and text blocks produce no nodes', () => {
+    const graph = build([agentRow([
+      { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [
+        { type: 'thinking', thinking: '' },
+        { type: 'thinking', thinking: '   ' },
+        { type: 'text', text: '' },
+        { type: 'text', text: 'real text' },
+      ] } },
+    ])])
+    expect(graph.nodes.filter(n => n.kind === NodeKind.THINKING)).toHaveLength(0)
+    const texts = graph.nodes.filter(n => n.kind === NodeKind.TEXT)
+    expect(texts).toHaveLength(1)
+    expect(texts[0].data.text).toBe('real text')
+  })
+
+  it('rate_limit_event produces no node and no diagnostic', () => {
+    const graph = build([agentRow([
+      { type: 'rate_limit_event', rate_limit_info: { tier: 'x' } },
+    ])])
+    expect(graph.nodes.every(n => n.kind !== 'rate-limit')).toBe(true)
+    expect(graph.diagnostics).toHaveLength(0)
+  })
+
+  it('tool-use with sole tool-result child is folded into one node', () => {
+    const graph = build([agentRow([
+      { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [
+        { type: 'tool_use', id: 'toolu_x', name: 'Bash', input: { command: 'true' } },
+      ] } },
+      { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'toolu_x', content: 'ok', is_error: false },
+      ] } },
+    ])])
+    expect(graph.nodes.filter(n => n.kind === NodeKind.TOOL_RESULT)).toHaveLength(0)
+    const tu = graph.nodes.find(n => n.kind === NodeKind.TOOL_USE)
+    expect(tu.data.result.contentText).toBe('ok')
+    expect(tu.ui.collapsed).toBe(false)
+  })
+
+  it('error results are folded too and keep isError', () => {
+    const graph = build([agentRow([
+      { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [
+        { type: 'tool_use', id: 'toolu_e', name: 'Bash', input: { command: 'false' } },
+      ] } },
+      { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'toolu_e', content: 'boom', is_error: true },
+      ] } },
+    ])])
+    const tu = graph.nodes.find(n => n.kind === NodeKind.TOOL_USE)
+    expect(tu.data.result.isError).toBe(true)
+  })
+
+  it('tool-use with additional children keeps its tool-result as a separate node', () => {
+    const graph = build([agentRow([
+      { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [
+        { type: 'tool_use', id: 'toolu_bg', name: 'Bash', input: { command: 'sleep 1', run_in_background: true } },
+      ] } },
+      { type: 'system', subtype: 'task_started', task_id: 't1', tool_use_id: 'toolu_bg', task_type: 'local_bash', description: 'bg' },
+      { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'toolu_bg', content: 'started', is_error: false },
+      ] } },
+    ])])
+    const tu = graph.nodes.find(n => n.kind === NodeKind.TOOL_USE)
+    const tr = graph.nodes.find(n => n.kind === NodeKind.TOOL_RESULT)
+    expect(tr).toBeDefined()
+    expect(tr.parentId).toBe(tu.id)
+    expect(tu.data.result).toBeUndefined()
+  })
+
+  it('orphan tool-result (no matching tool-use) stays a node under the agent message', () => {
+    const graph = build([agentRow([
+      { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'toolu_missing', content: 'orphan', is_error: false },
+      ] } },
+    ])])
+    const tr = graph.nodes.find(n => n.kind === NodeKind.TOOL_RESULT)
+    expect(tr).toBeDefined()
+    const agent = graph.nodes.find(n => n.kind === NodeKind.AGENT_MESSAGE)
+    expect(tr.parentId).toBe(agent.id)
   })
 })

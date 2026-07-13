@@ -70,7 +70,14 @@
           <div class="detail-field"><span class="detail-label">MCP Tool</span><span>{{ node.data.mcpTool }}</span></div>
         </template>
         <div class="detail-section-title">Input</div>
-        <pre class="detail-json">{{ JSON.stringify(node.data.input, null, 2) }}</pre>
+        <div class="detail-table"><JsonTable :value="node.data.input" /></div>
+        <template v-if="node.data.result">
+          <div class="detail-section-title">Result</div>
+          <div v-if="node.data.result.isError" class="detail-field">
+            <span class="badge-error">error result</span>
+          </div>
+          <pre class="detail-json detail-result-body">{{ node.data.result.contentText || '(empty)' }}</pre>
+        </template>
         <SummaryOverlay :summaries="node.summaries" />
       </template>
 
@@ -152,7 +159,7 @@
         </div>
         <template v-if="node.data.patch">
           <div class="detail-section-title">Patch</div>
-          <pre class="detail-json">{{ JSON.stringify(node.data.patch, null, 2) }}</pre>
+          <div class="detail-table"><JsonTable :value="node.data.patch" /></div>
         </template>
       </template>
 
@@ -176,12 +183,12 @@
         <div v-if="node.data.cwd" class="detail-field"><span class="detail-label">CWD</span><span>{{ node.data.cwd }}</span></div>
         <template v-if="node.data.tools">
           <div class="detail-section-title">Tools</div>
-          <pre class="detail-json">{{ JSON.stringify(node.data.tools, null, 2) }}</pre>
+          <div class="detail-tools">{{ node.data.tools.join(', ') }}</div>
         </template>
       </template>
 
       <template v-else>
-        <pre class="detail-json">{{ JSON.stringify(node.data, null, 2) }}</pre>
+        <div class="detail-table"><JsonTable :value="node.data" /></div>
       </template>
 
     </div>
@@ -192,6 +199,7 @@
 import { computed } from 'vue'
 import MarkdownMessage from '../MarkdownMessage.vue'
 import SummaryOverlay from './SummaryOverlay.vue'
+import JsonTable from './JsonTable.vue'
 
 const props = defineProps({
   node: { type: Object, default: null },
@@ -298,6 +306,15 @@ const messageSummaries = computed(() => {
   overflow-y: auto;
 }
 .detail-result-body { background: #0f2027; color: #86efac; }
+.detail-table {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.detail-tools { color: #475569; font-size: 0.9em; word-break: break-word; }
 .detail-mono {
   font-family: monospace;
   white-space: pre-wrap;

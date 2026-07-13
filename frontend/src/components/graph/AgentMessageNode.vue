@@ -10,7 +10,7 @@
   >
     <div class="gn-header">
       <span class="gn-kind-badge gn-badge-agent">{{ agentLabel }}</span>
-      <button v-if="data.data.hasTranscript" class="gn-chevron" @click.stop="$emit('expand-toggle', data)">
+      <button v-if="data.hasChildren" class="gn-chevron" @click.stop="data.onExpandToggle && data.onExpandToggle()">
         {{ data.ui.collapsed ? '▶' : '▼' }}
       </button>
       <span v-if="data.data.interrupted" class="gn-kind-badge gn-badge-warning">interrupted</span>
@@ -23,10 +23,10 @@
 import { computed } from 'vue'
 
 const props = defineProps({ data: { type: Object, required: true } })
-defineEmits(['select', 'expand-toggle'])
+defineEmits(['select'])
 
 const agentLabel = computed(() => props.data.data.agentName ? `@${props.data.data.agentName}` : 'Agent')
-const preview = computed(() => (props.data.data.text || '').slice(0, 80) || '(no text)')
+const preview = computed(() => (props.data.data.text || '').slice(0, 160) || '(no text)')
 </script>
 
 <style scoped>

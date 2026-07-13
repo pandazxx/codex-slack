@@ -8,8 +8,8 @@
       <span class="gn-kind-badge" :class="data.data.isError ? 'gn-badge-error' : 'gn-badge-result'">
         {{ data.data.isError ? 'error' : 'result' }}
       </span>
-      <span class="gn-label">{{ preview }}</span>
     </div>
+    <div class="gn-preview">{{ preview }}</div>
   </div>
 </template>
 
@@ -19,7 +19,7 @@ import { computed } from 'vue'
 const props = defineProps({ data: { type: Object, required: true } })
 defineEmits(['select'])
 
-const preview = computed(() => (props.data.data.contentText || '').slice(0, 80) || '(empty)')
+const preview = computed(() => (props.data.data.contentText || '').slice(0, 160) || '(empty)')
 </script>
 
 <style scoped>

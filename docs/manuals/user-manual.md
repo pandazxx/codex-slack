@@ -124,14 +124,13 @@ Pan the canvas by dragging. Zoom with the scroll wheel or trackpad. The **Fit vi
 | Agent message | A completed agent reply on the spine. Expandable to show its internal trace. An amber "interrupted" badge means the agent was stopped before finishing — no subtree is shown. |
 | Thinking | The agent's chain-of-thought (amber tint, matches the chat view). |
 | Text | An incremental prose block from the agent. |
-| Tool use | A tool the agent invoked (e.g. `Bash`, `Read`, MCP tools). MCP tools show two badges: server and tool name. |
-| Tool result | The output returned to the agent for a tool invocation. A red border indicates an error result. |
+| Tool use | A tool the agent invoked (e.g. `Bash`, `Read`, MCP tools). MCP tools show two badges: server and tool name. When the result is the tool's only output it is shown inline on the same card. |
+| Tool result | The output returned to the agent for a tool invocation, shown as its own card only when the tool has other children (subagent, task events). A red border indicates an error result. |
 | Subagent | A spawned sub-agent (Agent tool). Wraps all events belonging to that invocation. |
 | Task event | Progress and status updates for a running task (`task_started`, `task_progress`, `task_updated`, `task_notification`). |
 | Result rollup | The final cost, duration, turn count, and token usage for an agent message. |
 | Compaction | A context-window compaction boundary. Shows pre/post token counts and reduction percentage. |
 | System init | Session initialization metadata (model, tools, working directory). Usually visually minimal. |
-| Rate limit | A rate-limit event recorded during the agent run. |
 | Parse warning | A transcript line the parser could not classify. |
 
 For the underlying event schema that drives these nodes, see [`docs/references/schemas/topic-transcript-events.md`](../references/schemas/topic-transcript-events.md).

@@ -459,3 +459,15 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* `transcriptGraph.js` accepts both shapes (`type` first, then `sender`, with `event` mapping to the user side since event rows are dispatched prompts), and unmatched messages now emit an `unknown_event_type` diagnostic instead of vanishing. Regression tests RG-01 cover MessageOut-shaped rows for all three senders plus the unknown-sender diagnostic.
 
 *Prevention:* When a frontend consumes an API response, at least one fixture must mirror the API schema (`MessageOut`), not a derived export format. Never let a classifier fall through silently — every unmatched branch should emit a diagnostic so gaps surface in the UI instead of producing an empty view.
+
+---
+
+## 2026-07-13 — Graph node chevron did nothing: Vue Flow swallows custom-node emits
+
+*Summary:* The per-node expand/collapse chevron in the topic graph view (#248) was completely inert — clicking it neither toggled the subtree nor selected the node.
+
+*Root cause:* Custom node components rendered through Vue Flow's `:node-types` map are mounted internally by the library; events they `$emit` (`expand-toggle`, `select`) are **not** forwarded to the listeners bound on `<VueFlow>`. The only wired path was `@node-click` (a DOM-level handler), and the chevron's `@click.stop` suppressed even that. The same emits worked in `NodeDetailPanel` because that component is instantiated directly by the view, which hid the bug during panel-based testing.
+
+*Fix applied:* `TopicGraph.vue` now injects an `onExpandToggle` callback (plus a `hasChildren` flag) into each node's `data` payload; node components invoke the callback instead of emitting. Chevrons render only when the node actually has children.
+
+*Prevention:* When a component is mounted *by a library* rather than by our own template, do not rely on custom emits reaching our listeners — pass callbacks (or use provide/inject) through the data the library forwards. UAT for interactive canvas elements must click the element inside the canvas, not only its side-panel equivalent.

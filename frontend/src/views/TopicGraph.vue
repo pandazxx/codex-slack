@@ -81,7 +81,6 @@ import ResultRollupNode from '../components/graph/ResultRollupNode.vue'
 import TaskEventNode from '../components/graph/TaskEventNode.vue'
 import CompactionNode from '../components/graph/CompactionNode.vue'
 import SystemInitNode from '../components/graph/SystemInitNode.vue'
-import RateLimitNode from '../components/graph/RateLimitNode.vue'
 import ParseWarningNode from '../components/graph/ParseWarningNode.vue'
 
 const route = useRoute()
@@ -112,7 +111,6 @@ const nodeTypes = {
   'task-event':     TaskEventNode,
   'compaction':     CompactionNode,
   'system-init':    SystemInitNode,
-  'rate-limit':     RateLimitNode,
   'parse-warning':  ParseWarningNode,
 }
 
@@ -134,13 +132,24 @@ const selectedNode = computed(() => {
 
 const vfNodes = computed(() => {
   if (!graph.value) return []
+  const parentIds = new Set()
+  for (const n of graph.value.nodes) {
+    if (n.parentId != null) parentIds.add(n.parentId)
+  }
   return graph.value.nodes
     .filter(n => !n.ui.hidden)
     .map(n => ({
       id: n.id,
       type: n.kind,
       position: { x: n.ui.x ?? 0, y: n.ui.y ?? 0 },
-      data: { ...n, selected: n.id === selectedNodeId.value },
+      data: {
+        ...n,
+        selected: n.id === selectedNodeId.value,
+        hasChildren: parentIds.has(n.id),
+        // Vue Flow does not forward emits from custom node components,
+        // so collapse toggling is passed down as a callback (#248).
+        onExpandToggle: () => toggleCollapse(n.id),
+      },
     }))
 })
 
