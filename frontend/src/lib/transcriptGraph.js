@@ -581,7 +581,10 @@ export function buildTopicGraph({
   for (const msg of messages) {
     if (!msg || typeof msg !== 'object') continue
 
-    const msgType = msg.type
+    // API MessageOut rows carry `sender` (user|agent|event); export logs carry `type`.
+    // `event` rows are dispatched prompts, so they sit on the user side of the spine.
+    const msgType = msg.type ?? (msg.sender === 'agent' ? 'agent'
+      : msg.sender === 'user' || msg.sender === 'event' ? 'user' : undefined)
     const msgId = msg.id ?? msg.message_id ?? String(state.seq)
     const msgTs = msg.timestamp ?? msg.created_at ?? null
 
@@ -629,6 +632,9 @@ export function buildTopicGraph({
       }
       continue
     }
+
+    diagnostics.push(makeDiagnostic('warn', DiagnosticCode.UNKNOWN_EVENT_TYPE,
+      `Unknown message sender/type: ${msg.sender ?? msg.type}`, msgId))
   }
 
   return {

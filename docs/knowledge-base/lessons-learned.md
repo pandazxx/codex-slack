@@ -447,3 +447,15 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* Added `"alwaysLoad": true` and `"instructions"` to the server config in `notes-mcp.json`, `settings.json`, and `config.toml`. `alwaysLoad` bypasses Tool Search deferral and loads tool schemas at session start.
 
 *Prevention:* Any MCP server providing context or memory tools that Claude should use proactively must set `alwaysLoad: true`. Leave other servers on the default deferred behaviour to conserve the context window.
+
+---
+
+## 2026-07-13 — Topic graph view rendered only the topic node on live topics
+
+*Summary:* The new graph view (`/topics/:id/graph`) worked against test fixtures but showed a single topic node for real topics — every message was skipped.
+
+*Root cause:* The parser classified messages by `msg.type` (`user`/`agent`). That field exists only in topic *export* logs, where `topic_export.py` derives it from the DB `sender` column. Live `GET /messages` rows (`MessageOut`) carry `sender` (`user`/`agent`/`event`) and no `type`. All test fixtures were authored from exported logs, so the suite never exercised the live shape, and the parser's fall-through dropped unmatched messages silently — masking the failure.
+
+*Fix applied:* `transcriptGraph.js` accepts both shapes (`type` first, then `sender`, with `event` mapping to the user side since event rows are dispatched prompts), and unmatched messages now emit an `unknown_event_type` diagnostic instead of vanishing. Regression tests RG-01 cover MessageOut-shaped rows for all three senders plus the unknown-sender diagnostic.
+
+*Prevention:* When a frontend consumes an API response, at least one fixture must mirror the API schema (`MessageOut`), not a derived export format. Never let a classifier fall through silently — every unmatched branch should emit a diagnostic so gaps surface in the UI instead of producing an empty view.

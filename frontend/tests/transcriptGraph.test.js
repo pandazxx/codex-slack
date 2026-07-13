@@ -914,3 +914,54 @@ describe('NF-04: stable and unique node IDs', () => {
     expect(g1.nodes.map(n => n.id)).toEqual(g2.nodes.map(n => n.id))
   })
 })
+
+// ---------------------------------------------------------------------------
+// RG-01 Regression: MessageOut API rows use `sender`, not `type`
+// (bug: graph showed only the topic node for live topics)
+// ---------------------------------------------------------------------------
+describe('RG-01: MessageOut API row shape with sender field', () => {
+  const dispatchPayload = JSON.stringify({
+    message_id: 'm1', agent_name: 'claude', adapter: 'claude-code', subagent: null,
+    worktree: '/w', branch: 'topic/x', repo_ref: 'master', base_sha: '0'.repeat(40),
+    session_id: 'sess-1', is_new_session: true, session_scope: 'topic',
+    model: null, system_prompt: null, text: 'hello', attachments: [],
+  })
+  const agentTranscript = [
+    '{"type":"system","subtype":"init","cwd":"/w","session_id":"sess-1","tools":[],"model":"claude-sonnet-4-6"}',
+    '{"type":"result","subtype":"success","is_error":false,"duration_ms":10,"num_turns":1,"total_cost_usd":0.01,"usage":{}}',
+  ].join('\n')
+  const apiRows = [
+    { id: 'm1', sender: 'user', agent_name: null, text: 'hello', transcript: dispatchPayload, created_at: '2026-01-01T00:00:00Z', attachments: [] },
+    { id: 'm2', sender: 'agent', agent_name: 'claude', text: 'done', transcript: agentTranscript, created_at: '2026-01-01T00:01:00Z', attachments: [] },
+    { id: 'm3', sender: 'event', agent_name: null, text: 'cron fired', transcript: dispatchPayload, created_at: '2026-01-01T00:02:00Z', attachments: [] },
+  ]
+
+  it('sender=user produces a user-message node on the spine', () => {
+    const graph = build(apiRows)
+    expect(graph.nodes.filter(n => n.kind === NodeKind.USER_MESSAGE).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('sender=agent produces an agent-message node with transcript children', () => {
+    const graph = build(apiRows)
+    const agent = graph.nodes.find(n => n.kind === NodeKind.AGENT_MESSAGE)
+    expect(agent).toBeDefined()
+    expect(graph.nodes.some(n => n.kind === NodeKind.SYSTEM_INIT && n.messageId === 'm2')).toBe(true)
+    expect(graph.nodes.some(n => n.kind === NodeKind.RESULT_ROLLUP && n.messageId === 'm2')).toBe(true)
+  })
+
+  it('sender=event maps to a user-message node (dispatch prompt)', () => {
+    const graph = build(apiRows)
+    const users = graph.nodes.filter(n => n.kind === NodeKind.USER_MESSAGE)
+    expect(users.some(n => n.messageId === 'm3')).toBe(true)
+  })
+
+  it('unknown sender is not dropped silently: emits diagnostic', () => {
+    const graph = build([{ id: 'mX', sender: 'mystery', text: 'x', transcript: null, created_at: '2026-01-01T00:03:00Z' }])
+    expect(graph.diagnostics.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('export-log shape with type field still works', () => {
+    const graph = build([{ type: 'user', timestamp: '2026-01-01T00:00:00Z', text: 'hi', transcript: { message_id: 'x', text: 'hi', attachments: [] } }])
+    expect(graph.nodes.filter(n => n.kind === NodeKind.USER_MESSAGE)).toHaveLength(1)
+  })
+})
