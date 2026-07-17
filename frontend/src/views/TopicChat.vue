@@ -50,60 +50,11 @@
         }">
           <template v-if="m.sender === 'agent'">
             <template v-if="m.streaming && m.rows?.length">
-              <div class="trace-panel">
-                <button class="trace-panel-header" @click="m.traceOpen = !m.traceOpen">
-                  {{ m.traceOpen ? '▼' : '▶' }} {{ m.rows.length }} step{{ m.rows.length !== 1 ? 's' : '' }}
-                </button>
-                <div v-show="m.traceOpen" class="trace-panel-body trace-rows-scroll" :style="{ height: getTracePanelHeight(m.id) + 'px' }">
-                  <div class="trace-row" v-for="(row, i) in m.rows" :key="i">
-                    <!-- compact past rows, full display only for the last row -->
-                    <span v-if="i < m.rows.length - 1" class="trace-row-past">{{ compactRowLabel(row) }}</span>
-                    <template v-else>
-                      <details v-if="row.kind === 'tool_use'" class="tool-use-fold">
-                        <summary>{{ toolUseLabel(row.event) }}</summary>
-                        <pre class="tr-json">{{ toolUseInput(row.event) }}</pre>
-                      </details>
-                      <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
-                      <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
-                      <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
-                      <div v-else-if="row.kind === 'parse_warning'" class="tr-meta">
-                        <span class="tr-badge tr-badge-warning">parse error</span>
-                        <span class="tr-stat">{{ row.event.line || '' }}</span>
-                      </div>
-                      <div v-else-if="row.kind === 'thinking'" class="thinking-block">
-                        <div class="thinking-meta">💭 Thinking</div>
-                        <div class="thinking-text">{{ thinkingText(row.event) }}</div>
-                      </div>
-                      <div v-else-if="row.kind === 'agent_result'" class="agent-result">
-                        <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
-                        <MarkdownMessage :text="agentResultText(row.event)" />
-                      </div>
-                      <div v-else-if="row.kind === 'codex_text'" class="tr-text">{{ row.event.item?.text }}</div>
-                      <div v-else-if="row.kind === 'codex_error'" class="tr-meta">
-                        <span class="tr-badge tr-badge-error">failed</span>
-                        <span class="tr-stat">{{ row.event.error?.message || 'unknown error' }}</span>
-                      </div>
-                      <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
-                        <summary>{{ codexCmdLabel(row.event) }}</summary>
-                        <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
-                      </details>
-                      <details v-else-if="row.kind === 'folded'">
-                        <summary>···</summary>
-                        <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
-                      </details>
-                    </template>
-                  </div>
-                </div>
-                <div v-show="m.traceOpen" class="trace-resize-handle" @mousedown.prevent="startResize($event, m.id)"></div>
-              </div>
-            </template>
-            <template v-else-if="!m.streaming && m.traceRows?.length">
-              <div class="trace-panel">
-                <button class="trace-panel-header" @click="m.traceOpen = !m.traceOpen">
-                  {{ m.traceOpen ? '▼' : '▶' }} {{ m.traceRows.length }} step{{ m.traceRows.length !== 1 ? 's' : '' }}
-                </button>
-                <div v-show="m.traceOpen" class="trace-panel-body" :style="{ height: getTracePanelHeight(m.id) + 'px' }">
-                  <div class="trace-row" v-for="(row, i) in m.traceRows" :key="i">
+              <div class="trace-rows-scroll">
+                <div class="trace-row" v-for="(row, i) in m.rows" :key="i">
+                  <!-- compact past rows, full display only for the last row -->
+                  <span v-if="i < m.rows.length - 1" class="trace-row-past">{{ compactRowLabel(row) }}</span>
+                  <template v-else>
                     <details v-if="row.kind === 'tool_use'" class="tool-use-fold">
                       <summary>{{ toolUseLabel(row.event) }}</summary>
                       <pre class="tr-json">{{ toolUseInput(row.event) }}</pre>
@@ -136,10 +87,48 @@
                       <summary>···</summary>
                       <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
                     </details>
-                  </div>
+                  </template>
                 </div>
-                <div v-show="m.traceOpen" class="trace-resize-handle" @mousedown.prevent="startResize($event, m.id)"></div>
               </div>
+            </template>
+            <template v-else-if="!m.streaming && m.traceRows?.length">
+              <details :open="m.traceOpen" @toggle="m.traceOpen = $event.target.open">
+                <summary>▶ Show trace ({{ m.traceRows.length }} steps)</summary>
+                <div class="trace-row" v-for="(row, i) in m.traceRows" :key="i">
+                  <details v-if="row.kind === 'tool_use'" class="tool-use-fold">
+                    <summary>{{ toolUseLabel(row.event) }}</summary>
+                    <pre class="tr-json">{{ toolUseInput(row.event) }}</pre>
+                  </details>
+                  <span v-else-if="row.kind === 'task_progress'">↳ {{ row.event.description }}</span>
+                  <span v-else-if="row.kind === 'task_started'">🚀 {{ row.event.description }}</span>
+                  <span v-else-if="row.kind === 'retry_notice'">⟳ Session expired — retrying…</span>
+                  <div v-else-if="row.kind === 'parse_warning'" class="tr-meta">
+                    <span class="tr-badge tr-badge-warning">parse error</span>
+                    <span class="tr-stat">{{ row.event.line || '' }}</span>
+                  </div>
+                  <div v-else-if="row.kind === 'thinking'" class="thinking-block">
+                    <div class="thinking-meta">💭 Thinking</div>
+                    <div class="thinking-text">{{ thinkingText(row.event) }}</div>
+                  </div>
+                  <div v-else-if="row.kind === 'agent_result'" class="agent-result">
+                    <div class="agent-result-meta">🤖 Subagent · {{ agentResultMeta(row.event) }}</div>
+                    <MarkdownMessage :text="agentResultText(row.event)" />
+                  </div>
+                  <div v-else-if="row.kind === 'codex_text'" class="tr-text">{{ row.event.item?.text }}</div>
+                  <div v-else-if="row.kind === 'codex_error'" class="tr-meta">
+                    <span class="tr-badge tr-badge-error">failed</span>
+                    <span class="tr-stat">{{ row.event.error?.message || 'unknown error' }}</span>
+                  </div>
+                  <details v-else-if="row.kind === 'codex_cmd'" class="tool-use-fold">
+                    <summary>{{ codexCmdLabel(row.event) }}</summary>
+                    <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
+                  </details>
+                  <details v-else-if="row.kind === 'folded'">
+                    <summary>···</summary>
+                    <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
+                  </details>
+                </div>
+              </details>
             </template>
             <div v-if="m.text === '(message interrupted)'" class="interrupted-notice">
               <span class="tr-badge tr-badge-interrupted">{{ interruptLabel(m) }}</span>
@@ -342,28 +331,6 @@ const highlightedMsgId = ref(null)
 
 const MSG_COLLAPSE_THRESHOLD = 600
 const MSG_COLLAPSED_PREVIEW = 300
-const DEFAULT_TRACE_PANEL_HEIGHT = 220
-
-const tracePanelHeights = ref({})
-
-function getTracePanelHeight(msgId) {
-  return tracePanelHeights.value[msgId] ?? DEFAULT_TRACE_PANEL_HEIGHT
-}
-
-function startResize(e, msgId) {
-  const startY = e.clientY
-  const startH = getTracePanelHeight(msgId)
-  function onMove(ev) {
-    const newH = Math.max(60, startH + ev.clientY - startY)
-    tracePanelHeights.value = { ...tracePanelHeights.value, [msgId]: newH }
-  }
-  function onUp() {
-    document.removeEventListener('mousemove', onMove)
-    document.removeEventListener('mouseup', onUp)
-  }
-  document.addEventListener('mousemove', onMove)
-  document.addEventListener('mouseup', onUp)
-}
 
 const isArchived = computed(() => !!topic.value?.archived_at)
 const isWorkspaceArchived = computed(() => !!workspace.value?.archived_at)
@@ -962,14 +929,7 @@ onUnmounted(() => {
   animation: blink 1s steps(2) infinite;
 }
 @keyframes blink { to { visibility: hidden; } }
-.trace-panel { margin-bottom: 4px; }
-.trace-panel-header { background: none; border: none; cursor: pointer; font-size: 0.78em; color: #64748b; padding: 2px 6px; border-radius: 4px; font-family: monospace; text-align: left; width: 100%; display: block; }
-.trace-panel-header:hover { background: #f1f5f9; color: #475569; }
-.trace-panel-body { overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 6px 6px 0 0; padding: 4px 8px; margin-top: 4px; background: #f8fafc; display: flex; flex-direction: column; gap: 1px; }
-.trace-resize-handle { height: 8px; background: #f1f5f9; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 6px 6px; cursor: ns-resize; display: flex; align-items: center; justify-content: center; color: #94a3b8; user-select: none; }
-.trace-resize-handle::after { content: '⋯'; font-size: 0.7em; letter-spacing: 3px; }
-.trace-resize-handle:hover { background: #e2e8f0; }
-.trace-rows-scroll { scroll-behavior: smooth; }
+.trace-rows-scroll { max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; scroll-behavior: smooth; }
 .trace-row details summary { cursor: pointer; }
 .expand-msg-btn { display: block; margin-top: 0.25rem; background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.82em; padding: 0; text-align: left; }
 .expand-msg-btn:hover { text-decoration: underline; }
