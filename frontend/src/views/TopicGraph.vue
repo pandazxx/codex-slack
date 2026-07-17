@@ -101,12 +101,23 @@ const showMinimap = ref(localStorage.getItem('topicGraph.showMinimap') !== 'fals
 const SPINE_KINDS = new Set(['user-message', 'agent-message'])
 const LIST_DEFAULT_HEIGHT = 200
 const LIST_CHROME = 28
+const BOX_DEFAULT_WIDTH = 296
 const expandedLists = ref(new Set())
 const listHeights = ref({})
+const boxWidths = ref({})
 
 function getListHeight(id) { return listHeights.value[id] ?? LIST_DEFAULT_HEIGHT }
+function getBoxWidth(id) { return boxWidths.value[id] ?? BOX_DEFAULT_WIDTH }
 
 function setListHeight(id, h) {
+  listHeights.value = { ...listHeights.value, [id]: h }
+  recomputeLayout()
+}
+
+// Corner drag resizes the box in both axes: height feeds the layout (boxes
+// below shift down); width is purely visual (no depth columns to the right).
+function resizeBox(id, w, h) {
+  boxWidths.value = { ...boxWidths.value, [id]: w }
   listHeights.value = { ...listHeights.value, [id]: h }
   recomputeLayout()
 }
@@ -228,8 +239,9 @@ const vfNodes = computed(() => {
           childItems: childItemsFor(n.id),
           listExpanded: expandedLists.value.has(n.id),
           listHeight: getListHeight(n.id),
+          boxWidth: getBoxWidth(n.id),
           onListToggle: () => toggleList(n.id),
-          onListResize: (h) => setListHeight(n.id, h),
+          onBoxResize: (w, h) => resizeBox(n.id, w, h),
           onChildSelect: (cid) => selectNode(cid),
         })
       }

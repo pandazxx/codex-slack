@@ -6,6 +6,7 @@
       'gn-card-interrupted': data.data.interrupted,
       'gn-card-done': !data.data.interrupted,
     }"
+    :style="cardStyle"
     @click="$emit('select', data)"
   >
     <div class="gn-header">
@@ -54,12 +55,22 @@ const agentLabel = computed(() => props.data.data.agentName ? `@${props.data.dat
 const preview = computed(() => (props.data.data.text || '').slice(0, 160) || '(no text)')
 const items = computed(() => props.data.childItems || [])
 
+const cardStyle = computed(() => {
+  if (props.data.listExpanded && props.data.boxWidth) {
+    return { width: props.data.boxWidth + 'px', maxWidth: 'none' }
+  }
+  return {}
+})
+
 function startResize(e) {
+  const startX = e.clientX
   const startY = e.clientY
+  const startW = props.data.boxWidth ?? 296
   const startH = props.data.listHeight ?? 200
   function onMove(ev) {
+    const w = Math.max(220, startW + ev.clientX - startX)
     const h = Math.max(60, startH + ev.clientY - startY)
-    props.data.onListResize && props.data.onListResize(h)
+    props.data.onBoxResize && props.data.onBoxResize(w, h)
   }
   function onUp() {
     document.removeEventListener('mousemove', onMove)
@@ -78,35 +89,51 @@ function startResize(e) {
   overflow-y: auto;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
-  background: #f8fafc;
-  padding: 2px;
+  background: #f1f5f9;
+  padding: 4px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 4px;
   cursor: default;
 }
 .gn-childitem {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
-  padding: 3px 6px;
-  border-radius: 4px;
+  padding: 5px 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  background: #fff;
   font-size: 0.9em;
   color: #475569;
   cursor: pointer;
 }
-.gn-childitem:hover { background: #e2e8f0; }
-.gn-childicon { flex-shrink: 0; }
-.gn-childtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.gn-childitem:hover { background: #eef2f7; border-color: #94a3b8; }
+.gn-childicon { flex-shrink: 0; line-height: 1.4; }
+.gn-childtext {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+  min-width: 0;
+  word-break: break-word;
+}
 .gn-resize-handle {
-  height: 10px;
-  cursor: ns-resize;
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-end;
+  justify-content: flex-end;
   color: #94a3b8;
   user-select: none;
+  line-height: 1;
 }
-.gn-resize-handle::after { content: '⋯'; letter-spacing: 3px; font-size: 0.7em; }
+.gn-resize-handle::after { content: '◢'; font-size: 0.75em; }
 .gn-resize-handle:hover { color: #475569; }
 </style>
