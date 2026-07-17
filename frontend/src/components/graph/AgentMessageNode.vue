@@ -141,6 +141,7 @@ function startResize(e) {
   font-size: 0.9em;
   color: #475569;
   cursor: pointer;
+  min-height: 44px;
 }
 .gn-childitem:hover { background: #eef2f7; border-color: #94a3b8; }
 .gn-childicon { flex-shrink: 0; line-height: 1.4; }
@@ -149,6 +150,11 @@ function startResize(e) {
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 10;
+  line-clamp: 10;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .gn-resize-handle {
   position: absolute;
