@@ -66,7 +66,7 @@ import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 
 import { buildTopicGraph } from '../lib/transcriptGraph.js'
-import { layoutGraph } from '../lib/graphLayout.js'
+import { layoutGraph, estimateNodeHeight } from '../lib/graphLayout.js'
 import GraphHeaderToggle from '../components/GraphHeaderToggle.vue'
 import NodeDetailPanel from '../components/graph/NodeDetailPanel.vue'
 import TopicRootNode from '../components/graph/TopicRootNode.vue'
@@ -95,6 +95,77 @@ const loading = ref(true)
 const loadError = ref('')
 const selectedNodeId = ref(route.query.node ?? null)
 const showMinimap = ref(localStorage.getItem('topicGraph.showMinimap') !== 'false')
+
+// Embedded child-list state (graph renders first-level message boxes with their
+// children as an in-box scrollable list rather than as separate spatial nodes).
+const SPINE_KINDS = new Set(['user-message', 'agent-message'])
+const LIST_DEFAULT_HEIGHT = 200
+const LIST_CHROME = 28
+const expandedLists = ref(new Set())
+const listHeights = ref({})
+
+function getListHeight(id) { return listHeights.value[id] ?? LIST_DEFAULT_HEIGHT }
+
+function setListHeight(id, h) {
+  listHeights.value = { ...listHeights.value, [id]: h }
+  recomputeLayout()
+}
+
+function toggleList(id) {
+  const s = new Set(expandedLists.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  expandedLists.value = s
+  recomputeLayout()
+}
+
+const CHILD_ICONS = {
+  'thinking':      '💭',
+  'text':          '📝',
+  'tool-use':      '⚙',
+  'tool-result':   '↳',
+  'subagent':      '🤖',
+  'result-rollup': '✓',
+  'task-event':    '🚀',
+  'compaction':    '⚖',
+  'system-init':   'ⓘ',
+  'parse-warning': '⚠',
+}
+
+function childText(child) {
+  const d = child.data || {}
+  switch (child.kind) {
+    case 'thinking':      return (d.text || '').slice(0, 100) || 'Thinking'
+    case 'text':          return (d.text || '').slice(0, 100) || '(text)'
+    case 'tool-use':      return d.label || 'tool'
+    case 'tool-result':   return (d.contentText || '').slice(0, 100) || 'result'
+    case 'subagent':      return d.agentType ? `${d.agentType}: ${(d.prompt || '').slice(0, 80)}` : 'subagent'
+    case 'result-rollup': return 'result'
+    case 'task-event':    return (d.description || '').slice(0, 100) || 'task'
+    case 'compaction':    return 'compaction'
+    case 'system-init':   return 'init'
+    case 'parse-warning': return 'parse error'
+    default:              return child.kind
+  }
+}
+
+function childItemsFor(nodeId) {
+  if (!graph.value) return []
+  return graph.value.nodes
+    .filter(n => n.parentId === nodeId)
+    .sort((a, b) => a.sequence - b.sequence)
+    .map(c => ({ id: c.id, icon: CHILD_ICONS[c.kind] || '•', text: childText(c) }))
+}
+
+// Height override fed to layoutGraph: an expanded box reserves vertical space
+// for its child list so boxes below it shift down instead of overlapping.
+function nodeHeightOverride(node) {
+  let h = estimateNodeHeight(node)
+  if (node.kind === 'agent-message' && expandedLists.value.has(node.id)) {
+    h += getListHeight(node.id) + LIST_CHROME
+  }
+  return h
+}
 
 let flowInstance = null
 
@@ -138,19 +209,32 @@ const vfNodes = computed(() => {
   }
   return graph.value.nodes
     .filter(n => !n.ui.hidden)
-    .map(n => ({
-      id: n.id,
-      type: n.kind,
-      position: { x: n.ui.x ?? 0, y: n.ui.y ?? 0 },
-      data: {
-        ...n,
-        selected: n.id === selectedNodeId.value,
-        hasChildren: parentIds.has(n.id),
-        // Vue Flow does not forward emits from custom node components,
-        // so collapse toggling is passed down as a callback (#248).
-        onExpandToggle: () => toggleCollapse(n.id),
-      },
-    }))
+    .map(n => {
+      const base = {
+        id: n.id,
+        type: n.kind,
+        position: { x: n.ui.x ?? 0, y: n.ui.y ?? 0 },
+        data: {
+          ...n,
+          selected: n.id === selectedNodeId.value,
+          hasChildren: parentIds.has(n.id),
+          // Vue Flow does not forward emits from custom node components,
+          // so collapse toggling is passed down as a callback (#248).
+          onExpandToggle: () => toggleCollapse(n.id),
+        },
+      }
+      if (n.kind === 'agent-message') {
+        Object.assign(base.data, {
+          childItems: childItemsFor(n.id),
+          listExpanded: expandedLists.value.has(n.id),
+          listHeight: getListHeight(n.id),
+          onListToggle: () => toggleList(n.id),
+          onListResize: (h) => setListHeight(n.id, h),
+          onChildSelect: (cid) => selectNode(cid),
+        })
+      }
+      return base
+    })
 })
 
 const vfEdges = computed(() => {
@@ -197,34 +281,32 @@ function saveMinimapPref() {
 
 function recomputeLayout() {
   if (!graph.value) return
-  layoutGraph(graph.value)
+  layoutGraph(graph.value, { nodeHeight: nodeHeightOverride })
   triggerRef(graph)
 }
 
+// In embedded-list mode the chevron / detail-panel expand button toggles the
+// in-box child list rather than un-hiding spatial child nodes.
 function toggleCollapse(nodeOrData) {
   if (!graph.value) return
   const id = nodeOrData?.id ?? nodeOrData
   const node = graph.value.nodes.find(n => n.id === id)
   if (!node) return
-  node.ui.collapsed = !node.ui.collapsed
-  recomputeLayout()
+  if (node.kind === 'agent-message') toggleList(id)
 }
 
 function collapseAll() {
-  if (!graph.value) return
-  for (const n of graph.value.nodes) {
-    if (n.kind === 'agent-message' || n.kind === 'subagent' || n.kind === 'tool-use') {
-      n.ui.collapsed = true
-    }
-  }
+  expandedLists.value = new Set()
   recomputeLayout()
 }
 
 function expandAll() {
   if (!graph.value) return
+  const s = new Set()
   for (const n of graph.value.nodes) {
-    n.ui.collapsed = false
+    if (n.kind === 'agent-message') s.add(n.id)
   }
+  expandedLists.value = s
   recomputeLayout()
 }
 
@@ -274,7 +356,7 @@ function onKeydown(e) {
     e.preventDefault()
   }
   if (e.key === ' ') {
-    toggleCollapse(selectedNode.value)
+    if (selectedNode.value.kind === 'agent-message') toggleList(selectedNode.value.id)
     e.preventDefault()
   }
 }
@@ -308,7 +390,13 @@ async function load() {
       generatedAt: new Date().toISOString(),
       ...(maxEvents !== undefined ? { maxEvents } : {}),
     })
-    layoutGraph(built)
+    // Spine messages own their children as an in-box list, so collapse them in
+    // the spatial layout: their descendants become hidden and take no vertical
+    // space. The embedded list (expandedLists) is a separate, per-box control.
+    for (const n of built.nodes) {
+      if (SPINE_KINDS.has(n.kind)) n.ui.collapsed = true
+    }
+    layoutGraph(built, { nodeHeight: nodeHeightOverride })
     graph.value = built
     triggerRef(graph)
 
