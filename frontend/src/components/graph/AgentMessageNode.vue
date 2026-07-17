@@ -149,11 +149,6 @@ function startResize(e) {
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 6;
-  line-clamp: 6;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 .gn-resize-handle {
   position: absolute;
