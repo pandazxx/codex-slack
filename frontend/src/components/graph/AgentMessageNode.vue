@@ -20,20 +20,23 @@
 
     <div
       v-if="data.listExpanded && items.length"
+      ref="listEl"
       class="gn-childlist nowheel nodrag"
       :style="{ height: data.listHeight + 'px' }"
       @wheel.stop
       @mousedown.stop
     >
-      <div
-        v-for="it in items"
-        :key="it.id"
-        class="gn-childitem"
-        :title="it.text"
-        @click.stop="data.onChildSelect && data.onChildSelect(it.id)"
-      >
-        <span class="gn-childicon">{{ it.icon }}</span>
-        <span class="gn-childtext">{{ it.text }}</span>
+      <div ref="listInner" class="gn-childlist-inner">
+        <div
+          v-for="it in items"
+          :key="it.id"
+          class="gn-childitem"
+          :title="it.text"
+          @click.stop="data.onChildSelect && data.onChildSelect(it.id)"
+        >
+          <span class="gn-childicon">{{ it.icon }}</span>
+          <span class="gn-childtext">{{ it.text }}</span>
+        </div>
       </div>
     </div>
     <div
@@ -46,10 +49,16 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch, nextTick, onMounted } from 'vue'
+
+const MIN_LIST_HEIGHT = 66
+const LIST_PADDING = 8
 
 const props = defineProps({ data: { type: Object, required: true } })
 defineEmits(['select'])
+
+const listEl = ref(null)
+const listInner = ref(null)
 
 const agentLabel = computed(() => props.data.data.agentName ? `@${props.data.data.agentName}` : 'Agent')
 const preview = computed(() => (props.data.data.text || '').slice(0, 160) || '(no text)')
@@ -62,14 +71,37 @@ const cardStyle = computed(() => {
   return {}
 })
 
+// Full height the list needs to show every item without scrolling, measured
+// from the unconstrained inner wrapper so it's independent of the scroll box.
+function naturalHeight() {
+  if (!listInner.value) return Infinity
+  return listInner.value.offsetHeight + LIST_PADDING
+}
+
+// Never reserve more vertical space than the content needs: if the stored
+// height overshoots the content, shrink it so no empty gap is left behind.
+function clampToContent() {
+  const natural = naturalHeight()
+  if (!Number.isFinite(natural)) return
+  if ((props.data.listHeight ?? 0) > natural && props.data.onBoxResize) {
+    props.data.onBoxResize(props.data.boxWidth ?? 296, natural)
+  }
+}
+
+watch(() => props.data.listExpanded, (v) => { if (v) nextTick(clampToContent) })
+watch(() => items.value.length, () => { if (props.data.listExpanded) nextTick(clampToContent) })
+onMounted(() => { if (props.data.listExpanded) nextTick(clampToContent) })
+
 function startResize(e) {
   const startX = e.clientX
   const startY = e.clientY
   const startW = props.data.boxWidth ?? 296
   const startH = props.data.listHeight ?? 200
+  const maxH = naturalHeight()
   function onMove(ev) {
     const w = Math.max(220, startW + ev.clientX - startX)
-    const h = Math.max(60, startH + ev.clientY - startY)
+    let h = Math.max(MIN_LIST_HEIGHT, startH + ev.clientY - startY)
+    h = Math.min(h, maxH)
     props.data.onBoxResize && props.data.onBoxResize(w, h)
   }
   function onUp() {
@@ -91,10 +123,12 @@ function startResize(e) {
   border-radius: 6px;
   background: #f1f5f9;
   padding: 4px;
+  cursor: default;
+}
+.gn-childlist-inner {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  cursor: default;
 }
 .gn-childitem {
   display: flex;
