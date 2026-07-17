@@ -146,13 +146,13 @@ const CHILD_ICONS = {
 function childText(child) {
   const d = child.data || {}
   switch (child.kind) {
-    case 'thinking':      return (d.text || '').slice(0, 100) || 'Thinking'
-    case 'text':          return (d.text || '').slice(0, 100) || '(text)'
+    case 'thinking':      return d.text || 'Thinking'
+    case 'text':          return d.text || '(text)'
     case 'tool-use':      return d.label || 'tool'
-    case 'tool-result':   return (d.contentText || '').slice(0, 100) || 'result'
-    case 'subagent':      return d.agentType ? `${d.agentType}: ${(d.prompt || '').slice(0, 80)}` : 'subagent'
+    case 'tool-result':   return d.contentText || 'result'
+    case 'subagent':      return d.agentType ? `${d.agentType}: ${d.prompt || ''}` : 'subagent'
     case 'result-rollup': return 'result'
-    case 'task-event':    return (d.description || '').slice(0, 100) || 'task'
+    case 'task-event':    return d.description || 'task'
     case 'compaction':    return 'compaction'
     case 'system-init':   return 'init'
     case 'parse-warning': return 'parse error'

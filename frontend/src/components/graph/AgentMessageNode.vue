@@ -145,14 +145,10 @@ function startResize(e) {
 .gn-childitem:hover { background: #eef2f7; border-color: #94a3b8; }
 .gn-childicon { flex-shrink: 0; line-height: 1.4; }
 .gn-childtext {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
   line-height: 1.4;
   min-width: 0;
-  word-break: break-word;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .gn-resize-handle {
   position: absolute;
