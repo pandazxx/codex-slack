@@ -53,6 +53,7 @@ import { computed, ref, watch, nextTick, onMounted } from 'vue'
 
 const MIN_LIST_HEIGHT = 66
 const LIST_PADDING = 8
+const ITEM_GAP = 4
 
 const props = defineProps({ data: { type: Object, required: true } })
 defineEmits(['select'])
@@ -71,11 +72,16 @@ const cardStyle = computed(() => {
   return {}
 })
 
-// Full height the list needs to show every item without scrolling, measured
-// from the unconstrained inner wrapper so it's independent of the scroll box.
+// Height at which every item is fully shown without scrolling. Items are
+// flex-shrunk to fit the current box, so each item's full content height is
+// read from its scrollHeight (which ignores the overflow clip) rather than
+// its rendered height.
 function naturalHeight() {
-  if (!listInner.value) return Infinity
-  return listInner.value.offsetHeight + LIST_PADDING
+  const inner = listInner.value
+  if (!inner || !inner.children.length) return Infinity
+  let total = LIST_PADDING + ITEM_GAP * (inner.children.length - 1)
+  for (const el of inner.children) total += el.scrollHeight
+  return total
 }
 
 // Never reserve more vertical space than the content needs: if the stored
@@ -129,6 +135,7 @@ function startResize(e) {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  height: 100%;
 }
 .gn-childitem {
   display: flex;
@@ -141,7 +148,9 @@ function startResize(e) {
   font-size: 0.9em;
   color: #475569;
   cursor: pointer;
+  flex: 1 1 auto;
   min-height: 44px;
+  overflow: hidden;
 }
 .gn-childitem:hover { background: #eef2f7; border-color: #94a3b8; }
 .gn-childicon { flex-shrink: 0; line-height: 1.4; }
