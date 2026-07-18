@@ -32,6 +32,7 @@
         fit-view-on-init
         class="graph-flow"
         @node-click="onNodeClick"
+        @node-drag-stop="onNodeDragStop"
         @pane-click="clearSelection"
         @init="onFlowInit"
       >
@@ -72,6 +73,7 @@ import NodeDetailPanel from '../components/graph/NodeDetailPanel.vue'
 import TopicRootNode from '../components/graph/TopicRootNode.vue'
 import UserMessageNode from '../components/graph/UserMessageNode.vue'
 import AgentMessageNode from '../components/graph/AgentMessageNode.vue'
+import SubListNode from '../components/graph/SubListNode.vue'
 import ThinkingNode from '../components/graph/ThinkingNode.vue'
 import TextNode from '../components/graph/TextNode.vue'
 import ToolUseNode from '../components/graph/ToolUseNode.vue'
@@ -105,6 +107,22 @@ const BOX_DEFAULT_WIDTH = 296
 const expandedLists = ref(new Set())
 const listHeights = ref({})
 const boxWidths = ref({})
+
+// A list item that has children can be "popped out" into its own box, linked
+// to its parent box by the existing parent→child edge. poppedItems holds the
+// node ids currently shown as pop-out boxes; poppedPos holds their (draggable)
+// canvas positions. Both are keyed by node id and nest recursively.
+const POP_GAP = 44
+const poppedItems = ref(new Set())
+const poppedPos = ref({})
+
+const parentIdSet = computed(() => {
+  const s = new Set()
+  if (graph.value) {
+    for (const n of graph.value.nodes) if (n.parentId != null) s.add(n.parentId)
+  }
+  return s
+})
 
 function getListHeight(id) { return listHeights.value[id] ?? LIST_DEFAULT_HEIGHT }
 function getBoxWidth(id) { return boxWidths.value[id] ?? BOX_DEFAULT_WIDTH }
@@ -165,7 +183,99 @@ function childItemsFor(nodeId) {
   return graph.value.nodes
     .filter(n => n.parentId === nodeId)
     .sort((a, b) => a.sequence - b.sequence)
-    .map(c => ({ id: c.id, icon: CHILD_ICONS[c.kind] || '•', text: childText(c) }))
+    .map(c => ({
+      id: c.id,
+      icon: CHILD_ICONS[c.kind] || '•',
+      text: childText(c),
+      hasChildren: parentIdSet.value.has(c.id),
+      expanded: poppedItems.value.has(c.id),
+    }))
+}
+
+const KIND_LABELS = {
+  'thinking':      'thinking',
+  'text':          'text',
+  'tool-use':      'tool',
+  'tool-result':   'result',
+  'subagent':      'subagent',
+  'result-rollup': 'result',
+  'task-event':    'task',
+  'compaction':    'compaction',
+  'system-init':   'init',
+  'parse-warning': 'warning',
+}
+
+const KIND_BADGES = {
+  'thinking':      'gn-badge-thinking',
+  'text':          'gn-badge-neutral',
+  'tool-use':      'gn-badge-tool',
+  'tool-result':   'gn-badge-result',
+  'subagent':      'gn-badge-subagent',
+  'result-rollup': 'gn-badge-result',
+  'task-event':    'gn-badge-task',
+  'compaction':    'gn-badge-compact',
+  'system-init':   'gn-badge-neutral',
+  'parse-warning': 'gn-badge-warning',
+}
+
+function kindLabelFor(kind) { return KIND_LABELS[kind] || kind }
+function badgeClassFor(kind) { return KIND_BADGES[kind] || 'gn-badge-neutral' }
+
+// Canvas position of a box: a popped item uses its (draggable) stored position,
+// falling back to the node's spatial layout coordinates.
+function getBoxPos(id) {
+  if (poppedPos.value[id]) return poppedPos.value[id]
+  const node = graph.value?.nodes.find(n => n.id === id)
+  return { x: node?.ui.x ?? 0, y: node?.ui.y ?? 0 }
+}
+
+// Pop-out boxes reachable from a currently-visible container. A container is
+// visible when it's an expanded agent-message list or an already-visible
+// pop-out box, so closing/collapsing a container transitively hides its nested
+// pop-outs without mutating poppedItems.
+function visiblePoppedIds() {
+  if (!graph.value || !poppedItems.value.size) return new Set()
+  const byId = new Map(graph.value.nodes.map(n => [n.id, n]))
+  const result = new Set()
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const id of poppedItems.value) {
+      if (result.has(id)) continue
+      const node = byId.get(id)
+      if (!node) continue
+      const containerId = node.parentId
+      const containerVisible =
+        (byId.get(containerId)?.kind === 'agent-message' && expandedLists.value.has(containerId)) ||
+        result.has(containerId)
+      if (containerVisible) { result.add(id); changed = true }
+    }
+  }
+  return result
+}
+
+// Toggle a list item's pop-out box. On open, seed its position to the right of
+// its containing box; on close, drop its stored position.
+function toggleItem(id) {
+  if (!graph.value) return
+  const s = new Set(poppedItems.value)
+  if (s.has(id)) {
+    s.delete(id)
+    const { [id]: _drop, ...rest } = poppedPos.value
+    poppedPos.value = rest
+  } else {
+    s.add(id)
+    const node = graph.value.nodes.find(n => n.id === id)
+    const containerId = node?.parentId
+    if (containerId != null) {
+      const cpos = getBoxPos(containerId)
+      poppedPos.value = {
+        ...poppedPos.value,
+        [id]: { x: cpos.x + getBoxWidth(containerId) + POP_GAP, y: cpos.y },
+      }
+    }
+  }
+  poppedItems.value = s
 }
 
 // Height override fed to layoutGraph: an expanded box reserves vertical space
@@ -184,6 +294,7 @@ const nodeTypes = {
   'topic':          TopicRootNode,
   'user-message':   UserMessageNode,
   'agent-message':  AgentMessageNode,
+  'sub-list':       SubListNode,
   'thinking':       ThinkingNode,
   'text':           TextNode,
   'tool-use':       ToolUseNode,
@@ -243,11 +354,46 @@ const vfNodes = computed(() => {
           onListToggle: () => toggleList(n.id),
           onBoxResize: (w, h) => resizeBox(n.id, w, h),
           onChildSelect: (cid) => selectNode(cid),
+          onItemToggle: (cid) => toggleItem(cid),
         })
       }
       return base
     })
+    .concat(popoutNodes())
 })
+
+// Pop-out boxes rendered as separate 'sub-list' Vue Flow nodes. The existing
+// parent→child IR edge is picked up by vfEdges as the linkage line, so no
+// manual edge is needed. Each box is itself a ChildList, so its items can pop
+// out recursively.
+function popoutNodes() {
+  const visible = visiblePoppedIds()
+  const nodes = []
+  for (const id of visible) {
+    const node = graph.value.nodes.find(n => n.id === id)
+    if (!node) continue
+    nodes.push({
+      id,
+      type: 'sub-list',
+      position: getBoxPos(id),
+      data: {
+        ...node,
+        selected: id === selectedNodeId.value,
+        icon: CHILD_ICONS[node.kind] || '•',
+        kindLabel: kindLabelFor(node.kind),
+        badgeClass: badgeClassFor(node.kind),
+        title: childText(node).slice(0, 60),
+        childItems: childItemsFor(id),
+        listHeight: getListHeight(id),
+        boxWidth: getBoxWidth(id),
+        onChildSelect: (cid) => selectNode(cid),
+        onItemToggle: (cid) => toggleItem(cid),
+        onBoxResize: (w, h) => resizeBox(id, w, h),
+      },
+    })
+  }
+  return nodes
+}
 
 const vfEdges = computed(() => {
   if (!graph.value) return []
@@ -337,6 +483,16 @@ function onNodeClick(evt) {
   selectNode(nodeId)
 }
 
+// Persist a dragged pop-out box's position so it stays put across re-layouts.
+function onNodeDragStop(evt) {
+  const node = evt.node
+  if (!node || !poppedItems.value.has(node.id)) return
+  poppedPos.value = {
+    ...poppedPos.value,
+    [node.id]: { x: node.position.x, y: node.position.y },
+  }
+}
+
 function selectNode(id) {
   selectedNodeId.value = id
   router.replace({ query: { ...route.query, node: id } })
@@ -408,6 +564,8 @@ async function load() {
     for (const n of built.nodes) {
       if (SPINE_KINDS.has(n.kind)) n.ui.collapsed = true
     }
+    poppedItems.value = new Set()
+    poppedPos.value = {}
     layoutGraph(built, { nodeHeight: nodeHeightOverride })
     graph.value = built
     triggerRef(graph)
