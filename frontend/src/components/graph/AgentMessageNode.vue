@@ -9,6 +9,8 @@
     :style="cardStyle"
     @click="$emit('select', data)"
   >
+    <Handle type="target" :position="Position.Top" class="gn-flow-handle" />
+    <Handle type="source" :position="Position.Bottom" class="gn-flow-handle" />
     <div class="gn-header">
       <span class="gn-kind-badge gn-badge-agent">{{ agentLabel }}</span>
       <button v-if="items.length" class="gn-chevron" @click.stop="data.onListToggle && data.onListToggle()">
@@ -32,6 +34,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { Handle, Position } from '@vue-flow/core'
 import ChildList from './ChildList.vue'
 
 const props = defineProps({ data: { type: Object, required: true } })

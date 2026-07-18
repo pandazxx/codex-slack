@@ -400,12 +400,18 @@ const vfEdges = computed(() => {
   const visibleIds = new Set(vfNodes.value.map(n => n.id))
   return graph.value.edges
     .filter(e => visibleIds.has(e.source) && visibleIds.has(e.target))
-    .map(e => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      style: edgeStyle(e.kind),
-    }))
+    .map(e => {
+      const edge = {
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        style: edgeStyle(e.kind),
+      }
+      // Linkage to a popped-out box originates from its list item's own handle
+      // (id === the child node id) inside the parent box, not the box itself.
+      if (poppedItems.value.has(e.target)) edge.sourceHandle = e.target
+      return edge
+    })
 })
 
 const diagnosticChip = computed(() => {

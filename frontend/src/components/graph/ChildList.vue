@@ -23,6 +23,13 @@
           :title="it.expanded ? 'Collapse box' : 'Expand into box'"
           @click.stop="$emit('toggle', it.id)"
         >{{ it.expanded ? '▼' : '▶' }}</button>
+        <Handle
+          v-if="it.hasChildren"
+          type="source"
+          :id="it.id"
+          :position="Position.Right"
+          class="gn-item-handle"
+        />
       </div>
     </div>
   </div>
@@ -35,6 +42,7 @@
 
 <script setup>
 import { ref, watch, nextTick, onMounted } from 'vue'
+import { Handle, Position } from '@vue-flow/core'
 
 const MIN_LIST_HEIGHT = 66
 const LIST_PADDING = 8
@@ -124,6 +132,22 @@ function startResize(e) {
   flex: 1 1 auto;
   min-height: 44px;
   overflow: hidden;
+  position: relative;
+}
+/* Invisible edge anchor: gives the pop-out linkage line its origin at the
+ * right edge of this specific item row rather than at the whole box. */
+.gn-item-handle {
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  min-width: 0;
+  min-height: 0;
+  border: none !important;
+  background: transparent !important;
+  opacity: 0;
+  pointer-events: none;
 }
 .gn-childitem:hover { background: #eef2f7; border-color: #94a3b8; }
 .gn-childitem-open { border-color: #6c8cff; background: #f5f7ff; }
