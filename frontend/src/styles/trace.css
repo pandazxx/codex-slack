@@ -1,0 +1,120 @@
+/*
+ * Shared trace / transcript styles extracted from TopicChat.vue.
+ * Scoped under .tc-trace to prevent leaking into unrelated app areas.
+ * Import this file from both TopicChat.vue and TopicGraph.vue components.
+ */
+
+.tc-trace .tr-badge {
+  font-size: 0.78em;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.tc-trace .tr-badge-tool      { background: #dbeafe; color: #1d4ed8; }
+.tc-trace .tr-badge-result    { background: #dcfce7; color: #15803d; }
+.tc-trace .tr-badge-done      { background: #dcfce7; color: #15803d; }
+.tc-trace .tr-badge-error     { background: #fee2e2; color: #dc2626; }
+.tc-trace .tr-badge-warning   { background: #fef3c7; color: #92400e; }
+.tc-trace .tr-badge-thinking  { background: #f3e8ff; color: #7c3aed; }
+.tc-trace .tr-badge-interrupted { background: #fef3c7; color: #92400e; }
+
+.tc-trace .tr-stat    { color: #64748b; }
+.tc-trace .tr-tokens  { color: #6366f1; font-variant-numeric: tabular-nums; }
+.tc-trace .tr-cache   { color: #0891b2; }
+
+.tc-trace .tr-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+
+.tc-trace .tr-json {
+  background: #1e293b;
+  color: #e2e8f0;
+  padding: 5px 8px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  font-size: 0.9em;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.tc-trace .tr-result-body { background: #0f2027; color: #86efac; }
+
+.tc-trace .tr-text {
+  background: #f8fafc;
+  border-left: 3px solid #cbd5e1;
+  padding: 4px 8px;
+  white-space: pre-wrap;
+  color: #334155;
+  border-radius: 0 4px 4px 0;
+}
+
+.tc-trace .tr-thinking {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tc-trace .tr-thinking-body { background: #1a0a2e; color: #c4b5fd; }
+
+.tc-trace .thinking-block {
+  font-family: inherit;
+  color: #555;
+  margin: 0.4em 0;
+  padding: 0.4em 0.75em;
+  border-left: 3px solid #c0a85a;
+  background: rgba(192, 168, 90, 0.06);
+  border-radius: 0 4px 4px 0;
+}
+.tc-trace .thinking-meta {
+  font-size: 0.75em;
+  color: #c0a85a;
+  margin-bottom: 0.2em;
+  font-family: monospace;
+}
+.tc-trace .thinking-text {
+  font-style: italic;
+  white-space: pre-wrap;
+  line-height: 1.4;
+}
+
+.tc-trace .agent-result {
+  font-family: inherit;
+  color: inherit;
+  margin: 0.5em 0;
+  padding: 0.5em 0.75em;
+  border-left: 3px solid #6c8cff;
+  background: rgba(108, 140, 255, 0.05);
+  border-radius: 0 4px 4px 0;
+}
+.tc-trace .agent-result-meta {
+  font-size: 0.75em;
+  color: #6c8cff;
+  margin-bottom: 0.25em;
+  font-family: monospace;
+}
+
+.tc-trace .tool-use-fold > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.tc-trace .tool-use-fold > summary::-webkit-details-marker { display: none; }
+.tc-trace .tool-use-fold[open] > summary { color: #ccc; }
+
+.tc-trace .trace-row {
+  font-size: 0.85em;
+  color: #888;
+  padding: 1px 0;
+  font-family: monospace;
+}
+.tc-trace .trace-row-past {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  opacity: 0.55;
+  font-size: 0.9em;
+}

@@ -17,6 +17,7 @@
         title="Export conversation as JSON Lines"
         download
       >&#8615;</a>
+      <GraphHeaderToggle :wsId="wsId" :topicId="topicId" activeView="chat" class="breadcrumb-toggle" />
     </p>
 
     <div v-if="isArchived" class="archived-banner">This topic is archived — read only</div>
@@ -37,8 +38,9 @@
       <div
         v-for="(m, msgIdx) in filteredMessages"
         :key="m.id"
-        class="message"
-        :class="[m.sender === 'user' ? 'user' : 'agent', m.silent ? 'message-silent' : '']"
+        :id="`msg-${m.id}`"
+        class="message tc-trace"
+        :class="[m.sender === 'user' ? 'user' : 'agent', m.silent ? 'message-silent' : '', highlightedMsgId === m.id ? 'message-highlighted' : '']"
       >
         <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
         <div class="bubble" :class="{
@@ -299,7 +301,9 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import MarkdownMessage from '../components/MarkdownMessage.vue'
 import ChatInput from '../components/ChatInput.vue'
+import GraphHeaderToggle from '../components/GraphHeaderToggle.vue'
 import { formatInTimezone } from '../utils/datetime.js'
+import '../styles/trace.css'
 
 const route = useRoute()
 let wsId = route.params.wsId
@@ -323,6 +327,7 @@ const sendError = ref('')
 const verboseMode = ref(false)
 const expandedMsg = ref(null)
 const copiedMsgId = ref(null)
+const highlightedMsgId = ref(null)
 
 const MSG_COLLAPSE_THRESHOLD = 600
 const MSG_COLLAPSED_PREVIEW = 300
@@ -363,6 +368,19 @@ async function copyMsgText(m) {
 
 function onEscExpand(e) {
   if (e.key === 'Escape') expandedMsg.value = null
+}
+
+function scrollToHashMsg() {
+  const hash = location.hash
+  if (!hash.startsWith('#msg-')) return
+  const msgId = hash.slice(5)
+  nextTick(() => {
+    const el = document.getElementById(`msg-${msgId}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    highlightedMsgId.value = msgId
+    setTimeout(() => { highlightedMsgId.value = null }, 2000)
+  })
 }
 
 function collapsedPreview(text) {
@@ -839,6 +857,7 @@ onMounted(async () => {
   await load()
   if (!isArchived.value) connectWs()
   document.addEventListener('keydown', onEscExpand)
+  scrollToHashMsg()
 })
 
 onUnmounted(() => {
@@ -849,11 +868,13 @@ onUnmounted(() => {
 
 <style scoped>
 .chat-layout { display: flex; flex-direction: column; height: calc(100vh - 110px); }
+.breadcrumb-toggle { margin-left: auto; }
+.message-highlighted .bubble { box-shadow: 0 0 0 2px #2563eb80; transition: box-shadow 0.3s; }
 .chat-toolbar { display: flex; align-items: center; justify-content: flex-end; padding: 2px 0; min-height: 22px; }
 .verbose-toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 0.78em; color: #94a3b8; cursor: pointer; user-select: none; }
 .verbose-toggle input { cursor: pointer; }
 .message-silent .bubble { opacity: 0.55; border-style: dashed; }
-.breadcrumb { font-size: 0.9em; color: #64748b; margin-bottom: 0.5rem; }
+.breadcrumb { font-size: 0.9em; color: #64748b; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
 .topic-settings-link { color: #94a3b8; text-decoration: none; margin-left: 0.5rem; font-size: 1em; }
 .topic-settings-link:hover { color: #475569; }
 .archived-banner { font-size: 0.85em; background: #fef9c3; border: 1px solid #fde047; border-radius: 4px; padding: 0.25rem 0.75rem; margin-bottom: 0.5rem; color: #713f12; }
@@ -880,23 +901,7 @@ onUnmounted(() => {
 .raw-btn:hover { background: #334155; color: #e2e8f0; }
 .tr-raw { background: #0d1117; color: #e6edf3; padding: 0.6rem 0.75rem; border-radius: 6px; font-size: 0.72em; white-space: pre; overflow-x: auto; max-height: 400px; overflow-y: auto; margin-top: 6px; }
 .transcript-view { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; font-size: 0.78em; max-height: 400px; overflow-y: auto; }
-.tr-text { background: #f8fafc; border-left: 3px solid #cbd5e1; padding: 4px 8px; white-space: pre-wrap; color: #334155; border-radius: 0 4px 4px 0; }
 .tr-tool-call, .tr-tool-result { display: flex; flex-direction: column; gap: 2px; }
-.tr-json { background: #1e293b; color: #e2e8f0; padding: 5px 8px; border-radius: 4px; white-space: pre-wrap; word-break: break-all; margin: 0; font-size: 0.9em; max-height: 200px; overflow-y: auto; }
-.tr-result-body { background: #0f2027; color: #86efac; }
-.tr-meta { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
-.tr-stat { color: #64748b; }
-.tr-tokens { color: #6366f1; font-variant-numeric: tabular-nums; }
-.tr-cache { color: #0891b2; }
-.tr-badge { font-size: 0.78em; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
-.tr-badge-tool { background: #dbeafe; color: #1d4ed8; }
-.tr-badge-result { background: #dcfce7; color: #15803d; }
-.tr-badge-done { background: #dcfce7; color: #15803d; }
-.tr-badge-error { background: #fee2e2; color: #dc2626; }
-.tr-badge-warning { background: #fef3c7; color: #92400e; }
-.tr-badge-thinking { background: #f3e8ff; color: #7c3aed; }
-.tr-thinking { display: flex; flex-direction: column; gap: 2px; }
-.tr-thinking-body { background: #1a0a2e; color: #c4b5fd; }
 .attachment-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .attachment-img-wrap { max-width: 280px; }
 .attachment-img { max-width: 100%; border-radius: 6px; border: 1px solid #e2e8f0; }
@@ -925,19 +930,9 @@ onUnmounted(() => {
 }
 @keyframes blink { to { visibility: hidden; } }
 .trace-rows-scroll { max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; scroll-behavior: smooth; }
-.trace-row { font-size: 0.85em; color: #888; padding: 1px 0; font-family: monospace; }
-.trace-row-past { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; opacity: 0.55; font-size: 0.9em; }
 .trace-row details summary { cursor: pointer; }
 .expand-msg-btn { display: block; margin-top: 0.25rem; background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.82em; padding: 0; text-align: left; }
 .expand-msg-btn:hover { text-decoration: underline; }
-.agent-result { font-family: inherit; color: inherit; margin: 0.5em 0; padding: 0.5em 0.75em; border-left: 3px solid #6c8cff; background: rgba(108, 140, 255, 0.05); border-radius: 0 4px 4px 0; }
-.agent-result-meta { font-size: 0.75em; color: #6c8cff; margin-bottom: 0.25em; font-family: monospace; }
-.thinking-block { font-family: inherit; color: #555; margin: 0.4em 0; padding: 0.4em 0.75em; border-left: 3px solid #c0a85a; background: rgba(192, 168, 90, 0.06); border-radius: 0 4px 4px 0; }
-.thinking-meta { font-size: 0.75em; color: #c0a85a; margin-bottom: 0.2em; font-family: monospace; }
-.thinking-text { font-style: italic; white-space: pre-wrap; line-height: 1.4; }
-.tool-use-fold > summary { cursor: pointer; list-style: none; }
-.tool-use-fold > summary::-webkit-details-marker { display: none; }
-.tool-use-fold[open] > summary { color: #ccc; }
 .tr-cmd-failed { color: #dc2626; }
 
 @media (max-width: 768px) {

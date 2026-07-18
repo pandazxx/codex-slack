@@ -19,6 +19,7 @@ codex-slack v3 is a self-hosted chat interface for LLM coding agents. You intera
 | `/` | Workspace list — create and browse active workspaces |
 | `/workspaces/:id` | Workspace detail — topic list, agent configuration |
 | `/workspaces/:wsId/topics/:topicId` | Topic chat — message thread, real-time agent output |
+| `/workspaces/:wsId/topics/:topicId/graph` | Topic graph — interactive graph visualization of a topic's transcript |
 | `/workspaces/:wsId/topics/:topicId/settings` | Topic Settings — event actions for the topic |
 | `/archived` | Archived workspaces (read-only) |
 | `/workspaces/:id/archived-topics` | Archived topics for a workspace (read-only) |
@@ -100,6 +101,73 @@ Also navigate to:
 | Route | View |
 |-------|------|
 | `/workspaces/:wsId/topics/:topicId/settings` | Topic Settings — event actions for the topic |
+
+## Topic Graph View
+
+The graph view renders a topic's full conversation transcript as an interactive node graph. It is a read-only snapshot — the data is fetched once on load; use the browser refresh to pick up new messages.
+
+### Opening the graph
+
+In any topic, click the **Graph** tab in the topic header (next to the gear icon). The URL changes to `/workspaces/:wsId/topics/:topicId/graph`. Click **Chat** to return to the message thread. Both views are independent — each fetches data on mount.
+
+### Layout
+
+The graph uses a vertical timeline-flow layout. The left-most column (the spine) shows the sequence of user and agent messages in chronological order. Each agent message node can be expanded to reveal its internal structure as child nodes arranged in columns to the right.
+
+Pan the canvas by dragging. Zoom with the scroll wheel or trackpad. The **Fit view** button in the corner resets the viewport. A minimap in the top-right corner provides orientation; toggle it with the minimap button in the header.
+
+### Node kinds
+
+| Node | What it represents |
+|------|--------------------|
+| User message | A message you sent. Shows the text, any attachments, and the dispatch metadata (agent, model, session). |
+| Agent message | A completed agent reply on the spine. Expandable to show its internal trace. An amber "interrupted" badge means the agent was stopped before finishing — no subtree is shown. |
+| Thinking | The agent's chain-of-thought (amber tint, matches the chat view). |
+| Text | An incremental prose block from the agent. |
+| Tool use | A tool the agent invoked (e.g. `Bash`, `Read`, MCP tools). MCP tools show two badges: server and tool name. When the result is the tool's only output it is shown inline on the same card. |
+| Tool result | The output returned to the agent for a tool invocation, shown as its own card only when the tool has other children (subagent, task events). A red border indicates an error result. |
+| Subagent | A spawned sub-agent (Agent tool). Wraps all events belonging to that invocation. |
+| Task event | Progress and status updates for a running task (`task_started`, `task_progress`, `task_updated`, `task_notification`). |
+| Result rollup | The final cost, duration, turn count, and token usage for an agent message. |
+| Compaction | A context-window compaction boundary. Shows pre/post token counts and reduction percentage. |
+| System init | Session initialization metadata (model, tools, working directory). Usually visually minimal. |
+| Parse warning | A transcript line the parser could not classify. |
+
+For the underlying event schema that drives these nodes, see [`docs/references/schemas/topic-transcript-events.md`](../references/schemas/topic-transcript-events.md).
+
+### Expand and collapse
+
+Agent message and subagent nodes have a chevron toggle. Click it to expand or collapse the subtree. Collapsed subtrees are hidden from the canvas; the spine remains visible. The header provides **Expand all** and **Collapse all** buttons. Tool-use nodes whose result body is long default to collapsed.
+
+### Detail panel
+
+Clicking any node opens a detail panel on the right side of the canvas. The panel shows the full payload for that node kind — message text rendered as markdown, tool input as formatted JSON, cost/duration tables, and so on. Click elsewhere on the canvas or press `Esc` to close the panel and deselect the node.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Esc` | Deselect the current node and close the detail panel |
+| `→` / `←` | Navigate to the next / previous node in transcript order |
+| `Space` | Toggle the collapsed state of the selected node |
+
+### Jumping to the chat view
+
+Every user message and agent message card shows a small **→ chat** link. Clicking it opens the chat view scrolled to that message's anchor (`#msg-<id>`).
+
+### Deep-linking to a node
+
+Add `?node=<nodeId>` to the graph URL to select a specific node on load. The selection is reflected in the URL via `router.replace`, so the resulting URL is shareable.
+
+### Diagnostics
+
+If the parser encounters orphaned tool results, unmatched tool uses, or unknown event types, a warning chip appears in the graph header. These indicate incomplete or unexpected transcript data and do not prevent the rest of the graph from rendering.
+
+### Limitations
+
+- **Static snapshot.** The graph does not receive live updates. Refresh the page to reflect new messages.
+- **Desktop-oriented.** The graph canvas is not optimized for narrow viewports. On small screens the toggle defaults to the chat view.
+- **Large topics.** Topics exceeding 5000 transcript events are truncated at that cap. A diagnostic warning is shown. Pass `?maxEvents=<n>` in the URL to adjust the cap for debugging.
 
 ## Real-time Updates
 
