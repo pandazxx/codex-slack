@@ -481,9 +481,49 @@ def test_ensure_worktree_falls_back_on_existing_branch(tmp_path):
     with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
         _ensure_worktree(str(tmp_path / "repo"), str(wt), "feat/existing")
 
-    assert len(calls) == 2
-    assert "-b" in calls[0]
-    assert "-b" not in calls[1]
+    # Only the worktree-add attempts matter here (a leading fetch call is expected too).
+    worktree_calls = [c for c in calls if "worktree" in c]
+    assert len(worktree_calls) == 2
+    assert "-b" in worktree_calls[0]
+    assert "-b" not in worktree_calls[1]
+
+
+def test_ensure_worktree_fetches_before_branching(tmp_path):
+    """Regression for #250: the remote is fetched before the worktree is cut, so the
+    topic branch is not created off a stale origin/<repo_ref>."""
+    wt = tmp_path / "wt"
+    calls = []
+
+    def side_effect(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)
+
+    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
+        _ensure_worktree(str(tmp_path / "repo"), str(wt), "feat/new", repo_ref="main")
+
+    # A fetch of origin/main must happen, and it must precede the worktree add.
+    fetch_idx = next(i for i, c in enumerate(calls) if "fetch" in c)
+    worktree_idx = next(i for i, c in enumerate(calls) if "worktree" in c)
+    assert fetch_idx < worktree_idx
+    assert calls[fetch_idx][-2:] == ["origin", "main"]
+
+
+def test_ensure_worktree_survives_fetch_failure(tmp_path):
+    """A failed fetch (offline/transient) must not block worktree creation."""
+    wt = tmp_path / "wt"
+    calls = []
+
+    def side_effect(cmd, **kwargs):
+        calls.append(cmd)
+        if "fetch" in cmd:
+            return MagicMock(returncode=1, stderr="could not resolve host")
+        return MagicMock(returncode=0)
+
+    with patch("src.agent.mqtt_loop.subprocess.run", side_effect=side_effect):
+        _ensure_worktree(str(tmp_path / "repo"), str(wt), "feat/new", repo_ref="main")
+
+    # Worktree add still ran despite the fetch failing.
+    assert any("worktree" in c for c in calls)
 
 
 # --- _process_prompt ---
