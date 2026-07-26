@@ -133,10 +133,33 @@ def _verdict_topic(workspace_id: str, topic_id: str) -> str:
     return f"codex-slack/workspace/{workspace_id}/topic/{topic_id}/verdict"
 
 
+def _fetch_remote(repo_dir: str, repo_ref: str) -> None:
+    """Refresh remote-tracking refs before branching so the worktree is cut from
+    up-to-date remote state.  The agent's clone is only synced once at container
+    startup (stage_repo_sync); without this fetch a topic created later branches
+    off a stale origin/<repo_ref> and lands far behind remote (issue #250).  It
+    also pulls the object referenced by base_sha into the local store when the
+    remote has moved forward since startup.
+
+    Best-effort: a fetch failure (offline, transient network) must not block topic
+    creation — the worktree is still created from whatever refs are already local.
+    """
+    cmd = ["git", "-C", repo_dir, "fetch", "origin"]
+    if repo_ref:
+        cmd.append(repo_ref)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        LOGGER.warning("agent.worktree_fetch_failed repo_ref=%s stderr=%s", repo_ref, result.stderr.strip())
+    else:
+        LOGGER.info("agent.worktree_fetched repo_ref=%s", repo_ref or "(default refs)")
+
+
 def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str, repo_ref: str = "", base_sha: str = "") -> None:
     if Path(worktree_path).exists():
         return
     Path(worktree_path).parent.mkdir(parents=True, exist_ok=True)
+    # Sync remote refs first so origin/<repo_ref> and the base_sha object are current.
+    _fetch_remote(repo_dir, repo_ref)
     # Prefer the pre-resolved SHA — it always exists in the local clone regardless of
     # which branch the agent repo was cloned from.  Fall back to origin/<repo_ref> so
     # remote-tracking refs resolve even when no local branch of that name exists.
