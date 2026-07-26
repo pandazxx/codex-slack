@@ -309,3 +309,56 @@ def get_container_status(*, name: str, dry_run: bool = False) -> dict:  # type: 
     except Exception as exc:
         LOGGER.warning("agent_runner.inspect_failed name=%s error=%s", name, exc)
         return {"status": "unknown", "exit_code": None, "restart_count": None, "error": str(exc), "version": None}
+
+
+def build_spawn_kwargs(*, settings, db_path: str, workspace_id: str, repo_url: str) -> dict:  # type: ignore[type-arg]
+    """Assemble the keyword arguments for spawn_agent from current settings + DB config.
+
+    Centralizes the mapping so startup respawn, the health-check loop, and the
+    message-dispatch recovery path all create identically-configured containers.
+    """
+    from .runtime_config import load_agent_env
+
+    return dict(
+        runtime=settings.container_runtime,
+        workspace_id=workspace_id,
+        repo_url=repo_url,
+        image=settings.agent_base_image,
+        mqtt_host=settings.mqtt_host,
+        mqtt_port=settings.mqtt_port,
+        network=settings.agent_network,
+        claude_code_oauth_token=settings.claude_code_oauth_token,
+        anthropic_api_key=settings.anthropic_api_key,
+        openai_api_key=settings.openai_api_key,
+        gh_token=settings.gh_token,
+        ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
+        ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
+        dry_run=settings.dry_run,
+        master_url=settings.master_url,
+        extra_env=load_agent_env(db_path, workspace_id),
+        mem_limit=settings.agent_mem_limit or None,
+    )
+
+
+def ensure_agent_running(*, name: str, spawn_kwargs: dict, dry_run: bool = False) -> str:  # type: ignore[type-arg]
+    """Ensure the agent container is up, recreating it when it has gone missing.
+
+    Unlike start_agent_if_stopped — which can only restart a container that still
+    exists — this recovers the "not_found" case (container removed/pruned/crashed
+    away) by spawning a fresh one from spawn_kwargs. This is what lets an incoming
+    message revive a not_found agent instead of being silently dropped (issue #251).
+
+    Returns the action taken: "spawned", "started", "running", "dry_run", or "noop".
+    """
+    if dry_run:
+        LOGGER.info("agent_runner.dry_run_ensure container=%s", name)
+        return "dry_run"
+    status = get_container_status(name=name)["status"]
+    if status == "running":
+        return "running"
+    if status == "not_found":
+        spawn_agent(**spawn_kwargs)
+        LOGGER.info("agent_runner.ensure_spawned container=%s reason=not_found", name)
+        return "spawned"
+    # exited / unknown — the container object still exists, so a plain start suffices.
+    return "started" if start_agent_if_stopped(name=name) else "noop"

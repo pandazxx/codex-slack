@@ -7,12 +7,19 @@ session-sharing, MQTT contract, and agent-start behaviour.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 
-from .agent_runner import container_name as _agent_container_name, start_agent_if_stopped
+from .agent_runner import (
+    build_spawn_kwargs,
+    container_name as _agent_container_name,
+    ensure_agent_running,
+)
 from .db import get_connection
+
+LOGGER = logging.getLogger(__name__)
 
 _PROMPT_TOPIC = "codex-slack/workspace/{workspace_id}/topic/{topic_id}/prompt"
 
@@ -215,16 +222,23 @@ async def dispatch_to_staff(
     ws_conn = get_connection(app_state.db_path)
     try:
         ws_row = ws_conn.execute(
-            "SELECT container_name FROM workspaces WHERE id = ?", (workspace_id,)
+            "SELECT container_name, repo_url FROM workspaces WHERE id = ?", (workspace_id,)
         ).fetchone()
         cname = (ws_row["container_name"] if ws_row else None) or _agent_container_name(workspace_id)
+        repo_url = ws_row["repo_url"] if ws_row else ""
     finally:
         ws_conn.close()
 
+    # Recover the agent before publishing: start it if merely stopped, or respawn it
+    # if the container is gone (not_found) — otherwise the prompt is published to a
+    # topic no one is subscribed to and silently lost (issue #251).
     try:
-        start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
+        spawn_kwargs = build_spawn_kwargs(
+            settings=settings, db_path=app_state.db_path, workspace_id=workspace_id, repo_url=repo_url or "",
+        )
+        ensure_agent_running(name=cname, spawn_kwargs=spawn_kwargs, dry_run=settings.dry_run)
     except Exception:
-        pass
+        LOGGER.exception("dispatch.ensure_agent_failed container=%s", cname)
 
     mqtt_topic = _PROMPT_TOPIC.format(workspace_id=workspace_id, topic_id=topic_id)
     app_state.mqtt.publish(mqtt_topic, payload, qos=1)

@@ -880,6 +880,56 @@ class TestDispatchCore:
         conn.close()
         assert row["sender"] == "event"
 
+    def test_dispatch_recovers_not_found_agent(self, tmp_path):
+        # DISP-251 — regression for issue #251: dispatch must recover a missing
+        # (not_found) agent by respawning it, not merely try to start it. Verify
+        # dispatch routes through ensure_agent_running with the workspace's
+        # spawn config, so a removed container is recreated before the prompt is
+        # published (instead of being silently dropped).
+        db_path = str(tmp_path / "db.db")
+        _init_minimal_db(db_path)
+        ws_id, tp_id = _insert_workspace_and_topic(db_path)
+        _insert_staff(db_path, name="reviewer", scope_type="global")
+
+        app_state = _make_app_state(db_path=db_path)
+        app_state.settings.dry_run = False  # exercise the real recovery branch
+        loop = asyncio.new_event_loop()
+        app_state.event_loop = loop
+
+        from src.master.db import get_connection
+        from src.master.staffs import resolve_staff
+
+        conn = get_connection(db_path)
+        staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
+        conn.close()
+
+        sentinel_kwargs = {"workspace_id": ws_id, "repo_url": "https://github.com/x/y"}
+
+        async def run():
+            from src.master.dispatch import dispatch_to_staff
+            with patch("src.master.dispatch.build_spawn_kwargs", return_value=sentinel_kwargs) as mock_build:
+                with patch("src.master.dispatch.ensure_agent_running") as mock_ensure:
+                    await dispatch_to_staff(
+                        app_state=app_state,
+                        workspace_id=ws_id,
+                        topic_id=tp_id,
+                        staff=staff,
+                        prompt_text="please review",
+                        sender="user",
+                    )
+            return mock_build, mock_ensure
+
+        mock_build, mock_ensure = loop.run_until_complete(run())
+        loop.close()
+
+        # build_spawn_kwargs received the workspace repo_url so a respawn is fully configured.
+        assert mock_build.call_args.kwargs["repo_url"] == "https://github.com/x/y"
+        assert mock_build.call_args.kwargs["workspace_id"] == ws_id
+        # ensure_agent_running (spawn-capable) was invoked with those kwargs and the container name.
+        mock_ensure.assert_called_once()
+        assert mock_ensure.call_args.kwargs["name"] == f"codex-agent-{ws_id}"
+        assert mock_ensure.call_args.kwargs["spawn_kwargs"] is sentinel_kwargs
+
     def test_session_uuid_matches_scope(self, tmp_path):
         # DISP-05 — session uuid is deterministic from _make_session_uuid
         db_path = str(tmp_path / "db.db")

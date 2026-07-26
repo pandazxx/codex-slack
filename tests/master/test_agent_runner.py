@@ -383,3 +383,84 @@ def test_resolve_agent_image_cleans_up_temp_dir_on_success():
     assert created_dirs
     for d in created_dirs:
         assert not os.path.exists(d), f"temp dir {d} was not cleaned up"
+
+
+# --- ensure_agent_running (issue #251) ---
+
+from types import SimpleNamespace
+
+from src.master.agent_runner import build_spawn_kwargs, ensure_agent_running
+
+
+def test_ensure_agent_running_spawns_when_not_found():
+    """Regression for #251: a not_found container must be recreated, not ignored."""
+    spawn_kwargs = {"runtime": "docker", "workspace_id": "ws1"}
+    with patch("src.master.agent_runner.get_container_status", return_value={"status": "not_found"}):
+        with patch("src.master.agent_runner.spawn_agent") as mock_spawn:
+            with patch("src.master.agent_runner.start_agent_if_stopped") as mock_start:
+                action = ensure_agent_running(name="codex-agent-ws1", spawn_kwargs=spawn_kwargs)
+    assert action == "spawned"
+    mock_spawn.assert_called_once_with(**spawn_kwargs)
+    mock_start.assert_not_called()
+
+
+def test_ensure_agent_running_starts_when_exited():
+    with patch("src.master.agent_runner.get_container_status", return_value={"status": "exited"}):
+        with patch("src.master.agent_runner.spawn_agent") as mock_spawn:
+            with patch("src.master.agent_runner.start_agent_if_stopped", return_value=True) as mock_start:
+                action = ensure_agent_running(name="codex-agent-ws1", spawn_kwargs={})
+    assert action == "started"
+    mock_start.assert_called_once_with(name="codex-agent-ws1")
+    mock_spawn.assert_not_called()
+
+
+def test_ensure_agent_running_noop_when_running():
+    with patch("src.master.agent_runner.get_container_status", return_value={"status": "running"}):
+        with patch("src.master.agent_runner.spawn_agent") as mock_spawn:
+            with patch("src.master.agent_runner.start_agent_if_stopped") as mock_start:
+                action = ensure_agent_running(name="codex-agent-ws1", spawn_kwargs={})
+    assert action == "running"
+    mock_spawn.assert_not_called()
+    mock_start.assert_not_called()
+
+
+def test_ensure_agent_running_dry_run_touches_nothing():
+    with patch("src.master.agent_runner.get_container_status") as mock_status:
+        with patch("src.master.agent_runner.spawn_agent") as mock_spawn:
+            action = ensure_agent_running(name="codex-agent-ws1", spawn_kwargs={}, dry_run=True)
+    assert action == "dry_run"
+    mock_status.assert_not_called()
+    mock_spawn.assert_not_called()
+
+
+def test_build_spawn_kwargs_maps_settings_and_repo_url():
+    settings = SimpleNamespace(
+        container_runtime="docker",
+        agent_base_image="codex-slack-master:latest",
+        mqtt_host="mosquitto",
+        mqtt_port=1883,
+        agent_network="codex-slack_internal",
+        claude_code_oauth_token="oauth-tok",
+        anthropic_api_key=None,
+        openai_api_key=None,
+        gh_token="gh-tok",
+        agent_ssh_auth_sock_path=None,
+        agent_ssh_known_hosts_path=None,
+        dry_run=False,
+        master_url="http://master:8080",
+        agent_mem_limit="",
+    )
+    with patch("src.master.runtime_config.load_agent_env", return_value={"FOO": "bar"}):
+        kwargs = build_spawn_kwargs(settings=settings, db_path=":memory:", workspace_id="ws1", repo_url="https://github.com/x/y")
+    assert kwargs["workspace_id"] == "ws1"
+    assert kwargs["repo_url"] == "https://github.com/x/y"
+    assert kwargs["image"] == "codex-slack-master:latest"
+    assert kwargs["gh_token"] == "gh-tok"
+    assert kwargs["extra_env"] == {"FOO": "bar"}
+    # empty-string mem_limit normalizes to None so spawn_agent omits the flag
+    assert kwargs["mem_limit"] is None
+    # kwargs must be directly consumable by spawn_agent
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
+        spawn_agent(**kwargs)
+    mock_client.containers.run.assert_called_once()
