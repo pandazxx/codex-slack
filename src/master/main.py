@@ -17,10 +17,10 @@ from fastapi.staticfiles import StaticFiles
 
 from ..logging_utils import LocalTimeFormatter
 from ..version import get_app_version
-from .agent_runner import container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
+from .agent_runner import build_spawn_kwargs, container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
 from .db import get_connection, init_db, schema_info
-from .runtime_config import load_agent_env, load_global_env
+from .runtime_config import load_global_env
 from .attachments import router as attachments_router
 from .messages import router as messages_router
 from .mqtt_client import build_client as build_mqtt_client
@@ -60,7 +60,7 @@ def _active_workspaces(db_path: str) -> list[dict]:  # type: ignore[type-arg]
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            "SELECT id, container_name, last_message_at, last_refreshed_at,"
+            "SELECT id, container_name, repo_url, last_message_at, last_refreshed_at,"
             " last_dispatched_at, last_responded_at"
             " FROM workspaces WHERE archived_at IS NULL AND container_name IS NOT NULL"
         ).fetchall()
@@ -273,6 +273,12 @@ def _background_tasks(settings, db_path: str, stop_event: threading.Event, app_s
                 if status["status"] == "exited" and exit_code not in (0, 143):
                     LOGGER.warning("master.health_restart container=%s exit_code=%s", cname, exit_code)
                     start_agent_if_stopped(name=cname, dry_run=settings.dry_run)
+                # not_found: the container is gone entirely (removed/pruned/crashed away).
+                # start_agent_if_stopped can't recover this — respawn a fresh one so the
+                # agent doesn't stay dead until the next master restart (issue #251).
+                elif status["status"] == "not_found":
+                    LOGGER.warning("master.health_respawn container=%s reason=not_found", cname)
+                    _spawn_agent_for_workspace(settings, db_path, ws_id, ws["repo_url"])
             except Exception:
                 LOGGER.exception("master.health_check_failed container=%s", cname)
 
@@ -422,6 +428,15 @@ def _scheduler_tick(db_path: str, app_state, now_utc_aware) -> None:
         conn.close()
 
 
+def _spawn_agent_for_workspace(settings, db_path: str, ws_id: str, repo_url: str) -> None:
+    """Create a fresh agent container for a workspace from current settings + DB config.
+
+    Shared by startup respawn and the health-check loop's not_found recovery so both
+    paths produce identically-configured containers.
+    """
+    spawn_agent(**build_spawn_kwargs(settings=settings, db_path=db_path, workspace_id=ws_id, repo_url=repo_url))
+
+
 def _respawn_agents(settings, db_path: str) -> None:
     """Respawn agent containers for all workspaces on master startup."""
     import docker
@@ -451,25 +466,7 @@ def _respawn_agents(settings, db_path: str) -> None:
         except docker.errors.NotFound:
             pass
         try:
-            spawn_agent(
-                runtime=settings.container_runtime,
-                workspace_id=ws_id,
-                repo_url=row["repo_url"],
-                image=settings.agent_base_image,
-                mqtt_host=settings.mqtt_host,
-                mqtt_port=settings.mqtt_port,
-                network=settings.agent_network,
-                claude_code_oauth_token=settings.claude_code_oauth_token,
-                anthropic_api_key=settings.anthropic_api_key,
-                openai_api_key=settings.openai_api_key,
-                gh_token=settings.gh_token,
-                ssh_auth_sock_path=settings.agent_ssh_auth_sock_path,
-                ssh_known_hosts_path=settings.agent_ssh_known_hosts_path,
-                dry_run=settings.dry_run,
-                master_url=settings.master_url,
-                extra_env=load_agent_env(db_path, ws_id),
-                mem_limit=settings.agent_mem_limit or None,
-            )
+            _spawn_agent_for_workspace(settings, db_path, ws_id, row["repo_url"])
             LOGGER.info("master.respawned container=%s workspace_id=%s", cname, ws_id)
         except Exception:
             LOGGER.exception("master.respawn_failed workspace_id=%s", ws_id)
