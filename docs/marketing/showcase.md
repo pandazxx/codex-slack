@@ -28,7 +28,7 @@
 > Give an LLM coding agent a repository, a chat thread, and its own git worktree —
 > then watch it design, implement, test, review, and open a PR while you sip coffee.
 
-Codex‑Slack is a **self‑hosted web platform that turns Claude Code and Codex into a managed, multi‑workspace engineering team.** Each repository becomes a *workspace* served by its own agent container; each conversation becomes a *topic* with an isolated git worktree and its own LLM session. You drive it all from a real‑time Vue 3 web UI — no Slack, no SaaS, no data leaving your infrastructure.
+Codex‑Slack is a **self‑hosted web platform that turns Claude Code and Codex into a managed, containerized engineering team.** It brings **topic‑level isolation**, **multiple agent roles**, **event‑based cross‑agent orchestration**, and **live visualization of the agent's thinking process** — all behind one easy‑to‑use web UI. Each repository becomes a *workspace* served by its own agent container; each conversation becomes a *topic* with an isolated git worktree and its own LLM session. No Slack, no SaaS, no data leaving your infrastructure.
 
 🖼️ [PLACEHOLDER: 20‑second product GIF — create workspace → open topic → @claude fix bug → streaming reply → PR link]
 
