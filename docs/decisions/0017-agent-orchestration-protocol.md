@@ -153,8 +153,10 @@ E2. **Live cc** — every message in the escalation channel is also copied
    |---|---|---|
    | `delegate_task(staff, goal, acceptance_criteria, context)` | Depth < `max_delegation_depth` | Hand a subtask to another staff |
    | `ask_sender(question)` | Any turn | Ask a clarifying question of whoever dispatched this turn |
-   | `accept_result(task_id)` | Dispatcher of `task_id` on its next turn | Close a task as completed |
-   | `reject_result(task_id, feedback)` | Dispatcher of `task_id` on its next turn | Increment `failure_score` and re-dispatch |
+   | `submit_result(status, summary, artifacts)` | Assignee of a delegated task | Submit the structured result-of-record (implicit-result fallback if omitted) |
+   | `accept_result(task_id)` | Dispatcher of `task_id` on its judgment turn | Close a task as completed |
+   | `reject_result(task_id, feedback)` | Dispatcher of `task_id` on its judgment turn | Increment `failure_score` and re-dispatch |
+   | `give_up_task(task_id, reason)` | Dispatcher of `task_id` | Explicitly escalate without further attempts |
 
    No direct agent-to-agent MQTT topics. No broker ACLs. No free-text
    delegation markers. Every hop is a tool call producing a `messages` row
@@ -220,6 +222,13 @@ E2. **Live cc** — every message in the escalation channel is also copied
    staff↔staff boundaries: a user asking a follow-up or rejecting a staff's
    answer never increments any counter.
 
+   Judgment is mandatory: a dispatcher's judgment turn that ends without
+   `accept_result` / `reject_result` / `give_up_task` has its reply routed
+   to the assignee as a clarification scored `+question_weight`, so a
+   judgment-avoiding ping-pong is bounded by `max_failure_score` and
+   terminates in escalation — a dispatcher cannot silently stall a task
+   (design doc §4.4).
+
    Configuration knobs (default → workspace → per-staff cascade):
 
    | Knob | v1 default | Effect |
@@ -268,6 +277,11 @@ E2. **Live cc** — every message in the escalation channel is also copied
    (resume / reassign / cancel), master injects a digest of what happened
    into the dispatcher's next prompt. This is a deliberate choice over live
    cc — see the alternatives section.
+
+   An escalated task releases the per-topic in-flight lock (a human-latency
+   wait must not block sibling delegations); on resume/reassign it
+   transitions back to `submitted` and re-enters the delegation queue at
+   the front (design doc §8).
 
 9. **Interop.** We borrow the A2A task lifecycle vocabulary now to leave the
    door open for a future adapter that exposes master as an A2A server for

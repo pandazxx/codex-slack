@@ -221,39 +221,30 @@ Notes:
   needless churn for the common case).
 - `state` values borrowed verbatim from the A2A task lifecycle.
 - `failure_score` is REAL to allow `question_weight` half-increments.
-- `result_summary` / `result_artifacts` populated when the assignee submits
-  a structured result (via reply, not a tool call in v1 — see §4).
+- `result_summary` / `result_artifacts` populated when the assignee calls
+  the `submit_result` MCP tool (or by the implicit-result fallback — see
+  §4.3).
 - No FK on `dispatcher_name` / `assignee_name` to `staffs.name` because
   staff names are not unique across scopes (ADR-0009 §2 override
   semantics); resolution goes through `resolve_staff` at every hop.
 
 ### 3. Task state machine
 
-```
-                            reject_result
-                          ┌────────────────┐
-                          ▼                │
-   ┌───────────┐   accept ┌───────────┐    │
-── │ submitted │ ────────►│  working  │────┤
-   └───────────┘          └───────────┘    │
-        │                   │   ▲          │  accept_result
-        │                   │   │          │
-        │                   │   │ ans      │
-        │                   ▼   │          ▼
-        │             ┌───────────────┐  ┌────────────┐
-        │             │ input-required│  │ completed  │
-        │             └───────────────┘  └────────────┘
-        │                   │
-        │                   │  failure_score > max
-        ▼                   ▼         or give_up
-    ┌────────┐         ┌────────────┐
-    │ failed │◄────────│ escalated  │
-    └────────┘         └────────────┘
-                            │ user cancels
-                            ▼
-                       ┌────────┐
-                       │ failed │
-                       └────────┘
+```mermaid
+stateDiagram-v2
+    state "input-required" as input_required
+    [*] --> submitted: delegate_task
+    submitted --> working: first prompt dispatched (lock acquired)
+    working --> input_required: assignee ask_sender
+    input_required --> working: dispatcher answers
+    working --> working: reject_result (score ≤ max) — re-dispatch with feedback
+    working --> completed: accept_result
+    working --> escalated: reject_result breaches max_failure_score
+    working --> escalated: give_up_task
+    escalated --> submitted: user resumes or reassigns (re-queued, score reset)
+    escalated --> failed: user cancels
+    completed --> [*]
+    failed --> [*]
 ```
 
 Transitions and who causes them:
@@ -261,16 +252,21 @@ Transitions and who causes them:
 | From → To | Trigger | Actor |
 |---|---|---|
 | — → `submitted` | `delegate_task` MCP call | Dispatcher LLM |
-| `submitted` → `working` | Assignee's first prompt is dispatched | Master |
+| `submitted` → `working` | Assignee's first prompt is dispatched (per-topic lock acquired) | Master |
 | `working` → `input-required` | Assignee calls `ask_sender` | Assignee LLM |
 | `input-required` → `working` | Dispatcher answers (a normal reply routes back) | Dispatcher LLM |
-| `working` → `completed` | Dispatcher calls `accept_result` on assignee's reply | Dispatcher LLM |
+| `working` → `completed` | Dispatcher calls `accept_result` on assignee's result | Dispatcher LLM |
 | `working` → `working` (with feedback) | Dispatcher calls `reject_result` | Dispatcher LLM; master increments `failure_score += 1.0` and re-dispatches |
-| `working` → `escalated` | `failure_score > max_failure_score` after `reject_result`, or dispatcher explicitly calls `give_up_task` | Master (score) or dispatcher LLM (give_up) |
-| `escalated` → `working` | User selects "resume" (dispatcher reassigns) | Master |
-| `escalated` → `working` (new assignee) | User selects "reassign" | Master |
+| `working` → `escalated` | `failure_score > max_failure_score` after an increment, or dispatcher explicitly calls `give_up_task` | Master (score) or dispatcher LLM (give_up) |
+| `escalated` → `submitted` | User selects "resume" (same assignee) or "reassign" (new assignee). `failure_score` reset; task re-enters the per-topic delegation queue at the front (§8) | Master |
 | `escalated` → `failed` | User selects "cancel" | Master |
 | any active → `failed` | Unrecoverable master-side error (e.g. assignee staff deleted mid-flight) | Master |
+
+Note the resume/reassign path goes back through `submitted`, not straight
+to `working`: an escalated task released the per-topic in-flight lock when
+it escalated (§8), so on close it re-queues (at the front) and re-acquires
+the lock like any other delegation. There is no path where two tasks hold
+the lock because one was resumed while another was working.
 
 Illegal transitions attempted by an LLM tool call (e.g.
 `accept_result(task_id)` on a task in `input-required`) return an MCP
@@ -325,13 +321,42 @@ class AskResult(TypedDict):
     task_state: str      # 'input-required' if inside a delegated task, else 'n/a'
 
 
+def submit_result(
+    status: Literal['completed', 'failed'],   # assignee's own assessment
+    summary: str,                             # one-paragraph result summary
+    artifacts: list[Artifact] | None = None,  # commits/files produced
+) -> SubmitResult:
+    """Submit the structured result of the current delegated task.
+
+    Available only on depth-≥1 turns (inside a delegated task). Records
+    result_summary / result_artifacts on the task row as the
+    result-of-record and marks the result as pending judgment; when the
+    assignee's turn ends, master dispatches the judgment turn to the
+    dispatcher. Task state stays 'working' until the dispatcher judges.
+    Calling it twice in one turn overwrites (last call wins).
+    """
+    # Fallback: if a delegated turn ends without any submit_result call,
+    # master treats the turn's final reply text as an implicit result
+    # (status='completed', summary=<reply text>, artifacts=[]) so a
+    # forgetful assignee cannot stall the task. The system prompt template
+    # instructs assignees to always call submit_result.
+
+class Artifact(TypedDict):
+    kind: Literal['commit', 'file']
+    ref: str                                  # sha or path
+
+class SubmitResult(TypedDict):
+    task_id: str
+    state: Literal['working']
+
+
 def accept_result(task_id: str) -> AcceptResult:
     """Close a task as completed.
 
     Callable only by the task's dispatcher on the turn immediately after
-    the assignee's reply. Uses the assignee's latest reply message as the
-    result-of-record; result_summary is that message's text, artifacts
-    parsed out of a structured tail block if present.
+    the assignee's result was submitted. The result-of-record is whatever
+    the assignee last passed to `submit_result` (or the implicit-result
+    fallback).
     """
 
 class AcceptResult(TypedDict):
@@ -367,12 +392,12 @@ class GiveUpResult(TypedDict):
 Master computes the tool surface per-agent-per-turn. The MCP server
 publishes only the tools the current turn is allowed to call.
 
-| Current turn context | `delegate_task` | `ask_sender` | `accept_result` / `reject_result` | `give_up_task` |
-|---|---|---|---|---|
-| Depth-0 turn (user is dispatcher), depth < `max_delegation_depth` | ✅ | ✅ (asks user) | ✅ (over own delegated child) | ✅ |
-| Depth-0 turn, depth == `max_delegation_depth` | ❌ | ✅ | ✅ | ✅ |
-| Depth-≥1 turn (staff is assignee) | ❌ in v1 (see below) | ✅ (asks dispatcher) | ❌ | ❌ |
-| Escalation channel turn (assignee↔user, task in `escalated`) | ❌ | ✅ (asks user) | ❌ | ❌ |
+| Current turn context | `delegate_task` | `ask_sender` | `submit_result` | `accept_result` / `reject_result` | `give_up_task` |
+|---|---|---|---|---|---|
+| Depth-0 turn (user is dispatcher), depth < `max_delegation_depth` | ✅ | ✅ (asks user) | ❌ (nothing to submit to) | ✅ (over own delegated child) | ✅ |
+| Depth-0 turn, depth == `max_delegation_depth` | ❌ | ✅ | ❌ | ✅ | ✅ |
+| Depth-≥1 turn (staff is assignee) | ❌ in v1 (see below) | ✅ (asks dispatcher) | ✅ | ❌ | ❌ |
+| Escalation channel turn (assignee↔user, task in `escalated`) | ❌ | ✅ (asks user) | ✅ (resubmit after direct fixes) | ❌ | ❌ |
 
 In v1, `delegate_task` is exposed to depth-0 turns only (since
 `max_delegation_depth=1`). When the operator raises
@@ -383,29 +408,38 @@ in their list.
 
 #### 4.3 Structured result envelope
 
-An assignee "returns" a result by replying to the dispatcher — no dedicated
-`return_result` tool. The reply is a normal `dispatch_to_staff` message.
-Master heuristically parses a tail block for structure; if absent, the whole
-reply becomes `result_summary`.
+An assignee returns its result by calling the **`submit_result` MCP tool**
+(§4.1) — the same explicit-and-observable principle as every other hop.
+The tool validates the envelope (`status`, `summary`, `artifacts`) at call
+time, writes it to the task row as the result-of-record, and master
+dispatches the judgment turn to the dispatcher when the assignee's turn
+ends. No free-text tail-block parsing on the happy path.
 
-Recommended tail block (documented in the assignee's system prompt
-template, not enforced):
+Fallback for robustness: if a delegated turn ends without a
+`submit_result` call, master synthesises an implicit result from the
+turn's final reply text (`status='completed'`, `summary=<reply text>`,
+`artifacts=[]`). A forgetful assignee therefore degrades to a weaker
+envelope instead of stalling the task. The assignee system-prompt template
+always instructs calling `submit_result`.
 
-```
----
-status: completed | failed
-summary: <one-paragraph summary>
-artifacts:
-  - kind: commit
-    ref: <sha>
-  - kind: file
-    ref: <path>
-```
+#### 4.4 Judgment is mandatory — no silent third option
 
-The dispatcher's next turn then either calls `accept_result` or
-`reject_result`. If the dispatcher does neither and instead replies with
-more text, master treats it as a `working`-state clarification (the task
-does not auto-close).
+The dispatcher's judgment turn must end in exactly one of `accept_result`,
+`reject_result`, or `give_up_task`. There is deliberately **no unscored
+"reply with more text" escape**: if the judgment turn ends with plain text
+and no judgment tool call, master routes that text to the assignee as a
+clarification message on the task **and scores it `+question_weight`**
+(symmetric with assignee-side `ask_sender`); the assignee's next
+`submit_result` re-opens judgment.
+
+This closes the loophole where a dispatcher that neither accepts nor
+rejects would leave the task orphaned: the reply always has a receiver
+(the assignee, via the task's addressing), and every non-judgment
+round-trip moves `failure_score`, so an accept/reject-avoiding ping-pong
+is bounded by `max_failure_score` and terminates in escalation — where
+the user takes over. A dispatcher literally cannot stall a task
+indefinitely; the worst case is a few scored clarification loops followed
+by escalation.
 
 ### 5. Failure scoring
 
@@ -415,6 +449,7 @@ Scoring applies exclusively at staff↔staff boundaries.
 |---|---|---|
 | Dispatcher calls `reject_result` | `+1.0` | The rejected `task_id` |
 | Assignee calls `ask_sender` inside a delegated task | `+question_weight` (default `0.5`) | The current `task_id` |
+| Dispatcher ends a judgment turn with plain text instead of a judgment tool (routed to assignee as clarification, §4.4) | `+question_weight` (default `0.5`) | The current `task_id` |
 | User rejects a staff answer or asks a follow-up | `0.0` | Never scored |
 | Staff `ask_sender` in a depth-0 turn (asking the user) | `0.0` | Never scored |
 | Assignee reply in `input-required` (dispatcher answers) | `0.0` | Score is untouched during `input-required` |
@@ -490,10 +525,13 @@ Sequence:
    escalated. `sender_kind='staff' (dispatcher) → receiver_kind='staff'
    (assignee)` for this task_id is rejected while state is `escalated`.
 5. User closes with one of three actions surfaced in the UI:
-   - **Resume** — dispatcher takes it back. State → `working`.
-     `failure_score` reset to `0.0`.
+   - **Resume** — dispatcher takes it back. State → `submitted`;
+     `failure_score` reset to `0.0`; task re-queued at the front of the
+     per-topic delegation FIFO (§8) and dispatched to the same assignee
+     when the lock is available.
    - **Reassign** — user picks a new assignee. Master rewrites
-     `assignee_name`, resets `failure_score` to `0.0`, state → `working`.
+     `assignee_name`, resets `failure_score` to `0.0`, state →
+     `submitted`; same front-of-queue re-entry as Resume.
    - **Cancel** — state → `failed`, `closed_at` set.
 6. On close, master synthesises a digest and injects it into the
    dispatcher's next prompt (turn re-entry): "While task `<task_id>` was
@@ -549,28 +587,27 @@ sequenceDiagram
 
     A2->>MCP: ask_sender("which token format?")
     MCP->>M: current turn depth=1, task_id=T
-    M->>M: score += question_weight (0.5); state → 'input-required'
-    M->>D: dispatch(sender=@engineer, receiver=@architect, task_id=T,
-                     reply_to=<@engineer's dispatch msg>)
+    Note over M: score += question_weight (0.5), state → input-required
+    M->>D: dispatch question, sender=@engineer, receiver=@architect, task_id=T
     D->>MQTT: publish /prompt to @architect
     MQTT->>A1: deliver prompt (depth=0, in task T context)
 
     A1->>MQTT: publish /response ("use JWT")
     MQTT->>M: response
-    M->>D: dispatch(sender=@architect, receiver=@engineer, task_id=T,
-                     reply_to=<@engineer's question>)
-    Note over M: task.state → 'working'
+    Note over M: state → working
+    M->>D: dispatch answer, sender=@architect, receiver=@engineer, task_id=T
     D->>MQTT: publish /prompt to @engineer
 
-    A2->>MQTT: publish /response (result text)
+    A2->>MCP: submit_result(status=completed, summary=..., artifacts=[commit sha])
+    MCP->>M: record result-of-record on task T
+    A2->>MQTT: publish /response (turn ends)
     MQTT->>M: response
-    M->>D: dispatch(sender=@engineer, receiver=@architect, task_id=T,
-                     reply_to=<@architect's answer>)
+    M->>D: dispatch judgment turn, sender=@engineer, receiver=@architect, task_id=T
     D->>MQTT: publish /prompt to @architect
 
     A1->>MCP: accept_result(T)
     MCP->>M: mark task completed
-    M-->>A1: {state='completed'}
+    M-->>A1: state=completed
 
     A1->>MQTT: publish /response (final answer to user)
     MQTT->>M: response
@@ -618,6 +655,23 @@ Master maintains a per-topic in-memory lock (`asyncio.Lock` keyed by
 first prompt. The lock releases when the task transitions to `completed`,
 `failed`, or `escalated` — not on every hop within the task.
 
+**Escalation deliberately releases the lock** even though control may
+later return to the dispatcher (user chooses *Resume*). An escalation
+waits on a human, with unbounded wall-clock time — holding the lock would
+block every sibling delegation on the topic for as long as the user takes
+to respond. Instead, on *Resume*/*Reassign* the task transitions back to
+`submitted` and re-enters the per-topic FIFO **at the front** (it was
+pre-empted, so it gets priority), re-acquiring the lock when the currently
+working task closes. Consequence: the worktree may have advanced while the
+task was escalated (siblings ran in the meantime); the resumed assignee
+sees the latest state — the same sequential-coherence model as any queued
+delegation. The exception: messages *within* the escalation channel
+(user↔assignee on the escalated task) don't need the lock — they are
+conversation, not delegation dispatch; if the user's direct intervention
+asks the assignee to touch the worktree while a sibling holds the lock,
+the assignee's turns still run (v1 accepts this narrow overlap; the
+escalation modal warns when another task is `working`).
+
 If a second `delegate_task` on the same topic arrives while the lock is
 held, the MCP call returns `{state: 'queued', queued_position: N}`; the
 caller LLM can wait, cancel, or do other work. Master queues the pending
@@ -664,6 +718,7 @@ in ADR-0017 Consequences). The future fix is session-per-task, local to
 | Cycle detection | On `delegate_task`, check ancestor chain via `parent_task_id` | If proposed assignee is already an ancestor of the current task, reject with `cycle_detected` |
 | Self-delegation | On `delegate_task`, sender == receiver | Rejected with `self_delegation` |
 | Sender→receiver validation | On every `dispatch_to_staff` call | Rejected against the communication matrix (§1); returns MCP tool error |
+| Judgment stall | Dispatcher's judgment turn ends without accept/reject/give_up (§4.4) | Reply routed to assignee as clarification and scored `+question_weight` — ping-pong is bounded by `max_failure_score` → `escalated` |
 
 Every guard writes an audit line: `orchestration.guard_hit
 guard=<name> task_id=<...> topic_id=<...>`.
@@ -731,6 +786,7 @@ Three PR-sized phases, each independently landable.
 - Task state machine (`submitted → working → input-required → completed`)
   implemented and enforced. Illegal LLM-driven transitions return MCP
   errors.
+- `submit_result` MCP tool + implicit-result fallback (§4.3).
 - `accept_result` MCP tool.
 - Per-topic in-flight lock; `delegate_task` queueing.
 - Configuration knobs (`max_delegation_depth`, `max_tasks_per_root`)
@@ -742,8 +798,12 @@ Three PR-sized phases, each independently landable.
 #### Phase (c) — Judgment loop and escalation
 
 - `reject_result` and `give_up_task` MCP tools.
-- Failure scoring (dispatcher rejection = +1.0, assignee `ask_sender` in
-  delegated task = +question_weight).
+- Mandatory-judgment gate (§4.4): non-judgment dispatcher replies route
+  to the assignee as scored clarifications.
+- Failure scoring (dispatcher rejection = +1.0, assignee `ask_sender` or
+  dispatcher non-judgment clarification = +question_weight).
+- Escalation-close re-queue (Resume/Reassign → `submitted`, front of
+  FIFO, score reset).
 - Escalation transition and direct user↔assignee channel (validator
   permits `staff→user` pair only when task is in `escalated`).
 - Escalation-close digest injection.
