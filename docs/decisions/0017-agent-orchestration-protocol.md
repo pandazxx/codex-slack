@@ -153,6 +153,7 @@ E2. **Live cc** — every message in the escalation channel is also copied
    |---|---|---|
    | `delegate_task(staff, goal, acceptance_criteria, context)` | Depth < `max_delegation_depth` | Hand a subtask to another staff |
    | `ask_sender(question)` | Any turn | Ask a clarifying question of whoever dispatched this turn |
+   | `answer_question(task_id, answer)` | Dispatcher with a pending question on an own task | Answer an assignee's `ask_sender` as a structured, addressed message (free-text fallback if omitted) |
    | `submit_result(status, summary, artifacts)` | Assignee of a delegated task | Submit the structured result-of-record (implicit-result fallback if omitted) |
    | `accept_result(task_id)` | Dispatcher of `task_id` on its judgment turn | Close a task as completed |
    | `reject_result(task_id, feedback)` | Dispatcher of `task_id` on its judgment turn | Increment `failure_score` and re-dispatch |
@@ -278,10 +279,14 @@ E2. **Live cc** — every message in the escalation channel is also copied
    into the dispatcher's next prompt. This is a deliberate choice over live
    cc — see the alternatives section.
 
-   An escalated task releases the per-topic in-flight lock (a human-latency
-   wait must not block sibling delegations); on resume/reassign it
-   transitions back to `submitted` and re-enters the delegation queue at
-   the front (design doc §8).
+   An escalated task **retains** the per-topic in-flight lock: the lock
+   protects the worktree, and an escalated task has by definition left it
+   in an incomplete state — a sibling starting on that state (and the
+   original later resuming against a diverged worktree) would be worse
+   than the queueing delay. Sibling delegations stay queued (loudly, in
+   the UI) until the user closes the escalation; resume/reassign continue
+   straight to `working` on the untouched worktree, cancel releases the
+   lock (design doc §8).
 
 9. **Interop.** We borrow the A2A task lifecycle vocabulary now to leave the
    door open for a future adapter that exposes master as an A2A server for
