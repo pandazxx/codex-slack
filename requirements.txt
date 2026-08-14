@@ -9,4 +9,4 @@ python-multipart>=0.0.12
 tzlocal>=5.0
 croniter>=2.0.0
 ruff>=0.4.0
-mcp>=1.0.0
+mcp>=1.0.0,<2  # 2.0.0 (2026-07-28) removed mcp.server.fastmcp; migration tracked separately

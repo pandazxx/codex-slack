@@ -471,3 +471,15 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* `TopicGraph.vue` now injects an `onExpandToggle` callback (plus a `hasChildren` flag) into each node's `data` payload; node components invoke the callback instead of emitting. Chevrons render only when the node actually has children.
 
 *Prevention:* When a component is mounted *by a library* rather than by our own template, do not rely on custom emits reaching our listeners — pass callbacks (or use provide/inject) through the data the library forwards. UAT for interactive canvas elements must click the element inside the canvas, not only its side-panel equivalent.
+
+---
+
+## 2026-08-14 — CI broke on a docs-only PR: unpinned `mcp` resolved to 2.0.0
+
+*Summary:* PR #257 (pure documentation) failed `Build and test` with `ModuleNotFoundError: No module named 'mcp.server.fastmcp'` in `src/notes_mcp/server.py`, blocking merge. Master's last green run was 2026-07-26; every branch run after 2026-07-28 would have failed identically.
+
+*Root cause:* `requirements.txt` pinned `mcp>=1.0.0` with no upper bound. The `mcp` package released 2.0.0 on 2026-07-28, which removed the `mcp.server.fastmcp` module. CI installs fresh on every run, so the first run after the release picked up 2.0.0 and the import broke — the failure surfaced on whatever PR ran next, regardless of its diff.
+
+*Fix applied:* Pinned `mcp>=1.0.0,<2` in `requirements.txt`. Verified locally: pip resolves 1.29.0 and all 10 `tests/notes_mcp/test_server.py` tests pass. Migrating `notes_mcp` to the mcp 2.x API is separate follow-up work, not part of this fix.
+
+*Prevention:* Runtime dependencies need an upper bound on the major version (`<N+1`) — `>=` alone means any upstream major release can break CI for unrelated PRs, and the breakage lands on whoever pushes next, disguised as their failure. When a green branch suddenly fails on code the diff never touched, diff the CI run dates against dependency release dates before debugging the code.
