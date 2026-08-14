@@ -646,6 +646,36 @@ sequenceDiagram
     M-->>U: WS broadcast (final reply, receiver=user)
 ```
 
+**Why `/response` is still published on tool-staged turns.** On turns
+where the content already travelled in an MCP call (`ask_sender`,
+`answer_question`, `submit_result`), the `/response` carries no routed
+content — it serves three mechanical purposes, all pre-existing:
+
+1. **Turn-end barrier.** Staged tool messages are dispatched only when
+   the turn actually ends, not at tool-call time — the agent may keep
+   working after a call (e.g. fix one more thing and call
+   `submit_result` again; last call wins, §4.1). `/response` is the
+   existing, durable (QoS 1) signal that the turn is over.
+2. **Bookkeeping.** Transcript, usage, and `llm_session_id` updates ride
+   the existing response machinery (ADR-0012) unchanged.
+3. **Fallback carrier.** If the expected tool was never called, the
+   `/response` text is what the implicit fallback interprets (§4.3–§4.4).
+
+What happens to the leftover free text follows reply-to-sender: it is
+addressed to the turn-taker's own task dispatcher. If the turn staged a
+tool message **to that same receiver**, the free text would duplicate it
+— so it is stored with the existing `silent=1` flag (auditable in the
+DB, not rendered), and the content of record is the structured tool
+input, which is what the UI renders (the `submit_result` summary +
+artifact chips, the `ask_sender` question, the `answer_question`
+answer). If the staged message targets a *different* receiver than the
+turn-taker's dispatcher, both flow: in the diagram above, the
+architect's `delegate_task` turn stages a message to `@engineer` while
+its free text goes to its own dispatcher — the user — as the visible
+delegation note; likewise the judgment turn stages nothing outbound
+(`accept_result` is a state change), so its free text is the final
+answer rendered to the user.
+
 The generalisation of ADR-0013's event-dispatcher pattern is exactly this:
 an agent's `/response` on the wire *may* be inspected by master to see if
 it's the final reply of the causal chain or a hop that should re-enter the
@@ -662,9 +692,12 @@ Concrete master-side logic on receiving `/response` (extends
    messages — receiver, task_id, and reply chain all came from the tool
    call, nothing is inferred.
 2. Insert the message row for the turn's free text (as today), with
-   `sender_kind='staff'`. If a staged tool message exists, the free text
-   is user-visible commentary (e.g. the delegation note in the diagram);
-   if none exists, apply the turn-context fallback below.
+   `sender_kind='staff'`, receiver = the turn-taker's task dispatcher
+   (reply-to-sender). If a staged tool message targets that same
+   receiver, store the free text `silent=1` (audit-only; the staged
+   structured message is what renders — see above); otherwise it
+   dispatches/renders normally. If a tool was expected but never called,
+   apply the turn-context fallback below.
 3. Fallback only — look up the *pending dispatch context*: master keeps a
    small in-memory map `pending_dispatches[message_id] → {task_id,
    dispatcher_kind, dispatcher_name, turn_kind}` populated when
