@@ -50,6 +50,16 @@ _MAX_SEEN_PROMPT_IDS = 2000
 # Module-level reference to the MQTT client, used by the SIGTERM handler.
 _mqtt_client_ref: mqtt.Client | None = None
 
+# Thread-local storage for per-prompt orchestration env vars.  Set in
+# _process_prompt before the LLM call; read in _run_claude/_run_codex, which
+# then thread the dict explicitly down to _stream_claude_once/_stream_codex_once
+# as an orch_env parameter.  The thread-local boundary exists only at the
+# _process_prompt → _run_claude/_run_codex gap because those functions are
+# mocked in tests with fixed positional signatures — adding orch_env there
+# would require updating test mocks.  Everything below _run_*/_run_codex uses
+# the explicit parameter.
+_prompt_orch_env: threading.local = threading.local()
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -182,7 +192,7 @@ def _ensure_worktree(repo_dir: str, worktree_path: str, branch: str, repo_ref: s
 
 _SESSION_NOT_FOUND = "No conversation found with session ID"
 _CODEX_SESSION_NOT_FOUND = "no rollout found for thread id"
-_MCP_CONFIG = "/opt/codex-slack/config/notes-mcp.json"
+_MCP_CONFIG = "/opt/codex-slack/config/agent-mcp.json"
 
 _VERDICT_RE = __import__("re").compile(r'\{[^{}]+\}')
 
@@ -232,6 +242,7 @@ def _stream_claude_once(
     model: str | None,
     system_prompt: str | None,
     seq_start: int = 0,
+    orch_env: dict | None = None,
 ) -> tuple[str, str | None, str | None, bool]:
     """Stream Claude stdout line by line, publishing each event as an MQTT chunk.
 
@@ -259,7 +270,7 @@ def _stream_claude_once(
     outputs: list[str] = []
     proc = None
     try:
-        proc_env = {**os.environ, "TOPIC_ID": topic_id}
+        proc_env = {**os.environ, "TOPIC_ID": topic_id, **(orch_env or {})}
         proc = subprocess.Popen(
             cmd, cwd=worktree, env=proc_env,
             stdin=subprocess.PIPE,
@@ -386,10 +397,11 @@ def _run_claude(
     model: str | None,
     system_prompt: str | None,
 ) -> tuple[str, str | None, str | None]:
+    orch_env = getattr(_prompt_orch_env, "env", {})
     output, new_session_id, transcript, is_error = _stream_claude_once(
         client, workspace_id, topic_id, reply_message_id, agent_name,
         worktree, text, session_id, is_new_session, subagent, model, system_prompt,
-        seq_start=0,
+        seq_start=0, orch_env=orch_env,
     )
     if not is_new_session and session_id and is_error and _SESSION_NOT_FOUND in (output or ""):
         LOGGER.warning("agent.session_expired sid=%s retrying_as_new", session_id)
@@ -405,7 +417,7 @@ def _run_claude(
         output, new_session_id, transcript, _ = _stream_claude_once(
             client, workspace_id, topic_id, reply_message_id, agent_name,
             worktree, text, session_id, True, subagent, model, system_prompt,
-            seq_start=seq,
+            seq_start=seq, orch_env=orch_env,
         )
     return output, new_session_id, transcript
 
@@ -423,6 +435,7 @@ def _stream_codex_once(
     is_new_session: bool = False,
     session_scope: str = "topic",
     seq_start: int = 0,
+    orch_env: dict | None = None,
 ) -> tuple[str, str | None, str | None, bool]:
     """Stream Codex stdout line by line, publishing each event as an MQTT chunk.
 
@@ -452,7 +465,7 @@ def _stream_codex_once(
     new_session_id: str | None = None
     proc = None
     try:
-        proc_env = {**os.environ, "TOPIC_ID": topic_id}
+        proc_env = {**os.environ, "TOPIC_ID": topic_id, **(orch_env or {})}
         proc = subprocess.Popen(
             cmd, cwd=worktree, env=proc_env,
             stdin=subprocess.PIPE,
@@ -595,9 +608,11 @@ def _run_codex(
     is_new_session: bool = False,
     session_scope: str = "topic",
 ) -> tuple[str, str | None, str | None]:
+    orch_env = getattr(_prompt_orch_env, "env", {})
     output, new_session_id, transcript, is_error = _stream_codex_once(
         client, workspace_id, topic_id, reply_message_id, agent_name,
         worktree, text, model, session_id, is_new_session, session_scope,
+        orch_env=orch_env,
     )
     if not is_new_session and session_id and is_error and _CODEX_SESSION_NOT_FOUND in (output or ""):
         LOGGER.warning("agent.codex_session_expired sid=%s retrying_as_new", session_id)
@@ -613,7 +628,7 @@ def _run_codex(
         output, new_session_id, transcript, _ = _stream_codex_once(
             client, workspace_id, topic_id, reply_message_id, agent_name,
             worktree, text, model, session_id, True, session_scope,
-            seq_start=seq,
+            seq_start=seq, orch_env=orch_env,
         )
     return output, new_session_id, transcript
 
@@ -643,6 +658,18 @@ def _process_prompt(
     attachments = payload.get("attachments", [])
     master_url = payload.get("master_url", "http://master:8080")
     response_mode = payload.get("response_mode")
+    task_id = payload.get("task_id")
+    task_depth = int(payload.get("task_depth") or 0)
+
+    # Store orchestration env vars in the thread-local so _run_claude/_run_codex
+    # can read them without an extra parameter (their public signatures are
+    # mocked in tests with fixed positional args).  The dict is then passed
+    # explicitly from _run_* to _stream_*_once.
+    _prompt_orch_env.env = {
+        "AGENT_NAME": agent_name,
+        "PROMPT_MESSAGE_ID": message_id,
+        "TASK_DEPTH": str(task_depth),
+    }
 
     if not text:
         LOGGER.warning("agent.empty_prompt topic_id=%s", topic_id)
