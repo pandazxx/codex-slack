@@ -1354,3 +1354,49 @@ def test_ask_rejects_mismatched_caller_identity(client, workspace_topic, archite
     )
     assert r.status_code == 422
     assert r.json()["detail"] == "caller_mismatch"
+
+
+def test_ws_frame_envelope_loader(client, workspace_topic, architect_staff, engineer_staff):
+    """The live WS frame for an agent reply must carry the envelope (badge renders
+    without a page refresh): _load_message_envelope returns the saved reply's
+    routing fields for merging into the broadcast dict."""
+    c, mock_mqtt = client
+    ws_id, topic_id = workspace_topic
+
+    user_r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/messages",
+        data={"text": "@architect design it"},
+    )
+    delegate_r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/delegate",
+        json={
+            "caller_staff": "architect",
+            "caller_message_id": user_r.json()["message_id"],
+            "staff": "engineer",
+            "goal": "Implement feature X",
+            "acceptance_criteria": "Tests pass",
+        },
+    )
+    task_id = delegate_r.json()["task_id"]
+    msgs = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages").json()
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+
+    from src.master.mqtt_client import _load_message_envelope, _save_agent_response
+    _save_agent_response(c.app.state.db_path, topic_id, {
+        "message_id": "eng-reply-ws",
+        "agent_name": "engineer",
+        "reply_to": eng_prompt["id"],
+        "last_response": "done",
+        "transcript": None,
+        "session_id": None,
+    })
+
+    envelope = _load_message_envelope(c.app.state.db_path, "eng-reply-ws")
+    assert envelope["sender_kind"] == "staff"
+    assert envelope["sender_name"] == "engineer"
+    assert envelope["receiver_kind"] == "staff"
+    assert envelope["receiver_name"] == "architect"
+    assert envelope["task_id"] == task_id
+
+    assert _load_message_envelope(c.app.state.db_path, "no-such-id") == {}
+    assert _load_message_envelope(c.app.state.db_path, "") == {}

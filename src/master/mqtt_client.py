@@ -101,6 +101,27 @@ def _save_chunk(db_path: str, topic_id: str, payload: dict) -> None:  # type: ig
         LOGGER.exception("mqtt.save_chunk_error topic_id=%s", topic_id)
 
 
+def _load_message_envelope(db_path: str, message_id: str) -> dict:  # type: ignore[type-arg]
+    """Return the addressing-envelope fields of a saved message row (empty on miss)."""
+    if not message_id:
+        return {}
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT sender_kind, sender_name, receiver_kind, receiver_name,"
+                " task_id, reply_to_message_id FROM messages WHERE id = ?",
+                (message_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.warning("mqtt.load_envelope_failed message_id=%s", message_id)
+        return {}
+    return dict(row) if row is not None else {}
+
+
 def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  # type: ignore[type-arg]
     """Save agent response and return the silent flag inherited from the prompt message."""
     silent = False
@@ -446,6 +467,10 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
 
             silent = _save_agent_response(db_path, topic_id, payload)
             message["silent"] = silent
+            # The saved row carries the addressing envelope (derived from the
+            # prompt row); the live WS frame must carry it too, or badges only
+            # appear after a page refresh re-fetches GET /messages.
+            message.update(_load_message_envelope(db_path, payload.get("message_id", "")))
             _record_agent_response(db_path, topic_id)
             notify.notify_reply(
                 db_path=db_path,
