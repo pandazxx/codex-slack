@@ -278,8 +278,8 @@ Frontend UAT cases for badge rendering. All require human verification on the st
 | UI-01 | A message with `sender_kind='user'`, `receiver_kind='staff'` renders with no sender→receiver badge (today's format, unchanged) | needs-human | P1 |
 | UI-02 | A message with `sender_kind='staff'`, `sender_name='architect'`, `receiver_kind='staff'`, `receiver_name='engineer'` renders a badge showing `@architect → @engineer` | needs-human | P0 |
 | UI-03 | A message with `sender_kind='staff'`, `sender_name='engineer'`, `receiver_kind='staff'`, `receiver_name='architect'` renders a badge showing `@engineer → @architect` (question routing) | needs-human | P0 |
-| UI-04 | The `task_id` in a delegated message renders as a clickable link or chip (exact UI shape TBD by engineer; verify it is present and tappable) | needs-human | P1 |
-| UI-05 | A backfilled historical message (`receiver_name=NULL`) renders a badge with `"(unknown)"` in the receiver position | needs-human | P2 |
+| UI-04 | Deferred to phase (b): the task chip / task-filtered view ships with the tasks panel; phase (a) renders no task chip | deferred | P1 |
+| UI-05 | A backfilled historical message (no `task_id`) renders the legacy label, unchanged from today; a task-linked message whose `receiver_name` is NULL shows `(unknown)` in the receiver position | needs-human | P2 |
 | UI-06 | A plain user message (no orchestration) renders identically to the pre-phase-a UI — no badge, no task chip | needs-human | P0 |
 
 ---

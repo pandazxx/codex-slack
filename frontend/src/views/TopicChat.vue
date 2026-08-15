@@ -43,10 +43,10 @@
         :class="[m.sender === 'user' ? 'user' : 'agent', m.silent ? 'message-silent' : '', highlightedMsgId === m.id ? 'message-highlighted' : '']"
       >
         <span class="label">
-          <template v-if="m.sender_name || m.receiver_name">
-            <span class="envelope-sender">@{{ m.sender_name || m.agent_name || 'agent' }}</span>
+          <template v-if="m.task_id">
+            <span class="envelope-sender">{{ m.sender_kind === 'user' ? 'You' : `@${m.sender_name || m.agent_name || 'agent'}` }}</span>
             <span class="envelope-arrow"> → </span>
-            <span class="envelope-receiver">{{ m.receiver_kind === 'user' ? 'You' : `@${m.receiver_name}` }}</span>
+            <span class="envelope-receiver">{{ m.receiver_kind === 'user' ? 'You' : (m.receiver_name ? `@${m.receiver_name}` : '(unknown)') }}</span>
           </template>
           <template v-else>{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</template>
         </span>
