@@ -248,26 +248,28 @@ async def dispatch_to_staff(
         payload_dict["response_mode"] = response_mode
     payload = json.dumps(payload_dict)
 
+    # Build a token-scrubbed transcript for DB storage and WS broadcast.
+    # dispatch_token is a per-turn auth secret delivered exclusively via MQTT;
+    # it must never appear in GET /messages responses or WS frames.
+    scrubbed_payload_dict = {k: v for k, v in payload_dict.items() if k != "dispatch_token"}
+    scrubbed_payload = json.dumps(scrubbed_payload_dict)
+
     disp_conn = get_connection(app_state.db_path)
     try:
         disp_conn.execute(
-            "UPDATE messages SET transcript = ? WHERE id = ?", (payload, message_id)
+            "UPDATE messages SET transcript = ? WHERE id = ?", (scrubbed_payload, message_id)
         )
         disp_conn.commit()
     finally:
         disp_conn.close()
 
-    # Carries text/transcript/attachments so other tabs render the bubble immediately
-    # without a refetch — see master's #155 fix for the user-message path.
-    # dispatch_token is excluded from WS frames and GET /messages — it is a
-    # per-turn auth secret that must not leak to the frontend.
     await app_state.hub.broadcast("_global", {
         "type": "message",
         "topic_id": topic_id,
         "message_id": message_id,
         "sender": sender,
         "text": raw_text,
-        "transcript": payload,
+        "transcript": scrubbed_payload,
         "attachments": attachments,
         "silent": silent,
         "sender_kind": sender_kind,

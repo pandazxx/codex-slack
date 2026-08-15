@@ -31,13 +31,17 @@ _VALID_KINDS = frozenset({"user", "staff", "system"})
 # Legal task-state transitions triggered by tool calls or master events.
 # Maps (current_state, event) → new_state.
 _TRANSITIONS: dict[tuple[str, str], str] = {
-    ("submitted", "dispatch"):       "working",
-    ("working", "ask_sender"):       "input-required",
-    ("input-required", "answer"):    "working",
-    ("working", "accept_result"):    "completed",
-    ("working", "master_error"):     "failed",
+    ("submitted", "dispatch"):          "working",
+    ("working", "ask_sender"):          "input-required",
+    # answer_question: table event name matches the endpoint; legacy tests use 'answer'
+    ("input-required", "answer"):       "working",
+    ("input-required", "answer_question"): "working",
+    # submit_result keeps the task in 'working' (judgment turn follows after turn-end)
+    ("working", "submit_result"):       "working",
+    ("working", "accept_result"):       "completed",
+    ("working", "master_error"):        "failed",
     ("input-required", "master_error"): "failed",
-    ("submitted", "master_error"):   "failed",
+    ("submitted", "master_error"):      "failed",
 }
 
 
@@ -158,7 +162,14 @@ _topic_lock_map_lock = threading.Lock()
 
 
 def get_topic_lock(topic_id: str) -> threading.Lock:
-    """Return the process-level threading.Lock for a topic, creating it on first use."""
+    """Return the process-level threading.Lock for a topic, creating it on first use.
+
+    threading.Lock is used here instead of asyncio.Lock because the lock is always
+    acquired non-blocking (blocking=False) from both the MQTT callback thread and the
+    event-loop coroutines, so there is no risk of deadlock from thread-vs-loop mixing.
+    asyncio.Lock requires the caller to be on the event loop; threading.Lock works from
+    any thread as long as it is never acquired blocking on the event loop.
+    """
     with _topic_lock_map_lock:
         if topic_id not in _topic_lock_map:
             _topic_lock_map[topic_id] = threading.Lock()

@@ -36,6 +36,7 @@ from .notes import topic_router as topic_notes_router
 from .notes import workspace_router as workspace_notes_router
 from .orchestrate_api import router as orchestrate_router
 from .orchestrate_api import tasks_router as orchestrate_tasks_router
+from .orchestrate_api import dispatch_undispatched_staged_rows
 from .event_dispatcher import emit_event, event_worker, worker_watchdog
 from .topic_export import router as topic_export_router
 from .topics import recent_router as recent_topics_router
@@ -516,6 +517,9 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     event_worker_task = asyncio.create_task(event_worker(app.state))
     watchdog_task = asyncio.create_task(worker_watchdog(app.state))
     LOGGER.info("master.event_worker_start")
+
+    dispatch_undispatched_staged_rows(app.state, loop)
+    LOGGER.info("master.startup_scan_complete")
 
     _respawn_agents(settings, db_path)
 

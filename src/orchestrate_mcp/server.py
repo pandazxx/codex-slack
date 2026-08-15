@@ -181,8 +181,9 @@ if _TASK_DEPTH == 0:
         """Answer a pending ask_sender question on a task you dispatched.
 
         Records the answer as a structured, addressed message (receiver = the
-        asking assignee) and returns the task to 'working'. Master dispatches
-        the answer to the assignee when your turn ends.
+        asking assignee). The response carries state='input-required' — the actual
+        task state at the time of this call. The task transitions to 'working' when
+        master dispatches the staged answer at the end of your turn.
 
         Only available on depth-0 turns (you are a dispatcher, not an assignee).
         """

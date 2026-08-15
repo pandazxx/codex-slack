@@ -91,18 +91,35 @@ def _post_prompt(client, ws_id, topic_id, text="@architect go"):
     return c.post(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages", data={"text": text})
 
 
+def _get_dispatch_token(client, message_id: str) -> str:
+    """Fetch the real dispatch_token stored on the given message row."""
+    db_path = _get_db_path(client)
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT dispatch_token FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        assert row is not None, f"message {message_id!r} not found"
+        assert row["dispatch_token"] is not None, f"message {message_id!r} has no dispatch_token"
+        return row["dispatch_token"]
+    finally:
+        conn.close()
+
+
 def _delegate(client, ws_id, topic_id, caller_staff, caller_msg_id, target_staff,
               goal="Build it", criteria="Tests pass", dispatch_token=None):
     c, _ = client
+    if dispatch_token is None:
+        dispatch_token = _get_dispatch_token(client, caller_msg_id)
     body = {
         "caller_staff": caller_staff,
         "caller_message_id": caller_msg_id,
+        "dispatch_token": dispatch_token,
         "staff": target_staff,
         "goal": goal,
         "acceptance_criteria": criteria,
     }
-    if dispatch_token:
-        body["dispatch_token"] = dispatch_token
     return c.post(f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/delegate", json=body)
 
 
@@ -351,6 +368,7 @@ def test_dispatch_token_generated_and_stored(client, workspace_topic, architect_
 def test_dispatch_token_not_in_ws_frame(client, workspace_topic, architect_staff):
     c, mock_mqtt = client
     ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
 
     broadcasts = []
     original_broadcast = c.app.state.hub.broadcast
@@ -366,6 +384,23 @@ def test_dispatch_token_not_in_ws_frame(client, workspace_topic, architect_staff
         assert "dispatch_token" not in frame, (
             f"dispatch_token must not appear in WS broadcast frame: {frame}"
         )
+        # If the frame carries a transcript string, parse it and check inside too.
+        transcript_str = frame.get("transcript")
+        if isinstance(transcript_str, str):
+            transcript_obj = json.loads(transcript_str)
+            assert "dispatch_token" not in transcript_obj, (
+                f"dispatch_token must not appear in WS frame transcript: {transcript_obj}"
+            )
+
+    # Also verify that GET /messages transcript field does not expose the token.
+    msgs = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages").json()
+    for msg in msgs:
+        transcript_str = msg.get("transcript")
+        if isinstance(transcript_str, str):
+            transcript_obj = json.loads(transcript_str)
+            assert "dispatch_token" not in transcript_obj, (
+                f"dispatch_token must not appear in GET /messages transcript: {transcript_obj}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +460,85 @@ def test_accept_result_wrong_token_returns_403(client, workspace_topic, architec
     assert r.json()["detail"] == "invalid_dispatch_token"
 
 
+def test_delegate_missing_token_returns_422(client, workspace_topic, architect_staff, engineer_staff):
+    """Missing dispatch_token on delegate returns 422 (Pydantic required-field validation)."""
+    c, _ = client
+    ws_id, topic_id = workspace_topic
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    caller_msg_id = prompt_r.json()["message_id"]
+
+    r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/delegate",
+        json={
+            "caller_staff": "architect",
+            "caller_message_id": caller_msg_id,
+            # dispatch_token omitted — required field
+            "staff": "engineer",
+            "goal": "Build",
+            "acceptance_criteria": "Done",
+        },
+    )
+    assert r.status_code == 422
+
+
+def test_submit_result_wrong_token_different_message_returns_403(
+    client, workspace_topic, architect_staff, engineer_staff
+):
+    """Token belonging to a DIFFERENT message row returns 403 invalid_dispatch_token."""
+    c, _ = client
+    ws_id, topic_id = workspace_topic
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    caller_msg_id = prompt_r.json()["message_id"]
+    # caller_msg_id has its own token — we'll use it on the wrong message
+    caller_token = _get_dispatch_token(client, caller_msg_id)
+
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", caller_msg_id, "engineer")
+    assert delegate_r.status_code == 200
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+
+    # Use the caller's token on the engineer prompt (wrong message → 403)
+    r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/submit_result",
+        json={
+            "caller_staff": "engineer",
+            "caller_message_id": eng_prompt["id"],
+            "dispatch_token": caller_token,  # belongs to a different message
+            "status": "completed",
+            "summary": "done",
+        },
+    )
+    assert r.status_code == 403
+    assert r.json()["detail"] == "invalid_dispatch_token"
+
+
+def test_ask_missing_token_returns_422(client, workspace_topic, architect_staff, engineer_staff):
+    """Missing dispatch_token on ask returns 422."""
+    c, _ = client
+    ws_id, topic_id = workspace_topic
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    caller_msg_id = prompt_r.json()["message_id"]
+    _delegate(client, ws_id, topic_id, "architect", caller_msg_id, "engineer")
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+
+    r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={
+            "caller_staff": "engineer",
+            "caller_message_id": eng_prompt["id"],
+            # dispatch_token omitted
+            "question": "Missing token?",
+        },
+    )
+    assert r.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # 6. submit_result endpoint
 # ---------------------------------------------------------------------------
@@ -442,12 +556,14 @@ def test_submit_result_stages_result_ready(client, workspace_topic, architect_st
 
     msgs = _get_messages(client, ws_id, topic_id)
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/submit_result",
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "status": "completed",
             "summary": "Feature X implemented",
             "artifacts": [{"kind": "commit", "ref": "abc123"}],
@@ -488,12 +604,14 @@ def test_submit_result_last_call_wins(client, workspace_topic, architect_staff, 
 
     msgs = _get_messages(client, ws_id, topic_id)
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
 
     c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/submit_result",
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "status": "failed",
             "summary": "First attempt",
         },
@@ -503,6 +621,7 @@ def test_submit_result_last_call_wins(client, workspace_topic, architect_staff, 
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "status": "completed",
             "summary": "Second attempt — successful",
         },
@@ -544,15 +663,16 @@ def test_submit_result_not_assignee_403(client, workspace_topic, architect_staff
     import uuid as _uuid
     from src.master.db import get_connection as _get_conn
     syn_msg_id = str(_uuid.uuid4())
+    syn_token = str(_uuid.uuid4())
     conn = _get_conn(db_path)
     try:
         conn.execute(
             "INSERT INTO messages"
             " (id, topic_id, sender, agent_name, text, silent, created_at,"
-            "  sender_kind, sender_name, receiver_kind, receiver_name, task_id)"
+            "  sender_kind, sender_name, receiver_kind, receiver_name, task_id, dispatch_token)"
             " VALUES (?, ?, 'event', 'architect', 'synthetic', 0, '2024-01-01T00:00:00Z',"
-            "         'staff', 'architect', 'staff', 'architect', ?)",
-            (syn_msg_id, topic_id, task_id),
+            "         'staff', 'architect', 'staff', 'architect', ?, ?)",
+            (syn_msg_id, topic_id, task_id, syn_token),
         )
         conn.commit()
     finally:
@@ -563,6 +683,7 @@ def test_submit_result_not_assignee_403(client, workspace_topic, architect_staff
         json={
             "caller_staff": "architect",  # identity check passes (receiver_name=architect)
             "caller_message_id": syn_msg_id,
+            "dispatch_token": syn_token,
             "status": "completed",
             "summary": "architect trying to submit for engineer's task",
         },
@@ -577,12 +698,14 @@ def test_submit_result_no_task_context_422(client, workspace_topic, architect_st
 
     prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = prompt_r.json()["message_id"]
+    caller_token = _get_dispatch_token(client, caller_msg_id)
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/submit_result",
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "status": "completed",
             "summary": "done",
         },
@@ -599,6 +722,7 @@ def test_answer_question_stages_answer(client, workspace_topic, architect_staff,
     c, _ = client
     ws_id, topic_id = workspace_topic
     db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
 
     prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = prompt_r.json()["message_id"]
@@ -607,6 +731,7 @@ def test_answer_question_stages_answer(client, workspace_topic, architect_staff,
 
     msgs = _get_messages(client, ws_id, topic_id)
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
 
     # Engineer asks architect a question
     ask_r = c.post(
@@ -614,6 +739,7 @@ def test_answer_question_stages_answer(client, workspace_topic, architect_staff,
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "question": "Which token format?",
         },
     )
@@ -621,11 +747,13 @@ def test_answer_question_stages_answer(client, workspace_topic, architect_staff,
 
     # Architect is now on a question turn (simulated: architect gets a new prompt message)
     # For test purposes we use the original architect prompt message as caller_message_id
+    caller_token = _get_dispatch_token(client, caller_msg_id)
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/answer_question",
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "task_id": task_id,
             "answer": "Use JWT",
         },
@@ -633,7 +761,9 @@ def test_answer_question_stages_answer(client, workspace_topic, architect_staff,
     assert r.status_code == 200
     body = r.json()
     assert body["task_id"] == task_id
-    assert body["state"] == "working"
+    # answer_question returns the ACTUAL current state at response time.
+    # The task remains 'input-required' until the staged answer dispatches at turn end.
+    assert body["state"] == "input-required"
 
     from src.master.db import get_connection
     conn = get_connection(db_path)
@@ -645,8 +775,28 @@ def test_answer_question_stages_answer(client, workspace_topic, architect_staff,
         assert staged is not None
         body_data = json.loads(staged["body"])
         assert body_data["answer"] == "Use JWT"
+
+        # Task state must still be input-required before turn end.
+        task = conn.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        assert task["state"] == "input-required"
     finally:
         conn.close()
+
+    # After process_turn_end the staged answer dispatches and the task transitions to working.
+    arch_reply_id = _simulate_response(db_path, topic_id, "architect", caller_msg_id, "Use JWT")
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id,
+        caller_msg_id, arch_reply_id, "architect", "Use JWT",
+    ))
+
+    conn2 = get_connection(db_path)
+    try:
+        task = conn2.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        assert task["state"] == "working", (
+            "Task must transition to 'working' after staged answer dispatches at turn end"
+        )
+    finally:
+        conn2.close()
 
 
 def test_answer_question_not_dispatcher_403(client, workspace_topic, architect_staff, engineer_staff):
@@ -660,12 +810,14 @@ def test_answer_question_not_dispatcher_403(client, workspace_topic, architect_s
 
     msgs = _get_messages(client, ws_id, topic_id)
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
 
     c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "question": "Which format?",
         },
     )
@@ -675,6 +827,7 @@ def test_answer_question_not_dispatcher_403(client, workspace_topic, architect_s
         json={
             "caller_staff": "engineer",  # engineer is not the dispatcher
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "task_id": task_id,
             "answer": "Should fail",
         },
@@ -690,6 +843,7 @@ def test_answer_question_wrong_state_409(client, workspace_topic, architect_staf
 
     prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = prompt_r.json()["message_id"]
+    caller_token = _get_dispatch_token(client, caller_msg_id)
     delegate_r = _delegate(client, ws_id, topic_id, "architect", caller_msg_id, "engineer")
     task_id = delegate_r.json()["task_id"]
 
@@ -698,6 +852,7 @@ def test_answer_question_wrong_state_409(client, workspace_topic, architect_staf
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "task_id": task_id,
             "answer": "Should fail — task is in 'working', not 'input-required'",
         },
@@ -717,6 +872,7 @@ def test_accept_result_completes_task(client, workspace_topic, architect_staff, 
 
     prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = prompt_r.json()["message_id"]
+    caller_token = _get_dispatch_token(client, caller_msg_id)
     delegate_r = _delegate(client, ws_id, topic_id, "architect", caller_msg_id, "engineer")
     task_id = delegate_r.json()["task_id"]
 
@@ -725,6 +881,7 @@ def test_accept_result_completes_task(client, workspace_topic, architect_staff, 
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "task_id": task_id,
         },
     )
@@ -754,12 +911,14 @@ def test_accept_result_not_dispatcher_403(client, workspace_topic, architect_sta
 
     msgs = _get_messages(client, ws_id, topic_id)
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/accept_result",
         json={
             "caller_staff": "engineer",  # engineer cannot accept its own result
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "task_id": task_id,
         },
     )
@@ -773,6 +932,7 @@ def test_accept_result_wrong_state_409(client, workspace_topic, architect_staff,
 
     prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = prompt_r.json()["message_id"]
+    caller_token = _get_dispatch_token(client, caller_msg_id)
     delegate_r = _delegate(client, ws_id, topic_id, "architect", caller_msg_id, "engineer")
     task_id = delegate_r.json()["task_id"]
 
@@ -790,6 +950,7 @@ def test_accept_result_wrong_state_409(client, workspace_topic, architect_staff,
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "task_id": task_id,
         },
     )
@@ -813,12 +974,14 @@ def test_ask_inside_task_stages_question(client, workspace_topic, architect_staf
 
     msgs = _get_messages(client, ws_id, topic_id)
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "question": "Which format?",
         },
     )
@@ -863,6 +1026,7 @@ def test_full_async_chain_via_process_turn_end(client, workspace_topic, architec
 
     msgs = _get_messages(client, ws_id, topic_id)
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
 
     # 3. Engineer calls submit_result
     c.post(
@@ -870,6 +1034,7 @@ def test_full_async_chain_via_process_turn_end(client, workspace_topic, architec
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "status": "completed",
             "summary": "JWT middleware implemented",
             "artifacts": [{"kind": "commit", "ref": "deadbeef"}],
@@ -908,12 +1073,14 @@ def test_full_async_chain_via_process_turn_end(client, workspace_topic, architec
     finally:
         conn.close()
 
-    # 5. Architect calls accept_result on the judgment turn
+    # 5. Architect calls accept_result on the judgment turn using the judgment prompt's token
+    judgment_token = _get_dispatch_token(client, judgment_prompt["id"])
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/accept_result",
         json={
             "caller_staff": "architect",
-            "caller_message_id": user_msg_id,
+            "caller_message_id": judgment_prompt["id"],
+            "dispatch_token": judgment_token,
             "task_id": task_id,
         },
     )
@@ -1002,11 +1169,13 @@ def test_implicit_answer_fallback(client, workspace_topic, architect_staff, engi
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
 
     # Step 2: Engineer asks a question → task goes input-required.
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
     c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "question": "Which token format?",
         },
     )
@@ -1122,11 +1291,13 @@ def test_queued_task_dispatches_after_accept_result(client, workspace_topic, arc
 
     # Accept result on task 1 — completes the task, releases the lock, and awaits
     # _dispatch_next_queued inline (the endpoint awaits it directly, not via create_task).
+    user_token = _get_dispatch_token(client, user_msg_id)
     accept_r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/accept_result",
         json={
             "caller_staff": "architect",
             "caller_message_id": user_msg_id,
+            "dispatch_token": user_token,
             "task_id": task_id_1,
         },
     )
@@ -1141,6 +1312,50 @@ def test_queued_task_dispatches_after_accept_result(client, workspace_topic, arc
         assert t2["state"] == "working", "Queued task must be dispatched after prior task completes"
     finally:
         conn.close()
+
+
+def test_lock_fully_released_after_accept_result(client, workspace_topic, architect_staff, engineer_staff):
+    """C-1: after accept_result the topic lock is fully released.
+
+    delegate → accept_result completes task 1 → delegate again on the same topic
+    returns state='working' (lock acquired, not queued), confirming the lock was
+    released and re-acquirable.
+    """
+    c, _ = client
+    ws_id, topic_id = workspace_topic
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+
+    # First delegate — acquires lock.
+    r1 = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer",
+                   goal="Task 1", criteria="Done")
+    assert r1.json()["state"] == "working"
+    task_id_1 = r1.json()["task_id"]
+
+    # Accept result — completes task 1, releases lock.
+    user_token = _get_dispatch_token(client, user_msg_id)
+    accept_r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/accept_result",
+        json={
+            "caller_staff": "architect",
+            "caller_message_id": user_msg_id,
+            "dispatch_token": user_token,
+            "task_id": task_id_1,
+        },
+    )
+    assert accept_r.status_code == 200
+    assert accept_r.json()["state"] == "completed"
+
+    # Second delegate — lock must be free, so state is working (not queued).
+    r2 = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer",
+                   goal="Task 2", criteria="Done")
+    assert r2.status_code == 200
+    body2 = r2.json()
+    assert body2["state"] in ("working", "submitted"), (
+        f"After lock release, second delegate must not be 'queued'; got {body2['state']!r}"
+    )
+    assert body2["state"] != "queued", "Lock must be released after accept_result"
 
 
 # ---------------------------------------------------------------------------
@@ -1168,12 +1383,14 @@ def test_ask_sender_wrong_state_409(client, workspace_topic, architect_staff, en
 
     msgs = _get_messages(client, ws_id, topic_id)
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "question": "Too late to ask",
         },
     )
@@ -1298,6 +1515,7 @@ def test_interrupted_turn_no_reentry(client, workspace_topic, architect_staff, e
 
     msgs = _get_messages(client, ws_id, topic_id)
     eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
 
     # Engineer stages a result.
     c.post(
@@ -1305,6 +1523,7 @@ def test_interrupted_turn_no_reentry(client, workspace_topic, architect_staff, e
         json={
             "caller_staff": "engineer",
             "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
             "status": "completed",
             "summary": "done",
         },
@@ -1364,7 +1583,116 @@ def test_get_tasks_endpoint(client, workspace_topic, architect_staff, engineer_s
 
 
 # ---------------------------------------------------------------------------
-# 18. MCP tool availability
+# 18. Startup scan — dispatch_undispatched_staged_rows
+# ---------------------------------------------------------------------------
+
+def test_startup_scan_dispatches_orphaned_staged_row(client, workspace_topic, architect_staff, engineer_staff):
+    """C-3: startup scan dispatches a staged row whose prompt already has a saved agent response.
+
+    Scenario: engineer called submit_result (staging a result_ready row), then
+    master restarted before process_turn_end ran.  At restart,
+    dispatch_undispatched_staged_rows finds the orphaned row and re-dispatches it.
+
+    Verified by asserting:
+    - staged_dispatches.dispatched_at is stamped after the scan.
+    - A new judgment-turn message is created for the dispatcher (architect).
+    """
+    c, _ = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    # Setup: delegate then engineer calls submit_result.
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer",
+                           goal="Build", criteria="Done")
+    task_id = delegate_r.json()["task_id"]
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/submit_result",
+        json={
+            "caller_staff": "engineer",
+            "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
+            "status": "completed",
+            "summary": "work done",
+        },
+    )
+
+    # Simulate engineer's MQTT /response arriving (saves agent reply row) WITHOUT
+    # running process_turn_end — mimicking a master crash between save and dispatch.
+    eng_reply_id = _simulate_response(db_path, topic_id, "engineer", eng_prompt["id"],
+                                      "done implicitly")
+
+    # Confirm staged row is still undispatched.
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        staged = conn.execute(
+            "SELECT * FROM staged_dispatches WHERE prompt_message_id = ?",
+            (eng_prompt["id"],),
+        ).fetchone()
+        assert staged is not None
+        assert staged["dispatched_at"] is None, "Staged row must be undispatched before scan"
+    finally:
+        conn.close()
+
+    # Simulate process restart: the topic lock is process-scoped and does not survive
+    # a restart.  Release it explicitly so dispatch_undispatched_staged_rows can acquire it.
+    from src.master.orchestration import get_topic_lock
+    topic_lock = get_topic_lock(topic_id)
+    try:
+        topic_lock.release()
+    except RuntimeError:
+        pass  # already released
+
+    # Run startup scan on a fresh event loop (mirrors what happens at master restart).
+    import threading
+
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    try:
+        from src.master.orchestrate_api import dispatch_undispatched_staged_rows
+        dispatch_undispatched_staged_rows(app_state, loop)
+        # Give the coroutine scheduled by run_coroutine_threadsafe time to complete.
+        import time
+        time.sleep(0.5)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2)
+
+    # dispatched_at must now be stamped.
+    conn2 = get_connection(db_path)
+    try:
+        staged2 = conn2.execute(
+            "SELECT dispatched_at FROM staged_dispatches WHERE prompt_message_id = ?",
+            (eng_prompt["id"],),
+        ).fetchone()
+        assert staged2["dispatched_at"] is not None, (
+            "Startup scan must stamp dispatched_at on the orphaned staged row"
+        )
+
+        # A new judgment prompt must have been dispatched to architect.
+        judgment = conn2.execute(
+            "SELECT * FROM messages WHERE task_id = ? AND receiver_name = 'architect'"
+            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        assert judgment is not None, (
+            "Startup scan must trigger a judgment-turn dispatch to architect"
+        )
+    finally:
+        conn2.close()
+
+
+# ---------------------------------------------------------------------------
+# 20. MCP tool availability
 # ---------------------------------------------------------------------------
 
 def test_mcp_submit_result_absent_at_depth_0(monkeypatch):

@@ -214,7 +214,7 @@ def _build_judgment_prompt(task: object, result_summary: str, result_status: str
 class DelegateIn(BaseModel):
     caller_staff: str
     caller_message_id: str
-    dispatch_token: str | None = None
+    dispatch_token: str
     staff: str
     goal: str
     acceptance_criteria: str
@@ -230,7 +230,7 @@ class DelegateOut(BaseModel):
 class AskIn(BaseModel):
     caller_staff: str
     caller_message_id: str
-    dispatch_token: str | None = None
+    dispatch_token: str
     question: str
 
 
@@ -242,7 +242,7 @@ class AskOut(BaseModel):
 class SubmitResultIn(BaseModel):
     caller_staff: str
     caller_message_id: str
-    dispatch_token: str | None = None
+    dispatch_token: str
     status: str  # 'completed' | 'failed'
     summary: str
     artifacts: list[dict] | None = None
@@ -256,7 +256,7 @@ class SubmitResultOut(BaseModel):
 class AnswerQuestionIn(BaseModel):
     caller_staff: str
     caller_message_id: str
-    dispatch_token: str | None = None
+    dispatch_token: str
     task_id: str
     answer: str
 
@@ -269,7 +269,7 @@ class AnswerQuestionOut(BaseModel):
 class AcceptResultIn(BaseModel):
     caller_staff: str
     caller_message_id: str
-    dispatch_token: str | None = None
+    dispatch_token: str
     task_id: str
 
 
@@ -330,8 +330,7 @@ async def delegate_task(
     try:
         _assert_workspace_and_topic(conn, workspace_id, topic_id)
         _verify_caller_identity(conn, body.caller_message_id, body.caller_staff, topic_id)
-        if body.dispatch_token:
-            _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
+        _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
 
         if body.caller_staff == body.staff:
             LOGGER.warning(
@@ -455,6 +454,8 @@ async def delegate_task(
     acquired = topic_lock.acquire(blocking=False)
     if not acquired:
         # Another task is in-flight on this topic — queue this one.
+        # queued_position is advisory/approximate: it is counted after insertion and
+        # may not match the final dispatch order if concurrent delegates race.
         queued_position = _count_queued_tasks(db_path, topic_id)
         LOGGER.info(
             "orchestration.task_queued task_id=%s topic_id=%s position=%d",
@@ -547,8 +548,7 @@ async def ask_sender(
     try:
         _assert_workspace_and_topic(conn, workspace_id, topic_id)
         _verify_caller_identity(conn, body.caller_message_id, body.caller_staff, topic_id)
-        if body.dispatch_token:
-            _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
+        _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
 
         prompt_row = conn.execute(
             "SELECT task_id FROM messages WHERE id = ?", (body.caller_message_id,)
@@ -657,8 +657,7 @@ async def submit_result(
     try:
         _assert_workspace_and_topic(conn, workspace_id, topic_id)
         _verify_caller_identity(conn, body.caller_message_id, body.caller_staff, topic_id)
-        if body.dispatch_token:
-            _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
+        _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
 
         prompt_row = conn.execute(
             "SELECT task_id FROM messages WHERE id = ?", (body.caller_message_id,)
@@ -684,7 +683,9 @@ async def submit_result(
             )
             raise HTTPException(403, "not_assignee")
 
-        if task_row["state"] != "working":
+        try:
+            apply_transition(task_row["state"], "submit_result")
+        except IllegalTransition:
             LOGGER.warning(
                 "orchestration.guard_hit guard=illegal_transition task_id=%s topic_id=%s"
                 " current_state=%s event=submit_result",
@@ -743,8 +744,7 @@ async def answer_question(
     try:
         _assert_workspace_and_topic(conn, workspace_id, topic_id)
         _verify_caller_identity(conn, body.caller_message_id, body.caller_staff, topic_id)
-        if body.dispatch_token:
-            _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
+        _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
 
         task_row = conn.execute(
             "SELECT * FROM tasks WHERE id = ?", (body.task_id,)
@@ -782,7 +782,10 @@ async def answer_question(
     finally:
         conn.close()
 
-    return AnswerQuestionOut(task_id=body.task_id, state="working")
+    # The task remains in 'input-required' at response time; the staged answer
+    # dispatches at turn end (process_turn_end), at which point the task transitions
+    # to 'working'.  Returning the actual current state keeps callers truthful.
+    return AnswerQuestionOut(task_id=body.task_id, state="input-required")
 
 
 # ── accept_result ──────────────────────────────────────────────────────────────
@@ -801,8 +804,7 @@ async def accept_result(
     try:
         _assert_workspace_and_topic(conn, workspace_id, topic_id)
         _verify_caller_identity(conn, body.caller_message_id, body.caller_staff, topic_id)
-        if body.dispatch_token:
-            _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
+        _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
 
         task_row = conn.execute(
             "SELECT * FROM tasks WHERE id = ?", (body.task_id,)
@@ -1020,10 +1022,25 @@ async def _apply_implicit_fallback(
     Design §4.3–4.4 (phase-b subset only): phase (c) adds scored-clarification.
     """
     db_path = app_state.db_path
-    assignee = task_row["assignee_name"]
-    dispatcher = task_row["dispatcher_name"]
-    state = task_row["state"]
     task_id = task_row["id"]
+
+    # Re-read the task row to avoid acting on a stale snapshot (M-7).
+    # master is the single writer of task state, so a fresh read is sufficient.
+    fresh_conn = get_connection(db_path)
+    try:
+        fresh_task = fresh_conn.execute(
+            "SELECT * FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+    finally:
+        fresh_conn.close()
+
+    if fresh_task is None:
+        LOGGER.warning("orchestration.implicit_fallback_task_missing task_id=%s", task_id)
+        return
+
+    assignee = fresh_task["assignee_name"]
+    dispatcher = fresh_task["dispatcher_name"]
+    state = fresh_task["state"]
 
     if state == "working" and agent_name == assignee:
         # Implicit submit_result: use the reply text as the summary.
@@ -1035,7 +1052,7 @@ async def _apply_implicit_fallback(
             app_state=app_state,
             workspace_id=workspace_id,
             topic_id=topic_id,
-            task_row=task_row,
+            task_row=fresh_task,
             result_summary=reply_text,
             result_status="completed",
             reply_message_id=reply_message_id,
@@ -1051,7 +1068,7 @@ async def _apply_implicit_fallback(
             app_state=app_state,
             workspace_id=workspace_id,
             topic_id=topic_id,
-            task_row=task_row,
+            task_row=fresh_task,
             answer=reply_text,
             sender_name=agent_name,
             reply_message_id=reply_message_id,
@@ -1061,8 +1078,9 @@ async def _apply_implicit_fallback(
         # Judgment turn ended with no accept_result.
         # Phase (c) adds scored-clarification; phase (b) just logs.
         LOGGER.warning(
-            "orchestration.guard_hit guard=judgment_missing task_id=%s topic_id=%s",
-            task_id, topic_id,
+            "orchestration.guard_hit guard=judgment_missing task_id=%s topic_id=%s"
+            " reply_text=%.120r",
+            task_id, topic_id, reply_text,
         )
 
 
@@ -1095,59 +1113,10 @@ async def _execute_staged_row(
         LOGGER.warning("orchestration.staged_task_missing task_id=%s", task_id)
         return
 
-    if kind == "question":
-        # Dispatch the already-saved question message to the staff dispatcher.
-        if receiver_kind == "staff" and receiver_name:
-            await _dispatch_question_to_staff(
-                app_state=app_state,
-                workspace_id=workspace_id,
-                topic_id=topic_id,
-                task_row=task_row,
-                question_text=body_data.get("text", ""),
-                sender_name=sender_name,
-                receiver_name=receiver_name,
-                reply_message_id=reply_message_id,
-                db_path=db_path,
-            )
-
-    elif kind == "answer":
-        answer = body_data.get("answer", "")
-        await _dispatch_answer_to_assignee(
-            app_state=app_state,
-            workspace_id=workspace_id,
-            topic_id=topic_id,
-            task_row=task_row,
-            answer=answer,
-            sender_name=sender_name,
-            reply_message_id=reply_message_id,
-            db_path=db_path,
-        )
-
-    elif kind == "result_ready":
-        result_summary = body_data.get("summary", "")
-        result_status = body_data.get("status", "completed")
-        conn = get_connection(db_path)
-        try:
-            conn.execute(
-                "UPDATE tasks SET result_summary = ?, result_status = ?, updated_at = ?"
-                " WHERE id = ?",
-                (result_summary, result_status, _now(), task_id),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-        await _dispatch_judgment_turn(
-            app_state=app_state,
-            workspace_id=workspace_id,
-            topic_id=topic_id,
-            task_row=task_row,
-            result_summary=result_summary,
-            result_status=result_status,
-            reply_message_id=reply_message_id,
-            db_path=db_path,
-        )
-
-    # Stamp dispatched regardless of kind.
+    # Stamp dispatched_at BEFORE calling dispatch_to_staff (C-4: at-most-once bias).
+    # A crash after the stamp but before MQTT publish is recovered by the startup scan
+    # re-delivering the prompt; a crash after publish but before stamp would double-dispatch
+    # the judgment turn, which is worse.  On dispatch failure, best-effort clear the stamp.
     conn = get_connection(db_path)
     try:
         conn.execute(
@@ -1157,6 +1126,81 @@ async def _execute_staged_row(
         conn.commit()
     finally:
         conn.close()
+
+    try:
+        if kind == "question":
+            # Dispatch the already-saved question message to the staff dispatcher.
+            if receiver_kind == "staff" and receiver_name:
+                await _dispatch_question_to_staff(
+                    app_state=app_state,
+                    workspace_id=workspace_id,
+                    topic_id=topic_id,
+                    task_row=task_row,
+                    question_text=body_data.get("text", ""),
+                    sender_name=sender_name,
+                    receiver_name=receiver_name,
+                    reply_message_id=reply_message_id,
+                    db_path=db_path,
+                )
+
+        elif kind == "answer":
+            answer = body_data.get("answer", "")
+            await _dispatch_answer_to_assignee(
+                app_state=app_state,
+                workspace_id=workspace_id,
+                topic_id=topic_id,
+                task_row=task_row,
+                answer=answer,
+                sender_name=sender_name,
+                reply_message_id=reply_message_id,
+                db_path=db_path,
+            )
+
+        elif kind == "result_ready":
+            result_summary = body_data.get("summary", "")
+            result_status = body_data.get("status", "completed")
+            conn = get_connection(db_path)
+            try:
+                conn.execute(
+                    "UPDATE tasks SET result_summary = ?, result_status = ?, updated_at = ?"
+                    " WHERE id = ?",
+                    (result_summary, result_status, _now(), task_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            await _dispatch_judgment_turn(
+                app_state=app_state,
+                workspace_id=workspace_id,
+                topic_id=topic_id,
+                task_row=task_row,
+                result_summary=result_summary,
+                result_status=result_status,
+                reply_message_id=reply_message_id,
+                db_path=db_path,
+            )
+    except Exception:
+        # Best-effort: clear the dispatch stamp so startup scan can retry on next restart.
+        LOGGER.warning(
+            "orchestration.staged_dispatch_failed staged_id=%s kind=%s task_id=%s"
+            " — clearing dispatched_at for retry",
+            staged["id"], kind, task_id,
+        )
+        try:
+            _clear_conn = get_connection(db_path)
+            try:
+                _clear_conn.execute(
+                    "UPDATE staged_dispatches SET dispatched_at = NULL WHERE id = ?",
+                    (staged["id"],),
+                )
+                _clear_conn.commit()
+            finally:
+                _clear_conn.close()
+        except Exception:
+            LOGGER.warning(
+                "orchestration.clear_dispatch_stamp_failed staged_id=%s", staged["id"]
+            )
+        raise
 
 
 async def _dispatch_question_to_staff(
@@ -1371,12 +1415,16 @@ async def _dispatch_next_queued(app_state, workspace_id: str, topic_id: str) -> 
     try:
         conn = get_connection(db_path)
         try:
+            # SELECT and UPDATE in one connection/transaction to avoid TOCTOU between
+            # the existence check and the state stamp (M-6).
             task_row = conn.execute(
                 "SELECT * FROM tasks WHERE topic_id = ? AND state = 'submitted'"
                 " ORDER BY created_at LIMIT 1",
                 (topic_id,),
             ).fetchone()
             if task_row is None:
+                # No queued task — release the lock before returning (C-1).
+                topic_lock.release()
                 return
 
             ws_row = conn.execute(
@@ -1387,10 +1435,18 @@ async def _dispatch_next_queued(app_state, workspace_id: str, topic_id: str) -> 
             ws_id = ws_row["id"] if ws_row else workspace_id
 
             target_staff = resolve_staff(conn, task_row["assignee_name"], ws_id, topic_id)
+            staff_found = target_staff is not None
+
+            if staff_found:
+                conn.execute(
+                    "UPDATE tasks SET state = 'working', updated_at = ? WHERE id = ?",
+                    (_now(), task_row["id"]),
+                )
+                conn.commit()
         finally:
             conn.close()
 
-        if target_staff is None:
+        if not staff_found:
             LOGGER.warning(
                 "orchestration.dispatch_failed reason=staff_not_found name=%s task_id=%s",
                 task_row["assignee_name"], task_row["id"],
@@ -1406,16 +1462,6 @@ async def _dispatch_next_queued(app_state, workspace_id: str, topic_id: str) -> 
             task_row["acceptance_criteria"] or "",
             None,
         )
-
-        conn = get_connection(db_path)
-        try:
-            conn.execute(
-                "UPDATE tasks SET state = 'working', updated_at = ? WHERE id = ?",
-                (_now(), task_row["id"]),
-            )
-            conn.commit()
-        finally:
-            conn.close()
 
         from .dispatch import dispatch_to_staff
         await dispatch_to_staff(
@@ -1464,14 +1510,17 @@ def dispatch_undispatched_staged_rows(app_state, loop: asyncio.AbstractEventLoop
             " JOIN messages m ON m.id = sd.prompt_message_id"
             " WHERE sd.dispatched_at IS NULL",
         ).fetchall()
-        orphaned = []
+        # For each undispatched row, find the agent response that already closed the turn
+        # so we can pass the correct reply_message_id (M-1: preserves reply chain).
+        orphaned: list[tuple] = []
         for r in rows:
-            response_exists = conn.execute(
-                "SELECT 1 FROM messages WHERE reply_to_message_id = ? AND sender = 'agent'",
+            response_row = conn.execute(
+                "SELECT id FROM messages WHERE reply_to_message_id = ? AND sender = 'agent'"
+                " ORDER BY created_at DESC LIMIT 1",
                 (r["prompt_message_id"],),
             ).fetchone()
-            if response_exists:
-                orphaned.append(r)
+            if response_row:
+                orphaned.append((r, response_row["id"]))
     finally:
         conn.close()
 
@@ -1479,8 +1528,18 @@ def dispatch_undispatched_staged_rows(app_state, loop: asyncio.AbstractEventLoop
         return
 
     LOGGER.info("orchestration.startup_scan orphaned_staged=%d", len(orphaned))
-    for staged in orphaned:
+    for staged, reply_message_id in orphaned:
         topic_id = staged["topic_id"]
+
+        # M-2: skip topics whose lock is held — an in-flight turn will advance them.
+        topic_lock = get_topic_lock(topic_id)
+        if not topic_lock.acquire(blocking=False):
+            LOGGER.info(
+                "orchestration.startup_scan skipped_locked topic_id=%s staged_id=%s",
+                topic_id, staged["id"],
+            )
+            continue
+
         ws_conn = get_connection(db_path)
         try:
             ws_row = ws_conn.execute(
@@ -1491,13 +1550,41 @@ def dispatch_undispatched_staged_rows(app_state, loop: asyncio.AbstractEventLoop
             ws_conn.close()
 
         asyncio.run_coroutine_threadsafe(
-            _execute_staged_row(
+            _startup_execute_and_release(
                 app_state=app_state,
                 workspace_id=workspace_id,
                 topic_id=topic_id,
                 staged=staged,
-                reply_message_id="",
+                reply_message_id=reply_message_id,
                 db_path=db_path,
+                topic_lock=topic_lock,
             ),
             loop,
         )
+
+
+async def _startup_execute_and_release(
+    *,
+    app_state,
+    workspace_id: str,
+    topic_id: str,
+    staged,
+    reply_message_id: str,
+    db_path: str,
+    topic_lock: threading.Lock,
+) -> None:
+    """Execute a single orphaned staged row and release the topic lock (M-2, C-3)."""
+    try:
+        await _execute_staged_row(
+            app_state=app_state,
+            workspace_id=workspace_id,
+            topic_id=topic_id,
+            staged=staged,
+            reply_message_id=reply_message_id,
+            db_path=db_path,
+        )
+    finally:
+        try:
+            topic_lock.release()
+        except RuntimeError:
+            pass
