@@ -218,21 +218,28 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
     return silent
 
 
-def _prompt_was_event_dispatched(db_path: str, reply_to: str) -> bool:
-    """Return True if the prompt message that triggered this reply had sender='event'.
+def _prompt_was_orchestration_reentry(db_path: str, reply_to: str) -> bool:
+    """Return True if the prompt message was a staff re-entry (event-dispatched or orchestration hop).
 
-    Agent replies to event-dispatched prompts must not re-fire topic_message_received,
-    otherwise every event action on that event type loops indefinitely.
+    Agent replies to staff-originated prompts must not re-fire event actions recursively.
+    We gate on sender_kind='user' — only genuine user messages should fire event hooks.
+    Legacy rows without sender_kind fall back to the old sender='event' check.
     """
     if not reply_to:
         return False
     try:
         conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
-                "SELECT sender FROM messages WHERE id = ?", (reply_to,)
+                "SELECT sender, sender_kind FROM messages WHERE id = ?", (reply_to,)
             ).fetchone()
-            return row is not None and row[0] == "event"
+            if row is None:
+                return False
+            if row["sender_kind"] is not None:
+                return row["sender_kind"] != "user"
+            # Legacy fallback: rows without sender_kind use the old sender='event' gate.
+            return row["sender"] == "event"
         finally:
             conn.close()
     except Exception:
@@ -479,13 +486,12 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
                 payload=payload,
             )
             app_state = userdata.get("app_state")
-            # emit_event self-guards if event infrastructure isn't up; the only thing
-            # we need to check here is that we have the app_state to pass through.
-            # Skip if this reply is responding to an event-dispatched prompt — otherwise
-            # every topic_message_received action loops: action fires → agent replies →
-            # topic_message_received re-fires → action fires again.
             reply_to = payload.get("reply_to", "")
-            if app_state is not None and not _prompt_was_event_dispatched(db_path, reply_to):
+            # Gate: skip event actions for staff-originated prompts (sender_kind != 'user').
+            # Delegation chains must not trigger topic_message_received recursively
+            # (design §7 loop safety).
+            is_orchestration_reentry = _prompt_was_orchestration_reentry(db_path, reply_to)
+            if app_state is not None and not is_orchestration_reentry:
                 workspace_id = _get_workspace_id(db_path, topic_id)
                 topic_name = _get_topic_name(db_path, topic_id)
                 if workspace_id:
@@ -507,6 +513,27 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
                                 "sender": "agent",
                             }),
                         },
+                    )
+            # Phase (b) turn re-entry: after the response is saved, dispatch staged rows
+            # and route free text per design §7.  Runs on all turns (user-prompted and
+            # orchestration hops alike) so delegated tasks complete their lifecycle.
+            if app_state is not None:
+                workspace_id_for_reentry = _get_workspace_id(db_path, topic_id) or ""
+                loop = userdata.get("loop")
+                if loop is not None:
+                    from .orchestrate_api import process_turn_end
+                    asyncio.run_coroutine_threadsafe(
+                        process_turn_end(
+                            app_state=app_state,
+                            workspace_id=workspace_id_for_reentry,
+                            topic_id=topic_id,
+                            prompt_message_id=reply_to,
+                            reply_message_id=payload.get("message_id", ""),
+                            agent_name=payload.get("agent_name") or "",
+                            reply_text=payload.get("last_response", ""),
+                            interrupt_reason=payload.get("interrupt_reason"),
+                        ),
+                        loop,
                     )
     elif msg_type == "verdict":
         reply_to = payload.get("reply_to")

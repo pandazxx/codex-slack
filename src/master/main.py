@@ -35,6 +35,7 @@ from .event_actions import workspace_router as event_actions_workspace_router
 from .notes import topic_router as topic_notes_router
 from .notes import workspace_router as workspace_notes_router
 from .orchestrate_api import router as orchestrate_router
+from .orchestrate_api import tasks_router as orchestrate_tasks_router
 from .event_dispatcher import emit_event, event_worker, worker_watchdog
 from .topic_export import router as topic_export_router
 from .topics import recent_router as recent_topics_router
@@ -554,6 +555,7 @@ app.include_router(event_actions_workspace_router, prefix="/api")
 app.include_router(workspace_notes_router, prefix="/api")
 app.include_router(topic_notes_router, prefix="/api")
 app.include_router(orchestrate_router, prefix="/api")
+app.include_router(orchestrate_tasks_router, prefix="/api")
 
 if (_STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="static-assets")

@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     failure_score       REAL NOT NULL DEFAULT 0.0,
     result_summary      TEXT,
     result_artifacts    TEXT,
+    result_status       TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     closed_at           TEXT
@@ -202,9 +203,27 @@ CREATE INDEX IF NOT EXISTS idx_tasks_topic         ON tasks (topic_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_root          ON tasks (root_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_topic_state   ON tasks (topic_id, state);
 CREATE INDEX IF NOT EXISTS idx_tasks_parent        ON tasks (parent_task_id);
+
+CREATE TABLE IF NOT EXISTS staged_dispatches (
+    id                  TEXT PRIMARY KEY,
+    prompt_message_id   TEXT NOT NULL,
+    topic_id            TEXT NOT NULL,
+    sender_name         TEXT NOT NULL,
+    receiver_kind       TEXT NOT NULL,
+    receiver_name       TEXT,
+    task_id             TEXT NOT NULL,
+    kind                TEXT NOT NULL CHECK (kind IN ('question', 'answer', 'result_ready')),
+    body                TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    dispatched_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_staged_dispatches_prompt
+    ON staged_dispatches (prompt_message_id);
+CREATE INDEX IF NOT EXISTS idx_staged_dispatches_undispatched
+    ON staged_dispatches (dispatched_at) WHERE dispatched_at IS NULL;
 """
 
-TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks", "event_actions", "notes", "tasks"]
+TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks", "event_actions", "notes", "tasks", "staged_dispatches"]
 
 
 _MIGRATIONS = [
@@ -234,7 +253,38 @@ _MIGRATIONS = [
     "ALTER TABLE messages ADD COLUMN receiver_name TEXT",
     "ALTER TABLE messages ADD COLUMN task_id TEXT",
     "ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN result_status TEXT",
+    "ALTER TABLE messages ADD COLUMN dispatch_token TEXT",
 ]
+
+
+def _migrate_staged_dispatches(conn: sqlite3.Connection) -> None:
+    """Create staged_dispatches table if absent (idempotent)."""
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='staged_dispatches'"
+    ).fetchone() is not None:
+        return
+    LOGGER.info("db.migration_start staged_dispatches")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS staged_dispatches (
+            id                  TEXT PRIMARY KEY,
+            prompt_message_id   TEXT NOT NULL,
+            topic_id            TEXT NOT NULL,
+            sender_name         TEXT NOT NULL,
+            receiver_kind       TEXT NOT NULL,
+            receiver_name       TEXT,
+            task_id             TEXT NOT NULL,
+            kind                TEXT NOT NULL CHECK (kind IN ('question', 'answer', 'result_ready')),
+            body                TEXT NOT NULL,
+            created_at          TEXT NOT NULL,
+            dispatched_at       TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_staged_dispatches_prompt
+            ON staged_dispatches (prompt_message_id);
+        CREATE INDEX IF NOT EXISTS idx_staged_dispatches_undispatched
+            ON staged_dispatches (dispatched_at) WHERE dispatched_at IS NULL;
+    """)
+    LOGGER.info("db.migration_done staged_dispatches")
 
 
 def _migrate_envelope_indexes(conn: sqlite3.Connection) -> None:
@@ -596,6 +646,7 @@ def init_db(db_path: str) -> None:
         _migrate_event_actions_v2(conn)
         _migrate_event_actions_v3(conn)
         _migrate_staffs_session_scope_none(conn)
+        _migrate_staged_dispatches(conn)
         _migrate_envelope_indexes(conn)
         _migrate_envelope_backfill(conn)
         conn.commit()

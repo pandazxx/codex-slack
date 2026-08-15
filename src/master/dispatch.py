@@ -85,6 +85,7 @@ async def dispatch_to_staff(
     receiver_name: str | None = None,
     task_id: str | None = None,
     reply_to_message_id: str | None = None,
+    dispatch_token: str | None = None,
 ) -> str:
     """Insert a message row, build the MQTT dispatch payload, broadcast on the hub, and publish.
 
@@ -110,6 +111,8 @@ async def dispatch_to_staff(
         raw_text = prompt_text
     if attachments is None:
         attachments = []
+    if dispatch_token is None:
+        dispatch_token = str(uuid.uuid4())
 
     conn = get_connection(app_state.db_path)
     try:
@@ -175,11 +178,13 @@ async def dispatch_to_staff(
             "INSERT INTO messages"
             " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
             "  event_action_id, silent, created_at,"
-            "  sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id)"
-            " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,"
+            "  dispatch_token)"
+            " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 message_id, topic_id, sender, raw_text, event_action_id, 1 if silent else 0, now,
                 sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,
+                dispatch_token,
             ),
         )
         if sender == "user":
@@ -211,6 +216,13 @@ async def dispatch_to_staff(
         finally:
             _task_conn.close()
 
+    from .orchestration import get_effective_max_delegation_depth
+    _cfg_conn = get_connection(app_state.db_path)
+    try:
+        max_delegation_depth = get_effective_max_delegation_depth(_cfg_conn, workspace_id)
+    finally:
+        _cfg_conn.close()
+
     payload_dict: dict = {
         "message_id": message_id,
         "agent_name": staff["name"],
@@ -229,6 +241,8 @@ async def dispatch_to_staff(
         "attachments": attachments,
         "task_id": task_id,
         "task_depth": task_depth,
+        "dispatch_token": dispatch_token,
+        "max_delegation_depth": max_delegation_depth,
     }
     if response_mode is not None:
         payload_dict["response_mode"] = response_mode
@@ -245,6 +259,8 @@ async def dispatch_to_staff(
 
     # Carries text/transcript/attachments so other tabs render the bubble immediately
     # without a refetch — see master's #155 fix for the user-message path.
+    # dispatch_token is excluded from WS frames and GET /messages — it is a
+    # per-turn auth secret that must not leak to the frontend.
     await app_state.hub.broadcast("_global", {
         "type": "message",
         "topic_id": topic_id,
