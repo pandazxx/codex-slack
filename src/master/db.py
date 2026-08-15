@@ -171,9 +171,40 @@ CREATE TABLE IF NOT EXISTS notes (
     UNIQUE (scope_type, scope_id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_notes_scope ON notes (scope_type, scope_id);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id                  TEXT PRIMARY KEY,
+    topic_id            TEXT NOT NULL REFERENCES topics(id),
+    root_task_id        TEXT NOT NULL,
+    parent_task_id      TEXT,
+    depth               INTEGER NOT NULL,
+    dispatcher_kind     TEXT NOT NULL CHECK (dispatcher_kind IN ('user', 'staff')),
+    dispatcher_name     TEXT,
+    assignee_name       TEXT NOT NULL,
+    goal                TEXT NOT NULL,
+    acceptance_criteria TEXT,
+    state               TEXT NOT NULL CHECK (state IN (
+                            'submitted',
+                            'working',
+                            'input-required',
+                            'completed',
+                            'failed',
+                            'escalated'
+                        )),
+    failure_score       REAL NOT NULL DEFAULT 0.0,
+    result_summary      TEXT,
+    result_artifacts    TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    closed_at           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_topic         ON tasks (topic_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_root          ON tasks (root_task_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_topic_state   ON tasks (topic_id, state);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent        ON tasks (parent_task_id);
 """
 
-TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks", "event_actions", "notes"]
+TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks", "event_actions", "notes", "tasks"]
 
 
 _MIGRATIONS = [
@@ -197,7 +228,66 @@ _MIGRATIONS = [
     "ALTER TABLE workspaces ADD COLUMN repo_ref TEXT NOT NULL DEFAULT 'master'",
     "ALTER TABLE event_actions ADD COLUMN silent INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE messages ADD COLUMN silent INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE messages ADD COLUMN sender_kind TEXT",
+    "ALTER TABLE messages ADD COLUMN sender_name TEXT",
+    "ALTER TABLE messages ADD COLUMN receiver_kind TEXT",
+    "ALTER TABLE messages ADD COLUMN receiver_name TEXT",
+    "ALTER TABLE messages ADD COLUMN task_id TEXT",
+    "ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT",
 ]
+
+
+def _migrate_envelope_indexes(conn: sqlite3.Connection) -> None:
+    """Create indexes for the envelope columns added to messages.
+
+    Idempotent: all use CREATE INDEX IF NOT EXISTS.
+    The partial index on sender_kind IS NULL makes the backfill's startup probe
+    O(1) — it scans only un-backfilled rows rather than the whole messages table.
+    Transaction is owned by the caller (init_db).
+    """
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_task"
+        " ON messages (task_id, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_reply_to"
+        " ON messages (reply_to_message_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_envelope_backfill"
+        " ON messages (id) WHERE sender_kind IS NULL"
+    )
+
+
+def _migrate_envelope_backfill(conn: sqlite3.Connection) -> None:
+    """Populate sender_kind/receiver_kind for pre-migration messages.
+
+    Rules (design §2.1):
+      sender='user'  → sender_kind='user',  receiver_kind='staff'  (receiver_name left NULL)
+      sender='agent' → sender_kind='staff', sender_name=agent_name, receiver_kind='user'
+      sender='event' → sender_kind='staff', sender_name=agent_name, receiver_kind='user'
+
+    Only touches rows where sender_kind IS NULL so the migration is idempotent.
+    Transaction is owned by the caller (init_db).
+    """
+    if conn.execute(
+        "SELECT 1 FROM messages WHERE sender_kind IS NULL LIMIT 1"
+    ).fetchone() is None:
+        return
+    LOGGER.info("db.migration_start envelope_backfill")
+    conn.execute(
+        "UPDATE messages SET sender_kind = 'user', receiver_kind = 'staff'"
+        " WHERE sender = 'user' AND sender_kind IS NULL"
+    )
+    conn.execute(
+        "UPDATE messages SET sender_kind = 'staff', sender_name = agent_name, receiver_kind = 'user'"
+        " WHERE sender = 'agent' AND sender_kind IS NULL"
+    )
+    conn.execute(
+        "UPDATE messages SET sender_kind = 'staff', sender_name = agent_name, receiver_kind = 'user'"
+        " WHERE sender = 'event' AND sender_kind IS NULL"
+    )
+    LOGGER.info("db.migration_done envelope_backfill")
 
 
 def _migrate_workspace_name_uniqueness(conn: sqlite3.Connection) -> None:
@@ -506,6 +596,8 @@ def init_db(db_path: str) -> None:
         _migrate_event_actions_v2(conn)
         _migrate_event_actions_v3(conn)
         _migrate_staffs_session_scope_none(conn)
+        _migrate_envelope_indexes(conn)
+        _migrate_envelope_backfill(conn)
         conn.commit()
     finally:
         conn.close()

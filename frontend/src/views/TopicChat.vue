@@ -42,7 +42,14 @@
         class="message tc-trace"
         :class="[m.sender === 'user' ? 'user' : 'agent', m.silent ? 'message-silent' : '', highlightedMsgId === m.id ? 'message-highlighted' : '']"
       >
-        <span class="label">{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</span>
+        <span class="label">
+          <template v-if="m.sender_name || m.receiver_name">
+            <span class="envelope-sender">@{{ m.sender_name || m.agent_name || 'agent' }}</span>
+            <span class="envelope-arrow"> → </span>
+            <span class="envelope-receiver">{{ m.receiver_kind === 'user' ? 'You' : `@${m.receiver_name}` }}</span>
+          </template>
+          <template v-else>{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</template>
+        </span>
         <div class="bubble" :class="{
           'bubble-streaming': m.sender === 'agent' && m.streaming,
           'bubble-interrupted': m.sender === 'agent' && !m.streaming && m.text === '(message interrupted)',
@@ -626,6 +633,12 @@ function finaliseMessage(data) {
     silent: data.silent ?? existing?.silent ?? false,
     traceOpen: false, streaming: false,
     created_at: existing?.created_at || new Date().toISOString(),
+    sender_kind: data.sender_kind ?? existing?.sender_kind ?? null,
+    sender_name: data.sender_name ?? existing?.sender_name ?? null,
+    receiver_kind: data.receiver_kind ?? existing?.receiver_kind ?? null,
+    receiver_name: data.receiver_name ?? existing?.receiver_name ?? null,
+    task_id: data.task_id ?? existing?.task_id ?? null,
+    reply_to_message_id: data.reply_to_message_id ?? existing?.reply_to_message_id ?? null,
   }
   if (idx >= 0) messages.value.splice(idx, 1, finalMsg)
   else messages.value.push(finalMsg)
@@ -885,6 +898,9 @@ onUnmounted(() => {
 .message.user { align-self: flex-end; align-items: flex-end; }
 .message.agent { align-self: flex-start; align-items: flex-start; }
 .label { font-size: 0.75em; color: #64748b; margin-bottom: 2px; }
+.envelope-sender { color: #2563eb; font-weight: 600; }
+.envelope-arrow { color: #94a3b8; }
+.envelope-receiver { color: #7c3aed; font-weight: 600; }
 .bubble { padding: 0.6rem 0.9rem; border-radius: 12px; line-height: 1.45; }
 .message.user .bubble { background: #fff; color: #1e293b; border: 1px solid #2563eb; border-bottom-right-radius: 3px; max-width: 100%; overflow: hidden; }
 .message.agent .bubble { background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 3px; max-width: 100%; overflow: hidden; transition: border-color 0.3s; }

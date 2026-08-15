@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "notes": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["-c", "cd /opt/codex-slack && WORKSPACE_ID=$WORKSPACE_ID MASTER_URL=$MASTER_URL TOPIC_ID=$TOPIC_ID exec python -m src.notes_mcp"],
+      "alwaysLoad": true,
+      "instructions": "Provides persistent key-value note storage scoped to the current workspace and topic. Use these tools to read and write memory that survives across sessions. Always call list_workspace_notes at the start of a session to recall prior context."
+    },
+    "orchestrate": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["-c", "cd /opt/codex-slack && WORKSPACE_ID=$WORKSPACE_ID MASTER_URL=$MASTER_URL TOPIC_ID=$TOPIC_ID AGENT_NAME=$AGENT_NAME PROMPT_MESSAGE_ID=$PROMPT_MESSAGE_ID TASK_DEPTH=$TASK_DEPTH exec python -m src.orchestrate_mcp"],
+      "alwaysLoad": true,
+      "instructions": "Provides agent orchestration tools. Use delegate_task to hand subtasks to another staff member and ask_sender to request clarification from whoever dispatched you. delegate_task is only available when your current task depth is below the configured maximum."
+    }
+  }
+}

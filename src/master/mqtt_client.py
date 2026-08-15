@@ -131,13 +131,32 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
                     if events:
                         transcript = json.dumps(events)
             usage_json = _extract_usage(transcript)
-            # Inherit silent flag from the prompt message so the reply is also hidden.
+
+            # Build envelope for this agent reply from the prompt message it answers.
+            # Defaults: sender is always the responding staff; receiver and task_id
+            # are derived from the prompt row so the reply threads back correctly.
+            reply_sender_kind = "staff"
+            reply_sender_name = agent_name
+            reply_receiver_kind = "user"
+            reply_receiver_name: str | None = None
+            inherited_task_id: str | None = None
+
             if reply_to:
                 prompt_row = conn.execute(
-                    "SELECT silent FROM messages WHERE id = ?", (reply_to,)
+                    "SELECT silent, sender_kind, sender_name, task_id FROM messages WHERE id = ?",
+                    (reply_to,)
                 ).fetchone()
                 if prompt_row is not None:
                     silent = bool(prompt_row["silent"])
+                    inherited_task_id = prompt_row["task_id"]
+                    # If the prompt was sent by a staff (delegation), reply back to that staff.
+                    # Otherwise the reply goes to the user.
+                    if prompt_row["sender_kind"] == "staff":
+                        reply_receiver_kind = "staff"
+                        reply_receiver_name = prompt_row["sender_name"]
+                    # Phase (b) will dispatch the reply back to the receiver;
+                    # here we only record the envelope for audit purposes.
+
             with conn:
                 # If the stale-stream detector beat us here with "(message interrupted)",
                 # update it with the real response instead of silently dropping it.
@@ -148,9 +167,19 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
                 )
                 conn.execute(
                     "INSERT OR IGNORE INTO messages"
-                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, interrupt_reason, silent, created_at)"
-                    " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?, ?, ?)",
-                    (message_id, topic_id, agent_name, text, transcript, usage_json, interrupt_reason, 1 if silent else 0, _now()),
+                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
+                    "  interrupt_reason, silent, created_at,"
+                    "  sender_kind, sender_name, receiver_kind, receiver_name,"
+                    "  task_id, reply_to_message_id)"
+                    " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?, ?, ?,"
+                    "         ?, ?, ?, ?, ?, ?)",
+                    (
+                        message_id, topic_id, agent_name, text, transcript, usage_json,
+                        interrupt_reason, 1 if silent else 0, _now(),
+                        reply_sender_kind, reply_sender_name,
+                        reply_receiver_kind, reply_receiver_name,
+                        inherited_task_id, reply_to if reply_to else None,
+                    ),
                 )
                 conn.execute(
                     "DELETE FROM chunks WHERE message_id = ?", (message_id,)

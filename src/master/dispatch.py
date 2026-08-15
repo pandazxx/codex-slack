@@ -79,6 +79,12 @@ async def dispatch_to_staff(
     event_action_id: str | None = None,
     response_mode: str | None = None,
     silent: bool = False,
+    sender_kind: str | None = None,
+    sender_name: str | None = None,
+    receiver_kind: str | None = None,
+    receiver_name: str | None = None,
+    task_id: str | None = None,
+    reply_to_message_id: str | None = None,
 ) -> str:
     """Insert a message row, build the MQTT dispatch payload, broadcast on the hub, and publish.
 
@@ -86,7 +92,20 @@ async def dispatch_to_staff(
     sender is 'user' for human-initiated messages or 'event' for event-triggered ones.
     raw_text is the text stored in messages.text; defaults to prompt_text when omitted.
     attachments is a list of attachment meta dicts for the payload; events pass None.
+
+    sender_kind/sender_name/receiver_kind/receiver_name carry the explicit envelope
+    introduced in ADR-0017. When omitted, defaults are derived from sender so that
+    all existing callers continue to behave identically:
+      sender='user'  → sender_kind='user'
+      sender='event' → sender_kind='staff'
+    receiver_kind defaults to 'staff' (the dispatched agent) when not provided.
     """
+    if sender_kind is None:
+        sender_kind = "user" if sender == "user" else "staff"
+    if receiver_kind is None:
+        receiver_kind = "staff"
+    if receiver_name is None:
+        receiver_name = staff["name"]
     if raw_text is None:
         raw_text = prompt_text
     if attachments is None:
@@ -154,9 +173,14 @@ async def dispatch_to_staff(
         now = _now()
         conn.execute(
             "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, event_action_id, silent, created_at)"
-            " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?)",
-            (message_id, topic_id, sender, raw_text, event_action_id, 1 if silent else 0, now),
+            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
+            "  event_action_id, silent, created_at,"
+            "  sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id)"
+            " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                message_id, topic_id, sender, raw_text, event_action_id, 1 if silent else 0, now,
+                sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,
+            ),
         )
         if sender == "user":
             conn.execute(
@@ -175,6 +199,18 @@ async def dispatch_to_staff(
             db_path=app_state.db_path, workspace_id=workspace_id,
         )
 
+    task_depth = 0
+    if task_id:
+        _task_conn = get_connection(app_state.db_path)
+        try:
+            _task_row = _task_conn.execute(
+                "SELECT depth FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if _task_row is not None:
+                task_depth = _task_row["depth"]
+        finally:
+            _task_conn.close()
+
     payload_dict: dict = {
         "message_id": message_id,
         "agent_name": staff["name"],
@@ -191,6 +227,8 @@ async def dispatch_to_staff(
         "system_prompt": raw_system_prompt or None,
         "text": prompt_text,
         "attachments": attachments,
+        "task_id": task_id,
+        "task_depth": task_depth,
     }
     if response_mode is not None:
         payload_dict["response_mode"] = response_mode
@@ -216,6 +254,12 @@ async def dispatch_to_staff(
         "transcript": payload,
         "attachments": attachments,
         "silent": silent,
+        "sender_kind": sender_kind,
+        "sender_name": sender_name,
+        "receiver_kind": receiver_kind,
+        "receiver_name": receiver_name,
+        "task_id": task_id,
+        "reply_to_message_id": reply_to_message_id,
     })
 
     settings = app_state.settings

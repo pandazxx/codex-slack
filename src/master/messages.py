@@ -59,6 +59,12 @@ class MessageOut(BaseModel):
     silent: bool = False
     created_at: str
     attachments: list[AttachmentMeta] = []
+    sender_kind: str | None = None
+    sender_name: str | None = None
+    receiver_kind: str | None = None
+    receiver_name: str | None = None
+    task_id: str | None = None
+    reply_to_message_id: str | None = None
 
 
 @router.post("", status_code=202)
@@ -161,6 +167,9 @@ async def send_message(
         sender="user",
         raw_text=text.strip(),
         attachments=attachment_metas,
+        sender_kind="user",
+        receiver_kind="staff",
+        receiver_name=staff["name"],
     )
 
     # Insert attachment rows now that the message row exists.
@@ -240,8 +249,9 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
         ).fetchone() is None:
             raise HTTPException(404, "topic not found")
         rows = conn.execute(
-            "SELECT id, sender, agent_name, text, transcript, usage_json, interrupt_reason, silent, created_at FROM messages"
-            " WHERE topic_id = ? ORDER BY created_at",
+            "SELECT id, sender, agent_name, text, transcript, usage_json, interrupt_reason, silent, created_at,"
+            " sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id"
+            " FROM messages WHERE topic_id = ? ORDER BY created_at",
             (topic_id,),
         ).fetchall()
         result = []
@@ -264,6 +274,12 @@ def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[Me
                     interrupt_reason=r["interrupt_reason"],
                     silent=bool(r["silent"]),
                     created_at=r["created_at"], attachments=attachments,
+                    sender_kind=r["sender_kind"],
+                    sender_name=r["sender_name"],
+                    receiver_kind=r["receiver_kind"],
+                    receiver_name=r["receiver_name"],
+                    task_id=r["task_id"],
+                    reply_to_message_id=r["reply_to_message_id"],
                 )
             )
     finally:
