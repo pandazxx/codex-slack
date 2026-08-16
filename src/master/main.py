@@ -569,6 +569,11 @@ async def schema() -> dict:  # type: ignore[type-arg]
     return schema_info(app.state.db_path)
 
 
+@app.get("/hello-world")
+async def hello_world() -> dict:  # type: ignore[type-arg]
+    return {"message": "hello world"}
+
+
 async def _replay_in_progress_chunks(ws: WebSocket, db_path: str) -> None:
     """Replay every in-progress chunk stream to a freshly-connected client.
 
