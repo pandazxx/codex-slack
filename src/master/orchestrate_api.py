@@ -661,24 +661,26 @@ async def ask_sender(
                 "UPDATE tasks SET state = 'input-required', updated_at = ? WHERE id = ?",
                 (_now(), task_row["id"]),
             )
-            # For staff receivers: stage the question dispatch so process_turn_end publishes
-            # MQTT when the caller's turn ends. The message row is already written above;
-            # dispatch_to_staff will be called with insert_row=False to avoid a duplicate.
-            if receiver_kind == "staff":
-                _stage_dispatch(
-                    conn,
-                    prompt_message_id=body.caller_message_id,
-                    topic_id=topic_id,
-                    sender_name=body.caller_staff,
-                    receiver_kind=receiver_kind,
-                    receiver_name=receiver_name,
-                    task_id=task_row["id"],
-                    kind="question",
-                    body=json.dumps({
-                        "message_id": message_id,
-                        "text": body.question,
-                    }),
-                )
+            # Stage the question for BOTH receiver kinds. Staff receivers get an
+            # MQTT publish at turn end (dispatch_to_staff with insert_row=False);
+            # user receivers need no delivery (the row above is already visible),
+            # but the staged record makes process_turn_end treat this as a
+            # tool-staged turn — so the caller's leftover free text is silenced
+            # instead of falling into the answer_missing guard (rc8 UAT).
+            _stage_dispatch(
+                conn,
+                prompt_message_id=body.caller_message_id,
+                topic_id=topic_id,
+                sender_name=body.caller_staff,
+                receiver_kind=receiver_kind,
+                receiver_name=receiver_name,
+                task_id=task_row["id"],
+                kind="question",
+                body=json.dumps({
+                    "message_id": message_id,
+                    "text": body.question,
+                }),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -1034,6 +1036,7 @@ async def process_turn_end(
         r["receiver_name"] for r in staged_rows
         if r["receiver_kind"] == "staff"
     }
+    staged_targets_user = any(r["receiver_kind"] == "user" for r in staged_rows)
 
     # If no staged row was recorded and this was a delegated turn, apply implicit fallbacks.
     if not staged_rows and task_row:
@@ -1064,7 +1067,15 @@ async def process_turn_end(
     # If a staged message already targets the free-text receiver, mark the reply silent
     # (the structured content is the message of record per design §7).
     # Otherwise, if receiver is a staff, dispatch it; if receiver is user, it stays visible.
-    if free_text_receiver_name in staged_receiver_names:
+    if free_text_receiver_kind == "user":
+        # The stored reply envelope was derived from the prompt sender (the task
+        # counterparty) — retarget it so it renders as talking to the user, and
+        # silence it when a staged message (e.g. an ask_sender question) already
+        # carries this turn's content to the user (§7 silent rule).
+        _retarget_reply_to_user(db_path, reply_message_id)
+        if staged_targets_user:
+            _mark_reply_silent(db_path, reply_message_id)
+    elif free_text_receiver_name in staged_receiver_names:
         _mark_reply_silent(db_path, reply_message_id)
     elif free_text_receiver_kind == "staff" and free_text_receiver_name:
         await _dispatch_free_text_to_staff(

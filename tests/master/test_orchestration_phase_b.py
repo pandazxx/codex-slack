@@ -1852,15 +1852,16 @@ def test_dispatcher_ask_sender_routes_to_user(client, workspace_topic,
         task = conn.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
         assert task["state"] == "input-required"
 
-        # No staged dispatch must have been created (user-receiver questions need none).
+        # rc9: user-receiver questions DO stage (so the caller's leftover free
+        # text is recognised as tool-staged and silenced) — but the staged row
+        # targets the user; the executor never dispatches these to any staff.
         staged = conn.execute(
             "SELECT * FROM staged_dispatches"
             " WHERE prompt_message_id = ? AND kind = 'question'",
             (judgment_prompt_id,),
         ).fetchall()
-        assert len(staged) == 0, (
-            "Dispatcher ask_sender to user must NOT produce a staged staff dispatch"
-        )
+        assert len(staged) == 1
+        assert staged[0]["receiver_kind"] == "user"
 
         # Exactly one message row per ask_sender call.
         question_rows = conn.execute(
@@ -2453,5 +2454,83 @@ def test_dispatcher_can_bubble_question_while_input_required(client, workspace_t
             (task_id,),
         ).fetchone()
         assert q is not None, "Bubbled question to the user must exist"
+    finally:
+        conn.close()
+
+
+def test_dispatcher_question_turn_free_text_silenced_and_retargeted(
+    client, workspace_topic, architect_staff, engineer_staff
+):
+    """Regression (rc8 UAT): when the dispatcher relays a question to the user via
+    ask_sender, its leftover free text duplicated the staged question but rendered
+    visibly as @dispatcher → @assignee (stale prompt-derived envelope). It must be
+    silenced (§7 silent rule, user receiver included) and retargeted to the user."""
+    c, mock_mqtt = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer")
+    task_id = delegate_r.json()["task_id"]
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    # Engineer asks; turn ends; question turn dispatched to architect.
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={"caller_staff": "engineer", "caller_message_id": eng_prompt["id"],
+              "dispatch_token": eng_token, "question": "new name?"},
+    )
+    eng_reply_id = _simulate_response(db_path, topic_id, "engineer", eng_prompt["id"], "asked")
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id, eng_prompt["id"], eng_reply_id, "engineer", "asked",
+    ))
+
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        arch_prompt = conn.execute(
+            "SELECT id FROM messages WHERE task_id = ? AND receiver_name = 'architect'"
+            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    arch_token = _get_dispatch_token(client, arch_prompt["id"])
+
+    # Architect relays to the user via ask_sender, then its turn ends with
+    # leftover free text that paraphrases the same question.
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={"caller_staff": "architect", "caller_message_id": arch_prompt["id"],
+              "dispatch_token": arch_token, "question": "user: what is the new name?"},
+    )
+    free_text = "I've escalated to you - what should it be renamed to?"
+    arch_reply_id = _simulate_response(db_path, topic_id, "architect", arch_prompt["id"],
+                                        free_text)
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id, arch_prompt["id"], arch_reply_id, "architect", free_text,
+    ))
+
+    conn = get_connection(db_path)
+    try:
+        reply_row = conn.execute(
+            "SELECT silent, receiver_kind, receiver_name FROM messages WHERE id = ?",
+            (arch_reply_id,),
+        ).fetchone()
+        assert reply_row["silent"] == 1, "Duplicate free text must be silenced"
+        assert reply_row["receiver_kind"] == "user"
+        assert reply_row["receiver_name"] is None
+        # And nothing was dispatched to the engineer.
+        stray = conn.execute(
+            "SELECT id FROM messages WHERE task_id = ? AND receiver_name = 'engineer'"
+            " AND sender = 'event' AND id != ?",
+            (task_id, eng_prompt["id"]),
+        ).fetchone()
+        assert stray is None
     finally:
         conn.close()
