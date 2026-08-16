@@ -204,15 +204,23 @@ async def dispatch_to_staff(
             db_path=app_state.db_path, workspace_id=workspace_id,
         )
 
+    # Turn depth is the RECEIVER's role depth in the task, not the task's
+    # depth: the assignee's turns run at tasks.depth, but turns dispatched
+    # back to the dispatcher (questions, judgment) run one level up. The
+    # MCP server gates its tool surface on this value — getting it wrong
+    # hides accept_result/answer_question from the dispatcher's turns.
     task_depth = 0
     if task_id:
         _task_conn = get_connection(app_state.db_path)
         try:
             _task_row = _task_conn.execute(
-                "SELECT depth FROM tasks WHERE id = ?", (task_id,)
+                "SELECT depth, assignee_name FROM tasks WHERE id = ?", (task_id,)
             ).fetchone()
             if _task_row is not None:
-                task_depth = _task_row["depth"]
+                if receiver_name == _task_row["assignee_name"]:
+                    task_depth = _task_row["depth"]
+                else:
+                    task_depth = max(_task_row["depth"] - 1, 0)
         finally:
             _task_conn.close()
 

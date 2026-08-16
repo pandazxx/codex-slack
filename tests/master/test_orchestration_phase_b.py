@@ -1748,3 +1748,106 @@ def _reload_mcp(monkeypatch, task_depth: int, max_depth: int) -> None:
     for mod_name in list(sys.modules):
         if "orchestrate_mcp" in mod_name:
             del sys.modules[mod_name]
+
+
+# ---------------------------------------------------------------------------
+# Regression (rc4 UAT): turn depth in the MQTT payload must reflect the
+# RECEIVER's role in the task. Dispatcher-bound turns (judgment, questions)
+# run at task.depth - 1 — the MCP server gates accept_result/answer_question
+# on TASK_DEPTH == 0, so a judgment turn stamped with the task's depth (1)
+# hides the judgment tools from the dispatcher entirely.
+# ---------------------------------------------------------------------------
+
+def _published_payloads(mock_mqtt):
+    import json as _json
+    out = []
+    for call_ in mock_mqtt.publish.call_args_list:
+        try:
+            out.append(_json.loads(call_.args[1]))
+        except Exception:
+            pass
+    return out
+
+
+def test_judgment_turn_payload_has_dispatcher_depth(client, workspace_topic,
+                                                    architect_staff, engineer_staff):
+    c, mock_mqtt = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer",
+                           goal="Implement JWT", criteria="Tests green")
+    task_id = delegate_r.json()["task_id"]
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    # Assignee-bound first prompt runs at the task's depth.
+    eng_payload = next(p for p in _published_payloads(mock_mqtt)
+                       if p.get("message_id") == eng_prompt["id"])
+    assert eng_payload["task_depth"] == 1
+
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/submit_result",
+        json={"caller_staff": "engineer", "caller_message_id": eng_prompt["id"],
+              "dispatch_token": eng_token, "status": "completed",
+              "summary": "done", "artifacts": []},
+    )
+    eng_reply_id = _simulate_response(db_path, topic_id, "engineer", eng_prompt["id"], "done")
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id, eng_prompt["id"], eng_reply_id, "engineer", "done",
+    ))
+
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        judgment_prompt = conn.execute(
+            "SELECT id FROM messages WHERE task_id = ? AND receiver_name = 'architect'"
+            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert judgment_prompt is not None
+
+    # Dispatcher-bound judgment turn runs one level up: TASK_DEPTH must be 0
+    # so the MCP server registers accept_result/answer_question.
+    judgment_payload = next(p for p in _published_payloads(mock_mqtt)
+                            if p.get("message_id") == judgment_prompt["id"])
+    assert judgment_payload["task_depth"] == 0
+
+
+def test_question_turn_payload_has_dispatcher_depth(client, workspace_topic,
+                                                    architect_staff, engineer_staff):
+    c, mock_mqtt = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer",
+              goal="Implement JWT", criteria="Tests green")
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={"caller_staff": "engineer", "caller_message_id": eng_prompt["id"],
+              "dispatch_token": eng_token, "question": "which token format?"},
+    )
+    eng_reply_id = _simulate_response(db_path, topic_id, "engineer", eng_prompt["id"], "asked")
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id, eng_prompt["id"], eng_reply_id, "engineer", "asked",
+    ))
+
+    question_payloads = [p for p in _published_payloads(mock_mqtt)
+                         if p.get("agent_name") == "architect" and p.get("task_id")]
+    assert question_payloads, "Question turn must be dispatched to architect"
+    assert question_payloads[-1]["task_depth"] == 0
