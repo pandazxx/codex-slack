@@ -29,7 +29,7 @@ engineer changes any of these, update the corresponding test cases and this sect
 | `DelegateResult` (updated) | `{task_id: str, state: 'submitted' | 'queued', queued_position: int | None}` — `queued_position` non-null iff state is `queued` | §4.1, §8 |
 | Per-topic lock | DB-backed lock keyed by `topic_id`; acquired at `submitted → working`; released only on `completed` or `failed`; retained through `escalated` | §8 |
 | FIFO queue | Per-topic ordered list of delegations waiting on the lock; auto-dispatch on lock release; durable across process restart | §8 |
-| `_save_agent_response` re-entry hook | Extended to: check staged tool messages in `pending_dispatches`; dispatch staged messages via `dispatch_to_staff` when turn ends; apply implicit-result / implicit-answer fallbacks | §7 |
+| `_save_agent_response` re-entry hook | Extended to: check staged tool messages in `pending_dispatches`; dispatch staged messages via `dispatch_to_staff` when turn ends; apply the implicit-result fallback (a question turn ending without `answer_question` fails upward to the user — revised in rc8, see design §4.1) | §7 |
 | `pending_dispatches` map | In-memory map `message_id → {task_id, dispatcher_kind, dispatcher_name, turn_kind}`; rebuilt from DB on startup | §7 |
 | `GET /orchestrate/tasks` | Lists tasks for a topic; query param `state` optional filter; returns task rows | §11b |
 | `DISPATCH_TOKEN` auth | Short-lived token injected into the MQTT prompt payload (not stored in messages or returned by GET/WS endpoints); validated by all three `POST /orchestrate/…` endpoints instead of `caller_mismatch` message-id binding | §4 (auth note) |
@@ -66,7 +66,7 @@ Phase (b) only. Specifically:
 - Task state machine transitions `submitted → working → input-required → working → completed`;
   machine enforcement (illegal transitions return MCP errors, state does not change).
 - `submit_result`, `answer_question`, and `accept_result` MCP tools and their REST endpoints.
-- Implicit-result fallback (delegated turn ends without `submit_result`) and implicit-answer
+- Implicit-result fallback (delegated turn ends without `submit_result`); answer-missing fail-upward
   fallback (question turn ends without `answer_question`).
 - Per-topic DB-backed lock: acquired on `submitted → working`, released on `completed` / `failed`.
   Lock retained through `escalated` state (escalation is phase (c) but the lock-retention

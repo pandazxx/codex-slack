@@ -1139,21 +1139,17 @@ async def _apply_implicit_fallback(
             db_path=db_path,
         )
     elif state == "input-required" and agent_name == dispatcher:
-        # Implicit answer: use the reply text as the answer.
-        LOGGER.info(
-            "orchestration.implicit_answer task_id=%s topic_id=%s agent=%s",
-            task_id, topic_id, agent_name,
+        # A question turn ended without answer_question or ask_sender. Auto-
+        # delivering the free text as "the answer" poisoned tasks in UAT (the
+        # dispatcher's text was itself a question meant for the user). Fail
+        # UPWARD instead: retarget the reply to the user (visible, answerable)
+        # and keep the task input-required until a real answer arrives.
+        LOGGER.warning(
+            "orchestration.guard_hit guard=answer_missing task_id=%s topic_id=%s"
+            " reply_text=%.120r",
+            task_id, topic_id, reply_text,
         )
-        await _dispatch_answer_to_assignee(
-            app_state=app_state,
-            workspace_id=workspace_id,
-            topic_id=topic_id,
-            task_row=fresh_task,
-            answer=reply_text,
-            sender_name=agent_name,
-            reply_message_id=reply_message_id,
-            db_path=db_path,
-        )
+        _retarget_reply_to_user(db_path, reply_message_id)
     elif state == "working" and agent_name == dispatcher:
         # Judgment turn ended with no accept_result.  The reply text routes to the user
         # (the dispatcher's own sender for depth-1 tasks); task state is unchanged —
@@ -1165,8 +1161,26 @@ async def _apply_implicit_fallback(
             " reply_text=%.120r",
             task_id, topic_id, reply_text,
         )
-        # The reply_message_id row is already visible to the user (sender='agent',
-        # receiver derived from reply-to-sender = user).  No additional dispatch needed.
+        # The reply row's envelope was derived from the judgment prompt (sender =
+        # assignee), so it renders as dispatcher→assignee even though nothing is
+        # delivered — retarget it to the user so it reads as what it is: the
+        # dispatcher talking to its own sender.
+        _retarget_reply_to_user(db_path, reply_message_id)
+
+
+def _retarget_reply_to_user(db_path: str, reply_message_id: str) -> None:
+    """Point a reply row's envelope at the user (fail-upward for missing tool calls)."""
+    if not reply_message_id:
+        return
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE messages SET receiver_kind='user', receiver_name=NULL WHERE id = ?",
+                (reply_message_id,),
+            )
+    finally:
+        conn.close()
 
 
 async def _execute_staged_row(
@@ -1318,13 +1332,25 @@ async def _dispatch_question_to_staff(
         )
         return
 
+    # Footer travels only in the MQTT payload (insert_row=False keeps the stored
+    # row as the clean question text). Without explicit instructions the
+    # dispatcher answers conversationally and its free text used to be
+    # mis-delivered to the assignee as an implicit answer (rc7 UAT).
+    question_prompt = (
+        f"{question_text}\n\n---\n"
+        f"The assignee of task {task_row['id']} asks the question above.\n"
+        f"- If you know the answer: call answer_question(task_id, answer).\n"
+        f"- If only your own sender (e.g. the user) knows: call ask_sender(question) "
+        f"to relay it upward.\n"
+        f"Plain reply text is NOT delivered to the assignee."
+    )
     from .dispatch import dispatch_to_staff
     await dispatch_to_staff(
         app_state=app_state,
         workspace_id=workspace_id,
         topic_id=topic_id,
         staff=target_staff,
-        prompt_text=question_text,
+        prompt_text=question_prompt,
         sender="event",
         sender_kind="staff",
         sender_name=sender_name,

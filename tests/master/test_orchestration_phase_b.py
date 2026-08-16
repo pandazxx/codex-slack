@@ -1143,17 +1143,15 @@ def test_implicit_result_fallback(client, workspace_topic, architect_staff, engi
 # ---------------------------------------------------------------------------
 
 def test_implicit_answer_fallback(client, workspace_topic, architect_staff, engineer_staff):
-    """input-required turn ends without answer_question → answer dispatched to assignee.
+    """input-required turn ends without answer_question → fail UPWARD, not auto-answer.
 
-    The full flow simulated here:
-      1. Delegate user → architect → engineer (creates engineer prompt).
-      2. Engineer calls ask_sender (stages 'question' for engineer's prompt, task→input-required).
-      3. Engineer's turn ends → process_turn_end dispatches the staged question to architect,
-         creating a new question-prompt message addressed to architect with task_id set.
+    Regression (rc7 UAT): the dispatcher's free text on a question turn was
+    auto-delivered to the assignee as "the answer" — but that text was itself a
+    question meant for the user, poisoning the task. New semantics:
       4. Architect's turn ends with plain text and no answer_question call.
-      5. process_turn_end sees no staged rows for architect's question-prompt, and task is
-         still input-required with architect as dispatcher → implicit answer fires.
-      6. Verify: an answer message is dispatched to engineer, task→working.
+      5. Nothing is dispatched to the assignee; the reply row is retargeted to
+         the user (visible, answerable) and the task stays input-required until
+         a real answer_question arrives.
     """
     c, _ = client
     ws_id, topic_id = workspace_topic
@@ -1213,18 +1211,26 @@ def test_implicit_answer_fallback(client, workspace_topic, architect_staff, engi
         arch_question_msg_id, arch_reply_id, "architect", answer_text,
     ))
 
-    # Step 5-6: Verify an answer message was dispatched to engineer and task→working.
+    # Steps 5-6: nothing goes to the assignee; the reply is retargeted to the
+    # user and the task stays input-required.
     conn = get_connection(db_path)
     try:
         answer_prompt = conn.execute(
             "SELECT * FROM messages WHERE task_id = ? AND receiver_name = 'engineer'"
-            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
-            (task_id,),
+            " AND sender = 'event' AND id != ? ORDER BY created_at DESC LIMIT 1",
+            (task_id, eng_prompt["id"]),
         ).fetchone()
-        assert answer_prompt is not None, "Implicit answer must trigger dispatch to assignee"
+        assert answer_prompt is None, "Free text must NOT be auto-delivered to the assignee"
 
         task = conn.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        assert task["state"] == "working", "Task must return to working after implicit answer"
+        assert task["state"] == "input-required", "Task must stay input-required"
+
+        reply_row = conn.execute(
+            "SELECT receiver_kind, receiver_name FROM messages WHERE id = ?",
+            (arch_reply_id,),
+        ).fetchone()
+        assert reply_row["receiver_kind"] == "user", "Reply must be retargeted to the user"
+        assert reply_row["receiver_name"] is None
     finally:
         conn.close()
 
@@ -2114,7 +2120,7 @@ def test_implicit_answer_fires_only_for_assignee_questions(
     finally:
         conn.close()
 
-    # Architect's turn ends with free text (implicit answer → should dispatch to engineer).
+    # Architect's turn ends with free text and no tool call (must fail upward).
     arch_answer = "Use JWT"
     arch_reply_id = _simulate_response(
         db_path, topic_id, "architect", arch_q_prompt_id, arch_answer
@@ -2126,20 +2132,33 @@ def test_implicit_answer_fires_only_for_assignee_questions(
 
     conn2 = get_connection(db_path)
     try:
-        # Implicit answer fired: task back to working, engineer got an answer.
+        # Fail-upward semantics: task stays input-required, no auto-answer to engineer,
+        # and the question prompt payload carried the relay instructions.
         task = conn2.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        assert task["state"] == "working", "Task must be working after implicit answer fires"
+        assert task["state"] == "input-required"
 
         eng_answer_prompt = conn2.execute(
             "SELECT * FROM messages WHERE task_id = ? AND receiver_name = 'engineer'"
-            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
-            (task_id,),
+            " AND sender = 'event' AND id != ? ORDER BY created_at DESC LIMIT 1",
+            (task_id, eng_prompt["id"]),
         ).fetchone()
-        assert eng_answer_prompt is not None, (
-            "Implicit answer must dispatch an answer to engineer"
-        )
+        assert eng_answer_prompt is None
     finally:
         conn2.close()
+
+    # The architect's question-turn MQTT payload must include the relay footer.
+    import json as _json
+    payloads = []
+    _, mock_mqtt = client
+    for call_ in mock_mqtt.publish.call_args_list:
+        try:
+            payloads.append(_json.loads(call_.args[1]))
+        except Exception:
+            pass
+    q_payload = next(p for p in payloads if p.get("message_id") == arch_q_prompt_id)
+    assert "answer_question" in q_payload["text"]
+    assert "ask_sender" in q_payload["text"]
+    assert "NOT delivered" in q_payload["text"]
 
 
 # Fix 4: Delegated first prompt contains ask_sender/submit_result instruction footer.
