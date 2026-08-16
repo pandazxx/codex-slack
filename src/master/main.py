@@ -559,6 +559,11 @@ if (_STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="static-assets")
 
 
+@app.get("/hello-world")
+async def hello_world() -> dict:  # type: ignore[type-arg]
+    return {"message": "Hello, World!"}
+
+
 @app.get("/health")
 async def health() -> dict:  # type: ignore[type-arg]
     return {"status": "ok", "version": get_app_version()}
