@@ -1751,6 +1751,529 @@ def _reload_mcp(monkeypatch, task_depth: int, max_depth: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# rc5 UAT regression fixes
+# ---------------------------------------------------------------------------
+
+# Fix 1 + 2: Dispatcher ask_sender routes to user, exactly one message row.
+# When the task's DISPATCHER (architect) calls ask_sender on a judgment or
+# question turn, the question must go to the USER (architect's own sender),
+# not back to architect.  Exactly one message row must exist per ask_sender.
+# ---------------------------------------------------------------------------
+
+def test_dispatcher_ask_sender_routes_to_user(client, workspace_topic,
+                                               architect_staff, engineer_staff):
+    """Dispatcher calling ask_sender on a judgment turn produces receiver_kind='user',
+    task input-required, no staged staff dispatch, and exactly one message row.
+    No self-addressed architect→architect message may appear.
+    """
+    c, _ = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    # Set up: user → architect → engineer, engineer submits, judgment prompt goes to architect.
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer")
+    task_id = delegate_r.json()["task_id"]
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    # Engineer submits result; engineer's turn ends → judgment prompt dispatched to architect.
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/submit_result",
+        json={
+            "caller_staff": "engineer",
+            "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
+            "status": "completed",
+            "summary": "done",
+        },
+    )
+    eng_reply_id = _simulate_response(db_path, topic_id, "engineer", eng_prompt["id"], "done")
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id, eng_prompt["id"], eng_reply_id, "engineer", "done",
+    ))
+
+    # Get the judgment prompt dispatched to architect (this is the dispatcher's turn).
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        judgment_prompt = conn.execute(
+            "SELECT id FROM messages WHERE task_id = ? AND receiver_name = 'architect'"
+            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        assert judgment_prompt is not None
+        judgment_prompt_id = judgment_prompt["id"]
+    finally:
+        conn.close()
+
+    # Architect (the DISPATCHER) calls ask_sender on the judgment turn.
+    # Receiver must be the USER (architect's own sender), not architect itself.
+    judgment_token = _get_dispatch_token(client, judgment_prompt_id)
+    r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={
+            "caller_staff": "architect",
+            "caller_message_id": judgment_prompt_id,
+            "dispatch_token": judgment_token,
+            "question": "What name should I use?",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["task_state"] == "input-required"
+
+    question_msg_id = body["message_id"]
+
+    conn = get_connection(db_path)
+    try:
+        # The question message must address the USER, not architect.
+        question_msg = conn.execute(
+            "SELECT receiver_kind, receiver_name FROM messages WHERE id = ?",
+            (question_msg_id,),
+        ).fetchone()
+        assert question_msg is not None
+        assert question_msg["receiver_kind"] == "user"
+        assert question_msg["receiver_name"] is None, (
+            "Dispatcher ask_sender must produce receiver_name=NULL (user)"
+        )
+
+        # Task must be in input-required.
+        task = conn.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        assert task["state"] == "input-required"
+
+        # No staged dispatch must have been created (user-receiver questions need none).
+        staged = conn.execute(
+            "SELECT * FROM staged_dispatches"
+            " WHERE prompt_message_id = ? AND kind = 'question'",
+            (judgment_prompt_id,),
+        ).fetchall()
+        assert len(staged) == 0, (
+            "Dispatcher ask_sender to user must NOT produce a staged staff dispatch"
+        )
+
+        # Exactly one message row per ask_sender call.
+        question_rows = conn.execute(
+            "SELECT id FROM messages"
+            " WHERE task_id = ? AND text = 'What name should I use?'",
+            (task_id,),
+        ).fetchall()
+        assert len(question_rows) == 1, (
+            f"Exactly one message row per ask_sender, got {len(question_rows)}"
+        )
+
+        # No self-addressed message: no message with sender_name=architect AND
+        # receiver_name=architect should exist for this task.
+        self_msg = conn.execute(
+            "SELECT id FROM messages"
+            " WHERE task_id = ? AND sender_name = 'architect' AND receiver_name = 'architect'",
+            (task_id,),
+        ).fetchone()
+        assert self_msg is None, (
+            "No self-addressed architect→architect question must exist"
+        )
+    finally:
+        conn.close()
+
+
+def test_assignee_ask_sender_routes_to_dispatcher(client, workspace_topic,
+                                                   architect_staff, engineer_staff):
+    """Assignee calling ask_sender produces receiver_kind='staff', receiver=dispatcher.
+
+    The message row is written immediately at /ask time (exactly one row).
+    A staged dispatch is queued so MQTT fires at turn-end without a second INSERT.
+    After turn-end, still exactly one message row with the correct envelope.
+    """
+    c, _ = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer")
+    task_id = delegate_r.json()["task_id"]
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={
+            "caller_staff": "engineer",
+            "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
+            "question": "Which auth scheme?",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["task_state"] == "input-required"
+    question_msg_id = r.json()["message_id"]
+
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        # The message row must exist immediately after /ask (exactly one row).
+        pre_msg = conn.execute(
+            "SELECT id, receiver_kind, receiver_name FROM messages WHERE id = ?",
+            (question_msg_id,),
+        ).fetchone()
+        assert pre_msg is not None, "Question message must be written at /ask time"
+        assert pre_msg["receiver_kind"] == "staff"
+        assert pre_msg["receiver_name"] == "architect"
+
+        # A staged dispatch row must exist for the MQTT publish at turn-end.
+        staged = conn.execute(
+            "SELECT * FROM staged_dispatches"
+            " WHERE prompt_message_id = ? AND kind = 'question'",
+            (eng_prompt["id"],),
+        ).fetchone()
+        assert staged is not None
+        assert staged["receiver_name"] == "architect"
+    finally:
+        conn.close()
+
+    # After engineer's turn ends, process_turn_end fires the staged dispatch (MQTT only).
+    eng_reply_id = _simulate_response(db_path, topic_id, "engineer", eng_prompt["id"], "asked")
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id,
+        eng_prompt["id"], eng_reply_id, "engineer", "asked",
+    ))
+
+    conn2 = get_connection(db_path)
+    try:
+        # Still exactly one message row — dispatch_to_staff must not re-insert.
+        question_rows = conn2.execute(
+            "SELECT id, receiver_kind, receiver_name FROM messages"
+            " WHERE task_id = ? AND text LIKE '%Which auth scheme?%'",
+            (task_id,),
+        ).fetchall()
+        assert len(question_rows) == 1, (
+            f"Exactly one message row per ask_sender (staff receiver), got {len(question_rows)}"
+        )
+        assert question_rows[0]["receiver_kind"] == "staff"
+        assert question_rows[0]["receiver_name"] == "architect"
+    finally:
+        conn2.close()
+
+
+# Fix 3: Dispatcher judgment turn free text → user, NOT dispatched to assignee.
+# ---------------------------------------------------------------------------
+
+def test_dispatcher_judgment_free_text_routes_to_user(client, workspace_topic,
+                                                       architect_staff, engineer_staff):
+    """When the dispatcher's judgment turn ends with free text and no tool call,
+    the reply stays visible to the user and is NOT dispatched to the assignee.
+    """
+    c, _ = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer")
+    task_id = delegate_r.json()["task_id"]
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    # Engineer submits result; engineer's turn ends → judgment prompt dispatched to architect.
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/submit_result",
+        json={
+            "caller_staff": "engineer",
+            "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
+            "status": "completed",
+            "summary": "done",
+        },
+    )
+    eng_reply_id = _simulate_response(db_path, topic_id, "engineer", eng_prompt["id"], "done")
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id, eng_prompt["id"], eng_reply_id, "engineer", "done",
+    ))
+
+    # Get the judgment prompt dispatched to architect.
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        judgment_prompt = conn.execute(
+            "SELECT id FROM messages WHERE task_id = ? AND receiver_name = 'architect'"
+            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        assert judgment_prompt is not None
+        judgment_prompt_id = judgment_prompt["id"]
+    finally:
+        conn.close()
+
+    # Architect's judgment turn ends with free text only — no accept_result.
+    # The reply must stay visible to the user, NOT be dispatched to engineer.
+    free_text = "I need more information before I can accept this."
+    arch_reply_id = _simulate_response(
+        db_path, topic_id, "architect", judgment_prompt_id, free_text
+    )
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id,
+        judgment_prompt_id, arch_reply_id, "architect", free_text,
+    ))
+
+    conn2 = get_connection(db_path)
+    try:
+        # No new message dispatched to engineer after the judgment turn.
+        engineer_new_prompts = conn2.execute(
+            "SELECT * FROM messages"
+            " WHERE task_id = ? AND receiver_name = 'engineer' AND sender = 'event'"
+            " AND id != ?",
+            (task_id, eng_prompt["id"]),
+        ).fetchall()
+        assert len(engineer_new_prompts) == 0, (
+            "Dispatcher judgment free text must NOT be dispatched to the assignee"
+        )
+
+        # Task remains in 'working' state (not changed by a missing judgment).
+        task = conn2.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        assert task["state"] == "working"
+
+        # The architect reply message exists (not silenced) — user can see it.
+        arch_reply = conn2.execute(
+            "SELECT silent FROM messages WHERE id = ?", (arch_reply_id,)
+        ).fetchone()
+        assert arch_reply is not None
+        assert arch_reply["silent"] == 0, "Dispatcher free-text reply must be visible to user"
+    finally:
+        conn2.close()
+
+
+# Fix 3b: Implicit answer fallback only fires for assignee questions.
+# When input-required was set by the DISPATCHER's ask_sender to the user,
+# a separate (non-related) dispatcher turn ending with free text should NOT
+# trigger the implicit answer fallback.
+# ---------------------------------------------------------------------------
+
+def test_implicit_answer_fires_only_for_assignee_questions(
+    client, workspace_topic, architect_staff, engineer_staff
+):
+    """Implicit answer fallback fires only when the dispatcher owes the assignee
+    an answer — not when input-required was set by the dispatcher's own question
+    to the user.
+    """
+    c, _ = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    # Standard delegation setup.
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer")
+    task_id = delegate_r.json()["task_id"]
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    # Engineer calls ask_sender (puts task input-required).
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={
+            "caller_staff": "engineer",
+            "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
+            "question": "Which format?",
+        },
+    )
+
+    # Engineer's turn ends → staged question dispatches to architect.
+    eng_reply_id = _simulate_response(
+        db_path, topic_id, "engineer", eng_prompt["id"], "asked"
+    )
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id,
+        eng_prompt["id"], eng_reply_id, "engineer", "asked",
+    ))
+
+    # Architect gets a question prompt (task input-required).
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        arch_question_prompt = conn.execute(
+            "SELECT id FROM messages WHERE task_id = ? AND receiver_name = 'architect'"
+            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        assert arch_question_prompt is not None
+        arch_q_prompt_id = arch_question_prompt["id"]
+    finally:
+        conn.close()
+
+    # Architect's turn ends with free text (implicit answer → should dispatch to engineer).
+    arch_answer = "Use JWT"
+    arch_reply_id = _simulate_response(
+        db_path, topic_id, "architect", arch_q_prompt_id, arch_answer
+    )
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id,
+        arch_q_prompt_id, arch_reply_id, "architect", arch_answer,
+    ))
+
+    conn2 = get_connection(db_path)
+    try:
+        # Implicit answer fired: task back to working, engineer got an answer.
+        task = conn2.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        assert task["state"] == "working", "Task must be working after implicit answer fires"
+
+        eng_answer_prompt = conn2.execute(
+            "SELECT * FROM messages WHERE task_id = ? AND receiver_name = 'engineer'"
+            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        assert eng_answer_prompt is not None, (
+            "Implicit answer must dispatch an answer to engineer"
+        )
+    finally:
+        conn2.close()
+
+
+# Fix 4: Delegated first prompt contains ask_sender/submit_result instruction footer.
+# ---------------------------------------------------------------------------
+
+def test_delegated_first_prompt_contains_tool_instructions(
+    client, workspace_topic, architect_staff, engineer_staff
+):
+    """The first prompt dispatched to the assignee must include the ask_sender and
+    submit_result instruction footer so the agent knows to use the tools.
+    """
+    c, mock_mqtt = client
+    ws_id, topic_id = workspace_topic
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(
+        client, ws_id, topic_id, "architect", user_msg_id, "engineer",
+        goal="Build the auth module", criteria="Tests pass",
+    )
+    assert delegate_r.status_code == 200
+
+    # The MQTT publish payload for engineer's first prompt must contain tool instructions.
+    eng_payloads = [
+        p for p in _published_payloads(mock_mqtt)
+        if p.get("agent_name") == "engineer"
+    ]
+    assert eng_payloads, "First prompt must have been published to engineer"
+    prompt_text = eng_payloads[-1]["text"]
+
+    assert "ask_sender" in prompt_text, (
+        "First prompt must mention the ask_sender tool"
+    )
+    assert "submit_result" in prompt_text, (
+        "First prompt must mention the submit_result tool"
+    )
+
+
+# Fix 2b: Answer delivery prompt contains continuation instructions.
+# ---------------------------------------------------------------------------
+
+def test_answer_delivery_prompt_contains_footer(
+    client, workspace_topic, architect_staff, engineer_staff
+):
+    """When an answer is dispatched to the assignee, the prompt contains a
+    continuation instruction footer directing the assignee to use submit_result.
+    """
+    c, mock_mqtt = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer")
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    # Engineer asks a question.
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={
+            "caller_staff": "engineer",
+            "caller_message_id": eng_prompt["id"],
+            "dispatch_token": eng_token,
+            "question": "Which framework?",
+        },
+    )
+    eng_reply_id = _simulate_response(
+        db_path, topic_id, "engineer", eng_prompt["id"], "asked"
+    )
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id,
+        eng_prompt["id"], eng_reply_id, "engineer", "asked",
+    ))
+
+    # Get architect's question prompt.
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        arch_question_prompt = conn.execute(
+            "SELECT id FROM messages WHERE receiver_name = 'architect' AND sender = 'event'"
+            " ORDER BY created_at DESC LIMIT 1",
+        ).fetchone()
+        arch_q_id = arch_question_prompt["id"]
+    finally:
+        conn.close()
+
+    # Architect answers via answer_question.
+    arch_token = _get_dispatch_token(client, user_msg_id)
+    from src.master.db import get_connection as _gc
+    conn = _gc(db_path)
+    try:
+        task_row = conn.execute(
+            "SELECT id FROM tasks WHERE topic_id = ?", (topic_id,)
+        ).fetchone()
+        task_id = task_row["id"]
+    finally:
+        conn.close()
+
+    arch_q_token = _get_dispatch_token(client, arch_q_id)
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/answer_question",
+        json={
+            "caller_staff": "architect",
+            "caller_message_id": arch_q_id,
+            "dispatch_token": arch_q_token,
+            "task_id": task_id,
+            "answer": "Use FastAPI",
+        },
+    )
+    arch_reply_id = _simulate_response(
+        db_path, topic_id, "architect", arch_q_id, "Use FastAPI"
+    )
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id,
+        arch_q_id, arch_reply_id, "architect", "Use FastAPI",
+    ))
+
+    # The MQTT payload published to engineer must contain the continuation footer.
+    eng_answer_payloads = [
+        p for p in _published_payloads(mock_mqtt)
+        if p.get("agent_name") == "engineer" and "FastAPI" in (p.get("text") or "")
+    ]
+    assert eng_answer_payloads, "Answer must have been dispatched to engineer"
+    answer_text = eng_answer_payloads[-1]["text"]
+    assert "submit_result" in answer_text, (
+        "Answer delivery prompt must instruct engineer to continue with submit_result"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Regression (rc4 UAT): turn depth in the MQTT payload must reflect the
 # RECEIVER's role in the task. Dispatcher-bound turns (judgment, questions)
 # run at task.depth - 1 — the MCP server gates accept_result/answer_question

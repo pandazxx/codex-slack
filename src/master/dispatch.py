@@ -86,10 +86,12 @@ async def dispatch_to_staff(
     task_id: str | None = None,
     reply_to_message_id: str | None = None,
     dispatch_token: str | None = None,
+    reuse_message_id: str | None = None,
+    insert_row: bool = True,
 ) -> str:
     """Insert a message row, build the MQTT dispatch payload, broadcast on the hub, and publish.
 
-    Returns the new message_id. Caller provides an already-resolved staff row.
+    Returns the message_id. Caller provides an already-resolved staff row.
     sender is 'user' for human-initiated messages or 'event' for event-triggered ones.
     raw_text is the text stored in messages.text; defaults to prompt_text when omitted.
     attachments is a list of attachment meta dicts for the payload; events pass None.
@@ -100,6 +102,11 @@ async def dispatch_to_staff(
       sender='user'  → sender_kind='user'
       sender='event' → sender_kind='staff'
     receiver_kind defaults to 'staff' (the dispatched agent) when not provided.
+
+    reuse_message_id: when provided, use this pre-determined UUID as the message_id.
+    insert_row: when False, skip the INSERT (caller already inserted the row) and only
+    update the transcript, broadcast on the hub, and publish MQTT. reuse_message_id
+    must be provided when insert_row=False so the message_id is known.
     """
     if sender_kind is None:
         sender_kind = "user" if sender == "user" else "staff"
@@ -111,8 +118,6 @@ async def dispatch_to_staff(
         raw_text = prompt_text
     if attachments is None:
         attachments = []
-    if dispatch_token is None:
-        dispatch_token = str(uuid.uuid4())
 
     conn = get_connection(app_state.db_path)
     try:
@@ -172,26 +177,37 @@ async def dispatch_to_staff(
             if row:
                 llm_session_id = row["llm_session_id"]
 
-        message_id = str(uuid.uuid4())
+        message_id = reuse_message_id if reuse_message_id else str(uuid.uuid4())
         now = _now()
-        conn.execute(
-            "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
-            "  event_action_id, silent, created_at,"
-            "  sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,"
-            "  dispatch_token)"
-            " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                message_id, topic_id, sender, raw_text, event_action_id, 1 if silent else 0, now,
-                sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,
-                dispatch_token,
-            ),
-        )
-        if sender == "user":
+        if insert_row:
+            if dispatch_token is None:
+                dispatch_token = str(uuid.uuid4())
             conn.execute(
-                "UPDATE workspaces SET last_message_at = ?, last_dispatched_at = ? WHERE id = ?",
-                (now, now, workspace_id),
+                "INSERT INTO messages"
+                " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
+                "  event_action_id, silent, created_at,"
+                "  sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,"
+                "  dispatch_token)"
+                " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    message_id, topic_id, sender, raw_text, event_action_id, 1 if silent else 0, now,
+                    sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,
+                    dispatch_token,
+                ),
             )
+            if sender == "user":
+                conn.execute(
+                    "UPDATE workspaces SET last_message_at = ?, last_dispatched_at = ? WHERE id = ?",
+                    (now, now, workspace_id),
+                )
+        else:
+            # Row was pre-inserted by the caller (e.g. ask_sender for staff receivers).
+            # Fetch the dispatch_token from the existing row so the MQTT payload is consistent.
+            if dispatch_token is None:
+                existing = conn.execute(
+                    "SELECT dispatch_token FROM messages WHERE id = ?", (message_id,)
+                ).fetchone()
+                dispatch_token = existing["dispatch_token"] if existing else str(uuid.uuid4())
         conn.commit()
     finally:
         conn.close()

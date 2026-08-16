@@ -185,13 +185,28 @@ def _stamp_dispatched(conn, row_id: str) -> None:
 
 # ── Prompt-text builder ──────────────────────────────────────────────────────
 
+_ASSIGNEE_INSTRUCTION_FOOTER = (
+    "\n\n---\n"
+    "You are the assignee of the task above. Use the `ask_sender` tool "
+    "for any clarifying questions — do not ask in plain text. "
+    "When finished, submit your result via `submit_result(status, summary, artifacts)`. "
+    "Your plain reply text is not delivered as a question and will not reach anyone."
+)
+
+_ANSWER_DELIVERY_FOOTER = (
+    "\n\n---\n"
+    "The answer above was provided by your dispatcher. "
+    "Continue working on the task and finish with `submit_result(status, summary, artifacts)`."
+)
+
+
 def _build_prompt(goal: str, acceptance_criteria: str, context: str | None) -> str:
     parts = []
     if context:
         parts.append(f"**Context:**\n{context}")
     parts.append(f"**Goal:**\n{goal}")
     parts.append(f"**Acceptance criteria:**\n{acceptance_criteria}")
-    return "\n\n".join(parts)
+    return "\n\n".join(parts) + _ASSIGNEE_INSTRUCTION_FOOTER
 
 
 def _build_judgment_prompt(task: object, result_summary: str, result_status: str) -> str:
@@ -565,8 +580,43 @@ async def ask_sender(
         receiver_name = None
 
         if task_row:
-            receiver_kind = task_row["dispatcher_kind"]
-            receiver_name = task_row["dispatcher_name"]
+            caller_is_dispatcher = (body.caller_staff == task_row["dispatcher_name"])
+
+            if caller_is_dispatcher:
+                # The dispatcher is asking — route UP to whoever dispatched the dispatcher.
+                # For v1 depth-1 tasks the dispatcher has no parent task, so its sender is
+                # always the user.  For deeper trees we look up the parent task's dispatcher.
+                parent_task_id = task_row["parent_task_id"]
+                if parent_task_id:
+                    parent_task = conn.execute(
+                        "SELECT dispatcher_kind, dispatcher_name FROM tasks WHERE id = ?",
+                        (parent_task_id,),
+                    ).fetchone()
+                    if parent_task:
+                        receiver_kind = parent_task["dispatcher_kind"]
+                        receiver_name = parent_task["dispatcher_name"]
+                    else:
+                        receiver_kind = "user"
+                        receiver_name = None
+                else:
+                    receiver_kind = "user"
+                    receiver_name = None
+            else:
+                # Caller is the assignee — ask the task's dispatcher.
+                receiver_kind = task_row["dispatcher_kind"]
+                receiver_name = task_row["dispatcher_name"]
+
+            # Safety guard: never allow a question whose receiver equals the caller.
+            # If the routing above still resolves to the caller itself, escalate to user.
+            if receiver_name == body.caller_staff:
+                LOGGER.warning(
+                    "orchestration.guard_hit guard=self_question_prevented task_id=%s"
+                    " topic_id=%s caller=%s computed_receiver=%s — routing to user",
+                    task_row["id"], topic_id, body.caller_staff, receiver_name,
+                )
+                receiver_kind = "user"
+                receiver_name = None
+
             try:
                 apply_transition(task_row["state"], "ask_sender")
             except IllegalTransition:
@@ -578,31 +628,42 @@ async def ask_sender(
                 raise HTTPException(409, "illegal_transition")
             task_state = "input-required"
 
+        # Generate the question message UUID and insert the row immediately for all receiver kinds.
+        # This makes the message visible in the DB as soon as ask_sender returns, regardless of
+        # whether the receiver is a user or a staff member.
+        # For staff receivers: a staged dispatch is also queued so process_turn_end fires MQTT
+        # at turn-end (dispatch_to_staff is called with insert_row=False to skip re-inserting).
+        # sender='agent' for user-receiver questions (visible chat bubble);
+        # sender='event' for staff-receiver questions (matches dispatch_to_staff convention).
         message_id = str(uuid.uuid4())
+        dispatch_token_for_question = str(uuid.uuid4())
+        question_sender = "agent" if receiver_kind == "user" else "event"
 
         conn.execute(
             "INSERT INTO messages"
             " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
             "  silent, created_at,"
             "  sender_kind, sender_name, receiver_kind, receiver_name,"
-            "  task_id, reply_to_message_id)"
-            " VALUES (?, ?, 'agent', ?, ?, NULL, NULL, NULL, 0, ?,"
-            "         'staff', ?, ?, ?, ?, ?)",
+            "  task_id, reply_to_message_id, dispatch_token)"
+            " VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?,"
+            "         'staff', ?, ?, ?, ?, ?, ?)",
             (
-                message_id, topic_id, body.caller_staff, body.question, _now(),
+                message_id, topic_id, question_sender, body.caller_staff, body.question, _now(),
                 body.caller_staff, receiver_kind, receiver_name,
                 task_row["id"] if task_row else None,
                 body.caller_message_id,
+                dispatch_token_for_question,
             ),
         )
+
         if task_row:
             conn.execute(
                 "UPDATE tasks SET state = 'input-required', updated_at = ? WHERE id = ?",
                 (_now(), task_row["id"]),
             )
-            # Stage the question dispatch: delivered when the caller's turn ends.
-            # If receiver is a staff, the turn re-entry in process_turn_end will dispatch it.
-            # If receiver is the user, the message is already broadcast below.
+            # For staff receivers: stage the question dispatch so process_turn_end publishes
+            # MQTT when the caller's turn ends. The message row is already written above;
+            # dispatch_to_staff will be called with insert_row=False to avoid a duplicate.
             if receiver_kind == "staff":
                 _stage_dispatch(
                     conn,
@@ -613,28 +674,35 @@ async def ask_sender(
                     receiver_name=receiver_name,
                     task_id=task_row["id"],
                     kind="question",
-                    body=json.dumps({"message_id": message_id, "text": body.question}),
+                    body=json.dumps({
+                        "message_id": message_id,
+                        "text": body.question,
+                    }),
                 )
         conn.commit()
     finally:
         conn.close()
 
-    await app_state.hub.broadcast("_global", {
-        "type": "message",
-        "topic_id": topic_id,
-        "message_id": message_id,
-        "sender": "agent",
-        "agent_name": body.caller_staff,
-        "text": body.question,
-        "transcript": None,
-        "attachments": [],
-        "sender_kind": "staff",
-        "sender_name": body.caller_staff,
-        "receiver_kind": receiver_kind,
-        "receiver_name": receiver_name,
-        "task_id": task_row["id"] if task_row else None,
-        "reply_to_message_id": body.caller_message_id,
-    })
+    # Broadcast the question for user-receiver questions so the UI shows the bubble immediately.
+    # For staff-receiver questions the broadcast happens when the staged dispatch fires
+    # (inside dispatch_to_staff at turn-end).
+    if receiver_kind == "user":
+        await app_state.hub.broadcast("_global", {
+            "type": "message",
+            "topic_id": topic_id,
+            "message_id": message_id,
+            "sender": "agent",
+            "agent_name": body.caller_staff,
+            "text": body.question,
+            "transcript": None,
+            "attachments": [],
+            "sender_kind": "staff",
+            "sender_name": body.caller_staff,
+            "receiver_kind": receiver_kind,
+            "receiver_name": receiver_name,
+            "task_id": task_row["id"] if task_row else None,
+            "reply_to_message_id": body.caller_message_id,
+        })
 
     return AskOut(message_id=message_id, task_state=task_state)
 
@@ -944,11 +1012,23 @@ async def process_turn_end(
         conn.close()
 
     # Determine the reply-to-sender receiver for the free-text response.
+    # For assignee turns the receiver is the task's dispatcher (the staff that sent the task).
+    # For dispatcher turns (judgment, answer-to-assignee question) the receiver is the
+    # dispatcher's OWN sender — always the user for depth-1 tasks with no parent task.
+    # A dispatcher's free text must NEVER route to the assignee.
     free_text_receiver_kind = "user"
     free_text_receiver_name: str | None = None
     if task_row:
-        free_text_receiver_kind = task_row["dispatcher_kind"]
-        free_text_receiver_name = task_row["dispatcher_name"]
+        caller_is_task_dispatcher = (agent_name == task_row["dispatcher_name"])
+        if caller_is_task_dispatcher:
+            # Dispatcher turn: free text goes up to whoever sent the dispatcher.
+            # For depth-1 tasks (no parent_task_id) the dispatcher's sender is the user.
+            free_text_receiver_kind = "user"
+            free_text_receiver_name = None
+        else:
+            # Assignee turn: free text goes to the task's dispatcher.
+            free_text_receiver_kind = task_row["dispatcher_kind"]
+            free_text_receiver_name = task_row["dispatcher_name"]
 
     staged_receiver_names = {
         r["receiver_name"] for r in staged_rows
@@ -1075,13 +1155,18 @@ async def _apply_implicit_fallback(
             db_path=db_path,
         )
     elif state == "working" and agent_name == dispatcher:
-        # Judgment turn ended with no accept_result.
-        # Phase (c) adds scored-clarification; phase (b) just logs.
+        # Judgment turn ended with no accept_result.  The reply text routes to the user
+        # (the dispatcher's own sender for depth-1 tasks); task state is unchanged —
+        # the task stays result-pending until the dispatcher accepts or rejects in a
+        # future turn.  Phase (c) adds scored-clarification to the assignee;
+        # phase (b) routes to user and logs the guard hit.
         LOGGER.warning(
             "orchestration.guard_hit guard=judgment_missing task_id=%s topic_id=%s"
             " reply_text=%.120r",
             task_id, topic_id, reply_text,
         )
+        # The reply_message_id row is already visible to the user (sender='agent',
+        # receiver derived from reply-to-sender = user).  No additional dispatch needed.
 
 
 async def _execute_staged_row(
@@ -1129,13 +1214,16 @@ async def _execute_staged_row(
 
     try:
         if kind == "question":
-            # Dispatch the already-saved question message to the staff dispatcher.
+            # Deliver the already-saved question message to the staff receiver via MQTT.
+            # The message row was written in ask_sender; we publish the prompt payload here
+            # without creating a second row (eliminates the duplicate-message bug).
             if receiver_kind == "staff" and receiver_name:
                 await _dispatch_question_to_staff(
                     app_state=app_state,
                     workspace_id=workspace_id,
                     topic_id=topic_id,
                     task_row=task_row,
+                    question_message_id=body_data.get("message_id", ""),
                     question_text=body_data.get("text", ""),
                     sender_name=sender_name,
                     receiver_name=receiver_name,
@@ -1209,13 +1297,19 @@ async def _dispatch_question_to_staff(
     workspace_id: str,
     topic_id: str,
     task_row,
+    question_message_id: str,
     question_text: str,
     sender_name: str,
     receiver_name: str,
     reply_message_id: str,
     db_path: str,
 ) -> None:
-    """Dispatch a question prompt to the staff dispatcher and leave task input-required."""
+    """Publish the MQTT prompt for a question whose message row was already inserted by ask_sender.
+
+    The question row is created at /ask time (immediately visible); this function only
+    publishes the MQTT dispatch at turn-end so the receiving staff agent processes it.
+    dispatch_to_staff is called with insert_row=False to skip re-inserting the row.
+    """
     target_staff = _resolve_staff_for_topic(db_path, workspace_id, topic_id, receiver_name)
     if target_staff is None:
         LOGGER.warning(
@@ -1238,6 +1332,8 @@ async def _dispatch_question_to_staff(
         receiver_name=receiver_name,
         task_id=task_row["id"],
         reply_to_message_id=reply_message_id,
+        reuse_message_id=question_message_id,
+        insert_row=False,
     )
 
 
@@ -1278,7 +1374,7 @@ async def _dispatch_answer_to_assignee(
         workspace_id=workspace_id,
         topic_id=topic_id,
         staff=target_staff,
-        prompt_text=answer,
+        prompt_text=answer + _ANSWER_DELIVERY_FOOTER,
         sender="event",
         sender_kind="staff",
         sender_name=sender_name,
