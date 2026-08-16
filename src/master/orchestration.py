@@ -33,6 +33,10 @@ _VALID_KINDS = frozenset({"user", "staff", "system"})
 _TRANSITIONS: dict[tuple[str, str], str] = {
     ("submitted", "dispatch"):          "working",
     ("working", "ask_sender"):          "input-required",
+    # Question bubbling (design §6.1): the dispatcher relaying an assignee's
+    # question upward asks while the task is ALREADY input-required — an
+    # idempotent self-transition, not an error.
+    ("input-required", "ask_sender"):   "input-required",
     # answer_question: table event name matches the endpoint; legacy tests use 'answer'
     ("input-required", "answer"):       "working",
     ("input-required", "answer_question"): "working",

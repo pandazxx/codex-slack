@@ -2374,3 +2374,65 @@ def test_question_turn_payload_has_dispatcher_depth(client, workspace_topic,
                          if p.get("agent_name") == "architect" and p.get("task_id")]
     assert question_payloads, "Question turn must be dispatched to architect"
     assert question_payloads[-1]["task_depth"] == 0
+
+
+def test_dispatcher_can_bubble_question_while_input_required(client, workspace_topic,
+                                                             architect_staff, engineer_staff):
+    """Regression (rc6 UAT): the engineer's ask_sender puts the task in
+    input-required; the architect (dispatcher) then bubbles the question to the
+    user with its own ask_sender — which must be a legal idempotent transition,
+    not a 409."""
+    c, mock_mqtt = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer",
+                           goal="Rename endpoint", criteria="Name updated")
+    task_id = delegate_r.json()["task_id"]
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+
+    # Engineer asks → input-required, question staged to architect
+    r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={"caller_staff": "engineer", "caller_message_id": eng_prompt["id"],
+              "dispatch_token": eng_token, "question": "what is the new name?"},
+    )
+    assert r.status_code == 200
+    eng_reply_id = _simulate_response(db_path, topic_id, "engineer", eng_prompt["id"], "asked")
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id, eng_prompt["id"], eng_reply_id, "engineer", "asked",
+    ))
+
+    # Architect received the question turn; task is input-required
+    msgs = _get_messages(client, ws_id, topic_id)
+    arch_prompt = next(m for m in msgs
+                       if m.get("receiver_name") == "architect" and m.get("task_id") == task_id)
+    arch_token = _get_dispatch_token(client, arch_prompt["id"])
+
+    # Architect bubbles the question to the user — must NOT 409
+    r = c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={"caller_staff": "architect", "caller_message_id": arch_prompt["id"],
+              "dispatch_token": arch_token, "question": "user: what is the new name?"},
+    )
+    assert r.status_code == 200, r.text
+
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        task = conn.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        assert task["state"] == "input-required"
+        q = conn.execute(
+            "SELECT receiver_kind, receiver_name FROM messages"
+            " WHERE task_id = ? AND sender_name = 'architect' AND receiver_kind = 'user'",
+            (task_id,),
+        ).fetchone()
+        assert q is not None, "Bubbled question to the user must exist"
+    finally:
+        conn.close()
