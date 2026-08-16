@@ -483,3 +483,15 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* Pinned `mcp>=1.0.0,<2` in `requirements.txt`. Verified locally: pip resolves 1.29.0 and all 10 `tests/notes_mcp/test_server.py` tests pass. Migrating `notes_mcp` to the mcp 2.x API is separate follow-up work, not part of this fix.
 
 *Prevention:* Runtime dependencies need an upper bound on the major version (`<N+1`) — `>=` alone means any upstream major release can break CI for unrelated PRs, and the breakage lands on whoever pushes next, disguised as their failure. When a green branch suddenly fails on code the diff never touched, diff the CI run dates against dependency release dates before debugging the code.
+
+---
+
+## 2026-08-16 — delegate_task 422'd on real agents: token tested at every layer except the one that carries it
+
+*Summary:* Phase-b UAT on v4.20-rc3 found every orchestrate MCP tool call rejected with a missing `dispatch_token` — the architect agent fell back to its built-in subagent tool, silently bypassing orchestration. All 760 tests were green.
+
+*Root cause:* The per-dispatch token chain has four legs: master generates it (dispatch payload) → agent loop injects it into the CLI subprocess env → MCP config passes it to the MCP server process → MCP server sends it back to master. Legs 1 and 4 were implemented and tested; legs 2 and 3 (`mqtt_loop.py` orch-env dict, `config/*-mcp.json` env passthrough) were never written. Endpoint tests fetch tokens straight from the DB, so the whole env transport was untested.
+
+*Fix applied:* `dispatch_token` added to the orch-env dict in `mqtt_loop._process_prompt` and `DISPATCH_TOKEN=$DISPATCH_TOKEN` added to both MCP config commands. Regression test asserts the prompt payload's token reaches the subprocess env. v4.20-rc4.
+
+*Prevention:* When a value must cross process boundaries (payload → env → child process → HTTP), write at least one test per hop, or one test that spans the transport chain — endpoint-level tests that synthesize the value prove nothing about delivery. UAT on a real agent image is the only leg-2/leg-3 coverage we currently have; treat "agent improvised around a tool failure" in a trace as a red flag, not a curiosity.
