@@ -2534,3 +2534,80 @@ def test_dispatcher_question_turn_free_text_silenced_and_retargeted(
         assert stray is None
     finally:
         conn.close()
+
+
+def test_ws_frame_reflects_post_turn_end_state(client, workspace_topic,
+                                               architect_staff, engineer_staff):
+    """Regression (rc9 live-view race): the reply WS frame is broadcast AFTER
+    turn-end processing, so a silenced/retargeted echo never flashes with the
+    stale dispatcher→assignee envelope."""
+    c, mock_mqtt = client
+    ws_id, topic_id = workspace_topic
+    db_path = _get_db_path(client)
+    app_state = _make_app_state(client, db_path)
+
+    prompt_r = _post_prompt(client, ws_id, topic_id, "@architect go")
+    user_msg_id = prompt_r.json()["message_id"]
+    delegate_r = _delegate(client, ws_id, topic_id, "architect", user_msg_id, "engineer")
+    task_id = delegate_r.json()["task_id"]
+
+    msgs = _get_messages(client, ws_id, topic_id)
+    eng_prompt = next(m for m in msgs if m.get("receiver_name") == "engineer")
+    eng_token = _get_dispatch_token(client, eng_prompt["id"])
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={"caller_staff": "engineer", "caller_message_id": eng_prompt["id"],
+              "dispatch_token": eng_token, "question": "new name?"},
+    )
+    eng_reply_id = _simulate_response(db_path, topic_id, "engineer", eng_prompt["id"], "asked")
+    asyncio.run(_run_process_turn_end(
+        app_state, ws_id, topic_id, eng_prompt["id"], eng_reply_id, "engineer", "asked",
+    ))
+
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        arch_prompt = conn.execute(
+            "SELECT id FROM messages WHERE task_id = ? AND receiver_name = 'architect'"
+            " AND sender = 'event' ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    arch_token = _get_dispatch_token(client, arch_prompt["id"])
+    c.post(
+        f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
+        json={"caller_staff": "architect", "caller_message_id": arch_prompt["id"],
+              "dispatch_token": arch_token, "question": "user: what name?"},
+    )
+
+    # Simulate the architect's /response arriving, then run the chained
+    # turn-end-then-broadcast helper exactly as _on_message schedules it.
+    from src.master.mqtt_client import _save_agent_response, _turn_end_then_broadcast
+    reply_id = "arch-echo-reply"
+    payload = {
+        "message_id": reply_id,
+        "agent_name": "architect",
+        "reply_to": arch_prompt["id"],
+        "last_response": "I've escalated to you - what should it be renamed to?",
+        "transcript": None,
+        "session_id": None,
+    }
+    _save_agent_response(db_path, topic_id, payload)
+    frame = {"type": "message", "sender": "agent", **payload}
+    asyncio.run(_turn_end_then_broadcast(
+        app_state=app_state,
+        hub=app_state.hub,
+        workspace_id=ws_id,
+        topic_id=topic_id,
+        prompt_message_id=arch_prompt["id"],
+        payload=payload,
+        message=frame,
+        db_path=db_path,
+    ))
+
+    app_state.hub.broadcast.assert_called()
+    sent = app_state.hub.broadcast.call_args[0][1]
+    assert sent["silent"] is True, "Echo must broadcast as silent"
+    assert sent["receiver_kind"] == "user"
+    assert sent["receiver_name"] is None
