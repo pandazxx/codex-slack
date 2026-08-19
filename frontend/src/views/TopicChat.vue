@@ -25,11 +25,23 @@
       Agent: <em>{{ agentStatus }}</em>
     </div>
 
+    <TasksPanel
+      ref="tasksPanelRef"
+      :wsId="wsId"
+      :topicId="topicId"
+      :activeTaskId="activeTaskId"
+      @select-task="onSelectTask"
+    />
+
     <div class="chat-toolbar">
       <label class="verbose-toggle" :title="verboseMode ? 'Hide action messages' : 'Show hidden action messages'">
         <input type="checkbox" v-model="verboseMode" />
         Verbose
       </label>
+      <span v-if="activeTaskId" class="task-filter-indicator">
+        Filtered: task {{ activeTaskId.slice(0, 8) }}
+        <button class="task-filter-clear" @click="activeTaskId = null" title="Clear filter">&#10005;</button>
+      </span>
     </div>
 
     <div class="messages" ref="msgBox">
@@ -47,6 +59,12 @@
             <span class="envelope-sender">{{ m.sender_kind === 'user' ? 'You' : `@${m.sender_name || m.agent_name || 'agent'}` }}</span>
             <span class="envelope-arrow"> → </span>
             <span class="envelope-receiver">{{ m.receiver_kind === 'user' ? 'You' : (m.receiver_name ? `@${m.receiver_name}` : '(unknown)') }}</span>
+            <button
+              class="task-chip"
+              :class="{ 'task-chip-active': activeTaskId === m.task_id }"
+              @click.stop="onTaskChipClick(m.task_id)"
+              :title="activeTaskId === m.task_id ? 'Clear task filter' : `Filter by task ${m.task_id.slice(0, 8)}`"
+            >Task {{ m.task_id.slice(0, 8) }}</button>
           </template>
           <template v-else>{{ m.sender === 'user' ? 'You' : (m.agent_name ? `@${m.agent_name}` : 'Agent') }}</template>
         </span>
@@ -309,6 +327,7 @@ import { useRoute } from 'vue-router'
 import MarkdownMessage from '../components/MarkdownMessage.vue'
 import ChatInput from '../components/ChatInput.vue'
 import GraphHeaderToggle from '../components/GraphHeaderToggle.vue'
+import TasksPanel from '../components/TasksPanel.vue'
 import { formatInTimezone } from '../utils/datetime.js'
 import '../styles/trace.css'
 
@@ -335,6 +354,8 @@ const verboseMode = ref(false)
 const expandedMsg = ref(null)
 const copiedMsgId = ref(null)
 const highlightedMsgId = ref(null)
+const activeTaskId = ref(null)
+const tasksPanelRef = ref(null)
 
 const MSG_COLLAPSE_THRESHOLD = 600
 const MSG_COLLAPSED_PREVIEW = 300
@@ -342,9 +363,11 @@ const MSG_COLLAPSED_PREVIEW = 300
 const isArchived = computed(() => !!topic.value?.archived_at)
 const isWorkspaceArchived = computed(() => !!workspace.value?.archived_at)
 
-const filteredMessages = computed(() =>
-  verboseMode.value ? messages.value : messages.value.filter(m => !m.silent)
-)
+const filteredMessages = computed(() => {
+  let base = verboseMode.value ? messages.value : messages.value.filter(m => !m.silent)
+  if (activeTaskId.value) base = base.filter(m => m.task_id === activeTaskId.value)
+  return base
+})
 
 function isMsgCollapsible(msg, idx) {
   if (idx !== undefined && idx >= filteredMessages.value.length - 1) return false
@@ -400,6 +423,14 @@ function collapsedPreview(text) {
     return (cutIdx > 0 ? slice.slice(0, cutIdx) : slice) + '…'
   }
   return slice + '…'
+}
+
+function onSelectTask(taskId) {
+  activeTaskId.value = taskId
+}
+
+function onTaskChipClick(taskId) {
+  activeTaskId.value = activeTaskId.value === taskId ? null : taskId
 }
 
 function interruptLabel(m) {
@@ -716,6 +747,7 @@ function connectWs() {
       })
     } else if (data.type === 'message') {
       finaliseMessage(data)
+      if (data.task_id) tasksPanelRef.value?.refresh()
     } else if (data.type === 'chunk_retract') {
       const retractIdx = messages.value.findIndex(m => m.id === data.message_id)
       if (retractIdx >= 0) messages.value.splice(retractIdx, 1)
@@ -861,6 +893,7 @@ watch(
     seenSeq.clear()
     agentStatus.value = ''
     verboseMode.value = false
+    activeTaskId.value = null
     load()
     if (!isArchived.value) connectWs()
   },
@@ -883,7 +916,7 @@ onUnmounted(() => {
 .chat-layout { display: flex; flex-direction: column; height: calc(100vh - 110px); }
 .breadcrumb-toggle { margin-left: auto; }
 .message-highlighted .bubble { box-shadow: 0 0 0 2px #2563eb80; transition: box-shadow 0.3s; }
-.chat-toolbar { display: flex; align-items: center; justify-content: flex-end; padding: 2px 0; min-height: 22px; }
+.chat-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 0.6rem; padding: 2px 0; min-height: 22px; }
 .verbose-toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 0.78em; color: #94a3b8; cursor: pointer; user-select: none; }
 .verbose-toggle input { cursor: pointer; }
 .message-silent .bubble { opacity: 0.55; border-style: dashed; }
@@ -950,6 +983,47 @@ onUnmounted(() => {
 .expand-msg-btn { display: block; margin-top: 0.25rem; background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.82em; padding: 0; text-align: left; }
 .expand-msg-btn:hover { text-decoration: underline; }
 .tr-cmd-failed { color: #dc2626; }
+
+.task-chip {
+  display: inline-block;
+  margin-left: 0.45rem;
+  padding: 1px 7px;
+  border-radius: 9999px;
+  font-size: 0.78em;
+  font-weight: 600;
+  background: #ede9fe;
+  color: #6d28d9;
+  border: 1px solid #c4b5fd;
+  cursor: pointer;
+  vertical-align: middle;
+  line-height: 1.5;
+  transition: background 0.1s;
+}
+.task-chip:hover { background: #ddd6fe; }
+.task-chip-active { background: #7c3aed; color: #fff; border-color: #7c3aed; }
+.task-chip-active:hover { background: #6d28d9; }
+
+.task-filter-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78em;
+  color: #6d28d9;
+  background: #ede9fe;
+  border: 1px solid #c4b5fd;
+  border-radius: 9999px;
+  padding: 1px 8px;
+}
+.task-filter-clear {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #6d28d9;
+  font-size: 0.9em;
+  padding: 0;
+  line-height: 1;
+}
+.task-filter-clear:hover { color: #7c3aed; }
 
 @media (max-width: 768px) {
   .chat-layout { height: calc(100vh - 90px); }

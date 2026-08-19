@@ -3411,12 +3411,28 @@ class TestStructuredOutput:
         msg = MagicMock()
         msg.topic = f"codex-slack/workspace/{ws_id}/topic/{tp_id}/response"
         msg.payload = payload.encode()
+        # The response broadcast is chained after turn-end processing on the
+        # loop (run_coroutine_threadsafe), so drive the loop until the
+        # scheduled coroutine completes before asserting.
+        import threading
+
+        done = threading.Event()
+
+        def _drive():
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(asyncio.sleep(0.2))
+            done.set()
+
+        driver = threading.Thread(target=_drive)
+        driver.start()
         on_msg(None, userdata, msg)
+        done.wait(timeout=5)
+        driver.join(timeout=5)
         loop.close()
 
-        # Hub should have been broadcast with the agent message
-        app_state.hub.broadcast_threadsafe.assert_called_once()
-        call_args = app_state.hub.broadcast_threadsafe.call_args[0]
+        # Hub should have been broadcast with the agent message (async, post turn-end)
+        app_state.hub.broadcast.assert_called_once()
+        call_args = app_state.hub.broadcast.call_args[0]
         assert call_args[1]["type"] == "message"
         assert call_args[1]["sender"] == "agent"
 

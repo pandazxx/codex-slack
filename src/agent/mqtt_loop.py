@@ -669,6 +669,9 @@ def _process_prompt(
         "AGENT_NAME": agent_name,
         "PROMPT_MESSAGE_ID": message_id,
         "TASK_DEPTH": str(task_depth),
+        # Master requires this token on every orchestrate endpoint call; the
+        # MCP server reads it from env. Without it every tool call 422s.
+        "DISPATCH_TOKEN": payload.get("dispatch_token") or "",
     }
 
     if not text:

@@ -254,7 +254,7 @@ Transitions and who causes them:
 | — → `submitted` | `delegate_task` MCP call | Dispatcher LLM |
 | `submitted` → `working` | Assignee's first prompt is dispatched (per-topic lock acquired) | Master |
 | `working` → `input-required` | Assignee calls `ask_sender` | Assignee LLM |
-| `input-required` → `working` | Dispatcher calls `answer_question` (or the free-text fallback, §4.1) | Dispatcher LLM |
+| `input-required` → `working` | Dispatcher calls `answer_question` (free text on a question turn fails upward to the user instead, §4.1) | Dispatcher LLM |
 | `working` → `completed` | Dispatcher calls `accept_result` on assignee's result | Dispatcher LLM |
 | `working` → `working` (with feedback) | Dispatcher calls `reject_result` | Dispatcher LLM; master increments `failure_score += 1.0` and re-dispatches |
 | `working` → `escalated` | `failure_score > max_failure_score` after an increment, or dispatcher explicitly calls `give_up_task` | Master (score) or dispatcher LLM (give_up) |
@@ -328,11 +328,15 @@ def answer_question(task_id: str, answer: str) -> AnswerResult:
     asking assignee) and returns the task to 'working'. Master dispatches
     the answer to the assignee when the caller's turn ends.
     """
-    # Fallback: if a question turn ends with free text and no
-    # answer_question call, master uses the pending-dispatch context to
-    # treat the turn's final text as the answer. Structured call is
-    # primary; the fallback only keeps a non-calling agent from stalling
-    # the task.
+    # Fallback (revised in phase-b UAT): if a question turn ends with free
+    # text and no answer_question call, master does NOT deliver the text to
+    # the assignee as an implicit answer — live testing showed the
+    # dispatcher's free text is frequently itself a question meant for the
+    # user, and auto-delivering it poisons the task. Instead the reply is
+    # retargeted upward to the user (visible, answerable), the task stays
+    # input-required, and a guard_hit answer_missing is logged. The
+    # question-turn prompt carries an instruction footer telling the
+    # dispatcher to use answer_question or ask_sender explicitly.
 
 class AnswerResult(TypedDict):
     task_id: str

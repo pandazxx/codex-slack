@@ -314,6 +314,23 @@ def _get_caller_message_id(client, ws_id, topic_id):
     return msgs[0]["id"]
 
 
+def _get_dispatch_token(client, message_id: str) -> str:
+    """Fetch the dispatch_token stored on a message row."""
+    c, _ = client
+    db_path = c.app.state.db_path
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT dispatch_token FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        assert row is not None, f"message {message_id!r} not found"
+        assert row["dispatch_token"] is not None, f"message {message_id!r} has no dispatch_token"
+        return row["dispatch_token"]
+    finally:
+        conn.close()
+
+
 def test_delegate_creates_task_and_dispatches(
     client, workspace_topic, architect_staff, engineer_staff
 ):
@@ -323,12 +340,14 @@ def test_delegate_creates_task_and_dispatches(
     prompt_r = _post_prompt(client, ws_id, topic_id, "@architect design it")
     assert prompt_r.status_code == 202
     caller_msg_id = _get_caller_message_id(client, ws_id, topic_id)
+    caller_token = _get_dispatch_token(client, caller_msg_id)
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/delegate",
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "staff": "engineer",
             "goal": "Write tests",
             "acceptance_criteria": "All green",
@@ -374,12 +393,14 @@ def test_delegate_rejects_self_delegation(client, workspace_topic, architect_sta
 
     _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = _get_caller_message_id(client, ws_id, topic_id)
+    caller_token = _get_dispatch_token(client, caller_msg_id)
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/delegate",
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "staff": "architect",
             "goal": "Do it yourself",
             "acceptance_criteria": "Done",
@@ -395,12 +416,14 @@ def test_delegate_rejects_unknown_staff(client, workspace_topic, architect_staff
 
     _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = _get_caller_message_id(client, ws_id, topic_id)
+    caller_token = _get_dispatch_token(client, caller_msg_id)
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/delegate",
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "staff": "ghost",
             "goal": "Do it",
             "acceptance_criteria": "Done",
@@ -417,6 +440,7 @@ def test_delegate_rejects_depth_exceeded(client, workspace_topic, architect_staf
     # Post initial prompt to architect
     _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = _get_caller_message_id(client, ws_id, topic_id)
+    caller_token = _get_dispatch_token(client, caller_msg_id)
 
     # Architect delegates to engineer → creates depth-1 task
     r = c.post(
@@ -424,6 +448,7 @@ def test_delegate_rejects_depth_exceeded(client, workspace_topic, architect_staf
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "staff": "engineer",
             "goal": "Build",
             "acceptance_criteria": "Done",
@@ -436,6 +461,7 @@ def test_delegate_rejects_depth_exceeded(client, workspace_topic, architect_staf
     msgs = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages").json()
     engineer_msg = next(m for m in msgs if m.get("receiver_name") == "engineer")
     engineer_msg_id = engineer_msg["id"]
+    engineer_token = _get_dispatch_token(client, engineer_msg_id)
 
     # Engineer tries to delegate — should be rejected (depth >= MAX_DELEGATION_DEPTH)
     r2 = c.post(
@@ -443,6 +469,7 @@ def test_delegate_rejects_depth_exceeded(client, workspace_topic, architect_staf
         json={
             "caller_staff": "engineer",
             "caller_message_id": engineer_msg_id,
+            "dispatch_token": engineer_token,
             "staff": "architect",
             "goal": "Review",
             "acceptance_criteria": "OK",
@@ -497,12 +524,13 @@ def test_delegate_rejects_fan_out_exceeded(client, workspace_topic, architect_st
                 "         'g', 'c', 'working', 0.0, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
                 (f"child-{i}", topic_id, root_id, root_id),
             )
+        root_msg_token = str(__import__("uuid").uuid4())
         # Insert a message that references the root task so delegate can resolve it
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at,"
-            " sender_kind, task_id)"
-            " VALUES (?, ?, 'user', NULL, 'root msg', 0, '2024-01-01T00:00:00Z', 'user', ?)",
-            ("root-msg", topic_id, root_id),
+            " sender_kind, task_id, dispatch_token)"
+            " VALUES (?, ?, 'user', NULL, 'root msg', 0, '2024-01-01T00:00:00Z', 'user', ?, ?)",
+            ("root-msg", topic_id, root_id, root_msg_token),
         )
         conn.commit()
     finally:
@@ -518,6 +546,7 @@ def test_delegate_rejects_fan_out_exceeded(client, workspace_topic, architect_st
         json={
             "caller_staff": "architect",
             "caller_message_id": "root-msg",
+            "dispatch_token": root_msg_token,
             "staff": "engineer",
             "goal": "One too many",
             "acceptance_criteria": "Done",
@@ -537,6 +566,7 @@ def test_ask_inside_task_sets_input_required(client, workspace_topic, architect_
 
     _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = _get_caller_message_id(client, ws_id, topic_id)
+    caller_token = _get_dispatch_token(client, caller_msg_id)
 
     # Delegate from architect to engineer
     delegate_r = c.post(
@@ -544,6 +574,7 @@ def test_ask_inside_task_sets_input_required(client, workspace_topic, architect_
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "staff": "engineer",
             "goal": "Build",
             "acceptance_criteria": "Done",
@@ -555,12 +586,14 @@ def test_ask_inside_task_sets_input_required(client, workspace_topic, architect_
     msgs = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages").json()
     engineer_msg = next(m for m in msgs if m.get("receiver_name") == "engineer")
     engineer_msg_id = engineer_msg["id"]
+    engineer_token = _get_dispatch_token(client, engineer_msg_id)
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
         json={
             "caller_staff": "engineer",
             "caller_message_id": engineer_msg_id,
+            "dispatch_token": engineer_token,
             "question": "Which token format?",
         },
     )
@@ -594,12 +627,14 @@ def test_ask_outside_task_routes_to_user(client, workspace_topic, architect_staf
 
     _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = _get_caller_message_id(client, ws_id, topic_id)
+    caller_token = _get_dispatch_token(client, caller_msg_id)
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/ask",
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "question": "What do you want?",
         },
     )
@@ -740,11 +775,13 @@ def test_depth1_happy_path(client, workspace_topic, architect_staff, engineer_st
     user_msg_id = user_r.json()["message_id"]
 
     # Architect delegates to engineer
+    user_token = _get_dispatch_token(client, user_msg_id)
     delegate_r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/delegate",
         json={
             "caller_staff": "architect",
             "caller_message_id": user_msg_id,
+            "dispatch_token": user_token,
             "staff": "engineer",
             "goal": "Implement feature X",
             "acceptance_criteria": "Tests pass",
@@ -1000,12 +1037,14 @@ def test_delt10_server_side_depth_guard_independent_of_tool_hiding(
     # Step 1: establish a depth-1 task so engineer has a depth-1 context.
     _post_prompt(client, ws_id, topic_id, "@architect go")
     caller_msg_id = _get_caller_message_id(client, ws_id, topic_id)
+    caller_token = _get_dispatch_token(client, caller_msg_id)
 
     r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/delegate",
         json={
             "caller_staff": "architect",
             "caller_message_id": caller_msg_id,
+            "dispatch_token": caller_token,
             "staff": "engineer",
             "goal": "Build",
             "acceptance_criteria": "Done",
@@ -1016,6 +1055,7 @@ def test_delt10_server_side_depth_guard_independent_of_tool_hiding(
     msgs = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages").json()
     engineer_msg = next(m for m in msgs if m.get("receiver_name") == "engineer")
     engineer_msg_id = engineer_msg["id"]
+    engineer_token = _get_dispatch_token(client, engineer_msg_id)
 
     # Step 2: engineer calls /orchestrate/delegate directly (bypassing tool hiding).
     # The server must reject this independently of DELT-04's tool-list hiding.
@@ -1024,6 +1064,7 @@ def test_delt10_server_side_depth_guard_independent_of_tool_hiding(
         json={
             "caller_staff": "engineer",
             "caller_message_id": engineer_msg_id,
+            "dispatch_token": engineer_token,
             "staff": "architect",
             "goal": "Review",
             "acceptance_criteria": "OK",
@@ -1150,13 +1191,14 @@ def test_delt11_cycle_detected_synthetic_depth2(client, workspace_topic, archite
             "         '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
             (child_id, topic_id, root_id, root_id),
         )
+        cycle_msg_token = str(__import__("uuid").uuid4())
         # Prompt message referencing the depth-1 task (engineer is the caller)
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at,"
-            " sender_kind, task_id)"
+            " sender_kind, task_id, dispatch_token)"
             " VALUES (?, ?, 'event', 'engineer', 'eng prompt', 0, '2024-01-01T00:00:00Z',"
-            " 'staff', ?)",
-            ("cycle-msg", topic_id, child_id),
+            " 'staff', ?, ?)",
+            ("cycle-msg", topic_id, child_id, cycle_msg_token),
         )
         conn.commit()
     finally:
@@ -1178,6 +1220,7 @@ def test_delt11_cycle_detected_synthetic_depth2(client, workspace_topic, archite
         json={
             "caller_staff": "engineer",
             "caller_message_id": "cycle-msg",
+            "dispatch_token": cycle_msg_token,
             "staff": "architect",
             "goal": "Review",
             "acceptance_criteria": "OK",
@@ -1273,7 +1316,11 @@ def test_delt11_cycle_detection_walk_logic():
 # ---------------------------------------------------------------------------
 
 def test_delegate_rejects_unknown_caller_message_id(client, workspace_topic, architect_staff, engineer_staff):
-    """caller_mismatch returned when caller_message_id does not exist."""
+    """caller_mismatch returned when caller_message_id does not exist.
+
+    The caller_identity check fires before token verification, so a placeholder
+    token satisfies the required field while still producing the expected 422.
+    """
     c, _ = client
     ws_id, topic_id = workspace_topic
 
@@ -1282,6 +1329,7 @@ def test_delegate_rejects_unknown_caller_message_id(client, workspace_topic, arc
         json={
             "caller_staff": "architect",
             "caller_message_id": "nonexistent-msg-id",
+            "dispatch_token": "irrelevant-caller-check-fires-first",
             "staff": "engineer",
             "goal": "Do it",
             "acceptance_criteria": "Done",
@@ -1292,7 +1340,11 @@ def test_delegate_rejects_unknown_caller_message_id(client, workspace_topic, arc
 
 
 def test_delegate_rejects_mismatched_caller_identity(client, workspace_topic, architect_staff, engineer_staff):
-    """caller_mismatch returned when caller_staff does not match the message's receiver."""
+    """caller_mismatch returned when caller_staff does not match the message's receiver.
+
+    The caller_identity check fires before token verification; passing the real
+    token of the architect message is correct here.
+    """
     c, _ = client
     ws_id, topic_id = workspace_topic
 
@@ -1300,6 +1352,7 @@ def test_delegate_rejects_mismatched_caller_identity(client, workspace_topic, ar
     _post_prompt(client, ws_id, topic_id, "@architect design it")
     msgs = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages").json()
     architect_msg_id = msgs[0]["id"]
+    architect_token = _get_dispatch_token(client, architect_msg_id)
 
     # engineer tries to use architect's message id as its own
     r = c.post(
@@ -1307,6 +1360,7 @@ def test_delegate_rejects_mismatched_caller_identity(client, workspace_topic, ar
         json={
             "caller_staff": "engineer",
             "caller_message_id": architect_msg_id,
+            "dispatch_token": architect_token,
             "staff": "architect",
             "goal": "Do it",
             "acceptance_criteria": "Done",
@@ -1326,6 +1380,7 @@ def test_ask_rejects_unknown_caller_message_id(client, workspace_topic, architec
         json={
             "caller_staff": "architect",
             "caller_message_id": "nonexistent-msg-id",
+            "dispatch_token": "irrelevant-caller-check-fires-first",
             "question": "What do you mean?",
         },
     )
@@ -1342,6 +1397,7 @@ def test_ask_rejects_mismatched_caller_identity(client, workspace_topic, archite
     _post_prompt(client, ws_id, topic_id, "@architect design it")
     msgs = c.get(f"/api/workspaces/{ws_id}/topics/{topic_id}/messages").json()
     architect_msg_id = msgs[0]["id"]
+    architect_token = _get_dispatch_token(client, architect_msg_id)
 
     # engineer tries to use architect's message id
     r = c.post(
@@ -1349,6 +1405,7 @@ def test_ask_rejects_mismatched_caller_identity(client, workspace_topic, archite
         json={
             "caller_staff": "engineer",
             "caller_message_id": architect_msg_id,
+            "dispatch_token": architect_token,
             "question": "Can I ask this?",
         },
     )
@@ -1367,11 +1424,14 @@ def test_ws_frame_envelope_loader(client, workspace_topic, architect_staff, engi
         f"/api/workspaces/{ws_id}/topics/{topic_id}/messages",
         data={"text": "@architect design it"},
     )
+    user_msg_id = user_r.json()["message_id"]
+    user_token = _get_dispatch_token(client, user_msg_id)
     delegate_r = c.post(
         f"/api/workspaces/{ws_id}/topics/{topic_id}/orchestrate/delegate",
         json={
             "caller_staff": "architect",
-            "caller_message_id": user_r.json()["message_id"],
+            "caller_message_id": user_msg_id,
+            "dispatch_token": user_token,
             "staff": "engineer",
             "goal": "Implement feature X",
             "acceptance_criteria": "Tests pass",

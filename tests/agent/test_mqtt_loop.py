@@ -939,3 +939,31 @@ def test_publish_interrupted_all_clears_persisted_state(tmp_path):
          patch("src.agent.mqtt_loop.os.killpg"):
         _publish_interrupted_all(client)
     assert not state_path.exists()
+
+
+def test_process_prompt_sets_orch_env_with_dispatch_token(tmp_path):
+    """Regression: the MQTT prompt's dispatch_token must reach the CLI
+    subprocess env (via the orch-env thread-local) — without it every
+    orchestrate MCP tool call is rejected by master with 422."""
+    client = MagicMock()
+    captured = {}
+
+    def fake_run_claude(*args, **kwargs):
+        captured.update(mqtt_loop_module._prompt_orch_env.env)
+        return ("ok", None, None)
+
+    with patch("src.agent.mqtt_loop._run_claude", side_effect=fake_run_claude):
+        with patch("src.agent.mqtt_loop._ensure_worktree"):
+            _process_prompt(
+                client, "ws1", "t1",
+                {"message_id": "m-tok", "text": "hi", "adapter": "claude-code",
+                 "agent_name": "architect", "worktree": str(tmp_path),
+                 "branch": "feat/t", "session_id": None,
+                 "task_depth": 0, "dispatch_token": "tok-123"},
+                repo_dir=str(tmp_path),
+            )
+
+    assert captured["DISPATCH_TOKEN"] == "tok-123"
+    assert captured["AGENT_NAME"] == "architect"
+    assert captured["PROMPT_MESSAGE_ID"] == "m-tok"
+    assert captured["TASK_DEPTH"] == "0"
