@@ -144,3 +144,20 @@ class TestVersion:
         assert response.status_code == 200
         body = response.json()
         assert set(body.keys()) == {"version"}
+
+
+class TestDemo:
+    """Tests for the GET /demo endpoint."""
+
+    def test_demo_returns_200(self, _base_env, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GET /demo must return status 200 with empty body."""
+        with TestClient(app) as client:
+            response = client.get("/demo")
+        assert response.status_code == 200
+
+    def test_demo_returns_empty_body(self, _base_env, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GET /demo must return an empty response body."""
+        with TestClient(app) as client:
+            response = client.get("/demo")
+        assert response.status_code == 200
+        assert response.text == ""

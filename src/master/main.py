@@ -12,7 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ..logging_utils import LocalTimeFormatter
@@ -567,6 +567,11 @@ async def health() -> dict:  # type: ignore[type-arg]
 @app.get("/version")
 async def version() -> dict:  # type: ignore[type-arg]
     return {"version": get_app_version()}
+
+
+@app.get("/demo")
+async def demo() -> Response:
+    return Response(status_code=200)
 
 
 @app.get("/schema")
