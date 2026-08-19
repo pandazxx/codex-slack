@@ -564,6 +564,11 @@ async def health() -> dict:  # type: ignore[type-arg]
     return {"status": "ok", "version": get_app_version()}
 
 
+@app.get("/version")
+async def version() -> dict:  # type: ignore[type-arg]
+    return {"version": get_app_version()}
+
+
 @app.get("/schema")
 async def schema() -> dict:  # type: ignore[type-arg]
     return schema_info(app.state.db_path)

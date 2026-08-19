@@ -87,3 +87,60 @@ class TestHealthVersion:
             response = client.get("/health")
         assert response.status_code == 200
         assert response.json()["version"] == "v4.0-rc3"
+
+
+class TestVersion:
+    """Tests for the GET /version endpoint."""
+
+    def test_version_returns_200(self, _base_env, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GET /version must return status 200."""
+        monkeypatch.setenv("APP_VERSION", "test-1.2.3")
+        with TestClient(app) as client:
+            response = client.get("/version")
+        assert response.status_code == 200
+
+    def test_version_returns_version_when_app_version_set(
+        self, _base_env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When APP_VERSION=test-1.2.3, GET /version must return
+        {"version": "test-1.2.3"}."""
+        monkeypatch.setenv("APP_VERSION", "test-1.2.3")
+        with TestClient(app) as client:
+            response = client.get("/version")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["version"] == "test-1.2.3"
+
+    def test_version_returns_dev_when_app_version_unset(
+        self, _base_env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When APP_VERSION is not set, GET /version must return
+        {"version": "dev"}."""
+        monkeypatch.delenv("APP_VERSION", raising=False)
+        with TestClient(app) as client:
+            response = client.get("/version")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["version"] == "dev"
+
+    def test_version_returns_dev_when_app_version_empty(
+        self, _base_env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When APP_VERSION='', GET /version must fall back to 'dev'."""
+        monkeypatch.setenv("APP_VERSION", "")
+        with TestClient(app) as client:
+            response = client.get("/version")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["version"] == "dev"
+
+    def test_version_response_contains_exactly_version(
+        self, _base_env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """GET /version response body must contain exactly 'version' key."""
+        monkeypatch.setenv("APP_VERSION", "v4.0-rc1")
+        with TestClient(app) as client:
+            response = client.get("/version")
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body.keys()) == {"version"}
