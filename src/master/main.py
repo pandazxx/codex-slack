@@ -561,6 +561,12 @@ app.include_router(topic_notes_router, prefix="/api")
 app.include_router(orchestrate_router, prefix="/api")
 app.include_router(orchestrate_tasks_router, prefix="/api")
 
+
+@app.get("/demo", status_code=200)
+async def demo() -> None:
+    return
+
+
 if (_STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="static-assets")
 
