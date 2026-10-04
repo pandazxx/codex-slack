@@ -6,6 +6,20 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-10-04 — Switched claude-code off npm entirely, onto Anthropic's native installer
+
+*Summary:* After three successive npm-specific fixes for `claude-code` (GHA cache-bust, Node 22 bump for `engines`, `--allow-scripts` for the postinstall block — all three previous entries), switched the CLI's install mechanism off npm entirely rather than keep patching around npm's behavior changes.
+
+*Root cause (of the pattern, not a single bug):* Every prior fix in this chain was npm silently changing default behavior out from under an unpinned `npm install -g @anthropic-ai/claude-code` — stale GHA layer cache, then `engines`-based version capping, then default-on `allowScripts` script blocking. Each fix solved one symptom and surfaced the next. `claude-code` ships an official native installer (`https://claude.ai/install.sh`) that downloads a checksum-verified platform-specific binary directly — no Node, no npm, no `engines` field, no lifecycle scripts to block.
+
+*Fix applied:* Removed `@anthropic-ai/claude-code` from every `npm install -g` invocation (`Dockerfile`, `Dockerfile.agent-minimal`, `Dockerfile.test` — `@openai/codex` stays on npm, it has no equivalent native installer and no install scripts of its own). Added `curl -fsSL https://claude.ai/install.sh | bash` as its own `RUN` step, placed *after* `USER appuser` is set so it installs into `/home/appuser/.local/bin` (the installer's fixed location — it has no override flag). Added `ENV PATH="/home/appuser/.local/bin:${PATH}"` right after, since the installer only offers to append to `~/.bashrc`, which isn't sourced in non-interactive `docker exec`/entrypoint contexts — confirmed this by actually running the installer locally with an isolated `$HOME` before touching Docker at all. Kept the existing `CODEX_CLI_CACHE_BUST` arg wired into this new RUN too, since "always fetch latest" is still subject to the same Docker/GHA layer-cache staleness as before. The build-time `~/.local/bin/claude --version` call fails the build immediately if the binary doesn't materialize, instead of silently shipping a broken image.
+
+*Not reverted:* The Node 22 bump and npm self-upgrade from the previous two entries are no longer strictly required now that `claude-code` isn't installed via npm at all — `codex`'s own `engines` (`>=16`) never needed Node 22, and the frontend's Arborist bug was specific to Node 22's bundled npm. Left both in place rather than reverting, since they're already validated working end-to-end (`v4.20-rc16`) and reverting them would mean re-validating a second untested combination for no concrete benefit — flagged as an optional future simplification, not done speculatively.
+
+*Prevention:* When a tool ships both an npm package and an official native installer, and the npm path keeps breaking on upstream npm behavior changes rather than anything in this repo's control, prefer the native installer — it removes an entire category of recurring breakage rather than chasing it fix-by-fix. Before wiring a new "always latest" install step into a Dockerfile, actually run it locally (isolated `$HOME`/prefix, no Docker needed) to see exactly where it places files and what PATH/profile assumptions it makes, rather than discovering that from a failed CI build or a user's runtime error.
+
+---
+
 ## 2026-10-04 — npm self-upgrade (previous entry) silently blocked claude-code's native-binary postinstall
 
 *Summary:* `v4.20-rc15` built and pushed clean, but a live agent container rebuilt from it reported `claude native binary not installed` at runtime, even though `which claude` found the shim and the CI build log showed `claude-code@2.1.289` "installed" successfully.
