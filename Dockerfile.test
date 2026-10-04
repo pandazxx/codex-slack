@@ -3,7 +3,10 @@ FROM ghcr.io/pandazxx/codex-slack-base:latest
 ARG CODEX_NPM_PACKAGE=@openai/codex
 ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code
 
-RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
+# See Dockerfile for why --allow-scripts=@anthropic-ai/claude-code is needed:
+# Dockerfile.base self-upgrades npm, and npm >=11 blocks claude-code's
+# native-binary postinstall by default unless explicitly allowlisted.
+RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE} --allow-scripts=@anthropic-ai/claude-code
 
 ARG JUST_VERSION=1.40.0
 RUN curl --proto '=https' --tlsv1.2 -fsSL https://just.systems/install.sh \

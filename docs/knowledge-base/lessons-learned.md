@@ -6,6 +6,18 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-10-04 — npm self-upgrade (previous entry) silently blocked claude-code's native-binary postinstall
+
+*Summary:* `v4.20-rc15` built and pushed clean, but a live agent container rebuilt from it reported `claude native binary not installed` at runtime, even though `which claude` found the shim and the CI build log showed `claude-code@2.1.289` "installed" successfully.
+
+*Root cause:* The `npm install -g npm@latest` added in the previous entry self-upgrades npm to `12.2.0`. Starting at some npm version in that range (confirmed present in `12.2.0`, absent in the NodeSource-bundled `10.9.9`), npm added a default-on `allowScripts` security feature that silently **skips** lifecycle scripts (postinstall, etc.) for any package not explicitly allowlisted — printing only a `npm warn install-scripts ... blocked because they are not covered by allowScripts` notice, not an error. `@anthropic-ai/claude-code`'s postinstall (`install.cjs`) is what downloads/links its platform-specific native binary; with the script blocked, the package "installs" (the JS shim lands in place) but the binary never does. `@openai/codex` has no install scripts, so it was never affected. `Dockerfile.agent-minimal` never self-upgrades npm (stays on the NodeSource-bundled version), so it was never exposed to this either — only `Dockerfile` (master image, via `Dockerfile.base`) and `Dockerfile.test` hit it, both of which build on top of the self-upgraded base image.
+
+*Fix applied:* Added `--allow-scripts=@anthropic-ai/claude-code` to the `npm install -g` invocations in `Dockerfile` and `Dockerfile.test`. Reproduced locally first (downloaded Node 22.23.3 standalone, matched the exact CI sequence: self-upgrade npm, then install claude-code) to confirm both the failure and the fix before touching CI again — avoided burning another RC tag on a guess.
+
+*Prevention:* Any time a Dockerfile explicitly upgrades a package manager to "latest" (npm, pip, etc.), re-verify that every package installed afterward with scripts/postinstall steps still actually runs them — newer major versions of the package manager itself can silently change script-execution defaults. Before trusting a CI "install succeeded" log line, check for `npm warn` lines near it; a non-fatal warning can still mean the thing you actually needed (a native binary, a generated file) never materialized. When debugging Docker-build-only npm behavior, reproducing locally with a matching standalone Node/npm version (no Docker needed) is much faster than iterating through CI/RC tags.
+
+---
+
 ## 2026-10-04 — Node 22 bump (previous entry) broke frontend `npm ci`: nodesource's bundled npm 10.9.9 has an Arborist null-deref bug
 
 *Summary:* Tagging `v4.20-rc13` to validate the Node 22 bump (previous entry) triggered a real CI rebuild of both `codex-slack-base` and `codex-slack-master`. `agent-minimal` built fine and confirmed `claude-code@2.1.289` installed correctly. `master` failed: `cd frontend && npm ci --prefer-offline 2>/dev/null || npm install` died with `npm error Cannot read properties of null (reading 'edgesOut')`.

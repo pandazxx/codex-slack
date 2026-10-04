@@ -12,9 +12,15 @@ ENV APP_VERSION=${APP_VERSION}
 # it, this RUN layer cache-hits forever since its inputs never change, and
 # re-tagging/rebuilding keeps shipping whatever codex/claude version was
 # installed the first time this layer was built.
+#
+# --allow-scripts=@anthropic-ai/claude-code: Dockerfile.base self-upgrades npm
+# to latest, and npm >=11 blocks lifecycle scripts by default for packages not
+# explicitly allowlisted. claude-code's postinstall (install.cjs) downloads
+# its native binary — without this flag the CLI installs "successfully" but
+# `claude` fails at runtime with "native binary not installed".
 ARG CODEX_CLI_CACHE_BUST=0
 RUN echo "cache-bust: ${CODEX_CLI_CACHE_BUST}" \
-    && npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE} \
+    && npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE} --allow-scripts=@anthropic-ai/claude-code \
     && npm list -g --depth=0
 
 ARG JUST_VERSION=1.40.0
