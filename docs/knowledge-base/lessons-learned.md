@@ -6,6 +6,18 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-10-04 — cache-bust fixed the layer, but claude CLI still frozen: npm silently honors `engines` over `latest`
+
+*Summary:* After shipping the GHA-cache-bust fix below (same day, previous entry), an agent container rebuilt from the resulting `v4.20-rc12` image still reported `claude --version` as `2.1.197` while the npm registry's actual `latest` dist-tag was `2.1.289`. Build logs confirmed the cache-bust *did* work — `npm install -g` genuinely re-ran (no `CACHED` step) — so the staleness had a second, independent cause.
+
+*Root cause:* `npm install -g <pkg>` with no version specifier does not simply install the registry's `latest` dist-tag — if the current Node runtime fails the package's `engines.node` range, npm silently resolves to the highest version whose `engines` the running Node satisfies instead (only a non-fatal `EBADENGINE` warning, no error). `@anthropic-ai/claude-code` bumped `engines.node` to `>=22.0.0` starting at version `2.1.198`; every version before that (through `2.1.197`) only required `>=18.0.0`. Both `Dockerfile.base` and `Dockerfile.agent-minimal` install Node via `deb.nodesource.com/setup_20.x`, so npm was mechanically incapable of ever installing `2.1.198` or later — no matter how aggressively the Docker layer cache was busted, the registry resolution itself was capped at `2.1.197`, the last Node-20-compatible release. `@openai/codex`'s `engines.node` (`>=16`) never exceeded Node 20, which is why only `claude`, not `codex`, appeared stale.
+
+*Fix applied:* Bumped the NodeSource setup script from `setup_20.x` to `setup_22.x` in both `Dockerfile.base` and `Dockerfile.agent-minimal`, with a comment explaining why the Node major must track the CLI packages' `engines` requirement. Kept the `CODEX_CLI_CACHE_BUST` fix from the previous entry — it's still required; it just wasn't sufficient on its own.
+
+*Prevention:* When a `RUN npm install -g <pkg>` step is meant to always track "latest," two independent things can freeze it: the Docker/CI layer cache (previous entry) and the installed Node major silently capping npm's resolution via `engines`. Verifying only "did the RUN layer actually execute" is not enough — confirm the *installed version* against the registry's real `dist-tags.latest`, and check whether a recent upstream release raised its `engines.node` floor past what the image ships.
+
+---
+
 ## 2026-10-04 — codex/claude CLI version frozen at whatever first built the npm-install layer
 
 *Summary:* The built `codex-slack-master` and `codex-slack-agent-minimal` images always shipped the same `codex`/`claude` CLI versions, even after pushing a new master commit, retagging, or forcing a rebuild.

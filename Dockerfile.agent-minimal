@@ -35,11 +35,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     silversearcher-ag \
     tini \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && printf '#!/bin/sh\nexec docker compose "$@"\n' > /usr/local/bin/docker-compose \
     && chmod +x /usr/local/bin/docker-compose \
     && rm -rf /var/lib/apt/lists/*
+# npm install -g with no version pin silently caps at the highest version
+# whose "engines.node" range the installed Node satisfies, rather than the
+# registry's `latest` dist-tag — see Dockerfile.base for the full story.
+# @anthropic-ai/claude-code requires node>=22 since 2.1.198, so staying on
+# nodesource setup_20.x here meant the cache-bust fix below could run every
+# time and still always resolve the same stale node-20-compatible release.
 
 # See Dockerfile for why CODEX_CLI_CACHE_BUST exists: it busts the GHA layer
 # cache for this install so rebuilds actually pick up the latest CLI version.

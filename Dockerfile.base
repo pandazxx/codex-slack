@@ -34,9 +34,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     poppler-utils \
     tini \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+# npm install -g with no version pin silently caps at the highest version
+# whose "engines.node" range the installed Node satisfies, rather than the
+# registry's `latest` dist-tag. @anthropic-ai/claude-code requires node>=22
+# since 2.1.198 — staying on nodesource setup_20.x meant every consumer
+# Dockerfile's npm install permanently resolved to the last node-20-compatible
+# release (2.1.197) no matter how fresh the layer cache was. Keep this Node
+# major at or above whatever the current claude-code/codex engines require.
 
 RUN useradd -m -u 1000 -s /bin/bash appuser \
     && mkdir -p /workspace/home /home/appuser/.claude /home/appuser/.codex /opt/codex-slack/data/master \
