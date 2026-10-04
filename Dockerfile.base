@@ -36,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g npm@latest \
     && rm -rf /var/lib/apt/lists/*
 # npm install -g with no version pin silently caps at the highest version
 # whose "engines.node" range the installed Node satisfies, rather than the
@@ -44,6 +45,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Dockerfile's npm install permanently resolved to the last node-20-compatible
 # release (2.1.197) no matter how fresh the layer cache was. Keep this Node
 # major at or above whatever the current claude-code/codex engines require.
+#
+# The npm version nodesource's setup_22.x bundles (10.9.9) crashes building a
+# dependency tree from scratch with no lockfile ("Cannot read properties of
+# null (reading 'edgesOut')" — an Arborist bug), which breaks the frontend's
+# `npm ci || npm install` step since no package-lock.json is committed.
+# Upgrading npm immediately after installing Node avoids shipping whatever
+# buggy patch version nodesource happens to bundle for a given Node major.
 
 RUN useradd -m -u 1000 -s /bin/bash appuser \
     && mkdir -p /workspace/home /home/appuser/.claude /home/appuser/.codex /opt/codex-slack/data/master \

@@ -6,6 +6,18 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 ---
 
+## 2026-10-04 — Node 22 bump (previous entry) broke frontend `npm ci`: nodesource's bundled npm 10.9.9 has an Arborist null-deref bug
+
+*Summary:* Tagging `v4.20-rc13` to validate the Node 22 bump (previous entry) triggered a real CI rebuild of both `codex-slack-base` and `codex-slack-master`. `agent-minimal` built fine and confirmed `claude-code@2.1.289` installed correctly. `master` failed: `cd frontend && npm ci --prefer-offline 2>/dev/null || npm install` died with `npm error Cannot read properties of null (reading 'edgesOut')`.
+
+*Root cause:* No `frontend/package-lock.json` is committed to the repo, so this step always builds npm's dependency tree (Arborist) from scratch off `package.json` alone. The npm version NodeSource's `setup_22.x` happens to bundle (`10.9.9`) has a reproducible Arborist null-dereference when resolving this frontend's dependency graph with no lockfile to start from — both `npm ci` and its `npm install` fallback hit the same crash, since the bug is in tree-building, not lockfile validation. `agent-minimal` never hit this because it has no frontend build step at all.
+
+*Fix applied:* Added `npm install -g npm@latest` immediately after the NodeSource `nodejs` install in `Dockerfile.base` (the image `Dockerfile`'s `prod`/`test` stages and `Dockerfile.test` build from), so every subsequent npm invocation in the image uses a current npm rather than whatever patch version NodeSource happened to bundle for that Node major. `Dockerfile.agent-minimal` was left unchanged since it has no exposure to this bug and the fix should stay scoped to where it's needed.
+
+*Prevention:* Don't trust the npm version bundled by a NodeSource/Node installer to be bug-free for a from-scratch dependency resolution — pin/upgrade npm explicitly right after installing Node, especially in images that run `npm ci`/`npm install` against a repo with no committed lockfile. When bumping a Node major for an `engines` requirement (see previous entry), always re-run a real build of every Dockerfile that does `npm install`/`npm ci` on application dependencies, not just the one that was mechanically required to change — a working CLI install doesn't prove the frontend build still works.
+
+---
+
 ## 2026-10-04 — cache-bust fixed the layer, but claude CLI still frozen: npm silently honors `engines` over `latest`
 
 *Summary:* After shipping the GHA-cache-bust fix below (same day, previous entry), an agent container rebuilt from the resulting `v4.20-rc12` image still reported `claude --version` as `2.1.197` while the npm registry's actual `latest` dist-tag was `2.1.289`. Build logs confirmed the cache-bust *did* work — `npm install -g` genuinely re-ran (no `CACHED` step) — so the staleness had a second, independent cause.
