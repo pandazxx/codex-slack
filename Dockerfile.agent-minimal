@@ -41,7 +41,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chmod +x /usr/local/bin/docker-compose \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
+# See Dockerfile for why CODEX_CLI_CACHE_BUST exists: it busts the GHA layer
+# cache for this install so rebuilds actually pick up the latest CLI version.
+ARG CODEX_CLI_CACHE_BUST=0
+RUN echo "cache-bust: ${CODEX_CLI_CACHE_BUST}" \
+    && npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE} \
+    && npm list -g --depth=0
 
 RUN useradd -m -u 1000 -s /bin/bash appuser \
     && mkdir -p /workspace/home /home/appuser/.claude \

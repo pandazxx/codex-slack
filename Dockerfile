@@ -6,7 +6,16 @@ ARG APP_VERSION=dev
 
 ENV APP_VERSION=${APP_VERSION}
 
-RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}
+# CODEX_CLI_CACHE_BUST has no effect on the install itself — it only exists so
+# the GHA layer cache can't serve a stale npm install from a previous build.
+# CI passes a value that changes on every run (see build-push.yml); without
+# it, this RUN layer cache-hits forever since its inputs never change, and
+# re-tagging/rebuilding keeps shipping whatever codex/claude version was
+# installed the first time this layer was built.
+ARG CODEX_CLI_CACHE_BUST=0
+RUN echo "cache-bust: ${CODEX_CLI_CACHE_BUST}" \
+    && npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE} \
+    && npm list -g --depth=0
 
 ARG JUST_VERSION=1.40.0
 RUN curl --proto '=https' --tlsv1.2 -fsSL https://just.systems/install.sh \

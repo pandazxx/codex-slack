@@ -2,7 +2,19 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-07-12 -->
+<!-- last updated: 2026-10-04 -->
+
+---
+
+## 2026-10-04 — codex/claude CLI version frozen at whatever first built the npm-install layer
+
+*Summary:* The built `codex-slack-master` and `codex-slack-agent-minimal` images always shipped the same `codex`/`claude` CLI versions, even after pushing a new master commit, retagging, or forcing a rebuild.
+
+*Root cause:* `Dockerfile` / `Dockerfile.agent-minimal` install the CLIs with a plain `RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}`. `build-push.yml` uses `cache-from: type=gha` / `cache-to: type=gha,mode=max` for both build jobs. Docker/Buildx cache keys a `RUN` layer on its instruction text plus the preceding layers' cache keys — none of which change between builds (base image tag, ARGs, and the RUN command text are all static) — so Buildx always served the cached layer from the *first* build that ever populated the GHA cache for that scope, and `npm install` never actually ran again. `Dockerfile.base`'s own comment ("they update daily … installed in each consumer Dockerfile so every build picks up the latest version") documents the intent this cache behavior was silently defeating.
+
+*Fix applied:* Added an `ARG CODEX_CLI_CACHE_BUST=0` immediately before the install `RUN` in both Dockerfiles, referenced inside the `RUN` so changing it invalidates the cache from that instruction onward (prior layers, e.g. apt installs, stay cached). `build-push.yml` passes `CODEX_CLI_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}` as a build-arg for both the `master` and `agent-minimal` jobs, guaranteeing a fresh value — and therefore a fresh `npm install -g` — on every CI run. Also added `npm list -g --depth=0` after the install so the resolved CLI versions are visible in build logs for future debugging.
+
+*Prevention:* Any `RUN` step whose job is "always fetch the latest X" (not pinned to a version) is incompatible with `cache-from: type=gha` unless it has an explicit cache-busting input. When adding GHA layer caching to a Dockerfile, audit for `RUN` steps that intentionally float (no version pin, no lockfile) and give each one a cache-bust ARG wired to a per-run-unique value in the workflow.
 
 ---
 
