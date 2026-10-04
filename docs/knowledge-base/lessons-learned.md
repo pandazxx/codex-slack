@@ -2,7 +2,69 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-07-12 -->
+<!-- last updated: 2026-10-04 -->
+
+---
+
+## 2026-10-04 — Switched claude-code off npm entirely, onto Anthropic's native installer
+
+*Summary:* After three successive npm-specific fixes for `claude-code` (GHA cache-bust, Node 22 bump for `engines`, `--allow-scripts` for the postinstall block — all three previous entries), switched the CLI's install mechanism off npm entirely rather than keep patching around npm's behavior changes.
+
+*Root cause (of the pattern, not a single bug):* Every prior fix in this chain was npm silently changing default behavior out from under an unpinned `npm install -g @anthropic-ai/claude-code` — stale GHA layer cache, then `engines`-based version capping, then default-on `allowScripts` script blocking. Each fix solved one symptom and surfaced the next. `claude-code` ships an official native installer (`https://claude.ai/install.sh`) that downloads a checksum-verified platform-specific binary directly — no Node, no npm, no `engines` field, no lifecycle scripts to block.
+
+*Fix applied:* Removed `@anthropic-ai/claude-code` from every `npm install -g` invocation (`Dockerfile`, `Dockerfile.agent-minimal`, `Dockerfile.test` — `@openai/codex` stays on npm, it has no equivalent native installer and no install scripts of its own). Added `curl -fsSL https://claude.ai/install.sh | bash` as its own `RUN` step, placed *after* `USER appuser` is set so it installs into `/home/appuser/.local/bin` (the installer's fixed location — it has no override flag). Added `ENV PATH="/home/appuser/.local/bin:${PATH}"` right after, since the installer only offers to append to `~/.bashrc`, which isn't sourced in non-interactive `docker exec`/entrypoint contexts — confirmed this by actually running the installer locally with an isolated `$HOME` before touching Docker at all. Kept the existing `CODEX_CLI_CACHE_BUST` arg wired into this new RUN too, since "always fetch latest" is still subject to the same Docker/GHA layer-cache staleness as before. The build-time `~/.local/bin/claude --version` call fails the build immediately if the binary doesn't materialize, instead of silently shipping a broken image.
+
+*Not reverted:* The Node 22 bump and npm self-upgrade from the previous two entries are no longer strictly required now that `claude-code` isn't installed via npm at all — `codex`'s own `engines` (`>=16`) never needed Node 22, and the frontend's Arborist bug was specific to Node 22's bundled npm. Left both in place rather than reverting, since they're already validated working end-to-end (`v4.20-rc16`) and reverting them would mean re-validating a second untested combination for no concrete benefit — flagged as an optional future simplification, not done speculatively.
+
+*Prevention:* When a tool ships both an npm package and an official native installer, and the npm path keeps breaking on upstream npm behavior changes rather than anything in this repo's control, prefer the native installer — it removes an entire category of recurring breakage rather than chasing it fix-by-fix. Before wiring a new "always latest" install step into a Dockerfile, actually run it locally (isolated `$HOME`/prefix, no Docker needed) to see exactly where it places files and what PATH/profile assumptions it makes, rather than discovering that from a failed CI build or a user's runtime error.
+
+---
+
+## 2026-10-04 — npm self-upgrade (previous entry) silently blocked claude-code's native-binary postinstall
+
+*Summary:* `v4.20-rc15` built and pushed clean, but a live agent container rebuilt from it reported `claude native binary not installed` at runtime, even though `which claude` found the shim and the CI build log showed `claude-code@2.1.289` "installed" successfully.
+
+*Root cause:* The `npm install -g npm@latest` added in the previous entry self-upgrades npm to `12.2.0`. Starting at some npm version in that range (confirmed present in `12.2.0`, absent in the NodeSource-bundled `10.9.9`), npm added a default-on `allowScripts` security feature that silently **skips** lifecycle scripts (postinstall, etc.) for any package not explicitly allowlisted — printing only a `npm warn install-scripts ... blocked because they are not covered by allowScripts` notice, not an error. `@anthropic-ai/claude-code`'s postinstall (`install.cjs`) is what downloads/links its platform-specific native binary; with the script blocked, the package "installs" (the JS shim lands in place) but the binary never does. `@openai/codex` has no install scripts, so it was never affected. `Dockerfile.agent-minimal` never self-upgrades npm (stays on the NodeSource-bundled version), so it was never exposed to this either — only `Dockerfile` (master image, via `Dockerfile.base`) and `Dockerfile.test` hit it, both of which build on top of the self-upgraded base image.
+
+*Fix applied:* Added `--allow-scripts=@anthropic-ai/claude-code` to the `npm install -g` invocations in `Dockerfile` and `Dockerfile.test`. Reproduced locally first (downloaded Node 22.23.3 standalone, matched the exact CI sequence: self-upgrade npm, then install claude-code) to confirm both the failure and the fix before touching CI again — avoided burning another RC tag on a guess.
+
+*Prevention:* Any time a Dockerfile explicitly upgrades a package manager to "latest" (npm, pip, etc.), re-verify that every package installed afterward with scripts/postinstall steps still actually runs them — newer major versions of the package manager itself can silently change script-execution defaults. Before trusting a CI "install succeeded" log line, check for `npm warn` lines near it; a non-fatal warning can still mean the thing you actually needed (a native binary, a generated file) never materialized. When debugging Docker-build-only npm behavior, reproducing locally with a matching standalone Node/npm version (no Docker needed) is much faster than iterating through CI/RC tags.
+
+---
+
+## 2026-10-04 — Node 22 bump (previous entry) broke frontend `npm ci`: nodesource's bundled npm 10.9.9 has an Arborist null-deref bug
+
+*Summary:* Tagging `v4.20-rc13` to validate the Node 22 bump (previous entry) triggered a real CI rebuild of both `codex-slack-base` and `codex-slack-master`. `agent-minimal` built fine and confirmed `claude-code@2.1.289` installed correctly. `master` failed: `cd frontend && npm ci --prefer-offline 2>/dev/null || npm install` died with `npm error Cannot read properties of null (reading 'edgesOut')`.
+
+*Root cause:* No `frontend/package-lock.json` is committed to the repo, so this step always builds npm's dependency tree (Arborist) from scratch off `package.json` alone. The npm version NodeSource's `setup_22.x` happens to bundle (`10.9.9`) has a reproducible Arborist null-dereference when resolving this frontend's dependency graph with no lockfile to start from — both `npm ci` and its `npm install` fallback hit the same crash, since the bug is in tree-building, not lockfile validation. `agent-minimal` never hit this because it has no frontend build step at all.
+
+*Fix applied:* Added `npm install -g npm@latest` immediately after the NodeSource `nodejs` install in `Dockerfile.base` (the image `Dockerfile`'s `prod`/`test` stages and `Dockerfile.test` build from), so every subsequent npm invocation in the image uses a current npm rather than whatever patch version NodeSource happened to bundle for that Node major. `Dockerfile.agent-minimal` was left unchanged since it has no exposure to this bug and the fix should stay scoped to where it's needed.
+
+*Prevention:* Don't trust the npm version bundled by a NodeSource/Node installer to be bug-free for a from-scratch dependency resolution — pin/upgrade npm explicitly right after installing Node, especially in images that run `npm ci`/`npm install` against a repo with no committed lockfile. When bumping a Node major for an `engines` requirement (see previous entry), always re-run a real build of every Dockerfile that does `npm install`/`npm ci` on application dependencies, not just the one that was mechanically required to change — a working CLI install doesn't prove the frontend build still works.
+
+---
+
+## 2026-10-04 — cache-bust fixed the layer, but claude CLI still frozen: npm silently honors `engines` over `latest`
+
+*Summary:* After shipping the GHA-cache-bust fix below (same day, previous entry), an agent container rebuilt from the resulting `v4.20-rc12` image still reported `claude --version` as `2.1.197` while the npm registry's actual `latest` dist-tag was `2.1.289`. Build logs confirmed the cache-bust *did* work — `npm install -g` genuinely re-ran (no `CACHED` step) — so the staleness had a second, independent cause.
+
+*Root cause:* `npm install -g <pkg>` with no version specifier does not simply install the registry's `latest` dist-tag — if the current Node runtime fails the package's `engines.node` range, npm silently resolves to the highest version whose `engines` the running Node satisfies instead (only a non-fatal `EBADENGINE` warning, no error). `@anthropic-ai/claude-code` bumped `engines.node` to `>=22.0.0` starting at version `2.1.198`; every version before that (through `2.1.197`) only required `>=18.0.0`. Both `Dockerfile.base` and `Dockerfile.agent-minimal` install Node via `deb.nodesource.com/setup_20.x`, so npm was mechanically incapable of ever installing `2.1.198` or later — no matter how aggressively the Docker layer cache was busted, the registry resolution itself was capped at `2.1.197`, the last Node-20-compatible release. `@openai/codex`'s `engines.node` (`>=16`) never exceeded Node 20, which is why only `claude`, not `codex`, appeared stale.
+
+*Fix applied:* Bumped the NodeSource setup script from `setup_20.x` to `setup_22.x` in both `Dockerfile.base` and `Dockerfile.agent-minimal`, with a comment explaining why the Node major must track the CLI packages' `engines` requirement. Kept the `CODEX_CLI_CACHE_BUST` fix from the previous entry — it's still required; it just wasn't sufficient on its own.
+
+*Prevention:* When a `RUN npm install -g <pkg>` step is meant to always track "latest," two independent things can freeze it: the Docker/CI layer cache (previous entry) and the installed Node major silently capping npm's resolution via `engines`. Verifying only "did the RUN layer actually execute" is not enough — confirm the *installed version* against the registry's real `dist-tags.latest`, and check whether a recent upstream release raised its `engines.node` floor past what the image ships.
+
+---
+
+## 2026-10-04 — codex/claude CLI version frozen at whatever first built the npm-install layer
+
+*Summary:* The built `codex-slack-master` and `codex-slack-agent-minimal` images always shipped the same `codex`/`claude` CLI versions, even after pushing a new master commit, retagging, or forcing a rebuild.
+
+*Root cause:* `Dockerfile` / `Dockerfile.agent-minimal` install the CLIs with a plain `RUN npm install -g ${CODEX_NPM_PACKAGE} ${CLAUDE_NPM_PACKAGE}`. `build-push.yml` uses `cache-from: type=gha` / `cache-to: type=gha,mode=max` for both build jobs. Docker/Buildx cache keys a `RUN` layer on its instruction text plus the preceding layers' cache keys — none of which change between builds (base image tag, ARGs, and the RUN command text are all static) — so Buildx always served the cached layer from the *first* build that ever populated the GHA cache for that scope, and `npm install` never actually ran again. `Dockerfile.base`'s own comment ("they update daily … installed in each consumer Dockerfile so every build picks up the latest version") documents the intent this cache behavior was silently defeating.
+
+*Fix applied:* Added an `ARG CODEX_CLI_CACHE_BUST=0` immediately before the install `RUN` in both Dockerfiles, referenced inside the `RUN` so changing it invalidates the cache from that instruction onward (prior layers, e.g. apt installs, stay cached). `build-push.yml` passes `CODEX_CLI_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}` as a build-arg for both the `master` and `agent-minimal` jobs, guaranteeing a fresh value — and therefore a fresh `npm install -g` — on every CI run. Also added `npm list -g --depth=0` after the install so the resolved CLI versions are visible in build logs for future debugging.
+
+*Prevention:* Any `RUN` step whose job is "always fetch the latest X" (not pinned to a version) is incompatible with `cache-from: type=gha` unless it has an explicit cache-busting input. When adding GHA layer caching to a Dockerfile, audit for `RUN` steps that intentionally float (no version pin, no lockfile) and give each one a cache-bust ARG wired to a per-run-unique value in the workflow.
 
 ---
 

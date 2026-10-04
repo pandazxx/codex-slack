@@ -52,6 +52,7 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             APP_VERSION=${{ github.ref_name }}
+            CODEX_CLI_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=master
           cache-to: type=gha,mode=max,scope=master
 
@@ -79,6 +80,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/codex-slack-agent-minimal:rc
           build-args: |
             APP_VERSION=${{ github.ref_name }}
+            CODEX_CLI_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=agent-minimal
           cache-to: type=gha,mode=max,scope=agent-minimal
       - name: Smoke test runtime contract
