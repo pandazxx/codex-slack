@@ -24,3 +24,5 @@ Status flow: `proposed` → `accepted` → `deprecated` / `superseded`
 | 0014 | [Codex agent adapter](0014-codex-agent-adapter.md) | accepted |
 | 0015 | [Workspace and topic notes with prompt injection](0015-notes-feature.md) | accepted |
 | 0016 | [Vue Flow + client-side parsing for the topic graph view](0016-topic-graph-view.md) | accepted |
+| 0017 | [Agent orchestration and cross-agent communication protocol](0017-agent-orchestration-protocol.md) | accepted |
+| 0018 | [Mr-deed agent adapter](0018-mr-deed-agent-adapter.md) | proposed |
