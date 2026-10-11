@@ -111,10 +111,11 @@ III. **In-memory session map keyed by `staff_sessions`**, lost on restart.
 1. **New adapter value `mr-deed`.** Added to `_VALID_ADAPTERS` in
    `src/master/staffs.py`. Agent side gets `elif adapter == "mr-deed":
    _run_mr_deed(...)` in `src/agent/mqtt_loop.py::_process_prompt`
-   alongside `_run_claude` and `_run_codex`. Master dispatch payload and
-   `staff_sessions` are unchanged beyond the enum. The only UI change is
-   new branches in the chunk-event classifier (`TopicChat.vue`) for the
-   `mr_deed.*` event types (point 6).
+   alongside `_run_claude` and `_run_codex`. `staff_sessions` is
+   unchanged. The staff record and dispatch payload gain one field,
+   `agent_config` (point 3). UI changes: an `agent_config` YAML editor in
+   the staff form, and new branches in the chunk-event classifier
+   (`TopicChat.vue`) for the `mr_deed.*` event types (point 6).
 
 2. **In-process runner on the `agent-llm` ThreadPoolExecutor.** No child
    process. The three usual in-process risks are each handled explicitly:
@@ -129,13 +130,31 @@ III. **In-memory session map keyed by `staff_sessions`**, lost on restart.
      killing the in-flight bash process group when fired (stopgap env
      subclass until mr-deed R3 ships).
 
+   **Where it runs:** everything mr-deed executes runs in the
+   per-workspace **agent container**, in the `mqtt_loop` process: the
+   imported library, the litellm model calls (agent container →
+   provider), the `bash` tool (a `LocalEnvironment` subprocess with
+   `cwd=<topic worktree>`, the same place claude/codex run their
+   commands today), and the host-tool handlers. Master only resolves the
+   staff (including `agent_config`), dispatches the turn, and serves the
+   orchestration/notes HTTP endpoints that the handlers call. The
+   mr-deed library is installed in the agent image only, not in master.
+
 3. **Config resolution — first match wins:**
+   0. **codex-slack config:** the staff's own `agent_config` (mr-deed
+      YAML stored on the staff record and edited in the web GUI). It is
+      resolved by the existing staff cascade (topic → workspace → global,
+      full override, ADR-0009 §2), so a global staff carries a global
+      config and a workspace/topic staff overrides it. Master sends the
+      resolved YAML in the dispatch payload.
    1. `<worktree>/.prj_assistant/mr-deed/<name>.yaml` (project-specific;
       arrives in P3).
    2. `/opt/codex-slack/config/mr-deed/<name>.yaml` (shipped configs).
    3. mr-deed built-ins.
 
-   The staff `agent` field names the config. `staff.model` overrides
+   Tier 0 is resolved on master. Tiers 1–3 are resolved on the agent,
+   because only the agent container has the worktree and the mr-deed
+   package. The staff `agent` field names the config for tiers 1–3. `staff.model` overrides
    `model.model_name`; `staff.system_prompt` is appended to
    `system_template`. The runner **always forces** `environment.type=local`
    with `cwd=<worktree>` — a repo config cannot switch execution to
@@ -228,7 +247,7 @@ support) land **before** project configs.
 
 | Phase | codex-slack scope | mr-deed deps |
 |---|---|---|
-| **P1** | `mr-deed` adapter, in-process runner on `agent-llm` pool, built-in + shipped config resolution, streaming, session resume, cancel | R1 #6, R2 #7, R3 #8, R5 #10 (stopgaps acceptable); R6 #11 for pinning |
+| **P1** | `mr-deed` adapter, in-process runner on `agent-llm` pool, config resolution for staff `agent_config` (GUI-editable) + shipped + built-in, streaming, session resume, cancel | R1 #6, R2 #7, R3 #8, R5 #10 (stopgaps acceptable); R6 #11 for pinning |
 | **P2** | codex-slack tools on top of bash → #256 orchestration support | R4 #9 |
 | **P3** | project configs under `.prj_assistant/mr-deed/` | none |
 

@@ -47,16 +47,19 @@ out in §Open Questions.
 ## Goals
 
 - **New adapter `mr-deed`** behind the same dispatch envelope used by
-  `claude-code` and `codex`. Master dispatch payload, `staff_sessions`
-  and session scope are unchanged beyond the enum; the UI only gains
-  classifier branches for `mr_deed.*` chunk events (§6).
+  `claude-code` and `codex`. `staff_sessions` and session scope are
+  unchanged. The staff record and dispatch payload gain one field,
+  `agent_config` (§3). UI changes: a YAML editor for `agent_config` in
+  the staff form, and classifier branches for `mr_deed.*` chunk events
+  (§6).
 - **In-process execution** on the existing `agent-llm` ThreadPoolExecutor
   (4 workers) in `src/agent/mqtt_loop.py`. No child process per turn.
 - **Per-turn env isolation.** `DISPATCH_TOKEN`, `TASK_DEPTH`, `TOPIC_ID`,
   `AGENT_NAME`, `PROMPT_MESSAGE_ID`, `WORKSPACE_ID`, `MASTER_URL` ride
   on `LocalEnvironment(env=...)` and never on `os.environ`.
-- **Config resolution** worktree → shipped → mr-deed built-ins, first
-  match wins. Runner always forces `environment.type=local,
+- **Config resolution** staff `agent_config` (codex-slack config, edited
+  in the web GUI) → worktree → shipped → mr-deed built-ins, first match
+  wins. Runner always forces `environment.type=local,
   cwd=<worktree>`.
 - **Session resume.** Persist trajectory per `session_id` on a volume;
   resume on `is_new_session=false` by appending a new user message
@@ -91,9 +94,6 @@ out in §Open Questions.
 - **Alternate `environment.type`s** (docker, modal, …). The runner
   always forces `local` so a repo config cannot break out of the
   worktree.
-- **Expanding the dispatch payload.** `staff.model`,
-  `staff.system_prompt`, `staff.agent`, `staff.session_scope` already
-  carry everything we need.
 - **hermes-specific plumbing.** It is one config in mr-deed, not a
   codex-slack concept.
 
@@ -140,7 +140,10 @@ Touch-points in the existing code:
 | File | Change |
 |---|---|
 | `src/master/staffs.py` | `_VALID_ADAPTERS.add("mr-deed")`; schema docs for valid values |
-| `src/master/dispatch.py` | No change (adapter string travels unchanged) |
+| `src/master/db.py` | Additive migration: nullable `staffs.agent_config TEXT` |
+| `src/master/staffs.py` | `agent_config` on `StaffIn`/`StaffOut`; on save, reject YAML that doesn't parse to a mapping (syntax check only — master has no mr-deed package) |
+| `src/master/dispatch.py` | Add `agent_config` to the prompt payload from the resolved staff |
+| `frontend/src/views/Settings.vue`, `WorkspaceDetail.vue` | YAML textarea for `agent_config` in the staff form, shown when `adapter = mr-deed` |
 | `src/agent/mqtt_loop.py::_process_prompt` (~line 636) | `elif adapter == "mr-deed": _run_mr_deed(...)` |
 | `src/agent/mqtt_loop.py` | New `_run_mr_deed` + streaming helpers next to `_run_claude` / `_run_codex` |
 | `src/agent/mr_deed_runner.py` (new) | `SessionAgent` subclass, config loader, event-hook wiring, cancel plumbing |
@@ -149,14 +152,28 @@ Touch-points in the existing code:
 | `frontend/src/views/TopicChat.vue` | Classifier branches for `mr_deed.*` event types (§6) |
 | `requirements.txt` (agent image) | Pin `mini-swe-agent @ git+https://github.com/pandazxx/mr-deed@<tag-or-sha>` |
 
+### 1a. Where each piece runs
+
+| Piece | Runs in | Notes |
+|---|---|---|
+| Staff resolution, tier-0 `agent_config` lookup | master | Existing staff cascade |
+| Dispatch, task state, orchestration/notes endpoints | master | Unchanged (ADR-0017) |
+| mr-deed library (`minisweagent`) | agent container, `mqtt_loop` process | Installed in the agent image only |
+| Tier 1–3 config resolution | agent container | Needs the worktree and the mr-deed package |
+| Model calls (litellm) | agent container → provider API | Provider keys from container env (§12) |
+| `bash` tool | agent container, `LocalEnvironment` subprocess, `cwd=<topic worktree>` | Same place claude/codex run commands today |
+| Host-tool handlers | agent container, same thread as the agent | Call master over HTTP |
+
 ### 2. Adapter dispatch mapping
 
-The staff → runner mapping. Nothing on master changes beyond the enum.
+The staff → runner mapping. Master changes: the enum and one new payload
+field, `agent_config`.
 
 | Payload field | Source | Mr-deed binding |
 |---|---|---|
 | `adapter` | `staff.adapter` | Selects `_run_mr_deed` |
-| `subagent` | `staff.agent` | Config name (resolution order §3) |
+| `subagent` | `staff.agent` | Config name for tiers 1–3 (§3) |
+| `agent_config` | `staff.agent_config` | Tier-0 YAML; used as-is when non-empty (§3) |
 | `model` | `staff.model` | Overrides `model.model_name` |
 | `system_prompt` | `staff.system_prompt` | Appended to `system_template` |
 | `session_id` | `_get_staff_session()` | Trajectory file name (§5) |
@@ -169,13 +186,29 @@ The staff → runner mapping. Nothing on master changes beyond the enum.
 
 First match wins:
 
+0. **`staff.agent_config`** — codex-slack config. Mr-deed YAML stored on
+   the staff record and edited in the web GUI staff form. It is resolved
+   by the existing staff cascade (topic → workspace → global, full
+   override, ADR-0009 §2): a global staff carries the global config, and
+   a workspace- or topic-scoped staff of the same name replaces it.
+   Master puts the resolved YAML in the dispatch payload.
 1. `<worktree>/.prj_assistant/mr-deed/<staff.agent>.yaml` (arrives in P3).
 2. `/opt/codex-slack/config/mr-deed/<staff.agent>.yaml` (shipped with
    the agent image; checked into this repo under `config/mr-deed/`).
 3. Mr-deed built-ins (`default`, `mini`, `hermes` and friends).
 
-Resolution lives in `src/agent/mr_deed_runner.py::resolve_config(worktree,
-name)`. Once a YAML is picked, the runner applies overrides:
+Tier 0 is resolved on master, where staffs live. Tiers 1–3 are resolved
+on the agent in `src/agent/mr_deed_runner.py::resolve_config(agent_config,
+worktree, name)`, since only the agent container has the worktree and
+the mr-deed package. Master only syntax-checks `agent_config` on save
+(must parse to a YAML mapping); a config mr-deed rejects at load time
+becomes a named error reply on the turn (§7).
+
+`agent_config` is stored in its own staff column, not in the `config`
+table: `config` values are injected into the agent container as env
+vars, which suits neither multi-line YAML nor per-staff scope.
+
+Once a YAML is picked, the runner applies overrides:
 
 ```
 model.model_name    ← staff.model if present
@@ -316,6 +349,7 @@ trajectory file.
 | `Cancelled` (our cancel token) | error reply | `"cancelled by user"` |
 | Litellm / provider exception | error reply | `"mr-deed model call failed: <summary>"` |
 | Any other exception in `agent.run()` | error reply | `"mr-deed crashed: <type>"` (full traceback goes to logs) |
+| Resolved config fails to load or validate | error reply | `"mr-deed config '<source>' is invalid: <reason>"` |
 
 The runner catches every exception around `agent.run()` so a litellm
 failure stays confined to its worker thread (crash isolation).
@@ -430,7 +464,8 @@ project configs.
 #### P1 — adapter + runner + streaming + resume + cancel
 
 - `_VALID_ADAPTERS.add("mr-deed")` + `_run_mr_deed` + runner module.
-- Built-in and shipped (`config/mr-deed/`) config resolution.
+- Config resolution: staff `agent_config` (DB column, payload field,
+  GUI YAML editor) → shipped (`config/mr-deed/`) → built-in.
 - `SessionAgent` with trajectory persist / resume.
 - Streaming via `add_messages` override.
 - Cancel via token + `LocalEnvironment` subclass.
@@ -461,7 +496,11 @@ project configs.
   deterministic / fake model (no litellm) and a fake
   `LocalEnvironment`:
   - Adapter enum round-trips through master → MQTT → `_process_prompt`.
-  - Config resolution picks worktree over shipped over built-in.
+  - Config resolution: `agent_config` over worktree over shipped over
+    built-in; an invalid `agent_config` is rejected on save (master) and
+    a config mr-deed can't load becomes a named error reply (agent).
+  - Staff cascade: a topic-scoped staff's `agent_config` replaces the
+    global staff's (no field merge).
   - System-prompt override is appended, not replaced.
   - Streaming emits exactly one chunk per event in the right shape.
   - Exit-status mapping covers each exit status (`Submitted`,
