@@ -593,6 +593,18 @@ intentionally shaped like any other config. The adapter stays generic.
 
 ## Open Questions
 
+- [ ] **Shape of tier-0 `agent_config` (deferred to detailed design).**
+      YAML stored on each staff record (current draft) vs. a named
+      config library at global/workspace scope that staffs reference by
+      name and several staffs can share (needs its own CRUD + UI).
+      Raised in PR #267 review; owner deferred it to the detailed design
+      phase.
+- [ ] **Tier-0 merge semantics (deferred to detailed design).** First
+      match wins with full replacement (current draft, consistent with
+      ADR-0009 full override) vs. an overlay merged onto the named base
+      config via mr-deed's `recursive_merge`, so one field can change
+      without copying the templates. Owner deferred to the detailed
+      design phase.
 - [ ] **Session history growth and compaction.** Linear history will
       eventually hit model context and cost ceilings for long topics.
       Options: hard cap on messages per session, summarisation turn,
