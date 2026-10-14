@@ -2,7 +2,7 @@
 
 **Status:** draft
 **Author:** architect
-**Date:** 2026-10-09
+**Date:** 2026-10-09 (updated 2026-10-14 for mr-deed `v0.1.0`)
 **Related ADRs:** [ADR-0018](../decisions/0018-mr-deed-agent-adapter.md);
 builds on ADR-0001 (agent provisioning), ADR-0014 (Codex adapter),
 ADR-0017 (orchestration protocol), ADR-0009 (staff system), ADR-0012
@@ -16,28 +16,20 @@ ADR-0017 (orchestration protocol), ADR-0009 (staff system), ADR-0012
 The platform runs two adapters today: `claude-code` and `codex`. Both are
 CLI subprocesses that stream JSONL on stdout, keep their own session
 state, and discover tools through MCP config files. We want to add
-`mr-deed` — a fork of mini-swe-agent v2 (package `minisweagent`, dist
-`mini-swe-agent`) owned by the same project-owner — as a third adapter.
+`mr-deed` — a fork of mini-swe-agent v2 (package `mr_deed`, dist
+`mr-deed`) owned by the same project-owner — as a third adapter.
 The intent is a side-kick / orchestrator / assistant that can also
 handle simple tasks end-to-end, with the latitude to iterate on agent
 flow and tool-call behaviour in-tree because both repositories are
 co-owned.
 
-The gaps vs. the two existing adapters, read off `pandazxx/mr-deed`
-`main` at `52c3c5c` (open mr-deed PR #5 adds `model.extra_tools` to
-`litellm_model` only):
-
-- Mr-deed is in-process (`DefaultAgent(model, env, **config).run(task)`);
-  no CLI.
-- `run()` resets `self.messages` — no session or resume concept.
-- `tools=[BASH_TOOL]` is hardcoded in the model classes;
-  `LocalEnvironment` runs bash via `subprocess.run` and accepts a
-  per-instance `env` dict and `cwd`.
-- No event hooks and no cancel. Each `step` just calls `add_messages()`
-  and `save()`.
-- `dotenv.load_dotenv()` runs at import time from the importing
-  process's cwd, mutating `os.environ`.
-- `GLOBAL_MODEL_STATS` is process-global.
+The gaps vs. the two existing adapters were: in-process only, no
+sessions, `bash` as the only tool, no event hooks or cancel, and import-
+time `.env` loading into `os.environ`. Following the boundary rule, they
+were filed as mr-deed issues #6–#11 and shipped in **mr-deed `v0.1.0`**
+(PR #13, `3834d02`). This design is written against that release; the
+API is summarised in ADR-0018 (Context) and used directly below. There
+are no codex-slack-side subclasses or patches of mr-deed.
 
 The design converged in issue #265 (comments from 2026-10-04 through
 2026-10-08). This document records the settled decisions and fills in
@@ -77,7 +69,8 @@ out in §Open Questions.
 - **Credentials.** Reuse the config-var → container env mechanism;
   litellm reads `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / etc.
 - **Clean cross-repo boundary.** Interface requirements are mr-deed
-  issues; each codex-slack-side stopgap has a named removal trigger.
+  issues and consumed through a pinned tag (`v0.1.0`); no codex-slack-side
+  subclasses of mr-deed.
 - **Generic agent interface.** `hermes` is an experiment; no special
   casing.
 
@@ -109,7 +102,7 @@ sequenceDiagram
     participant MQTT
     participant AL as agent-llm pool
     participant R as _run_mr_deed
-    participant SA as SessionAgent (DefaultAgent)
+    participant SA as DefaultAgent
     participant LE as LocalEnvironment
     participant LLM as litellm
 
@@ -119,17 +112,17 @@ sequenceDiagram
     MQTT->>AL: _process_prompt(payload)
     AL->>R: _run_mr_deed(payload)
     R->>R: resolve config (worktree → shipped → built-in)
-    R->>R: load or init trajectory for session_id
-    R->>SA: SessionAgent(model, env=LE(cwd=worktree, env=per-turn), **config)
+    R->>SA: new turn: DefaultAgent(model, LE(cwd=worktree, env=per-turn), tools, on_event, **config).run(prompt)
+    R->>SA: resume: DefaultAgent.from_trajectory(path, model, LE, tools=..., on_event=...).continue_run(prompt)
     SA->>LLM: completion(messages, tools=[bash, ...codex-slack tools])
     LLM-->>SA: assistant message
-    SA->>AL: on_event(assistant) → /chunk (folded)
+    SA->>AL: on_event("assistant") → /chunk
     SA->>LE: execute(bash cmd) [or host-tool handler]
     LE-->>SA: observation
-    SA->>AL: on_event(action|observation) → /chunk (tool-use|tool-result)
+    SA->>AL: on_event("action" / "observation") → /chunk
     SA->>LLM: completion(messages + observation)
     Note over SA,LLM: Loop until submission, limit, or cancel
-    SA->>AL: submission → last_response
+    SA->>AL: on_event("exit"); submission → last_response; save() trajectory
     AL->>MQTT: publish /response (with transcript)
     MQTT->>M: _save_agent_response
     M-->>U: WS broadcast reply
@@ -141,16 +134,16 @@ Touch-points in the existing code:
 |---|---|
 | `src/master/staffs.py` | `_VALID_ADAPTERS.add("mr-deed")`; schema docs for valid values |
 | `src/master/db.py` | Additive migration: nullable `staffs.agent_config TEXT` |
-| `src/master/staffs.py` | `agent_config` on `StaffIn`/`StaffOut`; on save, reject YAML that doesn't parse to a mapping (syntax check only — master has no mr-deed package) |
+| `src/master/staffs.py` | `agent_config` on `StaffIn`/`StaffOut`; on save, reject YAML that doesn't parse to a mapping (syntax check only — master doesn't import `mr_deed`, §11) |
 | `src/master/dispatch.py` | Add `agent_config` to the prompt payload from the resolved staff |
 | `frontend/src/views/Settings.vue`, `WorkspaceDetail.vue` | YAML textarea for `agent_config` in the staff form, shown when `adapter = mr-deed` |
 | `src/agent/mqtt_loop.py::_process_prompt` (~line 636) | `elif adapter == "mr-deed": _run_mr_deed(...)` |
 | `src/agent/mqtt_loop.py` | New `_run_mr_deed` + streaming helpers next to `_run_claude` / `_run_codex` |
-| `src/agent/mr_deed_runner.py` (new) | `SessionAgent` subclass, config loader, event-hook wiring, cancel plumbing |
+| `src/agent/mr_deed_runner.py` (new) | Config resolution, agent construction/resume, `on_event` → chunk publisher, running-agent registry for cancel. Uses mr-deed's public API only |
 | `src/orchestrate_mcp/`, `src/notes_mcp/` (P2) | Extract call-time client functions taking a per-turn context; MCP servers become thin wrappers |
 | `src/master/orchestration.py` or a shared module (P2) | `orchestration_tools_for(depth, max_depth)` — single gating function used by the MCP server and mr-deed |
 | `frontend/src/views/TopicChat.vue` | Classifier branches for `mr_deed.*` event types (§6) |
-| `requirements.txt` (agent image) | Pin `mini-swe-agent @ git+https://github.com/pandazxx/mr-deed@<tag-or-sha>` |
+| `requirements.txt` | Add `mr-deed @ git+https://github.com/pandazxx/mr-deed@v0.1.0` (§11) |
 
 ### 1a. Where each piece runs
 
@@ -158,8 +151,8 @@ Touch-points in the existing code:
 |---|---|---|
 | Staff resolution, tier-0 `agent_config` lookup | master | Existing staff cascade |
 | Dispatch, task state, orchestration/notes endpoints | master | Unchanged (ADR-0017) |
-| mr-deed library (`minisweagent`) | agent container, `mqtt_loop` process | Installed in the agent image only |
-| Tier 1–3 config resolution | agent container | Needs the worktree and the mr-deed package |
+| mr-deed library (`mr_deed`) | agent container, `mqtt_loop` process | Installed in the shared image (§11); only the agent process imports it |
+| Tier 1–3 config resolution | agent container | Needs the worktree and the imported `mr_deed` built-in configs |
 | Model calls (litellm) | agent container → provider API | Provider keys from container env (§12) |
 | `bash` tool | agent container, `LocalEnvironment` subprocess, `cwd=<topic worktree>` | Same place claude/codex run commands today |
 | Host-tool handlers | agent container, same thread as the agent | Call master over HTTP |
@@ -200,7 +193,7 @@ First match wins:
 Tier 0 is resolved on master, where staffs live. Tiers 1–3 are resolved
 on the agent in `src/agent/mr_deed_runner.py::resolve_config(agent_config,
 worktree, name)`, since only the agent container has the worktree and
-the mr-deed package. Master only syntax-checks `agent_config` on save
+imports `mr_deed`. Master only syntax-checks `agent_config` on save
 (must parse to a YAML mapping); a config mr-deed rejects at load time
 becomes a named error reply on the turn (§7).
 
@@ -228,9 +221,12 @@ as a malicious script in the repo.
 
 Each turn builds a tool list from `TASK_DEPTH` and the turn's role.
 `bash` is always present and primary. Host tools are additive and
-registered through the mr-deed pluggable-tool interface (R4; stopgap
-until R4 lands: a mr-deed `model` subclass that extends `tools` and
-dispatches by name — the same shape as mr-deed PR #5).
+registered as `mr_deed.Tool(name, description, parameters, handler)`
+objects passed via `DefaultAgent(tools=...)`. mr-deed validates names and
+required arguments, calls `handler(arguments)`, and turns a handler
+exception into an observation with `returncode -1`. A failing master
+call is therefore something the model can see and react to, not a
+crashed turn.
 
 The rule set is exactly the one `src/orchestrate_mcp/server.py` applies to
 Claude/Codex today. P2 extracts it into one shared function
@@ -277,47 +273,67 @@ A fabricated call is rejected at the API, not at the client.
 /workspace/sessions/mr-deed/<session_id>.traj.json
 ```
 
-`<session_id>` is the dispatch payload's `session_id` (which is already
-scoped by `staff.session_scope` on the master side — this adapter stays
-agnostic). File shape:
+`<session_id>` is the dispatch payload's `session_id` (already scoped by
+`staff.session_scope` on master; the adapter stays agnostic). The file is
+mr-deed's own `agent.save()` trajectory format, so no codex-slack schema
+needs maintaining:
 
 ```json
 {
-  "schema_version": 1,
-  "staff": "<staff.name>",
-  "config_name": "<staff.agent>",
-  "created_at": "...",
-  "updated_at": "...",
+  "info": {
+    "model_stats": {"instance_cost": 0.0, "api_calls": 0},
+    "config": {"agent": {"system_template": "...", "continue_template": "{{ task }}", "...": "..."}},
+    "exit_status": "Submitted",
+    "submission": "..."
+  },
   "messages": [
-    {"role": "system", "content": "<rendered system_template + staff.system_prompt>"},
+    {"role": "system", "content": "..."},
     {"role": "user", "content": "<rendered instance_template>"},
-    {"role": "assistant", "content": "..."},
-    {"role": "tool", "name": "bash", "content": "..."}
+    {"role": "assistant", "...": "..."},
+    {"role": "tool", "tool_call_id": "...", "content": "..."},
+    {"role": "exit", "...": "..."},
+    {"role": "user", "content": "<rendered continue_template>"}
   ],
-  "exit_status": null,
-  "cost_so_far": 0.0,
-  "step_count": 0
+  "trajectory_format": "..."
 }
 ```
 
-On `is_new_session=true` the runner creates a fresh file and renders the
-prompt through `instance_template`. On `is_new_session=false` it loads
-the file, appends the new prompt as a `user` message rendered through
-`continue_template` (a config key; defaults to the raw prompt, so the
-full task framing isn't repeated every turn), and continues the loop
-from there. Per-run counters (`n_calls`, `cost`, wall time) reset per
-continuation, so mr-deed config limits apply per turn; cumulative values
-stay in the file. No compaction; the file grows linearly. The volume holding
-`/workspace/sessions/` is the same one used for existing session state;
-file naming shares the pattern.
+| Case | Runner call |
+|---|---|
+| `is_new_session=true` (or file missing) | `DefaultAgent(model, env, tools=..., on_event=..., output_path=<file>, **config).run(prompt)`; system + `instance_template` rendered once |
+| `is_new_session=false` | `DefaultAgent.from_trajectory(<file>, model, env, tools=..., on_event=..., **config).continue_run(prompt)` |
+
+Notes:
+
+- The currently resolved config is passed as overrides to
+  `from_trajectory`, so GUI or file edits apply to the next turn (limits,
+  `continue_template`, observation templates). The **system message is
+  not re-rendered**: it was fixed when the session started. A changed
+  `system_template` or `staff.system_prompt` takes effect in new
+  sessions only.
+- `tools` are rebuilt every turn, so depth/role gating (§4) is always
+  per turn, even within one session.
+- Step/cost/wall-time limits reset per `run`/`continue_run`, so mr-deed
+  config limits are per turn. `total_cost`/`total_n_calls` (saved as
+  `model_stats`) span the session.
+- `exit` records of earlier turns stay in the file as turn boundaries but
+  are filtered out of the model's context by mr-deed.
+- `output_path` makes mr-deed save after every step, so a crash mid-turn
+  still leaves a resumable file.
+- No compaction: the file grows linearly (Open Questions). The
+  `/workspace/sessions/` volume already holds the claude sessions for
+  workspace/global scope.
 
 ### 6. Streaming event → chunk mapping
 
-Mr-deed calls `add_messages()` for every assistant / action / observation
-step. The runner installs an override (R2 stopgap: a thin
-`SessionAgent.add_messages` wrapper, deleted once R2 lands) that
-publishes each message as an `event` on the existing `/chunk` pipeline
-(ADR-0012), the same transport `_stream_codex_once` uses.
+The runner passes `on_event=publish` to the agent. mr-deed calls it
+synchronously, on the agent's worker thread, for every trajectory message
+and for every action before it runs. `publish` wraps the payload as an
+`event` on the existing `/chunk` pipeline (ADR-0012), the same transport
+`_stream_codex_once` uses. mr-deed requires that `on_event` handlers
+never raise, so `publish` catches and logs its own failures (an MQTT
+hiccup drops a chunk, not the turn). The final reply still travels on
+`/response`.
 
 The frontend classifier in `TopicChat.vue` dispatches on `event.type`
 and maps unknown types to `hidden`, so mr-deed events get their own
@@ -325,12 +341,14 @@ and maps unknown types to `hidden`, so mr-deed events get their own
 kinds. Native event types keep the chunk payload a faithful copy of the
 trajectory message instead of forging claude/codex shapes.
 
-| Mr-deed message | Chunk `event.type` | Classifier → display kind |
+| `on_event` kind | Chunk `event.type` | Classifier → display kind |
 |---|---|---|
-| Assistant message (text / reasoning) | `mr_deed.assistant` | `text` (reasoning → `thinking`) |
-| Action (bash or host tool) | `mr_deed.action` | `tool_use` |
-| Observation (bash or host-tool result) | `mr_deed.observation` | `folded` |
-| Exit (submission, limit, cancel, error) | `mr_deed.exit` | `hidden` (the reply itself carries the outcome) |
+| `system`, `user` | — | not published (the prompt is already in the topic) |
+| `assistant` (text / reasoning) | `mr_deed.assistant` | `text` (reasoning → `thinking`) |
+| `action` (bash or host tool) | `mr_deed.action` | `tool_use` |
+| `observation` (bash or host-tool result) | `mr_deed.observation` | `folded` |
+| `format_error` | `mr_deed.format_error` | `parse_warning` |
+| `exit` (submission, limit, cancel, error) | `mr_deed.exit` | `hidden` (the reply itself carries the outcome) |
 
 The `COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` submission text becomes
 `last_response` in the `/response` payload.
@@ -360,30 +378,36 @@ failure stays confined to its worker thread (crash isolation).
 sequenceDiagram
     participant UI
     participant M as Master
-    participant AL as agent-llm thread
-    participant SA as SessionAgent
+    participant ML as mqtt_loop (cancel handler)
+    participant SA as DefaultAgent (agent-llm thread)
     participant LE as LocalEnvironment
     participant BA as bash pgroup
 
     UI->>M: POST /cancel reply_message_id=R
-    M->>AL: cancel signal keyed by R
-    AL->>AL: cancel_tokens[R].set()
-    SA->>SA: step() boundary — check token
-    alt token set and bash running
-        SA->>LE: cancel()
-        LE->>BA: killpg(pgid, SIGTERM) → wait → SIGKILL
+    M->>ML: /cancel keyed by R
+    ML->>SA: _running_agents[R].cancel()
+    SA->>LE: interrupt()
+    alt command running
+        LE->>BA: killpg(SIGKILL)
+    else no command yet
+        LE->>LE: pending — kill the next command as soon as it spawns
     end
-    SA->>AL: raise Cancelled
-    AL->>M: publish /response (error reply "cancelled")
+    SA->>SA: next query/action → exit_status "Cancelled"
+    SA->>ML: on_event("exit") ; run returns
+    ML->>M: publish /response (error reply "cancelled")
 ```
 
 The existing cancel mechanism (`_active_procs` + `_active_procs_lock`)
-is subprocess-shaped. For mr-deed we add a parallel in-memory
-`_cancel_tokens[reply_message_id] -> threading.Event`. The runner polls
-the event at the top of each `step` and raises `Cancelled` when set.
-When bash is in flight, the token also fires `LocalEnvironment.cancel()`
-which kills the pgroup (stopgap env subclass until R3 ships). Both maps
-are serialised by the same lock discipline as `_active_procs`.
+is subprocess-shaped. For mr-deed the runner registers the live agent in
+`_running_agents[reply_message_id]` (same lock discipline, removed in a
+`finally` when the turn ends). The cancel handler calls
+`agent.cancel()`, which is thread-safe and does both halves: it sets the
+agent's cancel event (checked before every model query and action) and
+interrupts the in-flight or about-to-start bash command. A cancel that
+arrives before the agent is registered (while the trajectory is still
+loading) is recorded and applied right after registration. mr-deed
+resets pending interrupts at the start of each run, so a cancel never
+leaks into a later turn.
 
 ### 9. Per-turn env hygiene (lesson 2026-08-16)
 
@@ -411,35 +435,52 @@ master dispatch payload
 
 Concurrency: `test_two_mr_deed_turns_in_one_process_do_not_cross_
 contaminate` runs two staffs with distinct `DISPATCH_TOKEN` values on
-the pool in parallel and asserts each handler sees its own token. This
-addresses R5 (thread-safe globals) with observable behaviour.
+the pool in parallel and asserts each handler sees its own token.
 
-### 10. Stopgaps and their removal triggers
+### 10. mr-deed interface consumed
 
-Each codex-slack-side wrapper exists only until the matching mr-deed
-release pins. The table is the source of truth; a stopgap deletion PR
-cites its row.
+No codex-slack-side stopgaps. The earlier plan (session subclass,
+`add_messages` override, cancel/env subclass, dotenv guard, litellm model
+subclass) is dropped because each piece shipped in mr-deed `v0.1.0`:
 
-| Stopgap (codex-slack) | mr-deed issue | Removal trigger |
+| Need | mr-deed issue | `v0.1.0` API used |
 |---|---|---|
-| `SessionAgent(DefaultAgent)` loading / resuming `messages` from the trajectory file | [#6](https://github.com/pandazxx/mr-deed/issues/6) (R1) | Pinned mr-deed release ships a `resume=` kwarg or equivalent |
-| `add_messages` override that emits events to the `/chunk` pipeline | [#7](https://github.com/pandazxx/mr-deed/issues/7) (R2) | Pinned release exposes an `on_event(kind, message)` hook |
-| Cancel-check in a `step` override + `LocalEnvironment` subclass that kills the pgroup | [#8](https://github.com/pandazxx/mr-deed/issues/8) (R3) | Pinned release accepts a cancel token and propagates it to bash |
-| Import-time `os.environ` snapshot/restore (or cwd guard) around `import minisweagent` | [#10](https://github.com/pandazxx/mr-deed/issues/10) (R5) | Pinned release makes `dotenv.load_dotenv()` opt-in and makes `GLOBAL_MODEL_STATS` thread-safe |
-| `litellm_model` subclass that extends `tools` and dispatches host tools by name | [#9](https://github.com/pandazxx/mr-deed/issues/9) (R4) | Pinned release lands a general `extra_tools` + `extra_handlers` interface in `DefaultAgent` (generalising mr-deed PR #5) |
-| Git-SHA pin instead of a tag in `requirements.txt` | [#11](https://github.com/pandazxx/mr-deed/issues/11) (R6) | Mr-deed cuts a `v<X.Y.Z>` tag |
+| Session resume | [#6](https://github.com/pandazxx/mr-deed/issues/6) | `from_trajectory`, `continue_run`, `continue_template`, `save()` |
+| Streaming | [#7](https://github.com/pandazxx/mr-deed/issues/7) | `on_event(kind, payload)` |
+| Cancel | [#8](https://github.com/pandazxx/mr-deed/issues/8) | `agent.cancel()`, `LocalEnvironment.interrupt()` / `reset_interrupt()` |
+| Host tools | [#9](https://github.com/pandazxx/mr-deed/issues/9) | `mr_deed.Tool`, `DefaultAgent(tools=...)` |
+| Embedding hygiene | [#10](https://github.com/pandazxx/mr-deed/issues/10) | side-effect-free `import mr_deed`; per-agent limits |
+| Pinning | [#11](https://github.com/pandazxx/mr-deed/issues/11) | `v0.1.0` tag |
+
+The runner must import only from `mr_deed` (agents, models,
+environments, config), **never from `mr_deed.run`**: that package is the
+CLI entry point and loads `.env` files into `os.environ` on import. A
+unit test asserts that importing the runner leaves `os.environ`
+untouched.
+
+New needs found during implementation go back to mr-deed as issues
+(boundary rule), not into local workarounds.
 
 ### 11. Packaging and image impact
 
-Install line in the agent base image:
-
 ```
-pip install "mini-swe-agent @ git+https://github.com/pandazxx/mr-deed@<tag>"
+# requirements.txt
+mr-deed @ git+https://github.com/pandazxx/mr-deed@v0.1.0
 ```
 
-Pinned by git tag once R6 lands; SHA until then. Transitive dep of
-interest: **litellm** adds a noticeable amount to the image. Measured
-in P1; recorded in the release notes.
+By default master and agent containers run the **same image**
+(`MASTER_AGENT_BASE_IMAGE` defaults to the master's image), all built
+from `requirements.txt`. So mr-deed and its transitive **litellm**
+dependency are installed in master too, but only the agent process
+imports them. Master doesn't import `mr_deed`, keeping litellm out of the
+master process. That's why `agent_config` validation on master stays a
+YAML syntax check (§3). The image-size delta is measured in P1 and
+recorded in the release notes; splitting agent-only dependencies into a
+separate requirements file is an option if the delta matters (Open
+Questions).
+
+Upgrades are explicit tag bumps (`@v0.1.0` → `@v0.x.y`) in their own PR,
+with the mr-deed changelog linked.
 
 ### 12. Credentials
 
@@ -466,13 +507,12 @@ project configs.
 - `_VALID_ADAPTERS.add("mr-deed")` + `_run_mr_deed` + runner module.
 - Config resolution: staff `agent_config` (DB column, payload field,
   GUI YAML editor) → shipped (`config/mr-deed/`) → built-in.
-- `SessionAgent` with trajectory persist / resume.
-- Streaming via `add_messages` override.
-- Cancel via token + `LocalEnvironment` subclass.
-- Dotenv / globals stopgap (os.environ snapshot/restore around import).
-- Pin mr-deed by git SHA until R6.
-- Mr-deed deps: R1 #6, R2 #7, R3 #8, R5 #10 (stopgaps acceptable); R6
-  #11 for pinning.
+- Session persist / resume via `save()` + `from_trajectory` +
+  `continue_run`.
+- Streaming via `on_event`.
+- Cancel via `agent.cancel()` and a running-agent registry.
+- Pin `mr-deed @ ...@v0.1.0` in `requirements.txt`.
+- mr-deed deps: all shipped in `v0.1.0`.
 
 #### P2 — codex-slack host tools (#256 support)
 
@@ -482,7 +522,7 @@ project configs.
 - Tool-list computation per turn per the gating table (§4).
 - Handlers reuse the HTTP client code from `src/orchestrate_mcp/` and
   `src/notes_mcp/`; master still validates every call.
-- Depends on R4 #9 landing in mr-deed (or the P1 stopgap in §10).
+- Uses `mr_deed.Tool` / `DefaultAgent(tools=...)` from `v0.1.0`.
 
 #### P3 — project configs under `.prj_assistant/mr-deed/`
 
@@ -514,7 +554,7 @@ project configs.
   This is the lesson from the 2026-08-16 dispatch-token miss.
 - **Concurrency test:** two `_run_mr_deed` calls on the pool with
   different per-turn env dicts prove that `GLOBAL_MODEL_STATS` and
-  friends do not cross-contaminate (acceptance for R5).
+  friends do not cross-contaminate.
 - **Integration test (P2):** a mr-deed staff calls `delegate_task` via
   the host tool; master records the task row; the assignee is
   dispatched with the correct `task_depth`.
@@ -611,18 +651,10 @@ intentionally shaped like any other config. The adapter stays generic.
       sliding window, or require operators to start a new session.
       Owner: architect; schedule after P1 lands and we see real
       lengths.
-- [ ] **Exact shape of mr-deed interfaces pending R1–R4.** Each of
-      [mr-deed#6](https://github.com/pandazxx/mr-deed/issues/6),
-      [#7](https://github.com/pandazxx/mr-deed/issues/7),
-      [#8](https://github.com/pandazxx/mr-deed/issues/8),
-      [#9](https://github.com/pandazxx/mr-deed/issues/9) will land with
-      its own signature. Our stopgap classes (§10) will need to be
-      replaced carefully; we may discover during that work that a
-      stopgap's semantics do not match the shipped API exactly. Each
-      removal PR is responsible for the fit-check and migration.
-- [ ] **Image size impact of litellm.** Measure in P1 and decide
-      whether to split the agent image (base + mr-deed layer) if the
-      delta is significant. Owner: sre + engineer.
+- [ ] **Image size impact of litellm.** It's installed in the shared
+      master/agent image (§11). Measure in P1 and decide whether to
+      move agent-only dependencies into a separate requirements file /
+      image layer if the delta is significant. Owner: sre + engineer.
 - [ ] **Trust boundary for `.prj_assistant/mr-deed/` (P3).** We treat
       the directory like `CLAUDE.md` for now. Project-owner marked
       "revisit later" — scheduling that review once P3 is in use and
@@ -648,7 +680,7 @@ Milestones:
 
 1. **P1 merged.** `mr-deed` adapter end-to-end for a single bash-only
    staff, streaming + resume + cancel work, concurrency test green.
-   Mr-deed is pinned (SHA until R6).
+   mr-deed is pinned at `v0.1.0`.
 2. **P2 merged.** Native host tools gated by depth/role; a mr-deed
    staff can act as a dispatcher calling `delegate_task` and as an
    assignee calling `submit_result`. #256 orchestration path covered
@@ -656,8 +688,8 @@ Milestones:
 3. **P3 merged.** Project configs under `.prj_assistant/mr-deed/`
    participate in config resolution; trust model documented.
 
-Stopgap deletions are tracked individually against the mr-deed issues
-in §10. Each deletion is reviewable in isolation.
+mr-deed upgrades are explicit tag bumps in their own PR (§11). New
+interface needs go to mr-deed as issues (§10).
 
 Rollback: P1 is a pure additive change (new enum value + new code
 paths); removing the enum rejects any staff that was created with

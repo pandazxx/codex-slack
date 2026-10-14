@@ -13,7 +13,7 @@ The platform supports Claude Code (ADR-0001, ADR-0005) and Codex (ADR-0014)
 as agent backends. Both are CLI subprocesses that stream JSONL, keep their
 own session state, and load MCP tools from a config file. We want to add
 [`pandazxx/mr-deed`](https://github.com/pandazxx/mr-deed) — a fork of
-mini-swe-agent v2 (Python package `minisweagent`) owned by the same
+mini-swe-agent v2 (Python package `mr_deed`, dist `mr-deed`) owned by the same
 project-owner — as a third adapter so we can get fine-grained control of
 agent flow and tool calls from inside our own process. Mr-deed's primary
 role is a side-kick / orchestrator / assistant, with the ability to do
@@ -22,39 +22,44 @@ simple tasks end-to-end. See GitHub issue
 discussion (and [#256](https://github.com/pandazxx/codex-slack/issues/256)
 for the orchestration protocol it will plug into).
 
-Mr-deed differs from the existing adapters in four load-bearing ways:
+Before this work, mr-deed differed from the existing adapters in four
+load-bearing ways: it was in-process only (`DefaultAgent(model, env,
+**config).run(task)`, no CLI contract), had no sessions (`run()` reset
+`self.messages`), hardcoded `bash` as its only tool, and had no event
+hooks or cancel path. It also loaded `.env` into `os.environ` at import
+time.
 
-- **In-process API.** The whole agent is `DefaultAgent(model, env,
-  **config).run(task)` — no CLI, no subprocess.
-- **No sessions.** `run()` resets `self.messages`, so there is no
-  multi-turn / resume concept today.
-- **Bash is the only tool.** `tools=[BASH_TOOL]` is hardcoded in the
-  model classes; `subprocess.run` via `LocalEnvironment` is how the agent
-  touches the world.
-- **No event hooks, no cancel.** Each step just calls `add_messages()` and
-  `save()`. There is no cooperative cancel path and no observation
-  callback for streaming.
+Those gaps were closed upstream, following the boundary rule (point 12):
+codex-slack filed them as mr-deed issues #6–#11, which landed in mr-deed
+PR #13 and shipped as **mr-deed `v0.1.0`** (`3834d02`). The interface this
+ADR builds on:
 
-The adapter needs to bridge these gaps without blocking on upstream
-changes to mr-deed, while keeping a clean boundary between the two
-repositories.
+| Need | mr-deed `v0.1.0` API |
+|---|---|
+| Sessions | `DefaultAgent.from_trajectory(path, model, env, **overrides)` restores a `save()` file; `continue_run(task)` appends a user message rendered from `AgentConfig.continue_template` (default `{{ task }}`). Step/cost/time limits reset per run or continuation; `total_cost` / `total_n_calls` span the conversation. |
+| Live observation | `DefaultAgent(..., on_event=callable)`, called synchronously with `(kind, payload)`. Kinds: `system`, `user`, `assistant`, `action` (before it runs), `observation`, `format_error`, `exit`. Payloads are the dicts appended to `agent.messages`. Exactly one `exit` per run. Handlers must not raise. |
+| Cancel | `DefaultAgent(..., cancel_event=threading.Event())`; `agent.cancel()` sets it and calls `env.interrupt()`. `LocalEnvironment.interrupt()` kills the running process group, or stays pending and kills the next command as soon as it spawns. The agent calls `reset_interrupt()` at the start of every run. The run exits with `exit_status="Cancelled"`. |
+| Host tools | `mr_deed.Tool(name, description, parameters, handler)`; `DefaultAgent(..., tools=[...])` (replaceable per run). Tool-call models send `[bash, *tools]`. Actions are `{"name", "arguments", "tool_call_id"}` (bash also keeps `command`). A handler gets `arguments` and returns `{"output", ...}`; an exception becomes an observation with `returncode -1`. Text-based models reject tools. |
+| Embedding hygiene | `import mr_deed` has no side effects on `os.environ`, stdout or disk (dotenv and banner live in `mr_deed.run`). Per-agent limits use only the agent's own counters. |
+| Pinning | `v<version>` tags are created automatically on version bumps. |
 
 ## Decision Drivers
 
 - **Deep integration.** Project-owner wants fine-grained control of agent
   flow and tool calls (future: agent memory management). This rules out
   the CLI-subprocess shape used by `claude-code` and `codex`.
-- **Reuse existing machinery.** Dispatch payload, `staff_sessions`, the
-  `agent-llm` ThreadPoolExecutor in `mqtt_loop.py`, the `/chunk` streaming
-  pipeline, and the master-side orchestration protocol (ADR-0017) must
-  stay unchanged beyond adding a new adapter enum value.
+- **Reuse existing machinery.** `staff_sessions`, the `agent-llm`
+  ThreadPoolExecutor in `mqtt_loop.py`, the `/chunk` streaming pipeline,
+  and the master-side orchestration protocol (ADR-0017) are reused as-is;
+  master changes are limited to the adapter enum and the `agent_config`
+  staff field (point 3).
 - **Per-turn env hygiene.** `DISPATCH_TOKEN`, `TASK_DEPTH`, `TOPIC_ID`,
   `AGENT_NAME`, `PROMPT_MESSAGE_ID`, `WORKSPACE_ID`, `MASTER_URL` change
   every turn and must never leak into `os.environ` where another
   concurrent turn could read the wrong value.
 - **Clean cross-repo boundary.** codex-slack and mr-deed are co-owned but
-  separately versioned. Interface requirements go in as mr-deed issues;
-  codex-slack ships thin stopgaps until each mr-deed release pins.
+  separately versioned. Interface requirements go in as mr-deed issues
+  and codex-slack consumes them through a pinned release tag.
 - **Orchestration-first role.** Phasing must get mr-deed to the point
   where it can call `delegate_task` / `ask_sender` / `submit_result`
   (ADR-0017) early — that is the main intent — before expanding to
@@ -65,7 +70,7 @@ repositories.
 - **Lessons.** Env values that cross process/thread boundaries need a
   test per hop (lessons-learned 2026-08-16). Runtime dependency pins need
   an upper bound on the major version (lessons-learned 2026-08-14) — we
-  pin by git tag (SHA until mr-deed cuts tags).
+  pin by git tag (`v0.1.0`).
 
 ## Considered Options
 
@@ -126,9 +131,13 @@ III. **In-memory session map keyed by `staff_sessions`**, lost on restart.
    - **Crash isolation:** the runner wraps `agent.run()` in a
      catch-everything that becomes an error reply (same contract as the
      Codex adapter's exit-status mapping).
-   - **Cancel:** per-reply cancel token checked between steps, plus
-     killing the in-flight bash process group when fired (stopgap env
-     subclass until mr-deed R3 ships).
+   - **Cancel:** the runner keeps the running agent per
+     `reply_message_id`; the cancel handler calls `agent.cancel()`, which
+     stops the run at its next query or action and kills the in-flight (or
+     about-to-start) bash command.
+   - **Per-turn objects:** each turn builds its own `LocalEnvironment`,
+     model and agent (`from_trajectory` on resume). Nothing mr-deed-side
+     is shared between concurrent turns.
 
    **Where it runs:** everything mr-deed executes runs in the
    per-workspace **agent container**, in the `mqtt_loop` process: the
@@ -138,7 +147,8 @@ III. **In-memory session map keyed by `staff_sessions`**, lost on restart.
    commands today), and the host-tool handlers. Master only resolves the
    staff (including `agent_config`), dispatches the turn, and serves the
    orchestration/notes HTTP endpoints that the handlers call. The
-   mr-deed library is installed in the agent image only, not in master.
+   package is installed in the image master and agents share by default,
+   but only the agent process imports `mr_deed`.
 
 3. **Config resolution — first match wins:**
    0. **codex-slack config:** the staff's own `agent_config` (mr-deed
@@ -153,8 +163,8 @@ III. **In-memory session map keyed by `staff_sessions`**, lost on restart.
    3. mr-deed built-ins.
 
    Tier 0 is resolved on master. Tiers 1–3 are resolved on the agent,
-   because only the agent container has the worktree and the mr-deed
-   package. The staff `agent` field names the config for tiers 1–3. `staff.model` overrides
+   because only the agent container has the worktree and imports
+   `mr_deed`. The staff `agent` field names the config for tiers 1–3. `staff.model` overrides
    `model.model_name`; `staff.system_prompt` is appended to
    `system_template`. The runner **always forces** `environment.type=local`
    with `cwd=<worktree>` — a repo config cannot switch execution to
@@ -209,33 +219,33 @@ III. **In-memory session map keyed by `staff_sessions`**, lost on restart.
    like `CLAUDE.md` for now (we force `environment.type=local`
    regardless). Revisit later.
 
-10. **Packaging.** Installed in the agent base image from git, pinned to
-    a tag (SHA until mr-deed cuts tags per R6). Lesson from the `mcp`
-    2.0 break: unbounded version ranges on runtime deps cause unrelated
-    PRs to fail CI; we pin by git ref instead.
+10. **Packaging.** Installed in the agent base image as
+    `mr-deed @ git+https://github.com/pandazxx/mr-deed@v0.1.0`. Upgrades
+    are deliberate tag bumps in their own PR. Lesson from the `mcp` 2.0
+    break: unbounded version ranges on runtime deps cause unrelated PRs
+    to fail CI; we pin by git tag instead.
 
 11. **hermes is just an experiment.** Target a generic agent interface;
     no hermes special-casing.
 
-12. **Boundary rule.** codex-slack and mr-deed keep a clear boundary;
-    interface requirements are filed as mr-deed issues:
+12. **Boundary rule.** codex-slack and mr-deed keep a clear boundary.
+    Interface requirements are filed as mr-deed issues and consumed via a
+    pinned tag; codex-slack does not subclass or patch mr-deed internals.
+    Milestone 1 (all shipped in `v0.1.0`):
 
     | # | Requirement | mr-deed issue |
     |---|---|---|
     | R1 | Session continuation (resume with new prompt) | [mr-deed#6](https://github.com/pandazxx/mr-deed/issues/6) |
     | R2 | Event hook / callback API | [mr-deed#7](https://github.com/pandazxx/mr-deed/issues/7) |
     | R3 | Cooperative cancellation incl. in-flight bash | [mr-deed#8](https://github.com/pandazxx/mr-deed/issues/8) |
-    | R4 | Pluggable host tools alongside bash (builds on mr-deed PR #5) | [mr-deed#9](https://github.com/pandazxx/mr-deed/issues/9) |
-    | R5 | Embedding hygiene (no import-time dotenv; thread-safe `GLOBAL_MODEL_STATS`) | [mr-deed#10](https://github.com/pandazxx/mr-deed/issues/10) |
+    | R4 | Pluggable host tools alongside bash | [mr-deed#9](https://github.com/pandazxx/mr-deed/issues/9) |
+    | R5 | Embedding hygiene (no import-time dotenv; per-agent limits) | [mr-deed#10](https://github.com/pandazxx/mr-deed/issues/10) |
     | R6 | Versioned tags for pinning | [mr-deed#11](https://github.com/pandazxx/mr-deed/issues/11) |
 
-13. **P1 starts before mr-deed lands R1–R3/R5**, using thin codex-slack-
-    side subclasses/wrappers as stopgaps (session subclass for resume,
-    `add_messages` override for events, cancel-check in `step` + env
-    subclass for process-group kill, import-time `os.environ`
-    snapshot/restore or cwd guard for the dotenv load). Each stopgap is
-    deleted once the matching mr-deed release is pinned. The design doc
-    carries the stopgap → mr-deed issue → removal-trigger table.
+13. **No codex-slack-side stopgaps.** The earlier plan to start P1 with
+    wrappers (session subclass, `add_messages` override, cancel/env
+    subclass, dotenv guard) is dropped: every one of them is covered by
+    `v0.1.0`.
 
 14. **Memory management is out of scope.** Session resume (R1) is the
     foundation; agent-memory lands in a later ADR.
@@ -247,8 +257,8 @@ support) land **before** project configs.
 
 | Phase | codex-slack scope | mr-deed deps |
 |---|---|---|
-| **P1** | `mr-deed` adapter, in-process runner on `agent-llm` pool, config resolution for staff `agent_config` (GUI-editable) + shipped + built-in, streaming, session resume, cancel | R1 #6, R2 #7, R3 #8, R5 #10 (stopgaps acceptable); R6 #11 for pinning |
-| **P2** | codex-slack tools on top of bash → #256 orchestration support | R4 #9 |
+| **P1** | `mr-deed` adapter, in-process runner on `agent-llm` pool, config resolution for staff `agent_config` (GUI-editable) + shipped + built-in, streaming, session resume, cancel | R1, R2, R3, R5, R6 — shipped in `v0.1.0` |
+| **P2** | codex-slack tools on top of bash → #256 orchestration support | R4 — shipped in `v0.1.0` |
 | **P3** | project configs under `.prj_assistant/mr-deed/` | none |
 
 ### Consequences
@@ -257,14 +267,15 @@ support) land **before** project configs.
   - In-process execution gives us the deep integration intent: host tools
     are plain Python handlers, we can observe every message, and future
     agent-memory work has a hook surface to build on.
-  - Zero new master code paths. The streaming, dispatch, session, and
-    orchestration machinery stays unchanged beyond the enum.
+  - Few master changes: the adapter enum and the `agent_config` staff
+    field/payload key. Streaming, session and orchestration machinery is
+    reused as-is.
   - `tool set = bash + codex-slack tools` matches ADR-0017 T1 depth/role
     gating without inventing a parallel enforcement path. Master still
     validates every call server-side.
-  - Clean cross-repo boundary. Each codex-slack-side stopgap has a named
-    mr-deed issue and a documented removal trigger — the carry is
-    bounded.
+  - Clean cross-repo boundary. Everything codex-slack needs is public
+    mr-deed API at a pinned tag; there are no codex-slack-side
+    subclasses of mr-deed internals to maintain.
 - **Bad / accepted tradeoffs**
   - Litellm is a sizeable transitive dependency; it noticeably grows the
     agent base image. Measured in P1; documented in the design doc.
@@ -273,10 +284,6 @@ support) land **before** project configs.
     hit context and cost limits; compaction is deferred.
   - Text-based mini configs cannot use host tools (tool-call-mode only).
     Documented limitation.
-  - Four codex-slack-side stopgaps (session subclass, add_messages
-    override, cancel + env subclass, dotenv guard) carry until the
-    matching mr-deed releases pin. Each one is a few dozen lines and
-    tracked for deletion.
   - Shared boundary with mr-deed means some integration bugs will need
     coordinated fixes across two repos.
 
@@ -290,12 +297,12 @@ support) land **before** project configs.
     chunk kinds; submission → `last_response`).
   - Session resume loads prior messages and appends the new prompt
     through `continue_template`.
-  - Cancel: token flips → next step raises `Cancelled` → in-flight bash
-    pgroup is killed.
+  - Cancel: `agent.cancel()` from another thread → run exits
+    `Cancelled` → the in-flight bash command is killed.
   - Exit-status mapping: `LimitsExceeded`, `TimeExceeded`,
     `RepeatedFormatError`, `Cancelled` → named error replies.
 - Concurrency test: two `_run_mr_deed` calls on the pool with different
-  per-turn env dicts do not cross-contaminate (addresses R5).
+  per-turn env dicts do not cross-contaminate.
 - Integration test (P2 onwards): a `mr-deed` staff calls `delegate_task`
   via the in-process tool; master records the task row and dispatches
   the assignee exactly as it would for a Claude Code dispatcher.
@@ -309,7 +316,7 @@ support) land **before** project configs.
 
 | Option | Pro | Con |
 |---|---|---|
-| 1 — Import as library, run on agent-llm pool (chosen) | Deep integration (in-process tools, observable flow, future memory hooks); reuses existing threadpool and streaming; per-turn env isolated via `LocalEnvironment(env=...)` | Needs cooperative cancel from mr-deed (R3); needs event hooks (R2); carries stopgaps until R1–R3/R5 land |
+| 1 — Import as library, run on agent-llm pool (chosen) | Deep integration (in-process tools, observable flow, future memory hooks); reuses existing threadpool and streaming; per-turn env isolated via `LocalEnvironment(env=...)` | Depended on mr-deed cancel (R3), event hooks (R2) and embedding hygiene (R5) — all shipped in `v0.1.0` |
 | 2 — Library + child process per turn | Cancel is "kill PID"; `os.environ` isolated by process | Loses in-process tool integration (would need IPC); extra fork/exec cost per turn; defeats the deep-integration driver |
 | 3 — CLI wrapper | Mirrors Codex adapter | Mr-deed's `mini` CLI is single-shot and exposes no tool or flow hooks; forces subprocess serialisation and defeats the deep-integration intent |
 
@@ -325,7 +332,7 @@ support) land **before** project configs.
 
 | Option | Pro | Con |
 |---|---|---|
-| I — Persist trajectory per `session_id` (chosen) | Preserves `staff_sessions` + `session_scope` semantics; survives restart; cheap to implement with a `SessionAgent` subclass | Linear history; long sessions hit context/cost limits without compaction (deferred) |
+| I — Persist trajectory per `session_id` (chosen) | Preserves `staff_sessions` + `session_scope` semantics; survives restart; uses mr-deed's own `save()` / `from_trajectory` / `continue_run` | Linear history; long sessions hit context/cost limits without compaction (deferred) |
 | II — No session support | Simplest | Breaks `staff_sessions` contract; every turn is cold |
 | III — In-memory session map | Avoids a volume | Lost on restart; invisible in audits; same context-growth problem |
 
