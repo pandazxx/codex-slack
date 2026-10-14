@@ -1,6 +1,6 @@
 ---
 title: "ADR-0018: Mr-deed agent adapter"
-status: proposed
+status: accepted
 date: 2026-10-09
 decision-makers: [architect, project-owner]
 consulted: [engineer, tester]

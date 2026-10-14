@@ -1,6 +1,6 @@
 # Design: Mr-deed agent adapter
 
-**Status:** draft
+**Status:** accepted (ADR-0018)
 **Author:** architect
 **Date:** 2026-10-09 (updated 2026-10-14 for mr-deed `v0.1.0`)
 **Related ADRs:** [ADR-0018](../decisions/0018-mr-deed-agent-adapter.md);
