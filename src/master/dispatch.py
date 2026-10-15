@@ -247,6 +247,14 @@ async def dispatch_to_staff(
     finally:
         _cfg_conn.close()
 
+    # agent_config is the mr-deed YAML from the resolved staff record.  Key is always
+    # present in the payload (null when unset) so the agent can distinguish "no config"
+    # from "not a mr-deed turn".  Guarded against pre-migration rows without the column.
+    try:
+        agent_config_val = staff["agent_config"]
+    except (IndexError, KeyError):
+        agent_config_val = None
+
     payload_dict: dict = {
         "message_id": message_id,
         "agent_name": staff["name"],
@@ -261,6 +269,7 @@ async def dispatch_to_staff(
         "session_scope": staff["session_scope"] or "topic",
         "model": staff["model"],
         "system_prompt": raw_system_prompt or None,
+        "agent_config": agent_config_val,
         "text": prompt_text,
         "attachments": attachments,
         "task_id": task_id,
@@ -275,7 +284,12 @@ async def dispatch_to_staff(
     # Build a token-scrubbed transcript for DB storage and WS broadcast.
     # dispatch_token is a per-turn auth secret delivered exclusively via MQTT;
     # it must never appear in GET /messages responses or WS frames.
+    # agent_config may contain model_kwargs.api_key; replace with a size marker.
     scrubbed_payload_dict = {k: v for k, v in payload_dict.items() if k != "dispatch_token"}
+    if scrubbed_payload_dict.get("agent_config"):
+        scrubbed_payload_dict["agent_config"] = (
+            f"<agent_config: {len(scrubbed_payload_dict['agent_config'])} bytes>"
+        )
     scrubbed_payload = json.dumps(scrubbed_payload_dict)
 
     disp_conn = get_connection(app_state.db_path)

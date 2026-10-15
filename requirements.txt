@@ -10,3 +10,5 @@ tzlocal>=5.0
 croniter>=2.0.0
 ruff>=0.4.0
 mcp>=1.0.0,<2  # 2.0.0 (2026-07-28) removed mcp.server.fastmcp; migration tracked separately
+PyYAML>=6.0,<7  # used by master for agent_config validation; also a transitive dep via mr-deed
+mr-deed @ git+https://github.com/pandazxx/mr-deed@v0.1.0
