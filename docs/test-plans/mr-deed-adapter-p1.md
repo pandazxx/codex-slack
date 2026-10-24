@@ -60,6 +60,7 @@ Gaps found while authoring this plan, decided by the lead on 2026-10-14
 |---|---|
 | MD-U-52 | `transcript` is the list of published `mr_deed.*` events (same shape as the `/chunk` frames), not the raw trajectory messages, so the UI details view matches the live stream. The full conversation stays in the session file. |
 | MD-U-74 | Host-tool handlers arrive in P2; the case moves to the P2 plan. |
+| MD-UAT-06..11 | The classifier maps `mr_deed.*` to dedicated display kinds (`mr_deed_text`, `mr_deed_action`, `mr_deed_observation`, `mr_deed_format_error`; exit hidden) instead of the claude-shaped `text`/`tool_use`/`folded`/`parse_warning` kinds, whose templates read claude payload fields. Pure helpers in `frontend/src/lib/mrDeedEvents.js`, unit-tested in `frontend/tests/mrDeedEvents.test.js`. |
 | MD-U-02 | The runner sets `LITELLM_MODE=PRODUCTION` (setdefault) before importing mr-deed: litellm otherwise loads `.env` into `os.environ` at import. The test excludes that one key. |
 
 ## Pass / Fail Criteria
