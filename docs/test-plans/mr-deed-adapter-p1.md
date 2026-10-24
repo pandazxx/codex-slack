@@ -54,6 +54,14 @@ Gaps found while authoring this plan, decided by the lead on 2026-10-14
 | D4 | `staff.agent` empty vs null | Both resolve to config name `default` (MD-U-27, MD-U-28). |
 | D5 | Logging `agent_config` | Not logged verbatim: YAML may carry `model_kwargs.api_key`. Logs show a size marker only (MD-U-81). |
 
+### Implementation notes (2026-10-24)
+
+| Case | Note |
+|---|---|
+| MD-U-52 | `transcript` is the list of published `mr_deed.*` events (same shape as the `/chunk` frames), not the raw trajectory messages, so the UI details view matches the live stream. The full conversation stays in the session file. |
+| MD-U-74 | Host-tool handlers arrive in P2; the case moves to the P2 plan. |
+| MD-U-02 | The runner sets `LITELLM_MODE=PRODUCTION` (setdefault) before importing mr-deed: litellm otherwise loads `.env` into `os.environ` at import. The test excludes that one key. |
+
 ## Pass / Fail Criteria
 
 A test **passes** when:
