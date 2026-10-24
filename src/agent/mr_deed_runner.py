@@ -21,7 +21,8 @@ import yaml
 LOGGER = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config" / "mr-deed"
-SESSIONS_DIR = Path("/workspace/sessions/mr-deed")
+# On the per-workspace codex-mrdeed-<workspace_id> volume (agent_runner.spawn_agent).
+SESSIONS_DIR = Path("/home/appuser/.mr-deed/sessions")
 DEFAULT_CONFIG_NAME = "default"
 # Template variable carrying the staff system prompt. Passing the prompt as a
 # variable (not spliced into the template) means jinja never interprets it.
@@ -216,6 +217,9 @@ def run_turn(
             if path is not None:
                 path.parent.mkdir(parents=True, exist_ok=True)
             agent = DefaultAgent(llm, env, on_event=on_event, **agent_kwargs)
+    except OSError as exc:
+        LOGGER.warning("agent.mr_deed_session_dir_unwritable path=%s error=%s", path, exc)
+        return f"(mr-deed cannot use its session directory {path.parent}: {exc})", None, None
     except Exception as exc:
         if resume:
             LOGGER.warning("agent.mr_deed_session_unreadable path=%s error=%s", path, exc)

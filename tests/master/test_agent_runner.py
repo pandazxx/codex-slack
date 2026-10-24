@@ -42,6 +42,25 @@ def test_spawn_agent_calls_containers_run():
     assert kwargs["detach"] is True
 
 
+def test_spawn_agent_mounts_per_workspace_state_volumes():
+    mock_client = _mock_docker_client()
+    with patch("src.master.agent_runner._client", return_value=mock_client):
+        spawn_agent(
+            runtime="docker",
+            workspace_id="ws1",
+            repo_url="https://github.com/x/y",
+            image="img",
+            mqtt_host="mosquitto",
+            mqtt_port=1883,
+            network="net",
+        )
+    _, kwargs = mock_client.containers.run.call_args
+    volumes = kwargs["volumes"]
+    assert volumes["codex-claude-ws1"] == {"bind": "/home/appuser/.claude", "mode": "rw"}
+    assert volumes["codex-codex-ws1"] == {"bind": "/home/appuser/.codex", "mode": "rw"}
+    assert volumes["codex-mrdeed-ws1"] == {"bind": "/home/appuser/.mr-deed", "mode": "rw"}
+
+
 def test_spawn_agent_sets_environment():
     mock_client = _mock_docker_client()
     with patch("src.master.agent_runner._client", return_value=mock_client):

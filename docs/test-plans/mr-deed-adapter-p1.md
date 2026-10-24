@@ -26,7 +26,7 @@ engineer changes any of these signatures, update the corresponding test cases an
 | `mr_deed_runner.resolve_config(agent_config, worktree, name)` | Tier 0 (payload `agent_config`) → tier 2 (`/opt/codex-slack/config/mr-deed/<name>.yaml`) → tier 3 (mr-deed built-ins); default name `"default"` when `staff.agent` is empty | §3 |
 | `_run_mr_deed` — new session | `DefaultAgent(model, env, tools=(), on_event=publish, cancel_event=..., output_path=<traj>, **config).run(task)` | §5 |
 | `_run_mr_deed` — resume | `DefaultAgent.from_trajectory(<traj>, model, env, tools=..., on_event=..., **current_config).continue_run(task)` | §5 |
-| Trajectory path | `/workspace/sessions/mr-deed/<session_id>.traj.json` | §5 |
+| Trajectory path | `/home/appuser/.mr-deed/sessions/<session_id>.traj.json` (volume `codex-mrdeed-<workspace_id>`) | §5 |
 | Missing trajectory on resume | Treated as new session (not an error) | §5 |
 | Corrupted / unreadable trajectory on resume | Error reply naming the file; trajectory not overwritten | §5 (specified here) |
 | `on_event` → chunk mapping | `mr_deed.assistant`, `mr_deed.action`, `mr_deed.observation`, `mr_deed.format_error`, `mr_deed.exit`; system/user not published | §6 |
@@ -61,6 +61,7 @@ Gaps found while authoring this plan, decided by the lead on 2026-10-14
 | MD-U-52 | `transcript` is the list of published `mr_deed.*` events (same shape as the `/chunk` frames), not the raw trajectory messages, so the UI details view matches the live stream. The full conversation stays in the session file. |
 | MD-U-74 | Host-tool handlers arrive in P2; the case moves to the P2 plan. |
 | MD-UAT-06..11 | The classifier maps `mr_deed.*` to dedicated display kinds (`mr_deed_text`, `mr_deed_action`, `mr_deed_observation`, `mr_deed_format_error`; exit hidden) instead of the claude-shaped `text`/`tool_use`/`folded`/`parse_warning` kinds, whose templates read claude payload fields. Pure helpers in `frontend/src/lib/mrDeedEvents.js`, unit-tested in `frontend/tests/mrDeedEvents.test.js`. |
+| Sessions | Sessions live on a new per-workspace volume `codex-mrdeed-<workspace_id>` at `/home/appuser/.mr-deed` (path `/home/appuser/.mr-deed/sessions`). The design's `/workspace/sessions/mr-deed` was in the container's writable layer, which `spawn_agent` discards on every re-spawn. An unwritable session directory gives a named error reply. |
 | MD-U-02 | The runner sets `LITELLM_MODE=PRODUCTION` (setdefault) before importing mr-deed: litellm otherwise loads `.env` into `os.environ` at import. The test excludes that one key. |
 
 ## Pass / Fail Criteria
@@ -223,7 +224,7 @@ Tests that the dependency pin is correct and that importing the runner has no si
 
 | ID | Case | Preconditions | Steps | Expected | Design ref | UAT kind |
 |---|---|---|---|---|---|---|
-| MD-U-36 | New session calls `DefaultAgent.run()` and saves trajectory to correct path | `is_new_session=true`; no existing file | Run `_run_mr_deed` with deterministic model that submits | Trajectory file created at `/workspace/sessions/mr-deed/<session_id>.traj.json` | §5 | — |
+| MD-U-36 | New session calls `DefaultAgent.run()` and saves trajectory to correct path | `is_new_session=true`; no existing file | Run `_run_mr_deed` with deterministic model that submits | Trajectory file created at `/home/appuser/.mr-deed/sessions/<session_id>.traj.json` | §5 | — |
 | MD-U-37 | Resume session calls `DefaultAgent.from_trajectory().continue_run()` | `is_new_session=false`; trajectory file exists | Run `_run_mr_deed` | `from_trajectory` called with correct path; `continue_run` called; new turn appended to messages | §5 | — |
 | MD-U-38 | `is_new_session=false` with missing trajectory file treated as new session | `is_new_session=false`; no file at expected path | Run `_run_mr_deed` | `DefaultAgent.run()` called (not `from_trajectory`); no error | §5 | — |
 | MD-U-39 | Corrupted trajectory file on resume produces error reply, does not overwrite file | `is_new_session=false`; file exists but contains invalid JSON | Run `_run_mr_deed` | Error reply naming the file path; file on disk is not modified | §5 | — |
@@ -348,7 +349,7 @@ MD-UAT-11 can be asserted by calling the staging `/chunk` WebSocket endpoint wit
 | ID | Case | Preconditions | Steps | Expected | Design ref | UAT kind |
 |---|---|---|---|---|---|---|
 | MD-I-01 | Dispatch payload with `adapter="mr-deed"` routes to `_run_mr_deed` | Agent container running on dev env; deterministic model configured | POST message to topic with mr-deed staff | MQTT `/prompt` payload received; `_run_mr_deed` called (verifiable via log or stub); no error | §1 | automated |
-| MD-I-02 | `session_id` in payload matches trajectory file path on volume | New session | Run turn; inspect volume | File at `/workspace/sessions/mr-deed/<session_id>.traj.json` exists | §5 | automated |
+| MD-I-02 | `session_id` in payload matches trajectory file path on volume | New session | Run turn; inspect volume | File at `/home/appuser/.mr-deed/sessions/<session_id>.traj.json` exists | §5 | automated |
 | MD-I-03 | `/response` payload received for completed turn | Turn runs to submission | Wait for WebSocket `/response` | `last_response` non-empty; `session_id` present | §6 | automated |
 | MD-I-04 | Error reply received for `LimitsExceeded` exit | Config step limit = 1; deterministic model does not submit in 1 step | Run turn | Error reply `"mr-deed hit a limit: ..."` received via WebSocket | §7 | automated |
 
