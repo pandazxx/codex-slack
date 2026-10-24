@@ -108,6 +108,19 @@
                       <summary>{{ codexCmdLabel(row.event) }}</summary>
                       <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
                     </details>
+                    <div v-else-if="row.kind === 'mr_deed_text'" class="tr-text">{{ mrDeedText(row.event) }}</div>
+                    <details v-else-if="row.kind === 'mr_deed_action'" class="tool-use-fold">
+                      <summary>{{ mrDeedActionLabel(row.event) }}</summary>
+                      <pre class="tr-json">{{ mrDeedActionInput(row.event) }}</pre>
+                    </details>
+                    <details v-else-if="row.kind === 'mr_deed_observation'" class="tool-use-fold">
+                      <summary>↳ result</summary>
+                      <pre class="tr-json tr-result-body">{{ mrDeedText(row.event) }}</pre>
+                    </details>
+                    <div v-else-if="row.kind === 'mr_deed_format_error'" class="tr-meta">
+                      <span class="tr-badge tr-badge-warning">format error</span>
+                      <span class="tr-stat">{{ mrDeedText(row.event).slice(0, 200) }}</span>
+                    </div>
                     <details v-else-if="row.kind === 'folded'">
                       <summary>···</summary>
                       <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
@@ -148,6 +161,19 @@
                     <summary>{{ codexCmdLabel(row.event) }}</summary>
                     <pre v-if="row.event.item?.aggregated_output" class="tr-json tr-result-body">{{ row.event.item.aggregated_output }}</pre>
                   </details>
+                  <div v-else-if="row.kind === 'mr_deed_text'" class="tr-text">{{ mrDeedText(row.event) }}</div>
+                  <details v-else-if="row.kind === 'mr_deed_action'" class="tool-use-fold">
+                    <summary>{{ mrDeedActionLabel(row.event) }}</summary>
+                    <pre class="tr-json">{{ mrDeedActionInput(row.event) }}</pre>
+                  </details>
+                  <details v-else-if="row.kind === 'mr_deed_observation'" class="tool-use-fold">
+                    <summary>↳ result</summary>
+                    <pre class="tr-json tr-result-body">{{ mrDeedText(row.event) }}</pre>
+                  </details>
+                  <div v-else-if="row.kind === 'mr_deed_format_error'" class="tr-meta">
+                    <span class="tr-badge tr-badge-warning">format error</span>
+                    <span class="tr-stat">{{ mrDeedText(row.event).slice(0, 200) }}</span>
+                  </div>
                   <details v-else-if="row.kind === 'folded'">
                     <summary>···</summary>
                     <pre>{{ JSON.stringify(row.event, null, 2) }}</pre>
@@ -281,6 +307,32 @@
               <template v-else-if="evt.type === 'item.completed' && evt.item?.type === 'agent_message'">
                 <div class="tr-text">{{ evt.item.text }}</div>
               </template>
+              <template v-else-if="evt.type === 'mr_deed.assistant'">
+                <div v-if="mrDeedText(evt)" class="tr-text">{{ mrDeedText(evt) }}</div>
+              </template>
+              <template v-else-if="evt.type === 'mr_deed.action'">
+                <div class="tr-tool-call">
+                  <span class="tr-badge tr-badge-tool">{{ evt.message?.name || 'bash' }}</span>
+                  <pre class="tr-json">{{ mrDeedActionInput(evt) }}</pre>
+                </div>
+              </template>
+              <template v-else-if="evt.type === 'mr_deed.observation'">
+                <div class="tr-tool-result">
+                  <span class="tr-badge tr-badge-result">↳ result</span>
+                  <pre class="tr-json tr-result-body">{{ mrDeedText(evt) }}</pre>
+                </div>
+              </template>
+              <template v-else-if="evt.type === 'mr_deed.format_error'">
+                <div class="tr-meta">
+                  <span class="tr-badge tr-badge-warning">format error</span>
+                  <span class="tr-stat">{{ mrDeedText(evt).slice(0, 200) }}</span>
+                </div>
+              </template>
+              <template v-else-if="evt.type === 'mr_deed.exit'">
+                <div class="tr-meta">
+                  <span :class="evt.message?.extra?.exit_status === 'Submitted' ? 'tr-badge tr-badge-done' : 'tr-badge tr-badge-error'">{{ evt.message?.extra?.exit_status || 'exit' }}</span>
+                </div>
+              </template>
               <template v-else-if="evt.type === 'item.completed' && evt.item?.type === 'command_execution'">
                 <div class="tr-tool-call">
                   <details class="tool-use-fold">
@@ -329,6 +381,7 @@ import ChatInput from '../components/ChatInput.vue'
 import GraphHeaderToggle from '../components/GraphHeaderToggle.vue'
 import TasksPanel from '../components/TasksPanel.vue'
 import { formatInTimezone } from '../utils/datetime.js'
+import { classifyMrDeedEvent, mrDeedText, mrDeedActionLabel, mrDeedActionInput } from '../lib/mrDeedEvents.js'
 import '../styles/trace.css'
 
 const route = useRoute()
@@ -455,6 +508,10 @@ function compactRowLabel(row) {
   if (kind === 'codex_error') return `✗ ${event.error?.message || 'error'}`
   if (kind === 'retry_notice') return '⟳ Session expired — retrying…'
   if (kind === 'parse_warning') return `⚠ parse error: ${(event.line || '').slice(0, 60)}`
+  if (kind === 'mr_deed_text') return mrDeedText(event).slice(0, 60)
+  if (kind === 'mr_deed_action') return mrDeedActionLabel(event)
+  if (kind === 'mr_deed_observation') return '↳ result'
+  if (kind === 'mr_deed_format_error') return '⚠ format error'
   return '···'
 }
 
@@ -527,8 +584,9 @@ function classifyEvent(event) {
   if (t === 'item.completed' && event.item?.type === 'command_execution')   return 'codex_cmd'
   if (t === 'item.started')   return 'hidden'
   if (t === 'item.completed') return 'hidden'
-  return 'hidden'
+  return classifyMrDeedEvent(event) || 'hidden'
 }
+
 
 function agentResultText(event) {
   const blocks = event.tool_use_result?.content || []
