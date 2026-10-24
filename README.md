@@ -8,7 +8,7 @@ The project name reflects its v2 origin as a Slack/Discord bridge. v3 dropped ch
 
 - Not a hosted SaaS — the master and all agent containers run on infrastructure you control.
 - Not a multi-tenant platform — there is no per-user authentication; access control is whatever you put in front of the master HTTP port.
-- Not a replacement for the local `claude` or `codex` CLI — agent containers wrap and invoke those tools; they must be available inside the agent image and authenticated via env vars.
+- Not a replacement for the local `claude` or `codex` CLI — agent containers wrap and invoke those tools for the `claude-code` and `codex` adapters; they must be available inside the agent image and authenticated via env vars. The `mr-deed` adapter runs in-process and uses litellm directly.
 - No longer a Slack or Discord bridge — chat-platform adapters were removed in v3. If you need one, build it as an external service that calls the REST API.
 
 ## Architecture at a glance
@@ -17,7 +17,7 @@ The project name reflects its v2 origin as a Slack/Discord bridge. v3 dropped ch
 |---|---|---|
 | `master` | FastAPI app: REST API + Vue 3 SPA + WebSocket hub + MQTT client | 8080 |
 | `mosquitto` | MQTT broker (Eclipse Mosquitto 2) | 1883 (internal only) |
-| agent containers | One per workspace; runs `src/agent/mqtt_loop.py`, invokes `claude` / `codex` CLI | none |
+| agent containers | One per workspace; runs `src/agent/mqtt_loop.py`, invokes `claude` / `codex` CLI or runs mr-deed in-process | none |
 
 State lives in two places:
 - `master_data` Docker volume (SQLite at `/opt/codex-slack/data/master/master_data.db`) — workspaces, topics, messages, sessions, agent configs.
@@ -128,7 +128,7 @@ For the full list with types and defaults, see [`docs/references/config.md`](doc
 ├── frontend/                     # Vue 3 SPA (built into src/master/static/ during image build)
 ├── tests/                        # Automated tests (mirrors src/ structure)
 ├── scripts/                      # Bootstrap and utility scripts
-├── config/                       # Mosquitto, claude-global, codex-global config baked into images
+├── config/                       # Mosquitto, claude-global, codex-global, mr-deed config baked into images
 ├── docs/                         # All documentation (see docs/README.md for the map)
 │   ├── manuals/                  #   User and operator entry points
 │   ├── guides/                   #   Setup guides, tutorials, runbooks
