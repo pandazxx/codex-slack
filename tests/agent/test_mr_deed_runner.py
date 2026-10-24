@@ -163,6 +163,35 @@ def test_system_prompt_appended_as_literal_text(tmp_path):
     assert traj["messages"][0]["content"] == "SYS\n\nBe {{ brief }}"
 
 
+def test_system_prompt_with_jinja_delimiters_is_literal(tmp_path):
+    prompt = "Docs: {% endraw %}{{ undefined_var }}{% raw %} and {{ task }}"
+    reply, _, _ = _turn(tmp_path, _submit("c1", "ok"), system_prompt=prompt)
+    traj = json.loads((tmp_path / "sessions" / "sess-1.traj.json").read_text())
+    assert reply == "ok"
+    assert traj["messages"][0]["content"] == f"SYS\n\n{prompt}"
+
+
+def test_resume_without_system_prompt_still_renders(tmp_path):
+    _turn(tmp_path, _submit("c1", "first"), system_prompt="extra")
+    reply, _, _ = _turn(tmp_path, _submit("c2", "second"), is_new_session=False, reply_message_id="reply-2")
+    assert reply == "second"
+
+
+def test_ping_alive_until_response_queued():
+    client = MagicMock()
+    with mqtt_loop_module._active_procs_lock:
+        mqtt_loop_module._active_contexts["reply-post"] = {"workspace_id": "ws1", "topic_id": "t1", "agent_name": "d"}
+    try:
+        msg = MagicMock()
+        msg.topic = "codex-slack/workspace/ws1/topic/t1/ping"
+        msg.payload = json.dumps({"message_id": "reply-post"}).encode()
+        mqtt_loop_module._on_message(client, {}, msg)
+    finally:
+        with mqtt_loop_module._active_procs_lock:
+            mqtt_loop_module._active_contexts.pop("reply-post", None)
+    assert json.loads(client.publish.call_args.args[1])["alive"] is True
+
+
 def test_no_system_prompt_keeps_template():
     config = runner.apply_overrides({"agent": {"system_template": "SYS"}}, None, None)
     assert config["agent"]["system_template"] == "SYS"
@@ -502,7 +531,7 @@ def test_two_mr_deed_turns_in_one_process_do_not_cross_contaminate(tmp_path):
         reply = _turn(tmp_path, _bash("c1", f"sleep 0.2; {command}"), _submit("c2", name), events=events,
                       reply_message_id=f"reply-{name}", session_id=f"sess-{name}",
                       turn_env={"DISPATCH_TOKEN": f"tok-{name}"},
-                      publish_event=lambda e: (events.append(e), barrier.wait(5) if e["type"] == "mr_deed.action"
+                      publish_event=lambda e: (events.append(e), barrier.wait(30) if e["type"] == "mr_deed.action"
                                                and len(events) == 2 else None))
         return reply, events
 

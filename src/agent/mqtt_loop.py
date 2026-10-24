@@ -983,7 +983,13 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
             with _active_procs_lock:
                 proc = _active_procs.get(message_id)
                 active_count = len(_active_procs)
-            alive = proc is not None or mr_deed_runner.is_running(message_id)
+            # In-process mr-deed turns have no proc; their _active_contexts entry
+            # stays until the response is queued, like a proc in _active_procs.
+            alive = (
+                proc is not None
+                or mr_deed_runner.is_running(message_id)
+                or message_id in _active_contexts
+            )
             client.publish(
                 _pong_topic(workspace_id_ping, topic_id_ping),
                 json.dumps({"message_id": message_id, "alive": alive}),
