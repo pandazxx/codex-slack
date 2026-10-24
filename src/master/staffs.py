@@ -1,6 +1,7 @@
 """Staff invocation profiles — runtime-configurable Claude/Codex invocation units."""
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -10,8 +11,87 @@ from pydantic import BaseModel
 
 from .db import get_connection
 
+_LOGGER = logging.getLogger(__name__)
+
 _VALID_ADAPTERS = {"claude-code", "codex"}
 _VALID_SESSION_SCOPES = {"topic", "workspace", "global", "none"}
+
+# Fallback model lists used when no API key is configured or the provider is unreachable.
+_CLAUDE_MODELS_FALLBACK = [
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+]
+_CODEX_MODELS_FALLBACK = [
+    "codex-mini-latest",
+    "o4-mini",
+    "o3",
+    "o3-mini",
+]
+
+
+async def _fetch_claude_models(api_key: str | None, oauth_token: str | None = None) -> list[str]:
+    # Build auth headers: prefer explicit API key, fall back to OAuth token (claude -p mode).
+    headers: dict[str, str] = {"anthropic-version": "2023-06-01"}
+    if api_key:
+        headers["x-api-key"] = api_key
+    elif oauth_token:
+        headers["Authorization"] = f"Bearer {oauth_token}"
+    else:
+        return _CLAUDE_MODELS_FALLBACK
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(
+                "https://api.anthropic.com/v1/models",
+                headers=headers,
+                params={"limit": 100},
+            )
+            if r.is_success:
+                data = r.json()
+                models = sorted(
+                    [m["id"] for m in data.get("data", []) if m.get("id", "").startswith("claude-")],
+                    reverse=True,
+                )
+                if models:
+                    return models
+    except Exception:
+        _LOGGER.warning("staffs.models_fetch_failed adapter=claude-code")
+    return _CLAUDE_MODELS_FALLBACK
+
+
+async def _fetch_codex_models(api_key: str | None, codex_auth_json: str | None = None) -> list[str]:
+    # Fall back to extracting a token from CODEX_AUTH_JSON (codex CLI auth file content).
+    if not api_key and codex_auth_json:
+        try:
+            import json as _json
+            auth = _json.loads(codex_auth_json)
+            api_key = auth.get("token") or auth.get("api_key") or auth.get("key")
+        except Exception:
+            pass
+    if not api_key:
+        return _CODEX_MODELS_FALLBACK
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            if r.is_success:
+                data = r.json()
+                models = sorted(
+                    [
+                        m["id"] for m in data.get("data", [])
+                        if any(m.get("id", "").startswith(p) for p in ("o1", "o3", "o4", "codex"))
+                    ],
+                    reverse=True,
+                )
+                if models:
+                    return models
+    except Exception:
+        _LOGGER.warning("staffs.models_fetch_failed adapter=codex")
+    return _CODEX_MODELS_FALLBACK
 
 _SELECT_COLS = (
     "id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
@@ -239,6 +319,30 @@ def _delete_staff(
 
 
 # ── Global scope ──────────────────────────────────────────────────────────────
+
+@global_router.get("/models")
+async def list_adapter_models(request: Request, adapter: str = "claude-code") -> dict:  # type: ignore[type-arg]
+    """Return available model IDs for the given adapter.
+
+    Tries to fetch live models from the provider API when a key is configured.
+    Falls back to a curated static list on error or when no key is available.
+    """
+    if adapter not in _VALID_ADAPTERS:
+        raise HTTPException(400, f"Unknown adapter: {adapter!r}")
+    settings = request.app.state.settings
+    db_path = request.app.state.db_path
+    from .runtime_config import load_global_env
+    global_env = load_global_env(db_path)
+    if adapter == "claude-code":
+        api_key = settings.anthropic_api_key or global_env.get("ANTHROPIC_API_KEY")
+        oauth_token = settings.claude_code_oauth_token or global_env.get("CLAUDE_CODE_OAUTH_TOKEN")
+        models = await _fetch_claude_models(api_key, oauth_token)
+    else:
+        api_key = settings.openai_api_key or global_env.get("OPENAI_API_KEY")
+        codex_auth_json = global_env.get("CODEX_AUTH_JSON")
+        models = await _fetch_codex_models(api_key, codex_auth_json)
+    return {"adapter": adapter, "models": models}
+
 
 @global_router.get("", response_model=list[StaffOut])
 def list_global_staffs(request: Request) -> list[StaffOut]:

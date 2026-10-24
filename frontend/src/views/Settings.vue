@@ -52,7 +52,14 @@
           </select>
 
           <label>Model</label>
-          <input v-model="staffForm.model" placeholder="e.g. claude-opus-4-7 (leave blank for default)" />
+          <div class="model-combo">
+            <select v-model="modelDropdown" :disabled="modelsLoading">
+              <option value="">adapter default</option>
+              <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+              <option value="__custom__">custom…</option>
+            </select>
+            <input v-if="modelDropdown === '__custom__'" v-model="staffForm.model" placeholder="enter model ID" class="model-custom-input" />
+          </div>
 
           <label>System Prompt</label>
           <textarea v-model="staffForm.system_prompt" placeholder="--append-system-prompt value" rows="3" />
@@ -184,7 +191,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 
 const systemSettings = ref({ timezone: '' })
 const timezoneInput = ref('')
@@ -204,6 +211,36 @@ const editingStaff = ref(null)
 const savingStaff = ref(false)
 const staffError = ref('')
 const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false })
+
+const availableModels = ref([])
+const modelsLoading = ref(false)
+const modelDropdown = ref('')
+
+async function loadModels(adapter) {
+  modelsLoading.value = true
+  try {
+    const r = await fetch(`/api/staffs/models?adapter=${encodeURIComponent(adapter)}`)
+    if (r.ok) availableModels.value = (await r.json()).models || []
+  } catch { /* ignore */ } finally {
+    modelsLoading.value = false
+  }
+}
+
+function syncModelDropdown() {
+  const m = staffForm.value.model
+  if (!m) modelDropdown.value = ''
+  else if (availableModels.value.includes(m)) modelDropdown.value = m
+  else modelDropdown.value = '__custom__'
+}
+
+watch(modelDropdown, val => {
+  if (val !== '__custom__') staffForm.value.model = val
+})
+
+watch(() => staffForm.value.adapter, async adapter => {
+  await loadModels(adapter)
+  syncModelDropdown()
+})
 
 const config = ref({})
 const systemVars = ref([])
@@ -296,8 +333,10 @@ async function loadSystemVars() {
 function startCreateStaff() {
   editingStaff.value = null
   staffForm.value = { name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false }
+  modelDropdown.value = ''
   showStaffForm.value = true
   staffError.value = ''
+  loadModels('claude-code')
 }
 
 function startEditStaff(s) {
@@ -313,6 +352,7 @@ function startEditStaff(s) {
   }
   showStaffForm.value = true
   staffError.value = ''
+  loadModels(s.adapter).then(() => syncModelDropdown())
 }
 
 function cancelStaffForm() {
@@ -410,6 +450,8 @@ section { margin-bottom: 3rem; border-top: 1px solid #e2e8f0; padding-top: 1.5re
 .form-grid textarea { resize: vertical; }
 .checkbox-label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9em; padding-top: 0.2rem; }
 .form-actions { display: flex; gap: 0.75rem; align-items: center; }
+.model-combo { display: flex; flex-direction: column; gap: 0.35rem; }
+.model-custom-input { font-family: monospace !important; }
 
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .staff-table, .config-table { width: 100%; border-collapse: collapse; font-size: 0.9em; margin-top: 0.5rem; }
