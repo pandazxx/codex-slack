@@ -67,6 +67,8 @@ This directory is the canonical home for repository documentation.
 - [`docs/decisions/0011-version-display.md`](decisions/0011-version-display.md) — version display
 - [`docs/decisions/0012-streaming-agent-reply.md`](decisions/0012-streaming-agent-reply.md) — streaming agent reply
 - [`docs/decisions/0016-singleton-justfile-deploys.md`](decisions/0016-singleton-justfile-deploys.md) — singleton justfile deploys; CD daemon and multi-version staging retired
+- [`docs/decisions/0017-agent-orchestration-protocol.md`](decisions/0017-agent-orchestration-protocol.md) — agent orchestration protocol (ADR-0017)
+- [`docs/decisions/0018-mr-deed-agent-adapter.md`](decisions/0018-mr-deed-agent-adapter.md) — mr-deed in-process agent adapter
 
 ## Test Plans
 
@@ -78,12 +80,15 @@ This directory is the canonical home for repository documentation.
 - [`docs/test-plans/agent-message-notification.md`](test-plans/agent-message-notification.md)
 - [`docs/test-plans/adr-0009-staff-runtime-config.md`](test-plans/adr-0009-staff-runtime-config.md)
 - [`docs/test-plans/v3-slice-14-uat.md`](test-plans/v3-slice-14-uat.md)
+- [`docs/test-plans/event-based-staff-action.md`](test-plans/event-based-staff-action.md) — event-based staff actions UAT
+- [`docs/test-plans/mr-deed-adapter-p1.md`](test-plans/mr-deed-adapter-p1.md) — mr-deed adapter P1
 
 ## Releases
 
-- [`docs/releases/v3.2.md`](releases/v3.2.md)
-- [`docs/releases/v3.3.md`](releases/v3.3.md)
+- [`docs/releases/v4.6.md`](releases/v4.6.md) — event-based staff actions
 - [`docs/releases/v3.9.md`](releases/v3.9.md)
+- [`docs/releases/v3.3.md`](releases/v3.3.md)
+- [`docs/releases/v3.2.md`](releases/v3.2.md)
 
 Release notes are historical records and intentionally retain references to features (Slack/Discord adapters, slash commands) that were later removed by ADR-0006.
 

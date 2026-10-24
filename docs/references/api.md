@@ -288,6 +288,172 @@ Valid adapters: `"claude-code"`, `"codex"`.
 }
 ```
 
+### Staffs
+
+Staffs are named agent invocation profiles that resolve hierarchically: topic → workspace → global, first match wins. They are the primary way to configure dispatched agents (adapter, model, session scope, system prompt, and — for the `mr-deed` adapter — an inline YAML config block).
+
+**Scope and cascade**
+
+| Scope | Path prefix | Priority |
+|---|---|---|
+| Topic | `/api/workspaces/{wid}/topics/{tid}/staffs` | Highest — overrides workspace and global |
+| Workspace | `/api/workspaces/{wid}/staffs` | Overrides global for this workspace |
+| Global | `/api/staffs` | Lowest — applies when no narrower scope matches |
+
+`GET` on workspace and topic endpoints returns the scope's own records plus inherited records from wider scopes, with `inherited_from` set to the source scope. `PUT` and `DELETE` operate only on the record at the requested scope.
+
+**Global staffs**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/staffs` | List all global staffs. |
+| `POST` | `/api/staffs` | Create a global staff. Returns `201`. Returns `409` if a staff with that name already exists at global scope. |
+| `PUT` | `/api/staffs/{name}` | Replace a global staff. Returns `404` if not found. |
+| `DELETE` | `/api/staffs/{name}` | Delete a global staff. Returns `204`. |
+| `POST` | `/api/staffs/{name}/set-default` | Mark this staff as the dispatch default at global scope. |
+
+**Workspace staffs**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/workspaces/{wid}/staffs` | List workspace staffs and inherited global staffs. |
+| `POST` | `/api/workspaces/{wid}/staffs` | Create a workspace-scoped staff. Returns `201`. |
+| `PUT` | `/api/workspaces/{wid}/staffs/{name}` | Replace a workspace-scoped staff. |
+| `DELETE` | `/api/workspaces/{wid}/staffs/{name}` | Delete a workspace-scoped staff. Returns `204`. |
+| `POST` | `/api/workspaces/{wid}/staffs/{name}/set-default` | Mark this staff as the dispatch default for the workspace. |
+
+**Topic staffs**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/workspaces/{wid}/topics/{tid}/staffs` | List topic staffs and all inherited staffs. |
+| `POST` | `/api/workspaces/{wid}/topics/{tid}/staffs` | Create a topic-scoped staff. Returns `201`. |
+| `PUT` | `/api/workspaces/{wid}/topics/{tid}/staffs/{name}` | Replace a topic-scoped staff. |
+| `DELETE` | `/api/workspaces/{wid}/topics/{tid}/staffs/{name}` | Delete a topic-scoped staff. Returns `204`. |
+
+**POST/PUT request body (`StaffIn`):**
+
+```json
+{
+  "name": "engineer",
+  "adapter": "claude-code",
+  "model": null,
+  "system_prompt": null,
+  "agent": null,
+  "session_scope": "topic",
+  "is_default": false,
+  "extra_flags": null,
+  "agent_config": null
+}
+```
+
+**Staff fields:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `string` | required | Staff name used in `@mention`s and event-action `staff_name` references. Normalised to lowercase and stripped. |
+| `adapter` | `string` | `"claude-code"` | Agent backend. Valid values: `"claude-code"`, `"codex"`, `"mr-deed"`. |
+| `model` | `string \| null` | `null` | Model identifier. For `mr-deed`, overrides `model.model_name` in the resolved config (litellm model ID, e.g. `"anthropic/claude-sonnet-4-5"`, `"openai/gpt-4o"`). For `claude-code`/`codex`, passed as a CLI flag. |
+| `system_prompt` | `string \| null` | `null` | System-prompt text. For `mr-deed`, injected as a Jinja2 variable appended to the config's `system_template` at render time. |
+| `agent` | `string \| null` | `null` | Sub-agent / config name. For `mr-deed`, names the config to use (`null` or blank → `"default"`). For `claude-code`, passed as `--agent <name>`. |
+| `session_scope` | `string` | `"topic"` | Session sharing: `"topic"`, `"workspace"`, `"global"`, or `"none"`. |
+| `is_default` | `bool` | `false` | When `true`, this staff handles messages with no `@mention`. Only one default per scope. |
+| `extra_flags` | `string \| null` | `null` | Reserved for future adapter flags. |
+| `agent_config` | `string \| null` | `null` | Inline mr-deed YAML config (mapping). Must be a YAML mapping when non-empty; rejected with 422 if it is a scalar, a list, or syntactically invalid. Only used by the `mr-deed` adapter. See [mr-deed adapter](#mr-deed-adapter) below. |
+
+**Staff response shape (`StaffOut`):**
+
+```json
+{
+  "id": "<uuid>",
+  "scope_type": "global",
+  "scope_id": null,
+  "name": "engineer",
+  "adapter": "mr-deed",
+  "model": "anthropic/claude-sonnet-4-5",
+  "system_prompt": "You are a senior engineer.",
+  "agent": "default",
+  "session_scope": "topic",
+  "is_default": false,
+  "extra_flags": null,
+  "agent_config": null,
+  "inherited_from": null
+}
+```
+
+`inherited_from` is `null` for records owned by the queried scope; `"global"` or `"workspace"` for records inherited from a wider scope (list endpoints only).
+
+**Validation errors (422):** empty name; unknown `adapter`; unknown `session_scope`; `agent_config` that is non-empty but not a valid YAML mapping.
+
+**Conflict (409):** a staff with the same name already exists at this scope.
+
+---
+
+#### mr-deed adapter
+
+The `mr-deed` adapter runs an in-process [mr-deed v0.1.0](https://github.com/pandazxx/mr-deed) agent on the agent-llm thread pool. The agent uses a `bash` tool running in the topic's git worktree. Unlike `claude-code` and `codex`, it executes inside the agent process rather than as a subprocess.
+
+**Config resolution — first match wins:**
+
+| Tier | Source | Note |
+|---|---|---|
+| 0 | Staff `agent_config` field (inline YAML on this staff record) | Used as-is when non-empty |
+| 1 | Shipped config `config/mr-deed/<name>.yaml` | `name` = `staff.agent`; blank/null resolves to `"default"` |
+| 2 | mr-deed built-in configs (e.g. `mini`) | |
+
+Project configs under `.prj_assistant/mr-deed/` are not supported yet (planned for a later phase).
+
+Once resolved, the runner applies:
+
+| Setting | Source |
+|---|---|
+| `model.model_name` | `staff.model` (when non-empty) |
+| `system_template` | Original template + Jinja2 variable injection for `staff.system_prompt` |
+| `environment.type` | Forced to `"local"` — a config cannot change the executor |
+| `environment.cwd` | Forced to the topic worktree path |
+| `environment.env` | Config's `env` dict merged with per-turn dispatch variables |
+| `environment.timeout` | Honoured from the config (default 300 s in the shipped `default` config) |
+
+The shipped `default` config sets `cost_limit: 3.0` per turn (`step_limit: 0` = unlimited steps). Limits are per turn; cumulative session cost and call counts are tracked across turns in the trajectory file.
+
+**Credentials:**
+
+| Variable | Provider |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic models |
+| `OPENAI_API_KEY` | OpenAI models |
+| `OPENROUTER_API_KEY` | OpenRouter |
+
+Set these as system config variables (System Settings → Env Vars in the web UI). Codex `auth.json` OAuth and Claude subscription logins do not work — mr-deed uses litellm, which requires an API key.
+
+A model must be set via `staff.model` or `model.model_name` in the config. If no model is resolvable, the turn returns a config-invalid error reply.
+
+**Sessions:**
+
+Stored at `/home/appuser/.mr-deed/sessions/<session_id>.traj.json` on the per-workspace `codex-mrdeed-{workspace_id}` volume (survives container restarts and re-creation). Session scope follows `staff.session_scope`. Resumed turns keep the original system message — `system_template` or `system_prompt` edits take effect in new sessions only. A corrupted session file returns an error reply and is left untouched; delete it manually to reset. Session history is not compacted.
+
+**Error replies:**
+
+Normal replies are the bare submission text. All error replies are wrapped in parentheses.
+
+| Condition | Reply |
+|---|---|
+| Normal submission | `<submission text>` |
+| Cancelled | `(cancelled by user)` |
+| Wall-time limit | `(mr-deed timed out after <N>s)` |
+| Cost or step limit | `(mr-deed hit a limit: step_limit=<S>, cost_limit=<C>, steps=<n>, cost=$<x>)` |
+| Repeated format error | `(mr-deed could not produce a parseable action)` |
+| litellm / provider error | `(mr-deed model call failed: <ExceptionType>: <message>)` |
+| Unhandled exception | `(mr-deed crashed: <ExceptionType>)` |
+| Config load failure | `(mr-deed config '<source>' is invalid: <reason>)` |
+| Session file unreadable | `(mr-deed session file <path> could not be loaded and was left untouched: <reason>)` |
+| Unknown exit status | `(mr-deed exited: <status>)` |
+| Session directory not writable | `(mr-deed cannot use its session directory <dir>: <reason>)` — check the `codex-mrdeed-<workspace_id>` volume is mounted and owned by `appuser` |
+
+**Security note:** `agent_config` is stored in plain text. It is excluded from the payload stored in the database (replaced with a byte-count marker) but is readable via the staffs API and in the staff editor. Do not embed credentials in `agent_config`.
+
+---
+
 ### Notes
 
 Notes are key-value pairs with optional tags, stored at workspace or topic scope. See `docs/guides/notes-agent-guide.md` for agent usage.
@@ -393,13 +559,24 @@ codex-slack/workspace/{workspace_id}/topic/{topic_id}/prompt
   payload: {
     "message_id": "<uuid>",
     "agent_name": "claude",
-    "adapter": "claude-code",
-    "subagent": null,
+    "adapter": "claude-code",          // "claude-code" | "codex" | "mr-deed"
+    "subagent": null,                  // staff.agent — config name for mr-deed, --agent flag for claude-code
     "worktree": "/workspace/worktrees/<topic-id>",
     "branch": "fix-login-bug",
-    "session_id": "<llm-session-id>" | null,
+    "repo_ref": "master",
+    "base_sha": "<sha>",
+    "session_id": "<session-uuid>" | null,
+    "is_new_session": true | false,
+    "session_scope": "topic",          // "topic" | "workspace" | "global" | "none"
+    "model": null,                     // staff.model — adapter-specific model identifier
+    "system_prompt": null,             // staff.system_prompt (after template rendering)
+    "agent_config": null,              // staff.agent_config — mr-deed YAML (null for other adapters)
     "text": "...",
-    "attachments": []
+    "attachments": [],
+    "task_id": null,
+    "task_depth": 0,
+    "dispatch_token": "<uuid>",        // per-turn auth secret; scrubbed from DB and WS broadcast
+    "max_delegation_depth": 1
   }
 
 codex-slack/workspace/{workspace_id}/topic/{topic_id}/status
