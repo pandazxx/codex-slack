@@ -17,6 +17,8 @@ from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
+from . import mr_deed_runner
+
 LOGGER = logging.getLogger(__name__)
 
 _TOPIC_PARTS = 6  # codex-slack/workspace/{wid}/topic/{tid}/prompt
@@ -633,6 +635,66 @@ def _run_codex(
     return output, new_session_id, transcript
 
 
+def _run_mr_deed(
+    client: mqtt.Client,
+    workspace_id: str,
+    topic_id: str,
+    reply_message_id: str,
+    agent_name: str,
+    worktree: str,
+    text: str,
+    payload: dict,  # type: ignore[type-arg]
+    master_url: str,
+) -> tuple[str, str | None, str | None]:
+    turn_env = {
+        **getattr(_prompt_orch_env, "env", {}),
+        "WORKSPACE_ID": workspace_id,
+        "TOPIC_ID": topic_id,
+        "MASTER_URL": master_url,
+    }
+    chunk_topic = _chunk_topic(workspace_id, topic_id)
+    seq = 0
+
+    def publish_event(event: dict) -> None:
+        nonlocal seq
+        client.publish(chunk_topic, json.dumps({
+            "message_id": reply_message_id,
+            "agent_name": agent_name,
+            "seq": seq,
+            "event": event,
+        }, default=str), qos=0)
+        seq += 1
+
+    # Registered like a subprocess turn so SIGTERM and restart replay emit an
+    # interrupt for it; _process_prompt's finally removes the entry.
+    with _active_procs_lock:
+        _active_contexts[reply_message_id] = {
+            "workspace_id": workspace_id,
+            "topic_id": topic_id,
+            "agent_name": agent_name,
+        }
+        _persist_active_procs_locked()
+    output, new_session_id, transcript = mr_deed_runner.run_turn(
+        text=text,
+        worktree=worktree,
+        reply_message_id=reply_message_id,
+        session_id=payload.get("session_id"),
+        is_new_session=bool(payload.get("is_new_session", False)),
+        session_scope=payload.get("session_scope", "topic"),
+        config_name=payload.get("subagent"),
+        agent_config=payload.get("agent_config"),
+        model=payload.get("model"),
+        system_prompt=payload.get("system_prompt"),
+        turn_env=turn_env,
+        publish_event=publish_event,
+    )
+    LOGGER.info(
+        "agent.mr_deed_done topic_id=%s message_id=%s chunks=%d chars=%d",
+        topic_id, reply_message_id, seq, len(output),
+    )
+    return output, new_session_id, transcript
+
+
 def _process_prompt(
     client: mqtt.Client,
     workspace_id: str,
@@ -704,7 +766,12 @@ def _process_prompt(
         )
         text = f"{note_lines}\n{text}"
 
-    if adapter == "codex":
+    if adapter == "mr-deed":
+        response_text, new_session_id, transcript = _run_mr_deed(
+            client, workspace_id, topic_id, reply_message_id, agent_name,
+            cwd, text, payload, master_url,
+        )
+    elif adapter == "codex":
         response_text, new_session_id, transcript = _run_codex(
             client, workspace_id, topic_id, reply_message_id, agent_name,
             cwd, text, model, session_id, is_new_session, session_scope,
@@ -874,6 +941,8 @@ def _publish_interrupted_all(client: mqtt.Client) -> None:
         proc = procs.get(message_id)
         if proc is not None:
             _kill_proc_tree(proc)
+        else:
+            mr_deed_runner.cancel(message_id)
         try:
             client.publish(
                 _response_topic(ctx["workspace_id"], ctx["topic_id"]),
@@ -914,7 +983,7 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
             with _active_procs_lock:
                 proc = _active_procs.get(message_id)
                 active_count = len(_active_procs)
-            alive = proc is not None
+            alive = proc is not None or mr_deed_runner.is_running(message_id)
             client.publish(
                 _pong_topic(workspace_id_ping, topic_id_ping),
                 json.dumps({"message_id": message_id, "alive": alive}),
@@ -923,7 +992,7 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
             if alive:
                 LOGGER.info(
                     "agent.pong message_id=%s alive=True pid=%s",
-                    message_id, proc.pid,
+                    message_id, proc.pid if proc is not None else "in-process",
                 )
             else:
                 # alive=False means the proc is no longer in _active_procs.
@@ -953,6 +1022,8 @@ def _on_message(client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
             if proc is not None:
                 LOGGER.info("agent.cancel message_id=%s pid=%s", cancel_msg_id, proc.pid)
                 _kill_proc_tree(proc)
+            elif mr_deed_runner.cancel(cancel_msg_id):
+                LOGGER.info("agent.cancel message_id=%s adapter=mr-deed", cancel_msg_id)
             else:
                 LOGGER.info("agent.cancel_noop message_id=%s reason=not_found", cancel_msg_id)
         return
