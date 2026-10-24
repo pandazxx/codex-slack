@@ -250,6 +250,21 @@ def test_corrupted_trajectory_is_left_untouched(tmp_path):
     assert path.read_text() == "{not json"
 
 
+def test_sessions_live_on_the_mr_deed_volume():
+    from src.master import agent_runner
+    import inspect
+    assert runner.SESSIONS_DIR == Path("/home/appuser/.mr-deed/sessions")
+    assert '"/home/appuser/.mr-deed"' in inspect.getsource(agent_runner.spawn_agent)
+
+
+def test_unwritable_session_dir_is_named_error(tmp_path):
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    reply, session_id, _ = _turn(tmp_path, _submit("c1", "x"), sessions_dir=blocker / "sessions")
+    assert reply.startswith(f"(mr-deed cannot use its session directory {blocker / 'sessions'}:")
+    assert session_id is None
+
+
 def test_scope_none_does_not_persist(tmp_path):
     reply, session_id, _ = _turn(tmp_path, _submit("c1", "ok"), session_scope="none")
     assert (reply, session_id) == ("ok", None)

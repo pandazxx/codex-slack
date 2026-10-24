@@ -84,6 +84,20 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 *Prevention:* (1) Always open SQLite sources with the URI `mode=ro` flag in any tool that must never modify the source. (2) In runbooks that use `docker compose run` against a named volume, always specify `-p <project>` and include a pre-flight step that verifies the expected files are visible inside the container before running the actual operation.
 
+<!-- last updated: 2026-10-24 -->
+
+---
+
+## 2026-10-24 — litellm loads .env into os.environ at import time unless LITELLM_MODE=PRODUCTION is set first
+
+*Summary:* Importing any `mr_deed.models` class triggers a litellm import, which calls `dotenv.load_dotenv()` at module load time unless `LITELLM_MODE` is already set to `PRODUCTION` in the environment. In the agent container, this silently overwrites values in `os.environ` with whatever is in a `.env` file if one happens to exist — including per-turn secrets that were intentionally kept out of the process environment (they live in `LocalEnvironment.env` dicts instead). For a long-lived in-process runner this is not an immediate exploit, but it breaks the env-hygiene contract established for mr-deed turns (ADR-0018 §9) and could poison future turns.
+
+*Root cause:* litellm's `utils.py` calls `load_dotenv()` unconditionally at import time unless `LITELLM_MODE == "PRODUCTION"`. This is a litellm-level design choice; the flag gates other litellm features too, but `PRODUCTION` is the right value for server contexts.
+
+*Fix applied:* `mr_deed_runner._import_mr_deed()` calls `os.environ.setdefault("LITELLM_MODE", "PRODUCTION")` before any `import mr_deed.*` statement. `setdefault` avoids overriding an operator-set value. The unit test MD-U-02 excludes this one key when asserting `os.environ` is unchanged by the import.
+
+*Prevention:* Any library that calls dotenv at import time will silently load `.env` files in every process that imports it. When embedding such a library in a long-lived in-process runner, gate its import behind an env-flag check and document the flag in the config reference. Never rely on "the container has no `.env` file" as a safety net — the flag is the only reliable guard.
+
 ---
 
 ## 2026-10-04 — Switched claude-code off npm entirely, onto Anthropic's native installer
@@ -780,3 +794,14 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 **Fix applied:** Converted all 12 test-fixture INSERT sites across `tests/master/test_event_actions.py`, `tests/master/test_timezone_audit.py`, and `tests/master/test_db.py` to bind `True`/`False` as `?` parameters. Deleted `_BOOLEAN_COLS`, `_fix_insert_bool_literals`, and the dialect-conditional call site in `_ConnectionProxy.execute`. Updated `_find_bare_bool_literals_in_sql` in the guard test to accept a list of roots, removed `tests/` from the allowlist, and added `_check_insert_values_positions` to catch positional literal violations in INSERT VALUES clauses.
 
 **Prevention:** SQL boolean columns must always receive Python `bool` values through bound parameters — never embedded integer literals in SQL text. The guard test now enforces this across the entire codebase (src and tests) with no escape hatches except the SQLite-only migration file `_prebaseline.py`.
+
+## 2026-10-24 — Agent-container state under `/workspace` is not persistent
+
+*Summary:* The mr-deed design put session trajectories at `/workspace/sessions/mr-deed/`, assuming `/workspace/sessions/` was a volume. Writing the docs exposed that it isn't: sessions would have been lost on every agent re-spawn.
+
+*Root cause:* `agent_runner.spawn_agent` force-removes and recreates the agent container on every spawn, and only `~/.claude` and `~/.codex` are named volumes. `/workspace` (repo clone, worktrees, `/workspace/sessions/`) lives in the container's writable layer. Claude's workspace/global session cwd under `/workspace/sessions/` only works because Claude stores the actual session data in `~/.claude`.
+
+*Fix applied:* A per-workspace named volume `codex-mrdeed-{workspace_id}` is mounted at `/home/appuser/.mr-deed`, and sessions are stored at `/home/appuser/.mr-deed/sessions/`. Both agent images pre-create the directory as `appuser`, because Docker initialises a new named volume from the image path's ownership; without it the volume would be root-owned. An unwritable session directory produces a named error reply.
+
+*Prevention:* Anything an adapter must keep across turns or restarts needs an explicit named volume in `spawn_agent`, plus a mount point pre-created as `appuser` in every agent image. Never assume a path under `/workspace` persists.
+

@@ -270,7 +270,7 @@ A fabricated call is rejected at the API, not at the client.
 ### 5. Session file layout and resume
 
 ```
-/workspace/sessions/mr-deed/<session_id>.traj.json
+/home/appuser/.mr-deed/sessions/<session_id>.traj.json   # volume codex-mrdeed-<workspace_id> → /home/appuser/.mr-deed
 ```
 
 `<session_id>` is the dispatch payload's `session_id` (already scoped by
@@ -320,9 +320,11 @@ Notes:
   are filtered out of the model's context by mr-deed.
 - `output_path` makes mr-deed save after every step, so a crash mid-turn
   still leaves a resumable file.
-- No compaction: the file grows linearly (Open Questions). The
-  `/workspace/sessions/` volume already holds the claude sessions for
-  workspace/global scope.
+- No compaction: the file grows linearly (Open Questions). Sessions live on the per-workspace
+  `codex-mrdeed-<workspace_id>` volume (mounted by `spawn_agent` at
+  `/home/appuser/.mr-deed`, created as appuser in both agent images):
+  `/workspace` is the container's writable layer and is discarded on
+  every re-spawn.
 
 ### 6. Streaming event → chunk mapping
 
