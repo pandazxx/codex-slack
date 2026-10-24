@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sqlite3
 import subprocess
 import urllib.request
 import uuid
@@ -11,9 +10,10 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import text as sa_text
 
 from .agent_runner import get_container_status, refresh_auth, resolve_agent_image, spawn_agent, stop_agent, container_name
-from .db import get_connection
+from .db import get_connection, DBIntegrityError
 from .runtime_config import load_agent_env
 from .staffs import StaffOut, _SELECT_COLS as _STAFF_COLS, _row_to_out as _staff_row_to_out
 
@@ -51,16 +51,20 @@ class WorkspaceOut(BaseModel):
 
 def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
     row = conn.execute(
-        "SELECT id, name, repo_url, container_name, created_at, archived_at, last_refreshed_at"
-        " FROM workspaces WHERE id = ?",
-        (workspace_id,),
+        sa_text(
+            "SELECT id, name, repo_url, container_name, created_at, archived_at, last_refreshed_at"
+            " FROM workspaces WHERE id = :workspace_id"
+        ),
+        {"workspace_id": workspace_id},
     ).fetchone()
     if row is None:
         return None
     staff_rows = conn.execute(
-        f"SELECT {_STAFF_COLS} FROM staffs"
-        " WHERE scope_type='workspace' AND scope_id=? ORDER BY name",
-        (workspace_id,),
+        sa_text(
+            f"SELECT {_STAFF_COLS} FROM staffs"
+            " WHERE scope_type='workspace' AND scope_id=:workspace_id ORDER BY name"
+        ),
+        {"workspace_id": workspace_id},
     ).fetchall()
     return WorkspaceOut(
         id=row["id"], name=row["name"], repo_url=row["repo_url"],
@@ -73,16 +77,20 @@ def _fetch_workspace_any(conn, workspace_id: str) -> WorkspaceOut | None:
 def _fetch_workspace(conn, workspace_id: str) -> WorkspaceOut | None:
     """Fetch an active (non-archived) workspace."""
     row = conn.execute(
-        "SELECT id, name, repo_url, container_name, created_at, archived_at, last_refreshed_at"
-        " FROM workspaces WHERE id = ? AND archived_at IS NULL",
-        (workspace_id,),
+        sa_text(
+            "SELECT id, name, repo_url, container_name, created_at, archived_at, last_refreshed_at"
+            " FROM workspaces WHERE id = :workspace_id AND archived_at IS NULL"
+        ),
+        {"workspace_id": workspace_id},
     ).fetchone()
     if row is None:
         return None
     staff_rows = conn.execute(
-        f"SELECT {_STAFF_COLS} FROM staffs"
-        " WHERE scope_type='workspace' AND scope_id=? ORDER BY name",
-        (workspace_id,),
+        sa_text(
+            f"SELECT {_STAFF_COLS} FROM staffs"
+            " WHERE scope_type='workspace' AND scope_id=:workspace_id ORDER BY name"
+        ),
+        {"workspace_id": workspace_id},
     ).fetchall()
     return WorkspaceOut(
         id=row["id"], name=row["name"], repo_url=row["repo_url"],
@@ -100,19 +108,26 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
     try:
         try:
             conn.execute(
-                "INSERT INTO workspaces (id, name, repo_url, repo_ref, container_name, created_at)"
-                " VALUES (?, ?, ?, ?, NULL, ?)",
-                (workspace_id, body.name.strip(), body.repo_url.strip(), body.repo_ref.strip(), now),
+                sa_text(
+                    "INSERT INTO workspaces (id, name, repo_url, repo_ref, container_name, created_at)"
+                    " VALUES (:id, :name, :repo_url, :repo_ref, NULL, :now)"
+                ),
+                {"id": workspace_id, "name": body.name.strip(), "repo_url": body.repo_url.strip(),
+                 "repo_ref": body.repo_ref.strip(), "now": now},
             )
-        except sqlite3.IntegrityError:
+        except DBIntegrityError:
             raise HTTPException(status_code=409, detail="workspace name already exists")
-        for name, adapter, is_default in _DEFAULT_STAFFS:
+        for staff_name, adapter, is_default in _DEFAULT_STAFFS:
             conn.execute(
-                "INSERT INTO staffs"
-                " (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
-                "  session_scope, is_default, extra_flags, created_at, updated_at)"
-                " VALUES (?, 'workspace', ?, ?, ?, NULL, NULL, NULL, 'topic', ?, NULL, ?, ?)",
-                (str(uuid.uuid4()), workspace_id, name, adapter, 1 if is_default else 0, now, now),
+                sa_text(
+                    "INSERT INTO staffs"
+                    " (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
+                    "  session_scope, is_default, extra_flags, created_at, updated_at)"
+                    " VALUES (:id, 'workspace', :workspace_id, :name, :adapter, NULL, NULL, NULL,"
+                    " 'topic', :is_default, NULL, :now, :now)"
+                ),
+                {"id": str(uuid.uuid4()), "workspace_id": workspace_id, "name": staff_name,
+                 "adapter": adapter, "is_default": 1 if is_default else 0, "now": now},
             )
         conn.commit()
         result = _fetch_workspace(conn, workspace_id)
@@ -154,8 +169,8 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
         conn2 = get_connection(request.app.state.db_path)
         try:
             conn2.execute(
-                "UPDATE workspaces SET container_name = ? WHERE id = ?",
-                (name, workspace_id),
+                sa_text("UPDATE workspaces SET container_name = :name WHERE id = :workspace_id"),
+                {"name": name, "workspace_id": workspace_id},
             )
             conn2.commit()
             result = result.model_copy(update={"container_name": name})
@@ -173,7 +188,7 @@ def list_workspaces(request: Request, archived: bool = False) -> list[WorkspaceO
     try:
         where = "archived_at IS NOT NULL" if archived else "archived_at IS NULL"
         rows = conn.execute(
-            f"SELECT id FROM workspaces WHERE {where} ORDER BY created_at"
+            sa_text(f"SELECT id FROM workspaces WHERE {where} ORDER BY created_at")
         ).fetchall()
         return [w for row in rows if (w := _fetch_workspace_any(conn, row["id"])) is not None]
     finally:
@@ -197,19 +212,25 @@ def delete_workspace(workspace_id: str, request: Request) -> None:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
-            (workspace_id,),
+            sa_text(
+                "SELECT id, container_name FROM workspaces WHERE id = :workspace_id AND archived_at IS NULL"
+            ),
+            {"workspace_id": workspace_id},
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
         existing_container = row["container_name"] or container_name(workspace_id)
         now = _now()
         conn.execute(
-            "UPDATE workspaces SET archived_at = ? WHERE id = ?", (now, workspace_id)
+            sa_text("UPDATE workspaces SET archived_at = :now WHERE id = :workspace_id"),
+            {"now": now, "workspace_id": workspace_id},
         )
         conn.execute(
-            "UPDATE topics SET archived_at = ? WHERE workspace_id = ? AND archived_at IS NULL",
-            (now, workspace_id),
+            sa_text(
+                "UPDATE topics SET archived_at = :now"
+                " WHERE workspace_id = :workspace_id AND archived_at IS NULL"
+            ),
+            {"now": now, "workspace_id": workspace_id},
         )
         conn.commit()
     finally:
@@ -231,15 +252,18 @@ def refresh_workspace_auth(workspace_id: str, request: Request) -> dict:  # type
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
-            (workspace_id,),
+            sa_text(
+                "SELECT id, container_name FROM workspaces WHERE id = :workspace_id AND archived_at IS NULL"
+            ),
+            {"workspace_id": workspace_id},
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
         cname = row["container_name"] or container_name(workspace_id)
         now = _now()
         conn.execute(
-            "UPDATE workspaces SET last_refreshed_at = ? WHERE id = ?", (now, workspace_id)
+            sa_text("UPDATE workspaces SET last_refreshed_at = :now WHERE id = :workspace_id"),
+            {"now": now, "workspace_id": workspace_id},
         )
         conn.commit()
     finally:
@@ -261,8 +285,11 @@ def restart_workspace_agent(workspace_id: str, request: Request) -> dict:  # typ
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT id, repo_url, repo_ref, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
-            (workspace_id,),
+            sa_text(
+                "SELECT id, repo_url, repo_ref, container_name FROM workspaces"
+                " WHERE id = :workspace_id AND archived_at IS NULL"
+            ),
+            {"workspace_id": workspace_id},
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
@@ -322,7 +349,10 @@ def get_agent_status(workspace_id: str, request: Request) -> dict:  # type: igno
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT container_name, last_agent_state FROM workspaces WHERE id = ?", (workspace_id,)
+            sa_text(
+                "SELECT container_name, last_agent_state FROM workspaces WHERE id = :workspace_id"
+            ),
+            {"workspace_id": workspace_id},
         ).fetchone()
     finally:
         conn.close()
@@ -400,7 +430,8 @@ def list_workspace_branches(workspace_id: str, request: Request) -> list[str]:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT repo_url FROM workspaces WHERE id = ?", (workspace_id,)
+            sa_text("SELECT repo_url FROM workspaces WHERE id = :workspace_id"),
+            {"workspace_id": workspace_id},
         ).fetchone()
     finally:
         conn.close()

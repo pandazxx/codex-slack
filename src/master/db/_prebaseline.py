@@ -1,3 +1,14 @@
+"""Pre-baseline SQLite migration helpers.
+
+These are one-shot fixups that run against existing SQLite installs that
+pre-date the Alembic baseline.  They are SQLite-specific and use the raw
+sqlite3.Connection intentionally so that complex DDL (table-rebuilds,
+executescript) works without the SQLAlchemy shim layer.
+
+In M1, when Alembic takes over startup, these fixups run only once (gated
+by the absence of alembic_version) and then become dormant.  They will be
+deleted in Phase 3.
+"""
 from __future__ import annotations
 
 import logging
@@ -223,9 +234,6 @@ CREATE INDEX IF NOT EXISTS idx_staged_dispatches_undispatched
     ON staged_dispatches (dispatched_at) WHERE dispatched_at IS NULL;
 """
 
-TABLES = ["workspaces", "staffs", "staff_sessions", "config", "topics", "sessions", "messages", "attachments", "chunks", "event_actions", "notes", "tasks", "staged_dispatches"]
-
-
 _MIGRATIONS = [
     "ALTER TABLE workspaces ADD COLUMN archived_at TEXT",
     "ALTER TABLE topics ADD COLUMN archived_at TEXT",
@@ -293,7 +301,7 @@ def _migrate_envelope_indexes(conn: sqlite3.Connection) -> None:
     Idempotent: all use CREATE INDEX IF NOT EXISTS.
     The partial index on sender_kind IS NULL makes the backfill's startup probe
     O(1) — it scans only un-backfilled rows rather than the whole messages table.
-    Transaction is owned by the caller (init_db).
+    Transaction is owned by the caller (init_db_sqlite).
     """
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_task"
@@ -318,7 +326,7 @@ def _migrate_envelope_backfill(conn: sqlite3.Connection) -> None:
       sender='event' → sender_kind='staff', sender_name=agent_name, receiver_kind='user'
 
     Only touches rows where sender_kind IS NULL so the migration is idempotent.
-    Transaction is owned by the caller (init_db).
+    Transaction is owned by the caller (init_db_sqlite).
     """
     if conn.execute(
         "SELECT 1 FROM messages WHERE sender_kind IS NULL LIMIT 1"
@@ -350,14 +358,12 @@ def _migrate_workspace_name_uniqueness(conn: sqlite3.Connection) -> None:
         return
     table_sql: str = row[0] or ""
     if "UNIQUE" not in table_sql:
-        # Constraint already removed — just ensure the partial index exists.
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_active_name"
             " ON workspaces(name) WHERE archived_at IS NULL"
         )
         conn.commit()
         return
-    # SQLite cannot drop column constraints; recreate the table without it.
     LOGGER.info("db.migration_start relax_workspace_name_unique")
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.executescript("""
@@ -416,18 +422,14 @@ def _migrate_event_actions_v2(conn: sqlite3.Connection) -> None:
     SQLite cannot modify CHECK constraints in-place; we recreate the table.
     Idempotent: skips if topic_archiving is already present in the schema.
 
-    Preserves every column added by prior `_MIGRATIONS` (e.g. `structured_output`)
-    by reading the legacy column list dynamically rather than hard-coding it. An
-    earlier form of this helper hard-coded the SELECT list and silently dropped
-    `structured_output` on upgrade.
+    Preserves every column added by prior _MIGRATIONS (e.g. structured_output)
+    by reading the legacy column list dynamically rather than hard-coding it.
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='event_actions'"
     ).fetchone()
     if row is None or "topic_archiving" in (row[0] or ""):
         return
-    # Connection from init_db() has no row_factory set; PRAGMA table_info
-    # returns positional tuples (cid, name, type, notnull, dflt_value, pk).
     legacy_cols = {r[1] for r in conn.execute("PRAGMA table_info(event_actions)")}
     structured_output_select = (
         "structured_output" if "structured_output" in legacy_cols else "0 AS structured_output"
@@ -500,9 +502,6 @@ def _migrate_event_actions_v3(conn: sqlite3.Connection) -> None:
 
     SQLite cannot modify CHECK constraints in-place; we recreate the table.
     Idempotent: skips if 'workspace' is already present in the constraint.
-    Uses an explicit column list (not SELECT *) so that columns added by
-    concurrent ALTER TABLE migrations (e.g. structured_output, silent) are
-    preserved even when they weren't in the original schema.
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='event_actions'"
@@ -622,7 +621,18 @@ def _migrate_staffs_session_scope_none(conn: sqlite3.Connection) -> None:
     LOGGER.info("db.migration_done staffs_session_scope_none")
 
 
-def init_db(db_path: str) -> None:
+def init_db_sqlite(db_path: str) -> None:
+    """Run the full legacy SQLite init/migration sequence.
+
+    Creates the database file and parent directories, applies the full
+    _SCHEMA, runs the 28-entry _MIGRATIONS list with OperationalError
+    swallowing (idempotent ADD COLUMN), and runs all named migration
+    helpers in order.
+
+    M0: this is still the primary startup path.  In M1, Alembic takes
+    over and this function is called only once to stamp the baseline on
+    existing SQLite installs.
+    """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
@@ -650,24 +660,5 @@ def init_db(db_path: str) -> None:
         _migrate_envelope_indexes(conn)
         _migrate_envelope_backfill(conn)
         conn.commit()
-    finally:
-        conn.close()
-
-
-def get_connection(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def schema_info(db_path: str) -> dict[str, list[str]]:
-    conn = get_connection(db_path)
-    try:
-        result: dict[str, list[str]] = {}
-        for table in TABLES:
-            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-            result[table] = [row["name"] for row in rows]
-        return result
     finally:
         conn.close()

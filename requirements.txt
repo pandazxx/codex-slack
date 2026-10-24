@@ -10,3 +10,7 @@ tzlocal>=5.0
 croniter>=2.0.0
 ruff>=0.4.0
 mcp>=1.0.0,<2  # 2.0.0 (2026-07-28) removed mcp.server.fastmcp; migration tracked separately
+sqlalchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.1
+pymysql>=1.1

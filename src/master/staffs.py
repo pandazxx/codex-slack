@@ -1,9 +1,9 @@
 """Staff invocation profiles — runtime-configurable Claude/Codex invocation units."""
 from __future__ import annotations
 
-import sqlite3
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -53,7 +53,7 @@ class StaffOut(BaseModel):
     inherited_from: str | None = None
 
 
-def _row_to_out(row: sqlite3.Row, inherited_from: str | None = None) -> StaffOut:
+def _row_to_out(row: Any, inherited_from: str | None = None) -> StaffOut:
     return StaffOut(
         id=row["id"],
         scope_type=row["scope_type"],
@@ -81,8 +81,8 @@ def _validate_staff_in(body: StaffIn) -> None:
 
 
 def resolve_staff(
-    conn: sqlite3.Connection, name: str, workspace_id: str, topic_id: str | None
-) -> sqlite3.Row | None:
+    conn: Any, name: str, workspace_id: str, topic_id: str | None
+) -> Any | None:
     """Cascade resolution: topic → workspace → global. Returns first match."""
     if topic_id:
         row = conn.execute(
@@ -107,8 +107,8 @@ def resolve_staff(
 
 
 def resolve_default_staff(
-    conn: sqlite3.Connection, workspace_id: str, topic_id: str | None
-) -> sqlite3.Row | None:
+    conn: Any, workspace_id: str, topic_id: str | None
+) -> Any | None:
     """Cascade resolution for the default staff (is_default=1)."""
     if topic_id:
         row = conn.execute(
@@ -132,7 +132,7 @@ def resolve_default_staff(
 
 
 def _insert_staff(
-    conn: sqlite3.Connection,
+    conn: Any,
     body: StaffIn,
     scope_type: str,
     scope_id: str | None,
@@ -165,7 +165,7 @@ def _insert_staff(
 
 
 def _update_staff(
-    conn: sqlite3.Connection,
+    conn: Any,
     body: StaffIn,
     scope_type: str,
     scope_id: str | None,
@@ -197,7 +197,7 @@ def _update_staff(
 
 
 def _set_default_staff(
-    conn: sqlite3.Connection,
+    conn: Any,
     scope_type: str,
     scope_id: str | None,
     name: str,
@@ -223,7 +223,7 @@ def _set_default_staff(
 
 
 def _delete_staff(
-    conn: sqlite3.Connection,
+    conn: Any,
     scope_type: str,
     scope_id: str | None,
     name: str,

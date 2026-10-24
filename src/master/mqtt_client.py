@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sqlite3
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 import paho.mqtt.client as mqtt
+from sqlalchemy import text as sa_text
 
 from . import notify
 from .config import MasterSettings
+from .db import get_connection
 
 LOGGER = logging.getLogger(__name__)
 
@@ -58,12 +60,14 @@ def _record_agent_response(db_path: str, topic_id: str) -> None:
     only eligible for idle-stop when the agent has responded to every dispatch.
     """
     try:
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         try:
             conn.execute(
-                "UPDATE workspaces SET last_responded_at = ?"
-                " WHERE id = (SELECT workspace_id FROM topics WHERE id = ?)",
-                (_now(), topic_id),
+                sa_text(
+                    "UPDATE workspaces SET last_responded_at = :now"
+                    " WHERE id = (SELECT workspace_id FROM topics WHERE id = :topic_id)"
+                ),
+                {"now": _now(), "topic_id": topic_id},
             )
             conn.commit()
         finally:
@@ -74,7 +78,7 @@ def _record_agent_response(db_path: str, topic_id: str) -> None:
 
 def _save_chunk(db_path: str, topic_id: str, payload: dict) -> None:  # type: ignore[type-arg]
     try:
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         try:
             message_id = payload["message_id"]
             seq = payload["seq"]
@@ -85,16 +89,22 @@ def _save_chunk(db_path: str, topic_id: str, payload: dict) -> None:  # type: ig
                 and event.get("type") == "system"
                 and event.get("subtype") == "retry"
             )
-            with conn:
-                if is_retry:
-                    conn.execute(
-                        "DELETE FROM chunks WHERE message_id = ?", (message_id,)
-                    )
+            if is_retry:
                 conn.execute(
-                    "INSERT INTO chunks (message_id, topic_id, seq, event, agent_name)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (message_id, topic_id, seq, json.dumps(event), agent_name),
+                    sa_text("DELETE FROM chunks WHERE message_id = :message_id"),
+                    {"message_id": message_id},
                 )
+            conn.execute(
+                sa_text(
+                    "INSERT INTO chunks (message_id, topic_id, seq, event, agent_name)"
+                    " VALUES (:message_id, :topic_id, :seq, :event, :agent_name)"
+                ),
+                {
+                    "message_id": message_id, "topic_id": topic_id,
+                    "seq": seq, "event": json.dumps(event), "agent_name": agent_name,
+                },
+            )
+            conn.commit()
         finally:
             conn.close()
     except Exception:
@@ -106,13 +116,14 @@ def _load_message_envelope(db_path: str, message_id: str) -> dict:  # type: igno
     if not message_id:
         return {}
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(db_path)
         try:
             row = conn.execute(
-                "SELECT sender_kind, sender_name, receiver_kind, receiver_name,"
-                " task_id, reply_to_message_id FROM messages WHERE id = ?",
-                (message_id,),
+                sa_text(
+                    "SELECT sender_kind, sender_name, receiver_kind, receiver_name,"
+                    " task_id, reply_to_message_id FROM messages WHERE id = :message_id"
+                ),
+                {"message_id": message_id},
             ).fetchone()
         finally:
             conn.close()
@@ -126,9 +137,7 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
     """Save agent response and return the silent flag inherited from the prompt message."""
     silent = False
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
+        conn = get_connection(db_path)
         try:
             text = payload.get("last_response", "")
             transcript = payload.get("transcript")
@@ -139,8 +148,8 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
             reply_to = payload.get("reply_to", "")
             if transcript is None and text == "(message interrupted)":
                 chunk_rows = conn.execute(
-                    "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
-                    (message_id,),
+                    sa_text("SELECT event FROM chunks WHERE message_id = :message_id ORDER BY seq"),
+                    {"message_id": message_id},
                 ).fetchall()
                 if chunk_rows:
                     events = []
@@ -164,8 +173,10 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
 
             if reply_to:
                 prompt_row = conn.execute(
-                    "SELECT silent, sender_kind, sender_name, task_id FROM messages WHERE id = ?",
-                    (reply_to,)
+                    sa_text(
+                        "SELECT silent, sender_kind, sender_name, task_id FROM messages WHERE id = :reply_to"
+                    ),
+                    {"reply_to": reply_to},
                 ).fetchone()
                 if prompt_row is not None:
                     silent = bool(prompt_row["silent"])
@@ -178,39 +189,59 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
                     # Phase (b) will dispatch the reply back to the receiver;
                     # here we only record the envelope for audit purposes.
 
-            with conn:
-                # If the stale-stream detector beat us here with "(message interrupted)",
-                # update it with the real response instead of silently dropping it.
-                conn.execute(
-                    "UPDATE messages SET text=?, transcript=?, usage_json=?, interrupt_reason=?"
-                    " WHERE id=? AND text=?",
-                    (text, transcript, usage_json, interrupt_reason, message_id, "(message interrupted)"),
-                )
-                conn.execute(
+            # If the stale-stream detector beat us here with "(message interrupted)",
+            # update it with the real response instead of silently dropping it.
+            conn.execute(
+                sa_text(
+                    "UPDATE messages SET text=:text, transcript=:transcript,"
+                    " usage_json=:usage_json, interrupt_reason=:interrupt_reason"
+                    " WHERE id=:message_id AND text=:sentinel"
+                ),
+                {
+                    "text": text, "transcript": transcript, "usage_json": usage_json,
+                    "interrupt_reason": interrupt_reason, "message_id": message_id,
+                    "sentinel": "(message interrupted)",
+                },
+            )
+            conn.execute(
+                sa_text(
                     "INSERT OR IGNORE INTO messages"
                     " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
                     "  interrupt_reason, silent, created_at,"
                     "  sender_kind, sender_name, receiver_kind, receiver_name,"
                     "  task_id, reply_to_message_id)"
-                    " VALUES (?, ?, 'agent', ?, ?, ?, ?, NULL, ?, ?, ?,"
-                    "         ?, ?, ?, ?, ?, ?)",
-                    (
-                        message_id, topic_id, agent_name, text, transcript, usage_json,
-                        interrupt_reason, 1 if silent else 0, _now(),
-                        reply_sender_kind, reply_sender_name,
-                        reply_receiver_kind, reply_receiver_name,
-                        inherited_task_id, reply_to if reply_to else None,
-                    ),
-                )
+                    " VALUES (:id, :topic_id, 'agent', :agent_name, :text, :transcript, :usage_json, NULL,"
+                    "         :interrupt_reason, :silent, :created_at,"
+                    "         :sender_kind, :sender_name, :receiver_kind, :receiver_name,"
+                    "         :task_id, :reply_to)"
+                ),
+                {
+                    "id": message_id, "topic_id": topic_id, "agent_name": agent_name,
+                    "text": text, "transcript": transcript, "usage_json": usage_json,
+                    "interrupt_reason": interrupt_reason,
+                    "silent": 1 if silent else 0, "created_at": _now(),
+                    "sender_kind": reply_sender_kind, "sender_name": reply_sender_name,
+                    "receiver_kind": reply_receiver_kind, "receiver_name": reply_receiver_name,
+                    "task_id": inherited_task_id,
+                    "reply_to": reply_to if reply_to else None,
+                },
+            )
+            conn.execute(
+                sa_text("DELETE FROM chunks WHERE message_id = :message_id"),
+                {"message_id": message_id},
+            )
+            if llm_session_id and agent_name:
                 conn.execute(
-                    "DELETE FROM chunks WHERE message_id = ?", (message_id,)
+                    sa_text(
+                        "UPDATE sessions SET llm_session_id = :llm_session_id, updated_at = :now"
+                        " WHERE topic_id = :topic_id AND agent_name = :agent_name"
+                    ),
+                    {
+                        "llm_session_id": llm_session_id, "now": _now(),
+                        "topic_id": topic_id, "agent_name": agent_name,
+                    },
                 )
-                if llm_session_id and agent_name:
-                    conn.execute(
-                        "UPDATE sessions SET llm_session_id = ?, updated_at = ?"
-                        " WHERE topic_id = ? AND agent_name = ?",
-                        (llm_session_id, _now(), topic_id, agent_name),
-                    )
+            conn.commit()
         finally:
             conn.close()
     except Exception:
@@ -228,11 +259,11 @@ def _prompt_was_orchestration_reentry(db_path: str, reply_to: str) -> bool:
     if not reply_to:
         return False
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(db_path)
         try:
             row = conn.execute(
-                "SELECT sender, sender_kind FROM messages WHERE id = ?", (reply_to,)
+                sa_text("SELECT sender, sender_kind FROM messages WHERE id = :reply_to"),
+                {"reply_to": reply_to},
             ).fetchone()
             if row is None:
                 return False
@@ -247,22 +278,24 @@ def _prompt_was_orchestration_reentry(db_path: str, reply_to: str) -> bool:
         return False
 
 
-def _get_structured_output_action(db_path: str, message_id: str) -> sqlite3.Row | None:
+def _get_structured_output_action(db_path: str, message_id: str) -> Any | None:
     """Return the event_action row if message_id links to a structured-output action."""
     if not message_id:
         return None
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(db_path)
         try:
             msg_row = conn.execute(
-                "SELECT event_action_id FROM messages WHERE id = ?", (message_id,)
+                sa_text("SELECT event_action_id FROM messages WHERE id = :message_id"),
+                {"message_id": message_id},
             ).fetchone()
             if msg_row is None or not msg_row["event_action_id"]:
                 return None
             action_row = conn.execute(
-                "SELECT * FROM event_actions WHERE id = ? AND structured_output = 1",
-                (msg_row["event_action_id"],),
+                sa_text(
+                    "SELECT * FROM event_actions WHERE id = :action_id AND structured_output = 1"
+                ),
+                {"action_id": msg_row["event_action_id"]},
             ).fetchone()
             return action_row
         finally:
@@ -275,9 +308,12 @@ def _get_structured_output_action(db_path: str, message_id: str) -> sqlite3.Row 
 def _discard_chunks(db_path: str, message_id: str) -> None:
     """Delete streaming chunks and broadcast a retract event so the frontend clears the bubble."""
     try:
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         try:
-            conn.execute("DELETE FROM chunks WHERE message_id = ?", (message_id,))
+            conn.execute(
+                sa_text("DELETE FROM chunks WHERE message_id = :message_id"),
+                {"message_id": message_id},
+            )
             conn.commit()
         finally:
             conn.close()
@@ -297,7 +333,7 @@ def _resolve_gate_future(app_state, loop, reply_to: str, result: str) -> None:
 
 def _handle_structured_response(
     db_path: str,
-    action: sqlite3.Row,
+    action: Any,
     topic_id: str,
     payload: dict,  # type: ignore[type-arg]
     userdata: dict,  # type: ignore[type-arg]
@@ -379,10 +415,12 @@ def _handle_structured_response(
 
 def _get_workspace_id(db_path: str, topic_id: str) -> str | None:
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(db_path)
         try:
-            row = conn.execute("SELECT workspace_id FROM topics WHERE id = ?", (topic_id,)).fetchone()
+            row = conn.execute(
+                sa_text("SELECT workspace_id FROM topics WHERE id = :topic_id"),
+                {"topic_id": topic_id},
+            ).fetchone()
             return row["workspace_id"] if row else None
         finally:
             conn.close()
@@ -392,10 +430,12 @@ def _get_workspace_id(db_path: str, topic_id: str) -> str | None:
 
 def _get_topic_name(db_path: str, topic_id: str) -> str:
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(db_path)
         try:
-            row = conn.execute("SELECT subject FROM topics WHERE id = ?", (topic_id,)).fetchone()
+            row = conn.execute(
+                sa_text("SELECT subject FROM topics WHERE id = :topic_id"),
+                {"topic_id": topic_id},
+            ).fetchone()
             return row["subject"] if row else ""
         finally:
             conn.close()
@@ -449,12 +489,14 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage) -> None:
         message = {"type": "status", "state": state}
         if db_path and state and topic_id:
             try:
-                conn = sqlite3.connect(db_path)
+                conn = get_connection(db_path)
                 try:
                     conn.execute(
-                        "UPDATE workspaces SET last_agent_state = ?"
-                        " WHERE id = (SELECT workspace_id FROM topics WHERE id = ?)",
-                        (state, topic_id),
+                        sa_text(
+                            "UPDATE workspaces SET last_agent_state = :state"
+                            " WHERE id = (SELECT workspace_id FROM topics WHERE id = :topic_id)"
+                        ),
+                        {"state": state, "topic_id": topic_id},
                     )
                     conn.commit()
                 finally:
@@ -613,10 +655,11 @@ async def _turn_end_then_broadcast(
     # Refresh envelope + silent from the row — turn-end may have updated both.
     message.update(_load_message_envelope(db_path, reply_message_id))
     try:
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         try:
             row = conn.execute(
-                "SELECT silent FROM messages WHERE id = ?", (reply_message_id,)
+                sa_text("SELECT silent FROM messages WHERE id = :message_id"),
+                {"message_id": reply_message_id},
             ).fetchone()
             if row is not None:
                 message["silent"] = bool(row[0])
