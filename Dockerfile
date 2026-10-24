@@ -36,6 +36,9 @@ ENV PATH="/home/appuser/.local/bin:${PATH}"
 
 COPY --chown=appuser:appuser requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+# Mount point of the per-workspace mr-deed volume; created as appuser so a new
+# named volume inherits appuser ownership.
+RUN mkdir -p /home/appuser/.mr-deed/sessions
 
 COPY --chown=appuser:appuser frontend/package.json frontend/package-lock.json* ./frontend/
 RUN cd frontend && npm ci --prefer-offline 2>/dev/null || npm install

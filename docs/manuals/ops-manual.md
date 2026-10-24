@@ -20,6 +20,7 @@ codex-slack v3 is a self-hosted chat platform for LLM coding agents. There is no
 |----------|---------------|
 | `master_data` Docker volume → `/opt/codex-slack/data/master/master_data.db` | SQLite: workspaces, topics, messages, sessions, agent configs |
 | `codex-claude-{workspace_id}` Docker volume → `/home/appuser/.claude` | Per-workspace Claude Code session state |
+| `codex-mrdeed-{workspace_id}` Docker volume → `/home/appuser/.mr-deed` | Per-workspace mr-deed session trajectories (`sessions/<session_id>.traj.json`) |
 
 ## Prerequisites
 
@@ -86,7 +87,31 @@ Archived workspaces and their topics are viewable as read-only via `/archived` i
 
 ### Managing agent configurations
 
+#### Workspace agents (legacy)
+
 Add or remove named agents per workspace via the **Agents** section in the workspace detail view. Valid adapters: `claude-code`, `codex`. The `subagent` field (optional) injects `--agent <subagent>` into the claude-code CLI invocation.
+
+#### Staffs (current system)
+
+Staffs are named invocation profiles that cascade across global → workspace → topic scope. They support three adapters: `claude-code`, `codex`, and `mr-deed`. Manage them via **Settings** (global) or the **Staffs** section in the workspace or topic view.
+
+For the `mr-deed` adapter, additional fields are required:
+
+| Field | Purpose |
+|---|---|
+| **Adapter** | Set to `mr-deed` |
+| **Sub-agent** | mr-deed config name; blank → `default` |
+| **mr-deed Config** (YAML textarea) | Optional inline YAML config block (must be a YAML mapping). Overrides the named config entirely. May contain sensitive values — see the API reference security note. |
+| **Model** | litellm model ID (e.g. `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`). Required unless set in the config. |
+| **System Prompt** | Text appended to the config's system template for new sessions. |
+
+**Credentials for mr-deed:** provider API keys must be set as workspace config variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`). Codex `auth.json` and Claude subscription logins do not work — mr-deed uses litellm and requires a real API key.
+
+**mr-deed session files** accumulate at `/home/appuser/.mr-deed/sessions/` on the `codex-mrdeed-{workspace_id}` volume. To reset a session (so the next turn starts fresh), identify the trajectory file by its session UUID and delete it:
+
+```bash
+docker exec codex-agent-<workspace_id> rm /home/appuser/.mr-deed/sessions/<session_id>.traj.json
+```
 
 ### Monitoring
 
@@ -129,6 +154,15 @@ docker run --rm \
   -v codex-claude-<workspace_id>:/data:ro \
   -v $(pwd)/backup:/backup \
   alpine tar czf /backup/claude-sessions-<workspace_id>.tar.gz /data
+```
+
+mr-deed session trajectories live in the named volume `codex-mrdeed-{workspace_id}`. Back them up the same way:
+
+```bash
+docker run --rm \
+  -v codex-mrdeed-<workspace_id>:/data:ro \
+  -v "$PWD/backup":/backup \
+  alpine tar czf /backup/mr-deed-sessions-<workspace_id>.tar.gz /data
 ```
 
 ## Related References

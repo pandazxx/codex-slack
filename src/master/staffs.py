@@ -5,17 +5,18 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
+import yaml
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .db import get_connection
 
-_VALID_ADAPTERS = {"claude-code", "codex"}
+_VALID_ADAPTERS = {"claude-code", "codex", "mr-deed"}
 _VALID_SESSION_SCOPES = {"topic", "workspace", "global", "none"}
 
 _SELECT_COLS = (
     "id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
-    " session_scope, is_default, extra_flags"
+    " session_scope, is_default, extra_flags, agent_config"
 )
 
 global_router = APIRouter(prefix="/staffs", tags=["staffs"])
@@ -36,6 +37,7 @@ class StaffIn(BaseModel):
     session_scope: str = "topic"
     is_default: bool = False
     extra_flags: str | None = None
+    agent_config: str | None = None
 
 
 class StaffOut(BaseModel):
@@ -50,6 +52,7 @@ class StaffOut(BaseModel):
     session_scope: str
     is_default: bool
     extra_flags: str | None
+    agent_config: str | None = None
     inherited_from: str | None = None
 
 
@@ -66,6 +69,7 @@ def _row_to_out(row: sqlite3.Row, inherited_from: str | None = None) -> StaffOut
         session_scope=row["session_scope"],
         is_default=bool(row["is_default"]),
         extra_flags=row["extra_flags"],
+        agent_config=row["agent_config"],
         inherited_from=inherited_from,
     )
 
@@ -78,6 +82,13 @@ def _validate_staff_in(body: StaffIn) -> None:
         raise HTTPException(422, f"adapter must be one of {sorted(_VALID_ADAPTERS)}")
     if body.session_scope not in _VALID_SESSION_SCOPES:
         raise HTTPException(422, f"session_scope must be one of {sorted(_VALID_SESSION_SCOPES)}")
+    if body.agent_config and body.agent_config.strip():
+        try:
+            parsed = yaml.safe_load(body.agent_config)
+        except yaml.YAMLError as exc:
+            raise HTTPException(422, f"agent_config is not valid YAML: {exc}")
+        if not isinstance(parsed, dict):
+            raise HTTPException(422, "agent_config must be a YAML mapping (got a scalar or list)")
 
 
 def resolve_staff(
@@ -144,13 +155,13 @@ def _insert_staff(
         conn.execute(
             "INSERT INTO staffs"
             " (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
-            "  session_scope, is_default, extra_flags, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  session_scope, is_default, extra_flags, agent_config, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 staff_id, scope_type, scope_id, name, body.adapter,
                 body.model, body.system_prompt, body.agent,
                 body.session_scope, 1 if body.is_default else 0,
-                body.extra_flags, now, now,
+                body.extra_flags, body.agent_config or None, now, now,
             ),
         )
         conn.commit()
@@ -181,12 +192,12 @@ def _update_staff(
     now = _now()
     conn.execute(
         "UPDATE staffs SET adapter=?, model=?, system_prompt=?, agent=?,"
-        " session_scope=?, is_default=?, extra_flags=?, updated_at=?"
+        " session_scope=?, is_default=?, extra_flags=?, agent_config=?, updated_at=?"
         " WHERE id=?",
         (
             body.adapter, body.model, body.system_prompt, body.agent,
             body.session_scope, 1 if body.is_default else 0,
-            body.extra_flags, now, row["id"],
+            body.extra_flags, body.agent_config or None, now, row["id"],
         ),
     )
     conn.commit()

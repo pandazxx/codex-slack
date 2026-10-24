@@ -2,7 +2,19 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-10-04 -->
+<!-- last updated: 2026-10-24 -->
+
+---
+
+## 2026-10-24 — litellm loads .env into os.environ at import time unless LITELLM_MODE=PRODUCTION is set first
+
+*Summary:* Importing any `mr_deed.models` class triggers a litellm import, which calls `dotenv.load_dotenv()` at module load time unless `LITELLM_MODE` is already set to `PRODUCTION` in the environment. In the agent container, this silently overwrites values in `os.environ` with whatever is in a `.env` file if one happens to exist — including per-turn secrets that were intentionally kept out of the process environment (they live in `LocalEnvironment.env` dicts instead). For a long-lived in-process runner this is not an immediate exploit, but it breaks the env-hygiene contract established for mr-deed turns (ADR-0018 §9) and could poison future turns.
+
+*Root cause:* litellm's `utils.py` calls `load_dotenv()` unconditionally at import time unless `LITELLM_MODE == "PRODUCTION"`. This is a litellm-level design choice; the flag gates other litellm features too, but `PRODUCTION` is the right value for server contexts.
+
+*Fix applied:* `mr_deed_runner._import_mr_deed()` calls `os.environ.setdefault("LITELLM_MODE", "PRODUCTION")` before any `import mr_deed.*` statement. `setdefault` avoids overriding an operator-set value. The unit test MD-U-02 excludes this one key when asserting `os.environ` is unchanged by the import.
+
+*Prevention:* Any library that calls dotenv at import time will silently load `.env` files in every process that imports it. When embedding such a library in a long-lived in-process runner, gate its import behind an env-flag check and document the flag in the config reference. Never rely on "the container has no `.env` file" as a safety net — the flag is the only reliable guard.
 
 ---
 
@@ -557,3 +569,16 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* `dispatch_token` added to the orch-env dict in `mqtt_loop._process_prompt` and `DISPATCH_TOKEN=$DISPATCH_TOKEN` added to both MCP config commands. Regression test asserts the prompt payload's token reaches the subprocess env. v4.20-rc4.
 
 *Prevention:* When a value must cross process boundaries (payload → env → child process → HTTP), write at least one test per hop, or one test that spans the transport chain — endpoint-level tests that synthesize the value prove nothing about delivery. UAT on a real agent image is the only leg-2/leg-3 coverage we currently have; treat "agent improvised around a tool failure" in a trace as a red flag, not a curiosity.
+
+---
+
+## 2026-10-24 — Agent-container state under `/workspace` is not persistent
+
+*Summary:* The mr-deed design put session trajectories at `/workspace/sessions/mr-deed/`, assuming `/workspace/sessions/` was a volume. Writing the docs exposed that it isn't: sessions would have been lost on every agent re-spawn.
+
+*Root cause:* `agent_runner.spawn_agent` force-removes and recreates the agent container on every spawn, and only `~/.claude` and `~/.codex` are named volumes. `/workspace` (repo clone, worktrees, `/workspace/sessions/`) lives in the container's writable layer. Claude's workspace/global session cwd under `/workspace/sessions/` only works because Claude stores the actual session data in `~/.claude`.
+
+*Fix applied:* A per-workspace named volume `codex-mrdeed-{workspace_id}` is mounted at `/home/appuser/.mr-deed`, and sessions are stored at `/home/appuser/.mr-deed/sessions/`. Both agent images pre-create the directory as `appuser`, because Docker initialises a new named volume from the image path's ownership; without it the volume would be root-owned. An unwritable session directory produces a named error reply.
+
+*Prevention:* Anything an adapter must keep across turns or restarts needs an explicit named volume in `spawn_agent`, plus a mount point pre-created as `appuser` in every agent image. Never assume a path under `/workspace` persists.
+

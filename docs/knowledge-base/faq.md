@@ -18,7 +18,7 @@ Two: `master` (FastAPI app on port 8080) and `mosquitto` (MQTT broker, internal 
 
 **Q: Where is my data stored?**
 
-All workspace, topic, message, session, and agent configuration data is in a SQLite database at `/opt/codex-slack/data/master/master_data.db` inside the master container. This path is mounted from the `master_data` Docker volume. Each agent container has two persistent named volumes: `codex-claude-{workspace_id}` mounted at `/home/appuser/.claude` (Claude session state) and `codex-codex-{workspace_id}` mounted at `/home/appuser/.codex` (Codex config and auth).
+All workspace, topic, message, session, and agent configuration data is in a SQLite database at `/opt/codex-slack/data/master/master_data.db` inside the master container. This path is mounted from the `master_data` Docker volume. Each agent container has two persistent named volumes: `codex-claude-{workspace_id}` mounted at `/home/appuser/.claude` (Claude session state) and `codex-codex-{workspace_id}` mounted at `/home/appuser/.codex` (Codex config and auth). mr-deed session trajectories are stored in the `codex-mrdeed-{workspace_id}` volume mounted at `/home/appuser/.mr-deed`.
 
 ---
 
