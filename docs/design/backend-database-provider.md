@@ -1,9 +1,21 @@
-# Design: Backend database provider — Postgres first, MySQL second
+# Design: Backend database provider — Postgres default, SQLite and MySQL supported
 
-**Status:** draft
+**Status:** review
 **Author:** architect
 **Date:** 2026-10-24
-**Related ADRs:** [ADR-0019](../decisions/0019-backend-database-provider.md); supersedes the "SQLite deferred migration" note in [ADR-0005 §4](../decisions/0005-v3-system-architecture.md); respects the single-user plaintext-secret posture of [ADR-0009](../decisions/0009-runtime-configuration-and-staff-system.md) and [ADR-0010](../decisions/0010-workspace-env-var-overrides.md).
+**Related ADRs:** [ADR-0019](../decisions/0019-backend-database-provider.md); supersedes the "SQLite deferred migration" note in [ADR-0005 §4](../decisions/0005-v3-system-architecture.md); respects the single-user plaintext-secret posture of [ADR-0009](../decisions/0009-runtime-configuration-and-staff-system.md) and [ADR-0010](../decisions/0010-workspace-env-var-overrides.md); builds on the singleton deploy shape in [ADR-0016](../decisions/0016-singleton-justfile-deploys.md).
+
+## Revision history
+
+- **2026-10-24 (rev 2)** — Postgres becomes the default (was: SQLite
+  default, Postgres opt-in). All OQs resolved per project-owner
+  decisions and code-review findings except OQ10, which is reworded
+  and remains open pending confirmation. Added paramstyle choice,
+  Docker Compose profile mechanism, SQLite-upgrade safety behaviour,
+  sequence-reset handling on snapshot import, MySQL reserved-word /
+  VARCHAR-width handling, and a corrected enumeration of modules
+  that touch the DB. CI matrix is per-PR for all three dialects.
+- **2026-10-24 (rev 1)** — Initial draft paired with ADR-0019.
 
 ## Context
 
@@ -14,19 +26,40 @@ migration tooling that lets existing SQLite installs cut over without
 losing history, plus compose changes to run the chosen backend
 alongside the stack.
 
-Today's reality (surveyed 2026-10-24):
+Today's reality (surveyed 2026-10-24, verified against
+`src/master/db.py` and all callers):
 
 - `src/master/db.py` holds a ~670-line `_SCHEMA` string, a 28-entry
   `_MIGRATIONS` list of `ALTER TABLE ADD COLUMN` statements executed
-  with "swallow OperationalError" semantics, and seven table-rebuild
-  helpers that handle CHECK-constraint and uniqueness-constraint
-  changes (SQLite cannot `ALTER CONSTRAINT`).
-- Direct `sqlite3` import or `get_connection(db_path)` calls live in
-  `db.py`, `main.py`, `mqtt_client.py`, `notify.py`, `topics.py`,
-  `messages.py`, `notes.py`, `topic_export.py`, `event_actions.py`,
-  `orchestrate_api.py`, `event_dispatcher.py`, `staffs.py`,
-  `dispatch.py`, `runtime_config.py`, `workspaces.py` (18 files
-  including tests).
+  with "swallow OperationalError" semantics, and **eight** migration
+  helpers — four of which are full table rebuilds
+  (`_migrate_workspace_name_uniqueness`,
+  `_migrate_event_actions_v2`, `_migrate_event_actions_v3`,
+  `_migrate_staffs_session_scope_none`) to handle
+  CHECK-constraint and uniqueness-constraint changes (SQLite cannot
+  `ALTER CONSTRAINT`). The other four
+  (`_migrate_staged_dispatches`, `_migrate_agents_to_staffs`,
+  `_migrate_envelope_indexes`, `_migrate_envelope_backfill`) are
+  additive — new table creation, data move, index creation, and
+  data backfill respectively.
+- **16 production modules** touch the DB (via `sqlite3.connect`
+  directly or via `get_connection`): `attachments.py`, `db.py`,
+  `dispatch.py`, `event_actions.py`, `event_dispatcher.py`,
+  `main.py`, `messages.py`, `mqtt_client.py`, `notes.py`,
+  `notify.py`, `orchestrate_api.py`, `runtime_config.py`,
+  `staffs.py`, `topic_export.py`, `topics.py`, `workspaces.py`.
+  **13 test modules** touch it. Total: 29 files.
+- *Direct `sqlite3.connect(db_path)` outside `db.py`* lives in
+  `main.py` (4 call sites), `mqtt_client.py` (12 call sites), and
+  `notify.py` (2 call sites). These bypass any central pool. **Phase 0
+  funnels them through the SQLAlchemy engine's `get_connection()`
+  shim**; there will be no `sqlite3.connect()` outside `db.py` and
+  the pre-baseline fixup module after Phase 0 lands.
+- *All call sites use DB-API qmark `?` placeholders with positional
+  tuples.* `text()` requires named `:param` with a dict; psycopg uses
+  `%s`; PyMySQL uses `%s`. Phase 0 converts qmark `?` to `text()`
+  with named `:param` across every call site — see §3 for the
+  paramstyle rationale.
 - SQLite-only syntax actually used:
   - `INSERT OR IGNORE` (dispatch.py, mqtt_client.py, main.py, db.py
     migrations)
@@ -40,10 +73,18 @@ Today's reality (surveyed 2026-10-24):
     `WHERE sender_kind IS NULL`, `WHERE dispatched_at IS NULL`,
     `WHERE event_type = 'topic_scheduler'`)
   - Expression unique indexes (`COALESCE(scope_id, '')`)
+  - `INTEGER PRIMARY KEY AUTOINCREMENT` on `chunks.id` (the only
+    identity column in the schema — every other PK is a UUID TEXT)
   - Table-recreation migration pattern for CHECK-constraint changes
 - Datetimes are stored as ISO-8601 TEXT (`YYYY-MM-DDTHH:MM:SSZ`) —
   already dialect-neutral. The one float column
-  (`chunks.created_at REAL`) is the exception.
+  (`chunks.created_at REAL`) and `tasks.failure_score REAL` are the
+  exceptions.
+- Reserved-word collisions on MySQL: the `config` and `notes` tables
+  both have a `key` column, which MySQL treats as reserved. Phase 1
+  quotes these consistently via SQLAlchemy's Core column references
+  (backticks on MySQL, double-quotes on Postgres, both handled
+  automatically).
 - Short-lived connections per request (`get_connection(db_path)`
   called inside each FastAPI handler) is the dominant pattern.
   Background threads open their own. There is no pool.
@@ -51,45 +92,59 @@ Today's reality (surveyed 2026-10-24):
 ## Goals
 
 - One configuration surface for picking the DB backend:
-  `DATABASE_URL` (SQLAlchemy URL format). SQLite remains default.
-- Postgres is a *first-class* production target in phase 1: supported
-  end-to-end (schema, migrations, deploy, backup, tests, docs).
-- MySQL is a *supported* production target in phase 2 with a documented
-  minimum version floor (MySQL 8.0.13+) so partial-index / functional-index /
-  enforced-CHECK semantics are available.
+  `DATABASE_URL` (SQLAlchemy URL format). **Postgres is the default**;
+  SQLite and MySQL are selected by setting `DATABASE_URL` explicitly.
+- Postgres is a *first-class* production target: supported end-to-end
+  (schema, migrations, deploy, backup, tests, docs, UAT).
+- SQLite and MySQL are *supported* alternative targets with full CI
+  coverage. MySQL has a documented minimum version floor (MySQL
+  8.0.16+) so partial-index / functional-index / enforced-CHECK
+  semantics are available.
 - Snapshot tooling exports a provider-neutral representation of the
   current DB and imports it into a fresh target DB of any supported
-  provider.
-- CI runs the master test suite against SQLite on every PR and against
-  Postgres at least on `main` / nightly (final cadence per Open Question 5).
+  provider. Import resets identity sequences so subsequent inserts
+  do not collide with imported rows.
+- CI runs the master test suite against SQLite, Postgres, and MySQL
+  on every PR. Postgres is top priority (its failures gate merge
+  loudly).
 - Operators get a one-page runbook for migrating an existing SQLite
   install to Postgres with downtime bounded by snapshot size.
 
 ## Non-Goals
 
 - *Not* switching to async DB. Master mixes sync FastAPI handlers,
-  background threads, and `asyncio.to_thread` bridges. Async SQLAlchemy
-  across that surface is a separate design.
-- *Not* splitting read/write replicas, adding connection-level sharding,
-  or supporting multi-master.
+  background threads, and `asyncio.to_thread` bridges. Async
+  SQLAlchemy across that surface is a separate design.
+- *Not* splitting read/write replicas, adding connection-level
+  sharding, or supporting multi-master.
 - *Not* changing attachment storage (filesystem under
-  `MASTER_DATA_DIR/attachments` per ADR-0007). Blobs stay out of the DB.
-- *Not* adding encryption at rest. ADR-0009's plaintext-secret posture
-  carries over; moving to Postgres does not make it worse as long as
-  the connection is loopback or a trusted LAN segment (documented).
+  `MASTER_DATA_DIR/attachments` per ADR-0007). Blobs stay out of the
+  DB.
+- *Not* adding encryption at rest or TLS to the DB. ADR-0009's
+  plaintext posture carries over; plaintext connections to the
+  Postgres service (bundled on the same compose network, or on a
+  trusted LAN segment when managed externally) are acceptable per
+  OQ8.
 - *Not* porting the agent worker or the notes MCP server to the new
-  provider abstraction. Both are stateless with respect to the master DB
-  and talk via MQTT / HTTP.
+  provider abstraction. Both are stateless with respect to the
+  master DB and talk via MQTT / HTTP.
 - *Not* a full-ORM rewrite. ADR-0019 chose SQLAlchemy Core + Alembic
   explicitly to avoid that.
 
 ## Proposed Design
 
-### 1. Abstraction layer
+### 1. Scope
 
-A new `src/master/db/__init__.py` package replaces today's
-`src/master/db.py` module. The public surface stays small so that
-existing call sites change in one mechanical pass:
+Resolved from OQ1: this ADR covers the **master DB only** — the
+same scope as today's SQLite file. The agent worker and the notes
+MCP server do not persist anything in the master DB today and are
+untouched.
+
+### 2. Abstraction layer
+
+A new `src/master/db/` package replaces today's `src/master/db.py`
+module. The public surface stays small so that existing call sites
+change in one mechanical pass:
 
 ```python
 # today
@@ -107,14 +162,59 @@ from .db import get_connection, init_db, engine, session
   methods call sites use (`execute`, `executescript`, `fetchone`,
   `fetchall`, `commit`, `close`, context manager). Row objects are
   mapping-like (`row["id"]`) via `.mappings()`. This shim is the
-  smallest-possible change for the ten modules that already use
-  `get_connection`.
+  smallest-possible change for the sixteen production modules that
+  already use `get_connection`.
 - Low-level helpers that depend on SQLite-only syntax
   (`PRAGMA foreign_keys`, `sqlite_master` lookups) move into
-  dialect-dispatched private helpers (`_dialect.pg_insert_or_ignore`,
-  `_dialect.now_literal`, `_dialect.table_exists`, etc.).
+  dialect-dispatched private helpers (`_dialect.upsert`,
+  `_dialect.now_literal`, `_dialect.table_exists`,
+  `_dialect.reset_sequence`, etc.).
 
-### 2. Schema and migration management
+### 3. Paramstyle: `text()` with named `:param` bindings
+
+All call sites convert from DB-API qmark `?` with positional tuples to
+SQLAlchemy `text()` with named `:param` bindings and a dict of
+parameters. Example:
+
+```python
+# today
+conn.execute(
+    "INSERT INTO staffs (id, name, created_at) VALUES (?, ?, ?)",
+    (sid, name, now),
+)
+
+# phase 0
+conn.execute(
+    text("INSERT INTO staffs (id, name, created_at)"
+         " VALUES (:id, :name, :created_at)"),
+    {"id": sid, "name": name, "created_at": now},
+)
+```
+
+Rationale (also recorded in ADR-0019):
+
+- `text()` compiles to the right DB-API paramstyle automatically
+  (`?` on pysqlite, `%s` on psycopg and PyMySQL). No runtime
+  translator to maintain.
+- `exec_driver_sql()` was considered as a shortcut (keep `?` on
+  SQLite, rewrite to `%s` elsewhere). Rejected: it bypasses
+  SQLAlchemy's type coercion, which matters on Postgres — booleans
+  must be real `bool`, timestamps must be `str`/`datetime` depending
+  on column type, and the integer PK on `chunks.id` must flow
+  through the server-side sequence.
+- Named `:param` is easier to read where a call site has many
+  parameters. The heaviest site today (`orchestrate_api.py`) has 38
+  execute calls, several binding 10+ values.
+
+Phase 0 scope therefore includes a mechanical conversion pass across
+16 production files and 13 test files. Automation: a small AST-based
+rewrite script (`scripts/convert_qmark_to_named.py`, kept in the PR
+and deleted after merge) handles the common shape; a human reviews
+the diff file-by-file. **"No behaviour change" in Phase 0 means
+"same results, same semantics" — not "same source text."** The ADR
+is corrected accordingly.
+
+### 4. Schema and migration management
 
 Alembic owns schema evolution end-to-end. The in-code `_SCHEMA`
 string and `_MIGRATIONS` list in `db.py` go away in phase 1.
@@ -124,8 +224,9 @@ Layout:
 ```
 src/master/db/
   __init__.py           # public engine/get_connection
-  _dialect.py           # upsert, now(), introspection shims
+  _dialect.py           # upsert, now(), introspection, sequence-reset shims
   _row.py               # mapping wrapper for sqlite3.Row compatibility
+  _prebaseline.py       # one-shot SQLite fixups for existing installs
 alembic.ini
 alembic/
   env.py                # loads DATABASE_URL from master settings
@@ -136,86 +237,149 @@ alembic/
 
 Rules:
 
-- *Baseline revision* reflects the current schema as a single
-  Alembic revision. Any schema change after merge adds a new
-  revision — no more `_MIGRATIONS` list, no more
-  `swallow OperationalError if column already exists`.
+- *Baseline revision uses `op.create_table()` with typed Core
+  columns.* No raw DDL string in the baseline. This is what makes
+  the baseline portable across dialects: SQLAlchemy picks `TEXT` on
+  SQLite, `TEXT` or `VARCHAR(n)` on Postgres, `VARCHAR(n)` on
+  MySQL, `INTEGER` vs `BIGINT` vs `AUTOINCREMENT` identity
+  correctly, and the right `CHECK` and `UNIQUE` syntax per dialect.
 - *Existing SQLite installs* upgrade in-place: `alembic stamp` is
   issued once at first startup after the upgrade (when
   `alembic_version` table does not exist but `workspaces` does), to
   mark the baseline as applied. Dispositional in-code migrations
   from the pre-ADR era (envelope backfill, agents→staffs rename,
   event_actions_v2/v3, staffs_session_scope_none,
-  staged_dispatches) are **preserved** in `db.py` as one-shot
-  "pre-baseline" fixups that run before Alembic takes over. This
-  avoids forcing operators onto the snapshot-and-reload path for a
-  simple version bump.
+  staged_dispatches) are **preserved** in `_prebaseline.py` as
+  one-shot fixups that run before Alembic takes over, only when the
+  dialect is SQLite. This avoids forcing operators onto the
+  snapshot-and-reload path for a simple version bump.
 - *Fresh installs on any provider* get the baseline straight from
-  Alembic — the pre-baseline fixups are no-ops because the
-  conditional guards (`sqlite_master` lookup, `IS NULL` probes)
-  short-circuit on empty tables. For non-SQLite dialects the fixups
-  are skipped entirely (dialect check); they were never needed
-  there.
+  Alembic — the pre-baseline fixups are no-ops (SQLite-only, and
+  the conditional guards short-circuit on empty tables).
 - *Autogenerate* is enabled but not trusted blindly: CHECK
-  constraints, partial indexes, and expression indexes are
-  hand-written in each revision with a note referencing the
-  behaviour under each dialect.
+  constraints, partial indexes, expression/functional indexes, and
+  sequence-reset operations are hand-written in each revision with
+  a note referencing the behaviour under each dialect.
 
-### 3. Dialect handling
+### 5. Migration triggering and version mismatch
 
-Three specific SQLite-only patterns need concrete treatment:
+Resolved from OQ4: **auto-upgrade only on an empty database.
+Otherwise, migrations are an explicit step.**
 
-| Pattern | SQLite | Postgres | MySQL 8.0.13+ |
+Startup lifespan behaviour:
+
+1. Open a connection to `DATABASE_URL`.
+2. Query the Alembic version table.
+3. One of three outcomes:
+   - **Empty DB** (no tables, or no `alembic_version` entry on a
+     fresh DB): run `alembic upgrade head` automatically. Log it.
+   - **Up-to-date DB** (`alembic_version` == code's expected head):
+     proceed.
+   - **Behind** (`alembic_version` < expected head, or the version
+     column exists but the schema is missing columns the code
+     expects): **refuse to start.** Emit a clear message:
+     ```
+     ERROR: DB schema is behind code (DB=abc1234, code=def5678).
+     Run `scripts/db.sh migrate` before restarting master, or use
+     `scripts/db.sh snapshot-and-migrate` to snapshot first.
+     ```
+     Exit non-zero. Do not touch the DB.
+   - **Ahead** (DB has a newer `alembic_version` than this code
+     knows): refuse to start with a message pointing at the release
+     notes. Likely a mistaken downgrade — never silently touch a
+     schema a newer version wrote.
+4. Pre-baseline fixups run only on SQLite, only once (gated by
+   presence of `alembic_version`), only if the DB is pre-baseline.
+
+Operator tooling: `scripts/db.sh migrate` wraps `alembic upgrade
+head`. `scripts/db.sh snapshot-and-migrate` takes a snapshot into
+`${MASTER_DATA_DIR}/snapshots/` first, then migrates — the single
+step most operators will use when the schema is behind.
+
+### 6. Dialect handling
+
+The specific SQLite-only patterns and their dialect translations:
+
+| Pattern | SQLite | Postgres | MySQL 8.0.16+ |
 |---|---|---|---|
-| Upsert | `INSERT OR IGNORE` | `INSERT ... ON CONFLICT DO NOTHING` | `INSERT IGNORE INTO` |
+| Upsert (ignore conflicts) | `INSERT OR IGNORE` | `INSERT ... ON CONFLICT DO NOTHING` | `INSERT IGNORE INTO` |
 | Upsert with update | `ON CONFLICT (…) DO UPDATE SET x = excluded.x` | identical | `ON DUPLICATE KEY UPDATE x = VALUES(x)` |
 | "Now (sub-second)" default | `unixepoch('now','subsec')` | `extract(epoch from now())` | `UNIX_TIMESTAMP(NOW(3))` |
 | Partial index | `CREATE INDEX ... WHERE ...` | identical | functional index via generated column |
 | Expression unique | `CREATE UNIQUE INDEX ... ON t(COALESCE(c, ''))` | identical | functional index |
 | CHECK constraint | enforced | enforced | enforced (8.0.16+) |
 | Introspection | `sqlite_master` / `PRAGMA table_info` | `pg_catalog` / `information_schema` | `information_schema` |
+| **AUTOINCREMENT PK** | `INTEGER PRIMARY KEY AUTOINCREMENT` on `chunks.id` | `BIGSERIAL` (or `BIGINT GENERATED BY DEFAULT AS IDENTITY`) | `BIGINT AUTO_INCREMENT PRIMARY KEY` |
+| **Reserved word `key`** (used in `config` and `notes`) | no quoting needed | double-quotes auto-applied by SQLAlchemy | backticks auto-applied by SQLAlchemy |
+| **TEXT PK / indexed column** | `TEXT` | `TEXT` (indexable) | `VARCHAR(n)` required for PK/index |
 
-The upsert helper is a single function `upsert(table, values, conflict_cols, update_cols=None)` in `_dialect.py`; call sites that today write
-raw `INSERT OR IGNORE` SQL change to it. For `chunks.created_at`, the
-default moves off `unixepoch` into Python code (every row that writes
-chunks already has a timestamp available), closing one dialect gap
-without a dialect helper.
+The upsert helper is a single function `upsert(table, values,
+conflict_cols, update_cols=None)` in `_dialect.py`; call sites that
+today write raw `INSERT OR IGNORE` SQL change to it. For
+`chunks.created_at`, the default moves off `unixepoch` into Python
+code (every row that writes chunks already has a timestamp
+available), closing one dialect gap without a dialect helper.
 
-For MySQL, two of the partial indexes become functional indexes over a
-generated `IS NULL` column; the design doc for phase 2 (added when phase
-1 lands) will enumerate each one.
+**VARCHAR widths for MySQL.** All PK and indexed `TEXT` columns in
+today's schema store UUIDs — 36-character hex strings with dashes
+(or 32-character hex without, depending on the generator). We pick
+**`String(36)`** (`VARCHAR(36)`) uniformly. Non-PK free-form TEXT
+columns (prompt templates, message bodies, result artefacts) stay
+unbounded `Text`. The baseline Alembic migration uses `String(36)`
+on every PK/FK/indexed UUID column so the Postgres and MySQL tables
+agree.
 
-### 4. Configuration surface
+**MySQL partial-index conversion.** The four partial indexes
+(`WHERE archived_at IS NULL`, `WHERE sender_kind IS NULL`,
+`WHERE dispatched_at IS NULL`, `WHERE event_type = 'topic_scheduler'`)
+become functional indexes over generated columns on MySQL. The phase
+1 Alembic revision enumerates each one explicitly with
+`op.create_index(..., mysql_prefix='...', postgresql_where=...)`.
 
-Add one env var, read in `src/master/config.py`:
+### 7. Configuration surface
+
+Env vars read in `src/master/config.py`:
 
 | Key | Required | Default | Purpose |
 |---|---|---|---|
-| `DATABASE_URL` | No | `sqlite+pysqlite:///${MASTER_DATA_DIR}/master_data.db` | SQLAlchemy URL. Supported schemes: `sqlite+pysqlite`, `postgresql+psycopg`, `mysql+pymysql`. |
+| `DATABASE_URL` | No | `postgresql+psycopg://master:${POSTGRES_PASSWORD}@postgres:5432/master` | SQLAlchemy URL. Supported schemes: `postgresql+psycopg` (default), `sqlite+pysqlite`, `mysql+pymysql`. |
+| `POSTGRES_PASSWORD` | Yes (when `DATABASE_URL` defaults) | — | Password for the bundled Postgres service. If unset and `DATABASE_URL` is unset, master refuses to start. |
 | `DB_POOL_SIZE` | No | `5` | SQLAlchemy `pool_size`. SQLite ignores (`StaticPool`). |
 | `DB_POOL_MAX_OVERFLOW` | No | `10` | SQLAlchemy `max_overflow`. SQLite ignores. |
 | `DB_ECHO_SQL` | No | `false` | Dev-only flag to log every statement; off in prod. |
+| `COMPOSE_PROFILES` | No | — | Docker Compose variable. See §9 for the `db-bundled` profile. |
 
-`MASTER_DATA_DIR` keeps its current role (attachments, snapshots), and
-the derived `master_data.db` path only matters when `DATABASE_URL` is
-the SQLite default. Config reference in `docs/references/config.md`
-grows a row per key.
+`MASTER_DATA_DIR` keeps its current role (attachments, snapshots).
+When `DATABASE_URL` is pointed at a SQLite file (explicit opt-in),
+the file path lives under `MASTER_DATA_DIR` by convention. Config
+reference in `docs/references/config.md` grows a row per key.
 
-### 5. Snapshot format and tooling
+### 8. Snapshot format and tooling
 
-A new CLI, `python -m src.master.db_cli snapshot`, with two
-sub-commands:
+Resolved from OQ3 (JSONL) and OQ9 (`scripts/db.sh` as the entry
+point).
+
+Single operator-facing entry point: `scripts/db.sh`, a bash wrapper
+that internally calls `python -m src.master.db_cli`. Subcommands,
+all with `--help`:
 
 ```
-python -m src.master.db_cli snapshot export \
+scripts/db.sh snapshot export \
     --source-url "$DATABASE_URL" \
     --out /path/to/snapshot_YYYYMMDDTHHMMSSZ/
 
-python -m src.master.db_cli snapshot import \
+scripts/db.sh snapshot import \
     --in  /path/to/snapshot_YYYYMMDDTHHMMSSZ/ \
     --target-url "postgresql+psycopg://user:pw@host:5432/db" \
     [--yes]  # skip the "target already has rows" confirmation
+
+scripts/db.sh migrate                       # alembic upgrade head
+scripts/db.sh snapshot-and-migrate          # snapshot in-place, then migrate
+scripts/db.sh verify-schema                 # schema drift check
 ```
+
+`scripts/db.sh --help` lists all subcommands and prints a short
+description per command.
 
 Snapshot layout (one directory per snapshot):
 
@@ -252,108 +416,298 @@ snapshot_20261024T121500Z/
 }
 ```
 
+**Type normalisation on export (per m-3).** Every column type gets a
+canonical JSON encoding so the file is round-trippable across
+dialects:
+
+| Column type | JSON encoding | Import coercion |
+|---|---|---|
+| TEXT (ISO-8601 timestamp) | string, unchanged | string, unchanged |
+| TEXT (free-form) | string, unchanged | string, unchanged |
+| INTEGER | number (JSON int) | int |
+| REAL / Float (`chunks.created_at`, `tasks.failure_score`) | number (JSON float) | float |
+| BOOLEAN (stored as 0/1: `is_default`, `silent`, `enabled`, `structured_output`) | JSON boolean (`true`/`false`) | coerced to the target dialect's bool literal (0/1 on SQLite/MySQL, `true`/`false` on Postgres) |
+| JSON column (`attachments_json`, `usage_json`, `tags`, `result_artifacts`) | embedded JSON object/array (not a string) | serialized back to a JSON string before insert |
+| NULL | JSON `null` | NULL |
+| future BLOB | base64 string | base64-decoded to bytes |
+
+The exporter explicitly types each column against the Alembic model
+rather than relying on the source dialect's affinity, so a SQLite
+export of a 0/1 integer column that is logically boolean comes out
+as `true`/`false` in the JSONL. This fixes the "SQLite 0/1 round-trips
+as integer on Postgres and breaks the CHECK" class of bug.
+
+**Sequence reset on import (per B-1).** After loading rows into any
+table that has an identity/sequence column (today: `chunks.id`
+only; the baseline migration guarantees any future identity column
+is flagged in the model), the importer runs:
+
+- On Postgres:
+  `SELECT setval(pg_get_serial_sequence('chunks', 'id'), MAX(id), true) FROM chunks;`
+- On MySQL:
+  `ALTER TABLE chunks AUTO_INCREMENT = <max_id + 1>;`
+- On SQLite:
+  `UPDATE sqlite_sequence SET seq = <max_id> WHERE name = 'chunks';`
+
+The reset step is generalised: `_dialect.reset_sequences_for_table`
+iterates every column flagged as identity in the Alembic model and
+emits the right statement per dialect. The CI round-trip test asserts
+that an INSERT into `chunks` after import succeeds without PK
+collision.
+
 Rules:
 
-- One JSON object per line; values are dialect-neutral (ISO-8601 TEXT
-  dates, JSON for already-JSON columns, base64 for any future bytes).
-  `chunks.created_at` is a float on disk; the exporter normalises it
-  to a float field in JSON regardless of source dialect.
+- One JSON object per line; values dialect-neutral per the table
+  above.
 - Export is streaming (`SELECT` with server-side cursor on Postgres,
   no `fetchall()` of large tables). Import is batched (`executemany`
   of 500 rows) inside a single transaction per table.
 - Import *always targets an empty DB*: it runs `alembic upgrade head`
   first, then refuses to proceed if any user-data table has rows,
-  unless `--yes` is passed. We do not merge; we restore.
+  unless `--yes` is passed in which case it truncates and reloads.
+  See OQ10 below for the still-open "replace-only vs merge"
+  decision.
 - `schema_version` in the manifest must equal the current Alembic
   head on import, or the tool refuses to proceed. This fails fast on
   cross-release snapshots rather than silently losing columns.
 - Row-level foreign keys are respected by load order (parents first).
   The load order is baked into the exporter.
 - Round-trip test: a CI job seeds a SQLite DB, exports, imports into
-  a Postgres container, and runs a read-side smoke test
+  a Postgres container, resets sequences, inserts a new `chunks` row
+  (asserts no PK conflict), and runs a read-side smoke test
   (count-per-table, selected row equality).
 
-### 6. Compose and runtime changes
+### 9. Compose and runtime changes
 
-Three compose files change:
+Resolved from OQ2 and OQ7: **dev runs on Postgres; production
+supports both bundled and managed Postgres via a Compose profile.**
 
-- `docker-compose.yml` — base. No DB service added here; the base
-  stays provider-neutral. Reads `DATABASE_URL` from env (empty →
-  SQLite default inside the volume).
-- `docker-compose.postgres.yml` (new) — optional overlay that adds a
-  `postgres` service pinned to `postgres:17-alpine`, a
-  `postgres_data` named volume, healthchecked, on the `internal`
-  network. Sets `DATABASE_URL=postgresql+psycopg://master:${POSTGRES_PASSWORD}@postgres:5432/master`
-  on the master service. Documented as "layer this on
-  `docker-compose.yml` for dev/staging/prod when Postgres is the
-  chosen provider."
-- `docker-compose.mysql.yml` (new, phase 2) — same shape with
-  `mysql:8.4`.
+New file: `docker-compose.postgres.yml`. It declares the `postgres`
+service behind a Docker Compose profile and the master-side env
+wiring that points at it. Shape:
 
-The deploy overlay (`docker-compose.deploy.yml`) does not change —
-the singleton stays provider-neutral; operators pick a DB overlay via
-the justfile deploy recipe (see Open Question 7 for the deploy UX).
+```yaml
+services:
+  postgres:
+    profiles: ["db-bundled"]
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: master
+      POSTGRES_USER: master
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "master", "-d", "master"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
 
-### 7. CI test matrix
+  master:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://master:${POSTGRES_PASSWORD}@postgres:5432/master}
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false   # service is optional (behind profile)
 
-Phase 1:
-
+volumes:
+  postgres_data:
 ```
+
+The master service's `depends_on.postgres` is marked `required:
+false` so compose does not error when the profile is inactive and no
+`postgres` service exists.
+
+**Profile mechanism**:
+
+- `COMPOSE_PROFILES=db-bundled` → compose starts the bundled Postgres
+  service, and the master's `DATABASE_URL` defaults to the on-network
+  Postgres.
+- `COMPOSE_PROFILES` unset / without `db-bundled` → the Postgres
+  service does **not** start; the operator must set `DATABASE_URL`
+  to an external managed Postgres (or to SQLite or MySQL).
+
+**File layering** (preserves ADR-0016's shape — `docker-compose.yml`
+and `docker-compose.deploy.yml` stay provider-neutral):
+
+- `just dev-up` adds `-f docker-compose.postgres.yml` and sets
+  `COMPOSE_PROFILES=db-bundled` by default. The persisted
+  `postgres_data` volume means the test DB survives restarts, so
+  seed data is stable without hand-crafting fresh fixtures per test
+  run.
+- `just deploy env tag` adds `-f docker-compose.postgres.yml` and
+  reads `COMPOSE_PROFILES` from the environment (expected to come
+  from `.env.staging` / `.env.prod`). When set to `db-bundled`, the
+  singleton deploy includes the Postgres service and the
+  `postgres_data` volume; when unset, the compose file layers in but
+  no Postgres service runs — the operator is responsible for
+  pointing `DATABASE_URL` at their managed DB.
+- MySQL support ships `docker-compose.mysql.yml` with the same
+  profile pattern (`db-bundled-mysql`) for operators who want to
+  bundle MySQL instead of Postgres. UAT does not run against the
+  bundled MySQL path.
+
+The deploy recipe exports `COMPOSE_PROFILES` for every `docker
+compose` invocation; staging and prod `.env` files declare it.
+
+### 10. CI test matrix
+
+Resolved from OQ5: **every supported backend's CI runs on every PR.
+Postgres is top priority; SQLite and MySQL also gate merge; MySQL
+does not gate UAT.**
+
+```yaml
 jobs:
-  test-sqlite:   DATABASE_URL=sqlite+pysqlite:///...   # every PR
-  test-postgres: DATABASE_URL=postgresql+psycopg://... # every PR (or main-only per OQ5)
-  snapshot-roundtrip: SQLite → export → import → PG smoke
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres: { image: postgres:17-alpine, env: {...}, ports: ['5432:5432'] }
+    env:
+      DATABASE_URL: postgresql+psycopg://...
+    # top priority — always runs first; failures gate merge
+
+  test-sqlite:
+    env:
+      DATABASE_URL: sqlite+pysqlite:///:memory:
+    # runs on every PR; failures gate merge
+
+  test-mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql: { image: mysql:8.4, env: {...}, ports: ['3306:3306'] }
+    env:
+      DATABASE_URL: mysql+pymysql://...
+    # runs on every PR; failures gate merge; not part of UAT
+
+  snapshot-roundtrip:
+    needs: [test-postgres]
+    # SQLite → export → import → Postgres smoke + sequence-reset assertion
 ```
 
-Phase 2 adds `test-mysql`. The Postgres and MySQL legs use the
-service-containers feature of the chosen CI runner so no new SRE
-state is needed.
+Stale conditionals in the current `.github/workflows/test.yml` that
+scoped Postgres to `main` or nightly are removed in Phase 0.
 
-### 8. Phased rollout
+### 11. SQLite-upgrade safety and migration path
 
-**Phase 0 — Groundwork (one PR, no behaviour change)**
+Switching the default to Postgres introduces a hazard: an operator
+pulls the new release, restarts master, and master picks up the new
+default `DATABASE_URL`. If their existing SQLite file is still on
+disk, master could silently start fresh against the bundled Postgres
+and the operator loses visible history.
 
-- Add SQLAlchemy + Alembic to `requirements.txt`.
-- Introduce `src/master/db/` package with `engine()` and a backward-
-  compatible `get_connection()` shim built on SQLAlchemy's SQLite
-  dialect. All call sites continue to use raw SQL strings via
-  `text()`; results are mapping-like via `.mappings().all()`.
-- Freeze the current schema into `alembic/versions/000000000001_baseline.py`.
-  Add the pre-baseline fixup block for in-place upgrades of existing
-  SQLite installs.
-- Add `scripts/db_migrate.sh` wrapping `alembic upgrade head`.
+**We do not allow that.** Startup checks (in order):
+
+1. If `DATABASE_URL` is set explicitly, use it. The operator has
+   expressed intent; no safety-net override.
+2. If `DATABASE_URL` is unset and
+   `${MASTER_DATA_DIR}/master_data.db` **exists** and is non-empty
+   (file size > 0 and contains a `workspaces` table), **refuse to
+   start**. Emit:
+   ```
+   ERROR: existing SQLite data detected at
+   /opt/codex-slack/data/master/master_data.db, but DATABASE_URL is
+   unset and the default is now Postgres. Pick one:
+
+     (a) Keep SQLite:
+         export DATABASE_URL=sqlite+pysqlite:////opt/codex-slack/data/master/master_data.db
+
+     (b) Migrate to Postgres (recommended):
+         scripts/db.sh snapshot-and-migrate \
+             --source-url "sqlite+pysqlite:////opt/codex-slack/data/master/master_data.db" \
+             --target-url "$POSTGRES_URL"
+         Then set DATABASE_URL=$POSTGRES_URL.
+
+   See docs/guides/runbooks/migrate-sqlite-to-postgres.md.
+   ```
+3. If `DATABASE_URL` is unset and no SQLite file is present, master
+   defaults to the bundled Postgres URL (OQ2 default).
+
+The runbook `docs/guides/runbooks/migrate-sqlite-to-postgres.md`
+spells out:
+
+- Stop master (`just undeploy staging` or local equivalent).
+- Run `scripts/db.sh snapshot-and-migrate` from the host that can
+  reach both the old SQLite file and the target Postgres URL.
+- The script does: snapshot export → `alembic upgrade head` on target
+  → import → sequence reset → verify (row counts + sample reads).
+- Set `DATABASE_URL` in the environment file.
+- Start master.
+- Verify from the UI; keep the SQLite file around for one release
+  cycle as a rollback artifact before deleting.
+
+Rollback: set `DATABASE_URL` back to the SQLite URL. Postgres data
+is thrown away; SQLite data is intact because the migration tool
+never writes to the source.
+
+### 12. Phased rollout
+
+**Phase 0 — Groundwork (one PR, same behaviour, source changes)**
+
+- Add SQLAlchemy + Alembic + `psycopg[binary]` + `pymysql` to
+  `requirements.txt`.
+- Introduce `src/master/db/` package with `engine()` and a
+  backward-compatible `get_connection()` shim built on SQLAlchemy's
+  dialect-aware connection.
+- **Convert qmark `?` to `text()` with named `:param`** across all 16
+  production and 13 test files. Automated by
+  `scripts/convert_qmark_to_named.py`; human-reviewed per file.
+- **Funnel direct `sqlite3.connect()` callers through the engine's
+  `get_connection()` shim** in `main.py` (4 sites),
+  `mqtt_client.py` (12 sites), and `notify.py` (2 sites). After
+  Phase 0, no `sqlite3.connect()` remains outside `db/_prebaseline.py`
+  and the snapshot CLI.
+- Freeze the current schema into
+  `alembic/versions/000000000001_baseline.py` using **`op.create_table()`
+  with typed Core columns** (not raw DDL). The baseline matches what
+  the SQLite schema looks like after all 28 `_MIGRATIONS` entries,
+  all four table-rebuild helpers, and all four additive helpers have
+  run.
+- Add `_prebaseline.py` for in-place SQLite-only upgrades of existing
+  installs.
+- Add `scripts/db.sh` with `migrate`, `verify-schema`, and
+  `snapshot-and-migrate` subcommands.
 - Lint rule: no new `import sqlite3` outside `src/master/db/`,
   `src/master/db_cli.py`, and the test suite.
 
-**Phase 1 — Postgres first-class**
+**Phase 1 — Postgres default**
 
+- Switch `DATABASE_URL` default to the bundled Postgres URL.
 - Convert all SQLite-only SQL at call sites to the dialect helpers
   (`upsert`, timestamp defaults in Python, PRAGMAs replaced by
   SQLAlchemy events for FK enforcement where supported).
 - Replace `_MIGRATIONS` list and table-rebuild helpers with Alembic
-  revisions. Delete the fixup block once a release has shipped that
-  stamps the baseline on first boot (one-release deprecation).
-- Ship the snapshot CLI (export + import + round-trip test).
-- Ship `docker-compose.postgres.yml` and the migrate-from-SQLite
-  runbook.
-- Expand CI matrix to SQLite + Postgres.
-- Update `docs/references/config.md` with `DATABASE_URL` and pool
-  tunables; document the SQLite→Postgres migration in
-  `docs/guides/runbooks/migrate-sqlite-to-postgres.md`.
+  revisions. Keep `_prebaseline.py` for one release cycle (OQ11).
+- Ship the snapshot CLI (`scripts/db.sh snapshot export|import`) with
+  sequence-reset logic and round-trip test.
+- Ship `docker-compose.postgres.yml` with the `db-bundled` profile.
+- Add the SQLite-upgrade safety-net startup check (§11).
+- Expand CI matrix to SQLite + Postgres + MySQL per PR. Remove stale
+  conditionals that scoped non-SQLite legs to `main` or nightly.
+- Update `docs/references/config.md` with `DATABASE_URL`,
+  `POSTGRES_PASSWORD`, `COMPOSE_PROFILES`, and pool tunables.
+- Ship `docs/guides/runbooks/migrate-sqlite-to-postgres.md`.
+- Switch dev stack default to the bundled Postgres (`just dev-up`
+  starts the `postgres` service via `COMPOSE_PROFILES=db-bundled`).
+- Switch staging singleton to Postgres via `.env.staging` setting
+  `COMPOSE_PROFILES=db-bundled`.
 
-**Phase 2 — MySQL second**
+**Phase 2 — MySQL support hardened**
 
-- Add MySQL dialect: adapt the two partial indexes to functional
-  indexes over generated columns; verify CHECK enforcement under
-  MySQL 8.0.16+.
-- Ship `docker-compose.mysql.yml`.
-- Expand CI matrix to include MySQL (per-PR or nightly, decided when
-  phase 1 lands).
-- Update docs with the MySQL version floor and known caveats.
+- Finalise MySQL dialect: functional-index conversions over
+  generated columns for the four partial indexes, VARCHAR(36)
+  widths on all UUID PK/FK/indexed columns, CHECK enforcement
+  verified under MySQL 8.0.16.
+- Ship `docker-compose.mysql.yml` with the `db-bundled-mysql`
+  profile.
+- Document the MySQL version floor and known caveats; MySQL is
+  CI-only (no UAT leg).
 
 **Phase 3 — Cleanup (optional, not blocking)**
 
-- Delete the pre-baseline fixups.
+- Delete `_prebaseline.py`.
 - Delete the `get_connection()` shim once all call sites are moved
   to Core expression API (long tail).
 
@@ -365,6 +719,11 @@ state is needed.
 - **Full ORM rewrite.** Rejected in ADR-0019. Too large a diff for
   this issue; mixing async FastAPI handlers with sync workers via
   async SQLAlchemy adds a separate design problem.
+- **Keep SQLite as the default and promote Postgres only as an
+  overlay.** The prior revision of this doc. Rejected: dev/staging
+  parity matters more than contributor friction, and the bundled
+  Postgres on a persisted volume removes most of the friction
+  anyway.
 - **Keep SQLite as the only provider; add tooling for file-based
   replication/backup.** Does not solve the "pick a provider" ask in
   issue #268 and does not help the "SQLite isn't suitable for
@@ -378,93 +737,103 @@ state is needed.
   still need a bespoke tool, so we would end up writing the
   provider-neutral one anyway. The JSONL format also doubles as a
   diff-friendly audit artefact.
+- **`exec_driver_sql()` with runtime paramstyle translation.**
+  Smaller Phase 0 diff — keeps `?` on SQLite call sites — but
+  bypasses SQLAlchemy's type coercion (critical on Postgres for
+  booleans, timestamps, and identity columns) and keeps us in the
+  "re-invent half of SQLAlchemy" problem for the paramstyle layer
+  specifically. Rejected.
+
+## Resolved questions (previously open)
+
+Decisions below are final per the project owner, 2026-10-24. They
+are documented here (rather than deleted) so a future reader can see
+the reasoning that led to the current shape.
+
+- **OQ1 — Scope.** Master DB only, same scope as today's SQLite.
+  Agent worker and notes MCP server are untouched.
+- **OQ2 — Dev stack DB.** Postgres. The dev compose starts a
+  bundled Postgres via `docker-compose.postgres.yml` with the
+  `db-bundled` profile and a persisted `postgres_data` volume. Test
+  env setup is a single `just dev-up`.
+- **OQ3 — Snapshot format.** JSONL per table + `manifest.json`.
+- **OQ4 — Migration triggering.** Auto-run `alembic upgrade head`
+  **only on an empty database**. For non-empty DBs, migrations are
+  an explicit `scripts/db.sh migrate` step. On version mismatch
+  (DB schema behind code), master refuses to start and emits a
+  clear message pointing at the migrate command and the
+  snapshot-and-migrate shortcut.
+- **OQ5 — CI matrix cadence.** Every PR, all three dialects.
+  Postgres is top priority. Stale conditionals removed from the
+  workflow file in Phase 0.
+- **OQ6 — MySQL version floor.** 8.0.16+. Master refuses to start
+  on older MySQL.
+- **OQ7 — Deploy UX for Postgres.** Both bundled and managed, via
+  a Docker Compose profile (`db-bundled`) toggled by
+  `COMPOSE_PROFILES`. Bundled: profile active, bundled Postgres
+  service runs, `DATABASE_URL` defaults into it. Managed: profile
+  inactive, no Postgres service runs, operator sets `DATABASE_URL`
+  to an external managed instance. The justfile deploy recipe
+  (ADR-0016) passes `-f docker-compose.postgres.yml` on every
+  invocation and exports `COMPOSE_PROFILES` from the environment —
+  no new recipes, no conditional compose-file inclusion.
+- **OQ8 — Secrets at rest / in flight.** Plaintext DB connections
+  are acceptable. TLS is not required by this ADR.
+- **OQ9 — Snapshot CLI location and name.** `scripts/db.sh`, a
+  bash script with `--help`, with subcommands `snapshot export`,
+  `snapshot import`, `migrate`, `snapshot-and-migrate`, and
+  `verify-schema`. The script wraps Python internally
+  (`python -m src.master.db_cli ...`).
+- **OQ11 — Pre-baseline fixups retention.** One release cycle
+  after Phase 1 lands. Then `_prebaseline.py` is deleted.
+- **OQ12 — Snapshot cross-release compatibility.** Not supported.
+  `schema_version` in the manifest must match the Alembic head on
+  import. Cross-release upgrades go through "upgrade source first,
+  then snapshot, then import."
 
 ## Open Questions
 
-- [ ] **OQ1 — Scope of this change: master DB only, or master + any
-      other persistent store?** The agent worker and the notes MCP
-      server don't persist anything in the master DB today. Confirm
-      we are scoping to master only. — Owner: project-owner.
-- [ ] **OQ2 — SQLite as the dev-stack default forever, or move dev to
-      Postgres for parity with prod?** Keeping SQLite is lower
-      friction for contributors; moving dev to Postgres catches
-      dialect bugs earlier. Recommendation: keep SQLite as the test
-      default, add an opt-in `docker-compose.postgres.yml` overlay
-      that `just dev-up` can be told to use. — Owner: project-owner
-      + sre.
-- [ ] **OQ3 — Snapshot format: JSONL per table (recommended) or raw
-      `pg_dump`-compatible SQL?** JSONL wins on cross-provider
-      portability; raw SQL is slightly faster. We recommend JSONL
-      and only revisit if snapshot time becomes a bottleneck. —
-      Owner: project-owner.
-- [ ] **OQ4 — Migration triggering: run `alembic upgrade head`
-      automatically on master startup, or require an explicit
-      `scripts/db_migrate.sh` step before deploy?** Auto-upgrade is
-      friendlier for self-hosted operators; explicit is safer for
-      the (hypothetical future) multi-replica case. Recommendation:
-      auto-upgrade in the master lifespan, gated by
-      `DB_AUTO_MIGRATE=true` (default on, off-switchable). — Owner:
-      sre.
-- [ ] **OQ5 — CI matrix cadence: run the Postgres leg on every PR,
-      or only on `main` / nightly?** Every-PR catches dialect bugs
-      early but costs ~2–3 CI minutes per PR. Recommendation:
-      every-PR for the first two releases, revisit if cost hurts.
-      — Owner: sre.
-- [ ] **OQ6 — MySQL version floor.** 8.0.13 unlocks functional
-      indexes; 8.0.16 enforces CHECK. Recommendation: 8.0.16+ and
-      document it as a hard requirement, refuse to start otherwise.
-      — Owner: project-owner.
-- [ ] **OQ7 — Deploy UX for Postgres.** Options: (a) Postgres as a
-      sibling service in the singleton compose, (b) assume an
-      external managed DB with `DATABASE_URL` pointed at it,
-      (c) both, documented. Recommendation: (c) — ship the compose
-      service for self-hosted installs, document external-managed
-      as the "scale up" path. — Owner: sre.
-- [ ] **OQ8 — Secrets at rest.** ADR-0009 established "plaintext in
-      SQLite is acceptable for the single-user threat model." Moving
-      to a server-based DB means secrets may now cross a wire.
-      Confirm: do we require TLS to the DB (even on loopback), or do
-      we accept plaintext for the self-hosted local-DB case and
-      document TLS as required only for remote DB? — Owner:
-      project-owner.
-- [ ] **OQ9 — Snapshot CLI location and name.** Options:
-      `python -m src.master.db_cli snapshot ...` (recommended),
-      `scripts/db_snapshot.py`, or extending the existing
-      `src/master/cli.py`. — Owner: engineer.
-- [ ] **OQ10 — Import semantics: replace-only, or allow
-      append/merge?** Replace-only is simpler and matches the
-      "migrate to new provider" use case; append/merge opens the
-      door to data-loss foot-guns. Recommendation: replace-only in
-      v1, revisit on real demand. — Owner: project-owner.
-- [ ] **OQ11 — Pre-baseline fixups: how long do we keep them?**
-      Existing SQLite installs with the envelope backfill /
-      agents→staffs / event_actions_v2+v3 /
-      staffs_session_scope_none migrations partially applied need
-      the current `db.py` helpers to run once more before Alembic
-      takes over. Recommendation: ship them for exactly one release
-      cycle after phase 1 lands, then delete. — Owner:
-      project-owner.
-- [ ] **OQ12 — Snapshot forward/backward compatibility.** Can a
-      snapshot taken against schema version `N` be imported into a
-      master running schema version `N+1`? Recommendation: no —
-      versions must match exactly; cross-release migrations go
-      through "upgrade source first, then snapshot, then import."
-      This keeps the tool simple. — Owner: project-owner.
+- [ ] **OQ10 — Snapshot *import* semantics: replace-only, or
+      allow append/merge?** Clarified: this is about `scripts/db.sh
+      snapshot import`, not export.
+      - **Replace-only** means the import targets an empty DB. If
+        the target DB is empty (fresh schema, zero rows in every
+        user-data table), the import proceeds. Otherwise it either
+        refuses (default) or, with `--yes`, truncates every target
+        table and reloads from the snapshot. Result: an exact
+        copy of the snapshot. No data from the target is
+        preserved.
+      - **Merge** means the import loads rows into a target DB
+        that already has data. Primary-key collisions have to be
+        resolved somehow — snapshot wins, target wins, or error
+        — and foreign keys can point at rows that only exist on
+        one side. Merge is a much bigger surface and introduces
+        silent-data-loss foot-guns.
+      - Recommendation: **replace-only** in v1 (default refuses on
+        non-empty target; `--yes` truncates and reloads).
+        Revisit when a real demand for merge semantics shows up.
+        Owner: project-owner. Awaiting confirmation of the
+        recommendation.
 
 ## Implementation Plan
 
 Milestones map 1:1 to the phases above. Each phase is a separate PR
 (or small series) and ends with a release:
 
-- *M0 (Phase 0):* Groundwork PR — SQLAlchemy/Alembic in, baseline
-  revision, shim in place, all tests green on SQLite. No
-  user-visible change.
-- *M1 (Phase 1):* Postgres first-class — call-site conversion,
-  Alembic migrations replacing `_MIGRATIONS`, snapshot CLI,
-  Postgres compose overlay, runbook, CI matrix expansion. Release
-  as the first version supporting a non-SQLite backend.
-- *M2 (Phase 2):* MySQL support — dialect-specific index handling,
-  MySQL compose overlay, CI leg, docs.
-- *M3 (Phase 3, optional):* Cleanup — remove pre-baseline fixups
-  and the `get_connection` shim once call sites are off raw
-  `text()` SQL.
+- *M0 (Phase 0):* Groundwork PR — SQLAlchemy/Alembic in, qmark →
+  named conversion, direct `sqlite3.connect()` funnelled, baseline
+  revision using `op.create_table()`, `scripts/db.sh` scaffold,
+  shim in place, all tests green on SQLite. No user-visible
+  change.
+- *M1 (Phase 1):* Postgres default — call-site conversion to
+  dialect helpers, Alembic migrations replacing `_MIGRATIONS`,
+  snapshot CLI with sequence reset, Postgres compose overlay with
+  the `db-bundled` profile, SQLite-upgrade safety-net, runbook, CI
+  matrix expansion to all three dialects per PR. Release as the
+  first version where Postgres is the default.
+- *M2 (Phase 2):* MySQL hardening — dialect-specific index
+  handling, VARCHAR(36) widths, MySQL compose overlay, CI leg
+  stable, docs. MySQL remains CI-only (no UAT).
+- *M3 (Phase 3, optional):* Cleanup — remove `_prebaseline.py` and
+  the `get_connection` shim once call sites are off raw `text()`
+  SQL.
