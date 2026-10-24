@@ -610,10 +610,16 @@ def _migrate_staffs_session_scope_none(conn: sqlite3.Connection) -> None:
                           CHECK (session_scope IN ('topic', 'workspace', 'global', 'none')),
             is_default    INTEGER NOT NULL DEFAULT 0,
             extra_flags   TEXT,
+            agent_config  TEXT,
             created_at    TEXT NOT NULL,
             updated_at    TEXT NOT NULL
         );
-        INSERT INTO staffs_new SELECT * FROM staffs;
+        INSERT INTO staffs_new
+            (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,
+             session_scope, is_default, extra_flags, agent_config, created_at, updated_at)
+        SELECT id, scope_type, scope_id, name, adapter, model, system_prompt, agent,
+               session_scope, is_default, extra_flags, agent_config, created_at, updated_at
+        FROM staffs;
         DROP TABLE staffs;
         ALTER TABLE staffs_new RENAME TO staffs;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_staffs_scope_name
