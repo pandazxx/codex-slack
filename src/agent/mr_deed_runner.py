@@ -23,6 +23,9 @@ LOGGER = logging.getLogger(__name__)
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config" / "mr-deed"
 SESSIONS_DIR = Path("/workspace/sessions/mr-deed")
 DEFAULT_CONFIG_NAME = "default"
+# Template variable carrying the staff system prompt. Passing the prompt as a
+# variable (not spliced into the template) means jinja never interprets it.
+SYSTEM_PROMPT_VAR = "codex_slack_system_prompt"
 
 # on_event kinds forwarded to the UI; system/user are the prompt itself.
 _PUBLISHED_KINDS = {"assistant", "action", "observation", "format_error", "exit"}
@@ -84,10 +87,8 @@ def apply_overrides(config: dict, model: str | None, system_prompt: str | None) 
         config.setdefault("model", {})["model_name"] = model
     if system_prompt:
         agent = config.setdefault("agent", {})
-        # Staff prompts are plain text; keep jinja from interpreting them.
         agent["system_template"] = (
-            agent.get("system_template", "").rstrip("\n")
-            + "\n\n{% raw %}" + system_prompt + "{% endraw %}\n"
+            agent.get("system_template", "").rstrip("\n") + "\n\n{{ " + SYSTEM_PROMPT_VAR + " }}\n"
         )
     return config
 
@@ -224,7 +225,8 @@ def run_turn(
 
     _register(reply_message_id, agent)
     try:
-        result = agent.continue_run(text) if resume else agent.run(text)
+        template_vars = {SYSTEM_PROMPT_VAR: system_prompt or ""}
+        result = agent.continue_run(text, **template_vars) if resume else agent.run(text, **template_vars)
     except Exception as exc:
         LOGGER.exception("agent.mr_deed_run_failed message_id=%s", reply_message_id)
         return _exception_reply(exc), session_id if persisted else None, transcript()

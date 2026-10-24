@@ -30,7 +30,7 @@ agent:
   continue_template: |
     {{task}}
   step_limit: 0
-  cost_limit: 3.
+  cost_limit: 3.0
 environment:
   timeout: 300
   env:
