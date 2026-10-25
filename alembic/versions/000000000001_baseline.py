@@ -206,7 +206,7 @@ def upgrade() -> None:
         sa.Column("seq", sa.Integer(), nullable=False),
         sa.Column("event", sa.Text(), nullable=False),
         sa.Column("agent_name", sa.Text()),
-        sa.Column("created_at", sa.Numeric(), nullable=False,
+        sa.Column("created_at", sa.Float(), nullable=False,
                   server_default=sa.text("(unixepoch('now','subsec'))")),
     )
     op.create_index("idx_chunks_message", "chunks", ["message_id", "seq"])
@@ -339,7 +339,7 @@ def upgrade() -> None:
             ),
             nullable=False,
         ),
-        sa.Column("failure_score", sa.Numeric(), nullable=False, server_default="0.0"),
+        sa.Column("failure_score", sa.Float(), nullable=False, server_default="0.0"),
         sa.Column("result_summary", sa.Text()),
         sa.Column("result_artifacts", sa.Text()),
         sa.Column("result_status", sa.Text()),
