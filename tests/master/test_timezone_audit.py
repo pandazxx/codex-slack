@@ -141,6 +141,7 @@ def test_topic_created_at_is_utc(client):
     assert _is_utc_iso(topic["created_at"]), f"created_at not UTC ISO-8601: {topic['created_at']!r}"
 
 
+@pytest.mark.sqlite_only
 def test_message_created_at_is_utc(tmp_path, monkeypatch):
     """Messages stored via SQLite must have UTC ISO-8601 created_at."""
     import sqlite3 as _sqlite3
