@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -20,7 +21,7 @@ from ..logging_utils import LocalTimeFormatter
 from ..version import get_app_version
 from .agent_runner import build_spawn_kwargs, container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
-from .db import get_connection, init_db, resolve_db_url, schema_info, startup_db
+from .db import get_connection, schema_info, startup_db
 from .db._dialect import upsert as _upsert
 from .runtime_config import load_global_env
 from .attachments import router as attachments_router
@@ -501,7 +502,18 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
         settings.agent_base_image,
         settings.container_runtime,
     )
-    db_path = resolve_db_url()
+    # Resolve the DB URL:
+    #   1. DATABASE_URL — explicit operator setting (Postgres, external SQLite, etc.)
+    #   2. MASTER_DATA_DIR / master_data.db — legacy SQLite path for dev/test compat.
+    # resolve_db_url() is the Postgres-default resolver used by alembic and the
+    # snapshot CLI; here we need the backward-compatible MASTER_DATA_DIR fallback
+    # so that existing tests and dev environments that only set MASTER_DATA_DIR
+    # continue to work without requiring POSTGRES_PASSWORD.
+    _db_url_from_env = os.environ.get("DATABASE_URL", "").strip()
+    if _db_url_from_env:
+        db_path = _db_url_from_env
+    else:
+        db_path = f"sqlite+pysqlite:///{_db_path(settings.data_dir)}"
     startup_db(db_path)
     LOGGER.info("master.db_init url=%s", db_path)
     hub = ConnectionHub()

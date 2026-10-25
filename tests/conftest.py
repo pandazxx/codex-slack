@@ -14,15 +14,21 @@ if str(ROOT) not in sys.path:
 
 @pytest.fixture(autouse=True, scope="session")
 def _set_test_database_url(tmp_path_factory):
-    """Set DATABASE_URL to a temp SQLite file for the entire test session.
+    """Optionally configure DATABASE_URL for the test session.
 
-    This keeps the full test suite running on SQLite by default.  Override
-    by setting TEST_DATABASE_URL before running pytest — all tests will then
-    use that URL instead (e.g. TEST_DATABASE_URL=postgresql+psycopg://... for
-    a Postgres run).
+    Behaviour:
+    - If DATABASE_URL is already set in the environment (e.g. set before
+      running pytest), leave it unchanged.  This allows CI to run the suite
+      against Postgres by setting DATABASE_URL externally.
+    - If TEST_DATABASE_URL is set, use it as DATABASE_URL for the session.
+      This lets you run the full suite against a specific backend without
+      polluting the real DATABASE_URL variable.
+    - Otherwise, leave DATABASE_URL unset so that each integration test's
+      fixture (which sets MASTER_DATA_DIR via monkeypatch) determines its
+      own per-test SQLite database path, preserving test isolation.
 
-    Individual tests that monkeypatch DATABASE_URL are unaffected because
-    monkeypatch operates at test scope and restores the value on teardown.
+    The db-unit tests in tests/master/db/ create explicit per-test URLs or
+    paths via their own fixtures and do not rely on a session DATABASE_URL.
     """
     if "DATABASE_URL" in os.environ:
         yield
@@ -35,10 +41,8 @@ def _set_test_database_url(tmp_path_factory):
         del os.environ["DATABASE_URL"]
         return
 
-    db = tmp_path_factory.mktemp("session_db") / "test_session.db"
-    os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{db}"
+    # No DATABASE_URL override — let each test manage its own.
     yield
-    del os.environ["DATABASE_URL"]
 
 
 @pytest.fixture(autouse=True)
