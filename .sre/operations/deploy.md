@@ -57,7 +57,14 @@ dcs() { DOCKER_HOST="$STAGING_DOCKER_HOST" COMPOSE_PROFILES=db-bundled MASTER_RU
 DOCKER_HOST="$STAGING_DOCKER_HOST" docker run --rm -v codex-slack_master_data:/data:ro alpine tar czf - -C /data . > "master_data-pre-pg-$(date +%Y%m%d%H%M).tgz"
 ls -lh master_data-pre-pg-*.tgz && tar tzf master_data-pre-pg-*.tgz | grep master_data.db
 
-# 2. Configure .env (first confirm this prints nothing: grep -nE '^(COMPOSE_PROFILES|POSTGRES_PASSWORD|DATABASE_URL)=' .env)
+# 2. Configure .env — abort if any of these keys already exist (duplicate keys cause
+#    the first occurrence to win, silently ignoring the new value).
+existing=$(grep -cE '^(COMPOSE_PROFILES|POSTGRES_PASSWORD|DATABASE_URL)=' .env 2>/dev/null || true)
+if [ "$existing" -gt 0 ]; then
+  echo "ERROR: .env already contains COMPOSE_PROFILES, POSTGRES_PASSWORD, or DATABASE_URL."
+  echo "Edit those entries in place instead of appending.  Aborting."
+  exit 1
+fi
 PGPW="$(openssl rand -hex 24)"
 printf '\nCOMPOSE_PROFILES=db-bundled\nPOSTGRES_PASSWORD=%s\nDATABASE_URL=%s\n' "$PGPW" "$SQLITE_URL" >> .env
 
