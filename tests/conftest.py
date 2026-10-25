@@ -12,23 +12,25 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _set_test_database_url(tmp_path_factory):
-    """Optionally configure DATABASE_URL for the test session.
+@pytest.fixture(autouse=True)
+def _set_test_database_url(monkeypatch, tmp_path):
+    """Set DATABASE_URL for each test so the app and db fixtures always have a URL.
 
-    Behaviour:
-    - If DATABASE_URL is already set in the environment (e.g. set before
-      running pytest), leave it unchanged.  This allows CI to run the suite
-      against Postgres by setting DATABASE_URL externally.
-    - If TEST_DATABASE_URL is set, use it as DATABASE_URL for the session.
-      This lets you run the full suite against a specific backend without
-      polluting the real DATABASE_URL variable.
-    - Otherwise, leave DATABASE_URL unset so that each integration test's
-      fixture (which sets MASTER_DATA_DIR via monkeypatch) determines its
-      own per-test SQLite database path, preserving test isolation.
+    Resolution order (mirrors the production lifespan in src/master/main.py):
 
-    The db-unit tests in tests/master/db/ create explicit per-test URLs or
-    paths via their own fixtures and do not rely on a session DATABASE_URL.
+    1. If DATABASE_URL is already set in the environment (e.g. set before
+       running pytest, as in CI against Postgres), leave it unchanged.
+    2. If TEST_DATABASE_URL is set, use it as DATABASE_URL.  This lets the
+       caller run the full suite against a specific backend without polluting
+       the real DATABASE_URL variable.
+    3. Otherwise, set DATABASE_URL to a per-test SQLite file inside tmp_path.
+       This gives every test full isolation without requiring POSTGRES_PASSWORD
+       or a live Postgres instance.
+
+    Tests that need DATABASE_URL unset (e.g. tests/master/db/test_engine.py
+    and test_regression.py that probe resolve_db_url/engine default behaviour)
+    use monkeypatch.delenv("DATABASE_URL", raising=False) inside the test body,
+    which takes effect for that test only and is restored automatically.
     """
     if "DATABASE_URL" in os.environ:
         yield
@@ -36,12 +38,12 @@ def _set_test_database_url(tmp_path_factory):
 
     override = os.environ.get("TEST_DATABASE_URL", "")
     if override:
-        os.environ["DATABASE_URL"] = override
+        monkeypatch.setenv("DATABASE_URL", override)
         yield
-        del os.environ["DATABASE_URL"]
         return
 
-    # No DATABASE_URL override — let each test manage its own.
+    url = f"sqlite+pysqlite:///{tmp_path}/master_data.db"
+    monkeypatch.setenv("DATABASE_URL", url)
     yield
 
 

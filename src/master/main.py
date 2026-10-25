@@ -21,7 +21,7 @@ from ..logging_utils import LocalTimeFormatter
 from ..version import get_app_version
 from .agent_runner import build_spawn_kwargs, container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
-from .db import get_connection, schema_info, startup_db
+from .db import get_connection, resolve_db_url, schema_info, sqlite_safety_check, startup_db
 from .db._dialect import upsert as _upsert
 from .runtime_config import load_global_env
 from .attachments import router as attachments_router
@@ -59,6 +59,12 @@ def configure_logging() -> None:
 
 
 def _db_path(data_dir: str) -> str:
+    """Return the canonical SQLite DB file path for a given data directory.
+
+    Kept as a public export for callers (e.g. test helpers) that need to
+    compute the legacy SQLite path from MASTER_DATA_DIR.  The production
+    lifespan uses resolve_db_url() instead — this function is a utility only.
+    """
     return str(Path(data_dir) / "master_data.db")
 
 
@@ -502,18 +508,27 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
         settings.agent_base_image,
         settings.container_runtime,
     )
-    # Resolve the DB URL:
-    #   1. DATABASE_URL — explicit operator setting (Postgres, external SQLite, etc.)
-    #   2. MASTER_DATA_DIR / master_data.db — legacy SQLite path for dev/test compat.
-    # resolve_db_url() is the Postgres-default resolver used by alembic and the
-    # snapshot CLI; here we need the backward-compatible MASTER_DATA_DIR fallback
-    # so that existing tests and dev environments that only set MASTER_DATA_DIR
-    # continue to work without requiring POSTGRES_PASSWORD.
-    _db_url_from_env = os.environ.get("DATABASE_URL", "").strip()
-    if _db_url_from_env:
-        db_path = _db_url_from_env
-    else:
-        db_path = f"sqlite+pysqlite:///{_db_path(settings.data_dir)}"
+    # Resolve the DB URL per design §7 and §11:
+    #   1. sqlite_safety_check — refuses to start when an existing SQLite file
+    #      would be silently abandoned if the default switches to Postgres.
+    #   2. resolve_db_url() — Postgres default; uses POSTGRES_PASSWORD to build
+    #      the bundled URL, or DATABASE_URL when set explicitly.  Raises
+    #      ValueError if neither is configured.
+    #   3. startup_db(url) — runs the Alembic state machine.
+    import sys as _sys
+
+    sqlite_safety_check(settings.data_dir)
+    try:
+        db_path = resolve_db_url()
+    except ValueError as exc:
+        print(
+            f"ERROR: cannot start master — {exc}\n"
+            "Set DATABASE_URL to a SQLAlchemy URL, or set POSTGRES_PASSWORD\n"
+            "to use the bundled Postgres instance.",
+            file=_sys.stderr,
+            flush=True,
+        )
+        _sys.exit(1)
     startup_db(db_path)
     LOGGER.info("master.db_init url=%s", db_path)
     hub = ConnectionHub()

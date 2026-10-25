@@ -1,7 +1,11 @@
 """Regression tests for M0 code-review findings.
 
 C-1: File-based SQLite must use NullPool — no shared DBAPI connection across threads.
-M-1: engine() and alembic/env.py must resolve to the same file as main.py.
+M-1: When DATABASE_URL points at a SQLite file named master_data.db, both engine()
+     and resolve_db_url() agree on that URL.  (In M1 MASTER_DATA_DIR alone no longer
+     determines the DB URL — resolve_db_url() defaults to the bundled Postgres URL.
+     master_data.db remains the canonical name for the safety-net check and for any
+     operator who explicitly opts back in to SQLite.)
 M-2: _ConnectionShim.__exit__ must close the connection.
 
 Tests are skipped when the M0 db/ package (engine function) is not available.
@@ -198,19 +202,27 @@ class TestConnectionClosedAfterWithBlock:
 
 
 # ---------------------------------------------------------------------------
-# M-1: engine() and alembic env resolve to master_data.db (same as main.py)
+# M-1: master_data.db is the canonical filename for the SQLite opt-in path
+#
+# In M1, MASTER_DATA_DIR alone no longer selects the DB URL.  When an
+# operator explicitly opts back in to SQLite by setting:
+#
+#   DATABASE_URL=sqlite+pysqlite:////data/master_data.db
+#
+# both engine() and resolve_db_url() must agree on that URL, and the filename
+# must be master_data.db (matching the safety-net check in §11).
 # ---------------------------------------------------------------------------
 
 class TestMasterDataDbFilename:
-    """engine() and alembic/env.py must use master_data.db, matching main.py."""
+    """engine() and resolve_db_url() agree when DATABASE_URL uses master_data.db."""
 
     def test_engine_resolves_master_data_db(self, monkeypatch, tmp_path):
-        """engine() via MASTER_DATA_DIR resolves to master_data.db."""
+        """engine() built from a master_data.db DATABASE_URL points at that file."""
         import importlib
         import src.master.db as db_mod
 
-        monkeypatch.delenv("DATABASE_URL", raising=False)
-        monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+        db_url = f"sqlite+pysqlite:///{tmp_path / 'master_data.db'}"
+        monkeypatch.setenv("DATABASE_URL", db_url)
         importlib.reload(db_mod)
 
         eng = db_mod.engine()
@@ -223,27 +235,43 @@ class TestMasterDataDbFilename:
         )
         eng.dispose()
 
-    def test_resolve_db_url_matches_main_py_filename(self, monkeypatch, tmp_path):
-        """resolve_db_url() returns a path ending in master_data.db."""
+    def test_resolve_db_url_returns_explicit_database_url(self, monkeypatch, tmp_path):
+        """resolve_db_url() returns DATABASE_URL as-is when it is set explicitly."""
+        import importlib
+        import src.master.db as db_mod
+
+        db_url = f"sqlite+pysqlite:///{tmp_path / 'master_data.db'}"
+        monkeypatch.setenv("DATABASE_URL", db_url)
+        importlib.reload(db_mod)
+
+        url = db_mod.resolve_db_url()
+        assert url == db_url, (
+            f"resolve_db_url() returned {url!r}; expected {db_url!r}"
+        )
+
+    def test_resolve_db_url_raises_without_config(self, monkeypatch, tmp_path):
+        """resolve_db_url() raises ValueError when neither DATABASE_URL nor POSTGRES_PASSWORD is set.
+
+        This is the M1 contract: no silent SQLite fallback from MASTER_DATA_DIR.
+        The operator must set DATABASE_URL or POSTGRES_PASSWORD explicitly.
+        """
         import importlib
         import src.master.db as db_mod
 
         monkeypatch.delenv("DATABASE_URL", raising=False)
-        monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+        monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
         importlib.reload(db_mod)
 
-        url = db_mod.resolve_db_url()
-        assert url.endswith("master_data.db"), (
-            f"resolve_db_url() returned {url!r}; expected path ending in master_data.db"
-        )
+        with pytest.raises(ValueError, match="POSTGRES_PASSWORD"):
+            db_mod.resolve_db_url()
 
     def test_alembic_env_resolve_matches_engine(self, monkeypatch, tmp_path):
         """alembic/env.py resolve_db_url and engine() point at the same file."""
         import importlib
         import src.master.db as db_mod
 
-        monkeypatch.delenv("DATABASE_URL", raising=False)
-        monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+        db_url = f"sqlite+pysqlite:///{tmp_path / 'master_data.db'}"
+        monkeypatch.setenv("DATABASE_URL", db_url)
         importlib.reload(db_mod)
 
         # Both paths now call the same resolve_db_url from src.master.db.

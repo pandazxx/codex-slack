@@ -514,3 +514,102 @@ class TestAheadRefuses:
         assert exit_code != 0, (
             f"Expected non-zero for ahead Postgres DB, got {exit_code}:\n{output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TC-18: Lifespan integration — main.py lifespan follows design §7 and §11
+# ---------------------------------------------------------------------------
+
+class TestLifespanResolution:
+    """The FastAPI lifespan in main.py calls sqlite_safety_check, resolve_db_url,
+    and startup_db in the correct order and exits cleanly when DATABASE_URL is set.
+
+    These tests exercise the lifespan as a black box via TestClient so they catch
+    any wiring errors between the three steps that unit tests of each function alone
+    cannot catch.
+    """
+
+    def test_lifespan_uses_database_url_when_set(self, tmp_path, monkeypatch):
+        """When DATABASE_URL is set the lifespan starts without error."""
+        from fastapi.testclient import TestClient
+        from src.master.main import app
+
+        db_url = f"sqlite+pysqlite:///{tmp_path}/master_data.db"
+        monkeypatch.setenv("DATABASE_URL", db_url)
+        monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
+
+        with TestClient(app) as client:
+            r = client.get("/health")
+        assert r.status_code == 200
+
+    def test_lifespan_refuses_when_no_url_and_no_password(self, tmp_path, monkeypatch):
+        """When neither DATABASE_URL nor POSTGRES_PASSWORD is set the lifespan exits non-zero."""
+        import subprocess, sys
+        from pathlib import Path
+
+        env = {k: v for k, v in __import__("os").environ.items()}
+        env.pop("DATABASE_URL", None)
+        env.pop("POSTGRES_PASSWORD", None)
+        env["MASTER_DATA_DIR"] = str(tmp_path)
+        env["CONTAINER_RUNTIME"] = "docker"
+
+        script = (
+            "import sys; "
+            f"sys.path.insert(0, str(__import__('pathlib').Path({str(REPO_ROOT)!r}).resolve())); "
+            "from src.master.main import app; "
+            "from fastapi.testclient import TestClient; "
+            "TestClient(app).__enter__()"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode != 0, (
+            f"Expected non-zero exit when no DATABASE_URL or POSTGRES_PASSWORD, "
+            f"got exit={result.returncode}:\n{result.stdout}\n{result.stderr}"
+        )
+
+    def test_lifespan_safety_check_blocks_on_existing_sqlite(self, tmp_path, monkeypatch):
+        """When DATABASE_URL is unset and an existing SQLite file is present the lifespan exits."""
+        import subprocess, sys, sqlite3 as _sqlite3
+
+        # Create a SQLite file that looks like an existing master DB
+        db_path = tmp_path / "master_data.db"
+        conn = _sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO workspaces VALUES ('ws-1', 'legacy')")
+        conn.commit()
+        conn.close()
+
+        env = {k: v for k, v in __import__("os").environ.items()}
+        env.pop("DATABASE_URL", None)
+        env.pop("POSTGRES_PASSWORD", None)
+        env["MASTER_DATA_DIR"] = str(tmp_path)
+        env["CONTAINER_RUNTIME"] = "docker"
+
+        script = (
+            "import sys; "
+            f"sys.path.insert(0, str(__import__('pathlib').Path({str(REPO_ROOT)!r}).resolve())); "
+            "from src.master.main import app; "
+            "from fastapi.testclient import TestClient; "
+            "TestClient(app).__enter__()"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode != 0, (
+            f"Expected non-zero exit when legacy SQLite file present and DATABASE_URL unset, "
+            f"got exit={result.returncode}:\n{result.stdout}\n{result.stderr}"
+        )
+        combined = result.stdout + result.stderr
+        assert "master_data.db" in combined, (
+            f"Expected 'master_data.db' in exit message, got:\n{combined}"
+        )

@@ -16,7 +16,12 @@ from src.master.db import resolve_db_url  # noqa: E402
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False prevents alembic's fileConfig call from
+    # disabling loggers that were created before alembic runs (e.g. during
+    # application startup).  The Python default of True would silence every
+    # logger not listed in alembic.ini for the rest of the process lifetime,
+    # breaking caplog-based tests and production log capture.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def _resolve_alembic_url() -> str:
