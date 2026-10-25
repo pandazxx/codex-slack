@@ -674,3 +674,15 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 - `.github/workflows/ci.yml`: added `timeout-minutes: 25` to the `test` and `test-mysql` jobs so a future hang kills the job rather than burning the 6-hour runner limit.
 
 **Prevention:** Always use `with engine.connect() as conn:` (or `engine.begin()`). Never call `engine.connect()` without a context manager or explicit `.close()`. `engine.dispose()` is not a substitute — it does not close checked-out connections. Test code that runs destructive operations (TRUNCATE, DROP, bulk DELETE) in a subprocess must ensure the in-process connections from the previous step are closed before the subprocess is launched.
+
+---
+
+## 2026-10-25 — M1 code review: `_fix_insert_bool_literals` shim removed as unreachable dead code
+
+**Summary:** Code review of PR #272 (M1, #268) found that `_fix_insert_bool_literals`, `_extract_insert_bool_positions`, and the bool-coercion branch inside `_qmark_to_named` in `src/master/db/__init__.py` were unreachable in production: every INSERT and UPDATE touching boolean columns (`messages.silent`, `staffs.is_default`, `event_actions.enabled/structured_output/silent`) already uses `text()` with named `:param` bindings and explicit Python `bool()` values. The old-style qmark path that called the shim was never exercised. The shim also had a latent bug: multi-row VALUES clauses would fail to rewrite correctly.
+
+**Root cause:** The shim was introduced in commit `4679a32` to handle boolean coercion on Postgres for call sites that had not yet been converted to `text()`. By the time that commit landed, all boolean-column call sites had already been converted. The shim therefore never ran.
+
+**Fix applied:** Deleted `_BOOLEAN_COLS`, `_fix_insert_bool_literals`, `_extract_insert_bool_positions`, and the `coerce_bool_positions` parameter from `_qmark_to_named`. Simplified `_ConnectionShim.execute`'s old-style path accordingly. Added a static analysis guard test (`test_no_bare_bool_literals_in_boolean_columns`) that scans `src/` for INSERT/UPDATE string literals assigning bare `0` or `1` to known boolean columns, so the class of bug cannot reappear silently.
+
+**Prevention:** When adding a compatibility shim, add a test that verifies the shim is actually exercised. When all call sites for a feature are converted, delete the shim immediately rather than leaving it in place. Static analysis guards (AST or regex scans) in the test suite are more reliable than manual code review for catching literal-value mistakes in SQL strings.

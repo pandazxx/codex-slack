@@ -239,135 +239,9 @@ class _ResultProxy:
 # Param-style conversion
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Columns that are BOOLEAN in the schema.  On Postgres, integer 0/1 must be
-# coerced to bool before binding, because psycopg3 sends Python int as int4
-# and Postgres has no implicit int4→boolean cast.  SQLite accepts 0/1 natively.
-_BOOLEAN_COLS: dict[str, frozenset[str]] = {
-    "messages":      frozenset({"silent"}),
-    "staffs":        frozenset({"is_default"}),
-    "event_actions": frozenset({"enabled", "structured_output", "silent"}),
-}
-
-
-def _fix_insert_bool_literals(sql: str) -> str:
-    """Replace literal 0/1 in VALUES clause at BOOLEAN column positions with false/true.
-
-    Handles INSERT statements where boolean values are hardcoded as integer literals
-    in the SQL text rather than as bound parameters.  PostgreSQL rejects integer
-    literals for BOOLEAN columns (no implicit int4→boolean cast); SQLite accepts
-    them natively, so this function is only called for non-SQLite dialects.
-
-    Parses the column list to find BOOLEAN column positions, then walks the VALUES
-    token by token and replaces bare '0' with 'false' and bare '1' with 'true' at
-    those positions.  Quoted strings and NULL are left untouched.
-    """
-    import re as _re
-
-    m = _re.match(
-        r"(?i)\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]+)\)",
-        sql,
-    )
-    if not m:
-        return sql
-
-    table = m.group(1).lower()
-    bool_cols = _BOOLEAN_COLS.get(table)
-    if not bool_cols:
-        return sql
-
-    col_names = [c.strip().strip('"').lower() for c in m.group(2).split(",")]
-    bool_col_positions = frozenset(i for i, col in enumerate(col_names) if col in bool_cols)
-    if not bool_col_positions:
-        return sql
-
-    vm = _re.search(r"(?i)\bVALUES\s*\(", sql)
-    if not vm:
-        return sql
-
-    body_start = vm.end()  # index after opening '('
-
-    # Tokenize the VALUES list: record (start, end) for each comma-separated item
-    # at depth 1, stopping when the matching closing ')' is found.
-    spans: list[tuple[int, int]] = []
-    depth = 1
-    tok_start = body_start
-    i = body_start
-
-    while i < len(sql):
-        c = sql[i]
-        if c == "'":
-            i += 1
-            while i < len(sql):
-                if sql[i] == "'":
-                    if i + 1 < len(sql) and sql[i + 1] == "'":
-                        i += 2
-                    else:
-                        i += 1
-                        break
-                else:
-                    i += 1
-        elif c == "(":
-            depth += 1
-            i += 1
-        elif c == ")":
-            depth -= 1
-            if depth == 0:
-                spans.append((tok_start, i))
-                break
-            i += 1
-        elif c == "," and depth == 1:
-            spans.append((tok_start, i))
-            tok_start = i + 1
-            i += 1
-        else:
-            i += 1
-
-    if not spans:
-        return sql
-
-    chars = list(sql)
-    for pos, (start, end) in enumerate(spans):
-        if pos not in bool_col_positions:
-            continue
-        token = sql[start:end]
-        stripped = token.strip()
-        if stripped not in ("0", "1"):
-            continue
-        replacement = "false" if stripped == "0" else "true"
-        # Find the exact character position of the digit within this token span.
-        leading = len(token) - len(token.lstrip())
-        digit_pos = start + leading
-        chars[digit_pos : digit_pos + 1] = list(replacement)
-
-    return "".join(chars)
-
-
-def _extract_insert_bool_positions(sql: str) -> frozenset[int]:
-    """Return positional indices (0-based) of qmark params that map to BOOLEAN columns.
-
-    Only handles INSERT INTO <table> (<col1>, <col2>, ...) VALUES (?...) syntax.
-    Returns an empty frozenset for any other statement or on parse failure.
-    """
-    import re
-    m = re.match(
-        r"(?i)\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]+)\)",
-        sql,
-    )
-    if not m:
-        return frozenset()
-    table = m.group(1).lower()
-    bool_cols = _BOOLEAN_COLS.get(table)
-    if not bool_cols:
-        return frozenset()
-    col_names = [c.strip().strip('"').lower() for c in m.group(2).split(",")]
-    return frozenset(i for i, col in enumerate(col_names) if col in bool_cols)
-
-
 def _qmark_to_named(
     sql: str,
     params: tuple | list,
-    *,
-    coerce_bool_positions: frozenset[int] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Convert qmark ? placeholders to :_p0, :_p1, … named params for SQLAlchemy.
 
@@ -375,10 +249,6 @@ def _qmark_to_named(
     literals is left untouched.  Standard SQL string literal rules apply:
       - A single-quoted literal begins with ' and ends with the next '
       - Two consecutive '' inside a literal is an escaped single quote
-
-    When coerce_bool_positions is provided, integer values at those positions
-    are cast to bool.  Used on Postgres where the BOOLEAN column type rejects
-    Python int (psycopg3 sends int as int4; Postgres has no implicit cast).
     """
     param_dict: dict[str, Any] = {}
     result: list[str] = []
@@ -403,15 +273,7 @@ def _qmark_to_named(
                         break
         elif ch == "?":
             name = f"_p{idx}"
-            value = params[idx]
-            if (
-                coerce_bool_positions
-                and idx in coerce_bool_positions
-                and isinstance(value, int)
-                and not isinstance(value, bool)
-            ):
-                value = bool(value)
-            param_dict[name] = value
+            param_dict[name] = params[idx]
             idx += 1
             result.append(f":{name}")
             i += 1
@@ -455,18 +317,8 @@ class _ConnectionShim:
             return _ResultProxy(result)
 
         # Old style: plain string, params may be tuple/list or None.
-        dialect_name = self._conn.dialect.name
-        if dialect_name != "sqlite":
-            sql = _fix_insert_bool_literals(sql)
         if params is not None and isinstance(params, (tuple, list)):
-            bool_positions = (
-                _extract_insert_bool_positions(sql)
-                if dialect_name != "sqlite"
-                else None
-            )
-            converted_sql, named_params = _qmark_to_named(
-                sql, params, coerce_bool_positions=bool_positions
-            )
+            converted_sql, named_params = _qmark_to_named(sql, params)
             sql_obj = sa_text(converted_sql)
         else:
             sql_obj = sa_text(sql)
@@ -642,26 +494,36 @@ def startup_db(url: str) -> None:
       Up-to-date (alembic_version == code head)
                                 → proceed — nothing to do.
 
-      Behind (alembic_version is a known but older revision)
+      Behind (alembic_version is a known ancestor revision)
                                 → sys.exit(1) with the §5 error message
                                   directing the operator to run
                                   `scripts/db.sh migrate`.
 
-      Ahead (alembic_version is an unknown future revision)
+      Ahead or unknown (alembic_version is not in the known revision graph)
                                 → sys.exit(1) pointing at a possible
                                   accidental downgrade.
+
+    Connection is retried with exponential backoff for up to
+    DB_CONNECT_TIMEOUT_SECONDS (default 60) before giving up.  This allows
+    the function to succeed even when the database service (e.g. the bundled
+    Postgres container) is still starting.
 
     This function must be called once at application startup before any
     request handling begins.  It does not modify the DB on up-to-date
     or refusal paths.
     """
     import sys
+    import time
     from pathlib import Path
     from alembic.config import Config
     from alembic.script import ScriptDirectory
     from alembic.runtime.migration import MigrationContext
     from alembic import command as alembic_command
     from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy.engine import make_url as _make_url
+    from sqlalchemy.exc import OperationalError as _SAOperationalError
+
+    safe_url = _make_url(url).render_as_string(hide_password=True)
 
     _repo_root = Path(__file__).parents[3]
     cfg = Config(str(_repo_root / "alembic.ini"))
@@ -670,20 +532,42 @@ def startup_db(url: str) -> None:
     script = ScriptDirectory.from_config(cfg)
     head = script.get_current_head()
 
-    eng = _make_engine(url)
-    try:
-        insp = sa_inspect(eng)
-        table_names = set(insp.get_table_names())
-        has_workspaces = "workspaces" in table_names
-        has_alembic_version = "alembic_version" in table_names
-        if has_alembic_version:
-            with eng.connect() as conn:
-                ctx = MigrationContext.configure(conn)
-                current_rev = ctx.get_current_revision()
-        else:
-            current_rev = None
-    finally:
-        eng.dispose()
+    connect_timeout = int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "60") or "60")
+    deadline = time.monotonic() + connect_timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        eng = None
+        try:
+            eng = _make_engine(url)
+            insp = sa_inspect(eng)
+            table_names = set(insp.get_table_names())
+            has_workspaces = "workspaces" in table_names
+            has_alembic_version = "alembic_version" in table_names
+            if has_alembic_version:
+                with eng.connect() as conn:
+                    ctx = MigrationContext.configure(conn)
+                    current_rev = ctx.get_current_revision()
+            else:
+                current_rev = None
+            eng.dispose()
+            break
+        except _SAOperationalError as exc:
+            if eng is not None:
+                eng.dispose()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                LOGGER.error(
+                    "startup_db: cannot connect to database %s after %ds: %s",
+                    safe_url, connect_timeout, exc,
+                )
+                raise
+            delay = min(2 ** (attempt - 1), remaining, 30)
+            LOGGER.warning(
+                "startup_db: connection attempt %d to %s failed (%s); retrying in %.1fs",
+                attempt, safe_url, exc, delay,
+            )
+            time.sleep(delay)
 
     # ── (1) Empty DB ──────────────────────────────────────────────────────────
     if current_rev is None and not has_workspaces:
@@ -698,9 +582,8 @@ def startup_db(url: str) -> None:
         )
         if "sqlite" not in url:
             raise RuntimeError(
-                f"Pre-baseline state is only supported for SQLite databases; got {url!r}"
+                f"Pre-baseline state is only supported for SQLite databases; got {safe_url!r}"
             )
-        from sqlalchemy.engine import make_url as _make_url
         db_file_path = str(_make_url(url).database)
         init_db_sqlite(db_file_path)
         _with_database_url(url, lambda: alembic_command.stamp(cfg, "000000000001"))
@@ -713,14 +596,16 @@ def startup_db(url: str) -> None:
 
     # ── (4) Behind or ahead ───────────────────────────────────────────────────
     #
-    # A revision is "behind" when it is either:
-    #   a) a known ancestor revision in the migration history, or
-    #   b) an unknown revision that is lexicographically earlier than HEAD
-    #      (e.g. a pre-history revision from a development branch).
-    # A revision is "ahead" when it is unknown AND lexicographically newer
-    # than HEAD (e.g. the DB was written by a future version of the software).
-    # Our migration file names use the format 000000000001, 000000000002, …
-    # so lexicographic ordering matches temporal ordering.
+    # Walk the Alembic revision graph to classify the current revision:
+    #   - In the graph → it is a known ancestor, so the DB is behind HEAD.
+    #   - Not in the graph → unknown revision.  We use lexicographic ordering
+    #     as a secondary heuristic: an unknown revision that sorts after HEAD
+    #     is almost certainly from a newer release (accidental downgrade),
+    #     while one that sorts before HEAD is likely from a development branch
+    #     or pre-history migration.  Our file names use 000000000001, 000000000002…
+    #     so lex order matches temporal order for revisions in the numbering
+    #     scheme.  Non-numeric IDs (e.g. short hashes from a feature branch)
+    #     always sort after digits in ASCII and are therefore treated as "ahead."
     known_revisions = {s.revision for s in script.walk_revisions()}
     is_ahead = current_rev not in known_revisions and current_rev > head
 

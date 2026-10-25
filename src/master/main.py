@@ -530,7 +530,8 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
         )
         _sys.exit(1)
     startup_db(db_path)
-    LOGGER.info("master.db_init url=%s", db_path)
+    from sqlalchemy.engine import make_url as _make_url
+    LOGGER.info("master.db_init url=%s", _make_url(db_path).render_as_string(hide_password=True))
     hub = ConnectionHub()
     loop = asyncio.get_running_loop()
     mqtt = build_mqtt_client(settings, hub=hub, loop=loop, db_path=db_path, app_state=app.state)
