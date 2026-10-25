@@ -24,20 +24,16 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
-def _resolve_alembic_url() -> str:
-    """Return the database URL using the same resolution as src/master/db.engine().
+def run_migrations_offline() -> None:
+    """Run migrations in offline mode (generate SQL script, no live connection).
 
-    Falls back to the alembic.ini placeholder URL so offline mode (SQL script
-    generation without a live connection) works without environment variables.
+    Offline mode does not require a live database — it only generates SQL.
+    Falls back to the alembic.ini placeholder URL so the caller can pass an
+    explicit URL via the --url flag without needing environment variables.
     """
-    return resolve_db_url(
+    url = resolve_db_url(
         alembic_ini_fallback=config.get_main_option("sqlalchemy.url", "")
     )
-
-
-def run_migrations_offline() -> None:
-    """Run migrations in offline mode (generate SQL script, no live connection)."""
-    url = _resolve_alembic_url()
     context.configure(
         url=url,
         target_metadata=None,
@@ -49,8 +45,14 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations against a live database connection."""
-    url = _resolve_alembic_url()
+    """Run migrations against a live database connection.
+
+    Requires DATABASE_URL or POSTGRES_PASSWORD to be set; raises ValueError
+    with a clear message if neither is available.  The alembic.ini placeholder
+    URL is NOT used here — it would silently create a stray master.db in the
+    repository root when the caller forgets to set environment variables.
+    """
+    url = resolve_db_url()
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = url
     connectable = engine_from_config(
