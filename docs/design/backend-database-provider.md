@@ -677,6 +677,26 @@ never writes to the source.
 
 **Phase 1 — Postgres default**
 
+*Carried from M0 code review (must be addressed before or alongside the
+Postgres switch):*
+
+- **M-3 (carried):** `scope_id IS :scope_id` in `staffs.py` is invalid on
+  Postgres (`IS` requires a literal, not a parameter; replace with
+  `scope_id = :scope_id OR (scope_id IS NULL AND :scope_id IS NULL)` or
+  use a dialect helper).
+- **m-2 (carried):** `schema_info()` in `src/master/db/__init__.py` uses
+  `PRAGMA table_info`, which is SQLite-only. Replace with
+  `sqlalchemy.inspect()` so it works on all dialects.
+- **m-3 (carried):** Driver packages (`psycopg[binary]`, `pymysql`) are
+  installed unconditionally. This is intentional (the design wants them
+  available); keep as-is but note in the dependency rationale.
+- **m-5 (carried):** Mixed commit ownership in `_prebaseline.py` helpers —
+  some call `conn.commit()` inside the helper, others leave commit to the
+  caller. Standardise to caller-commits before the first Alembic revision
+  that touches any of these tables.
+
+*Phase 1 primary work:*
+
 - Switch `DATABASE_URL` default to the bundled Postgres URL.
 - Convert all SQLite-only SQL at call sites to the dialect helpers
   (`upsert`, timestamp defaults in Python, PRAGMAs replaced by
