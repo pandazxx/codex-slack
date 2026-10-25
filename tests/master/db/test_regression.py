@@ -39,23 +39,34 @@ class TestNullPoolForFileSqlite:
         """Two threads opening connections simultaneously get different DBAPI objects."""
         import importlib
         import src.master.db as db_mod
+
+        # Reset cache so a prior test's engine does not bleed in.
+        db_mod._reset_engine_cache()
         importlib.reload(db_mod)
+        db_mod._reset_engine_cache()
 
         db_path = str(tmp_path / "concurrent.db")
         db_mod.init_db(db_path)
 
-        dbapi_ids: list[int] = []
+        dbapi_objects: list = []
         errors: list[Exception] = []
-        barrier = threading.Barrier(2)
+        # Barrier 1: both threads open their connection at the same instant so
+        # NullPool must allocate two distinct OS connections.
+        barrier_open = threading.Barrier(2)
+        # Barrier 2: both threads hold their connection alive until both have
+        # recorded the DBAPI object reference.  This prevents CPython from
+        # freeing object A before thread B allocates, which would let B reuse
+        # A's memory address and make id() comparisons meaningless.
+        barrier_hold = threading.Barrier(2)
 
         def _open_and_record():
             try:
-                barrier.wait()  # both threads acquire a connection at the same time
+                barrier_open.wait()
                 conn = db_mod.get_connection(db_path)
                 try:
-                    # Access the underlying DBAPI connection identity.
                     dbapi_conn = conn._conn.connection.dbapi_connection
-                    dbapi_ids.append(id(dbapi_conn))
+                    dbapi_objects.append(dbapi_conn)  # keep reference alive
+                    barrier_hold.wait()   # both objects are now live simultaneously
                 finally:
                     conn.close()
             except Exception as exc:
@@ -69,8 +80,8 @@ class TestNullPoolForFileSqlite:
         t2.join()
 
         assert not errors, f"Thread errors: {errors}"
-        assert len(dbapi_ids) == 2
-        assert dbapi_ids[0] != dbapi_ids[1], (
+        assert len(dbapi_objects) == 2
+        assert dbapi_objects[0] is not dbapi_objects[1], (
             "Both threads got the same DBAPI connection object — "
             "StaticPool is still being used for a file-based SQLite database. "
             "Expected NullPool so each thread gets an independent connection."

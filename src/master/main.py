@@ -20,7 +20,7 @@ from ..logging_utils import LocalTimeFormatter
 from ..version import get_app_version
 from .agent_runner import build_spawn_kwargs, container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
-from .db import get_connection, init_db, schema_info
+from .db import get_connection, init_db, resolve_db_url, schema_info, startup_db
 from .db._dialect import upsert as _upsert
 from .runtime_config import load_global_env
 from .attachments import router as attachments_router
@@ -501,9 +501,9 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
         settings.agent_base_image,
         settings.container_runtime,
     )
-    db_path = _db_path(settings.data_dir)
-    init_db(db_path)
-    LOGGER.info("master.db_init path=%s", db_path)
+    db_path = resolve_db_url()
+    startup_db(db_path)
+    LOGGER.info("master.db_init url=%s", db_path)
     hub = ConnectionHub()
     loop = asyncio.get_running_loop()
     mqtt = build_mqtt_client(settings, hub=hub, loop=loop, db_path=db_path, app_state=app.state)

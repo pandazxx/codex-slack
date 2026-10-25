@@ -17,10 +17,8 @@ to work in M0.
 """
 from __future__ import annotations
 
-import collections
 import logging
 import os
-import re
 import sqlite3
 import threading
 from typing import Any
@@ -34,15 +32,6 @@ from ._prebaseline import _migrate_envelope_backfill, init_db_sqlite
 from ._row import _Row
 
 LOGGER = logging.getLogger(__name__)
-
-# How many recently-closed DBAPI connection objects to retain in the graveyard.
-# See _ConnectionShim.close() for the rationale.
-_GRAVEYARD_DEPTH = 16
-# Closed DBAPI objects whose Python identity (id()) we want to stay pinned.
-# Only the Python object is kept alive; the underlying C/OS connection has
-# already been closed by NullPool before the object enters this deque.
-_dbapi_graveyard: collections.deque = collections.deque(maxlen=_GRAVEYARD_DEPTH)
-_dbapi_graveyard_lock = threading.Lock()
 
 TABLES = [
     "workspaces", "staffs", "staff_sessions", "config", "topics",
@@ -128,38 +117,60 @@ def _resolve_url(db_path_or_url: str | None) -> str:
 
 
 def resolve_db_url(*, alembic_ini_fallback: str = "") -> str:
-    """Resolve the database URL from environment variables.
+    """Resolve the database URL from environment variables (M1: Postgres default).
 
     Resolution order:
-      1. DATABASE_URL environment variable.
-      2. MASTER_DATA_DIR environment variable →
-         sqlite+pysqlite:///{MASTER_DATA_DIR}/master_data.db
-      3. alembic_ini_fallback — alembic offline-mode placeholder only;
+      1. DATABASE_URL environment variable — used as-is when set.
+      2. Bundled Postgres URL built from POSTGRES_HOST / POSTGRES_PORT /
+         POSTGRES_USER / POSTGRES_DB / POSTGRES_PASSWORD.  The PostgreSQL
+         default applies whenever DATABASE_URL is unset, regardless of whether
+         MASTER_DATA_DIR is set (MASTER_DATA_DIR is for attachments/snapshots,
+         not the DB URL).
+      3. alembic_ini_fallback — Alembic offline-mode placeholder only;
          empty by default.
 
-    Raises ValueError when no source is available and alembic_ini_fallback
-    is empty.  alembic/env.py imports this function so both paths use one
-    source of truth for the default filename (master_data.db).
+    Raises ValueError when DATABASE_URL is unset and POSTGRES_PASSWORD is
+    not available and alembic_ini_fallback is empty.
+
+    alembic/env.py imports this function so both paths share one source of
+    truth for the database URL.
     """
     database_url = os.getenv("DATABASE_URL", "").strip()
     if database_url:
         return database_url
-    data_dir = os.getenv("MASTER_DATA_DIR", "").strip()
-    if data_dir:
-        return f"sqlite+pysqlite:///{data_dir}/master_data.db"
+
+    host = os.getenv("POSTGRES_HOST", "postgres")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    user = os.getenv("POSTGRES_USER", "master")
+    db = os.getenv("POSTGRES_DB", "master")
+    password = os.getenv("POSTGRES_PASSWORD", "").strip()
+
+    if password:
+        return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}"
+
     if alembic_ini_fallback:
         return alembic_ini_fallback
-    raise ValueError("Provide DATABASE_URL or MASTER_DATA_DIR")
+
+    raise ValueError(
+        "DATABASE_URL is not set and POSTGRES_PASSWORD is not set. "
+        "Set DATABASE_URL explicitly, or set POSTGRES_PASSWORD so the bundled "
+        "Postgres URL can be constructed."
+    )
 
 
 def engine(db_path_or_url: str | None = None) -> Engine:
     """Return the SQLAlchemy engine.
 
     Resolution order:
-      1. DATABASE_URL environment variable (explicit operator setting).
-      2. db_path_or_url argument — full URL used as-is; plain path converted
-         to sqlite+pysqlite:///{path}.
-      3. resolve_db_url() → MASTER_DATA_DIR/master_data.db, or raises.
+      1. db_path_or_url argument — when explicitly provided (not None / empty),
+         use it directly.  A full SQLAlchemy URL is used as-is; a plain
+         filesystem path is converted to sqlite+pysqlite:///{path}.
+         This lets callers (tests, the shim) pin a specific database regardless
+         of DATABASE_URL.
+      2. DATABASE_URL environment variable — used when no explicit argument is
+         given.
+      3. resolve_db_url() — builds the bundled Postgres URL from env vars, or
+         raises ValueError when no configuration is available.
 
     Engines are cached per URL so a single pool is reused across requests.
     The cache is intentionally typed as dict | None: tests may monkeypatch
@@ -168,13 +179,11 @@ def engine(db_path_or_url: str | None = None) -> Engine:
     in new code.
     """
     global _engine
-    database_url = os.getenv("DATABASE_URL", "").strip()
-    if database_url:
-        url = database_url
-    else:
+    if db_path_or_url:
         url = _resolve_url(db_path_or_url)
-        if not url:
-            url = resolve_db_url()  # raises ValueError when MASTER_DATA_DIR unset
+    else:
+        database_url = os.getenv("DATABASE_URL", "").strip()
+        url = database_url if database_url else resolve_db_url()
 
     with _engine_lock:
         if not isinstance(_engine, dict):
@@ -326,25 +335,9 @@ class _ConnectionShim:
         Idempotent: safe to call more than once.  Under NullPool this returns
         the OS-level connection to the OS immediately; under StaticPool (:memory:)
         it releases the single shared connection back to the pool.
-
-        Before closing, the raw DBAPI connection object is placed in a
-        module-level graveyard deque.  This keeps the Python object (not the
-        underlying C/OS connection) alive just long enough to prevent CPython
-        from reusing its memory address before a concurrent thread has opened
-        its own connection.  Without this, a thread that finishes and frees its
-        DBAPI object before a second thread allocates one can cause both threads
-        to record the same id(), even though NullPool correctly gave each thread
-        a distinct OS connection.  The graveyard holds at most _GRAVEYARD_DEPTH
-        entries; closed objects carry no OS resources.
         """
         if not self._closed:
             self._closed = True
-            try:
-                dbapi_obj = self._conn.connection.dbapi_connection
-                with _dbapi_graveyard_lock:
-                    _dbapi_graveyard.append(dbapi_obj)
-            except Exception:
-                pass
             self._conn.close()
 
     def __enter__(self) -> "_ConnectionShim":
@@ -400,6 +393,63 @@ def init_db(db_path: str) -> None:
     will be replaced by Alembic's upgrade-on-empty-DB logic.
     """
     init_db_sqlite(db_path)
+
+
+def sqlite_safety_check(data_dir: str) -> None:
+    """Guard against silently abandoning existing SQLite data when the default switches to Postgres.
+
+    Reads DATABASE_URL from the environment.
+
+    - If DATABASE_URL is set: returns immediately — the operator has expressed
+      intent and no override is needed.
+    - If DATABASE_URL is unset and {data_dir}/master_data.db exists and contains
+      a 'workspaces' table: raises SystemExit(1) with a message that names the
+      SQLite file and describes both remedies (keep SQLite or migrate to Postgres).
+    - Otherwise: returns normally — safe to proceed with the Postgres default.
+    """
+    import sys
+
+    if os.getenv("DATABASE_URL", "").strip():
+        return
+
+    db_path = os.path.join(data_dir, "master_data.db")
+    if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
+        return
+
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='workspaces'"
+            ).fetchone()
+            has_workspaces = row is not None
+        finally:
+            conn.close()
+    except Exception:
+        return
+
+    if not has_workspaces:
+        return
+
+    msg = (
+        f"ERROR: existing SQLite data detected at\n"
+        f"  {db_path}\n"
+        f"but DATABASE_URL is unset and the default is now Postgres. Pick one:\n"
+        f"\n"
+        f"  (a) Keep SQLite:\n"
+        f"      export DATABASE_URL=sqlite+pysqlite:///{db_path}\n"
+        f"\n"
+        f"  (b) Migrate to Postgres (recommended):\n"
+        f"      scripts/db.sh snapshot-and-migrate \\\n"
+        f"          --source-url \"sqlite+pysqlite:///{db_path}\" \\\n"
+        f"          --target-url \"$POSTGRES_URL\"\n"
+        f"      Then set DATABASE_URL=$POSTGRES_URL.\n"
+        f"\n"
+        f"Set DATABASE_URL to suppress this check.\n"
+        f"See docs/guides/runbooks/migrate-sqlite-to-postgres.md"
+    )
+    print(msg, file=sys.stderr, flush=True)
+    sys.exit(1)
 
 
 def _with_database_url(url: str, fn) -> None:

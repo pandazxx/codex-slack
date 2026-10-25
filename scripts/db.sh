@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# Database management script for master service.
+# Database management script for the master service.
 #
 # Usage: db.sh <subcommand> [options]
 #
 # Subcommands:
-#   migrate              Apply pending Alembic migrations (alembic upgrade head).
-#   verify-schema        Compare live schema against Alembic head; exits non-zero on drift.
-#   snapshot-and-migrate Take a backup snapshot then migrate (not implemented in M0).
-#   --help               Show this help message.
+#   migrate                  Apply pending Alembic migrations (alembic upgrade head).
+#   verify-schema            Compare live schema against Alembic head; exits non-zero on drift.
+#   snapshot export          Export database tables to a JSONL snapshot directory.
+#   snapshot import          Import a JSONL snapshot directory into a target database.
+#   snapshot-and-migrate     Snapshot the source then migrate or import to target.
+#   --help                   Show this help message.
 #
 # Environment:
 #   DATABASE_URL     Full SQLAlchemy URL — highest priority.
-#   MASTER_DATA_DIR  Fallback; resolves to sqlite:///{MASTER_DATA_DIR}/master_data.db.
+#   MASTER_DATA_DIR  Used for snapshot default output path.
+#   POSTGRES_HOST, POSTGRES_PORT, POSTGRES_USER, POSTGRES_DB, POSTGRES_PASSWORD
+#                    Components for the bundled Postgres URL when DATABASE_URL is unset.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,32 +26,27 @@ _usage() {
     exit 0
 }
 
-_alembic() {
-    # Run alembic from the project root so it picks up alembic.ini.
+_python() {
     cd "${PROJECT_ROOT}"
-    python3 -m alembic "$@"
+    python3 -m src.master.db_cli "$@"
 }
 
 _migrate() {
     echo "db.sh: running alembic upgrade head"
-    _alembic upgrade head
-    echo "db.sh: migrations complete"
+    _python migrate
 }
 
 _verify_schema() {
-    # alembic check exits non-zero when the database is not at the head revision.
     echo "db.sh: verifying schema against Alembic head"
-    if ! _alembic check 2>&1; then
-        echo "db.sh: DRIFT DETECTED — database schema does not match Alembic head" >&2
-        exit 1
-    fi
-    echo "db.sh: schema is up to date"
+    _python verify-schema
+}
+
+_snapshot() {
+    _python snapshot "$@"
 }
 
 _snapshot_and_migrate() {
-    echo "db.sh: snapshot-and-migrate is not implemented in M0" >&2
-    echo "db.sh: Run 'db.sh migrate' to apply migrations without a snapshot." >&2
-    exit 1
+    _python snapshot-and-migrate "$@"
 }
 
 case "${1:-}" in
@@ -55,13 +54,20 @@ case "${1:-}" in
         _usage
         ;;
     migrate)
-        _migrate
+        shift
+        _migrate "$@"
         ;;
     verify-schema)
-        _verify_schema
+        shift
+        _verify_schema "$@"
+        ;;
+    snapshot)
+        shift
+        _snapshot "$@"
         ;;
     snapshot-and-migrate)
-        _snapshot_and_migrate
+        shift
+        _snapshot_and_migrate "$@"
         ;;
     "")
         echo "db.sh: subcommand required. Use --help for usage." >&2
