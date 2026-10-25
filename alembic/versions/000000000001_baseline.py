@@ -208,6 +208,7 @@ def upgrade() -> None:
         sa.Column("agent_name", sa.Text()),
         sa.Column("created_at", sa.Float(), nullable=False,
                   server_default=sa.text("(unixepoch('now','subsec'))")),
+        sqlite_autoincrement=True,
     )
     op.create_index("idx_chunks_message", "chunks", ["message_id", "seq"])
     op.create_index("idx_chunks_topic", "chunks", ["topic_id"])
