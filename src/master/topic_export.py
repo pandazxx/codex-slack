@@ -95,7 +95,7 @@ def export_topic(
         msg_rows = conn.execute(
             text(
                 "SELECT id, sender, agent_name, text, transcript, created_at FROM messages"
-                " WHERE topic_id = :topic_id ORDER BY created_at, rowid"
+                " WHERE topic_id = :topic_id ORDER BY created_at, id"
             ),
             {"topic_id": topic_id},
         ).fetchall()
