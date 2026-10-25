@@ -9,7 +9,8 @@ inspect():
   - UNIQUE constraints present
   - Regular indexes present (by column coverage)
   - Partial index names present (SQLite exposes these via inspect)
-  - chunks.id is autoincrement
+  - chunks.id is autoincrement (verified via sqlite_master DDL)
+  - All named indexes (including expression/partial) match via sqlite_master
 
 All tests are skipped when the M0 db/ package or Alembic baseline are
 not yet in place.
@@ -17,6 +18,8 @@ not yet in place.
 from __future__ import annotations
 
 import os
+import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -83,6 +86,19 @@ def _affinity(type_str: str) -> str:
         return "NUMERIC"
     # fallback: use as-is
     return t
+
+
+def _normalise_sql(sql: str) -> str:
+    """Normalise whitespace and open-paren spacing in a DDL statement.
+
+    Collapses all runs of whitespace to a single space, then removes the
+    space immediately before every open-parenthesis.  This makes legacy
+    DDL (e.g. ``ON staffs(``) and Alembic DDL (e.g. ``ON staffs (``)
+    compare equal.
+    """
+    s = re.sub(r"\s+", " ", sql.strip()).upper()
+    s = re.sub(r" \(", "(", s)
+    return s
 
 
 def _run_alembic_upgrade(database_url: str) -> None:
@@ -156,37 +172,74 @@ def _inspect_schema(database_url: str) -> dict:
     return schema
 
 
+def _sqlite_master_indexes(db_path: str) -> dict[str, str]:
+    """Return {index_name: normalised_sql} for all named indexes in a SQLite DB.
+
+    Queries sqlite_master directly so expression-based and partial indexes
+    are included, which SQLAlchemy's reflect layer skips with a SAWarning.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
+        ).fetchall()
+        return {name: _normalise_sql(sql) for name, sql in rows}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def legacy_db_path(tmp_path_factory):
+    """Path to a fresh SQLite DB initialised via legacy init_db()."""
+    from src.master.db import init_db
+    tmp = tmp_path_factory.mktemp("baseline_parity_legacy")
+    db_path = str(tmp / "legacy.db")
+    init_db(db_path)
+    return db_path
+
+
+@pytest.fixture(scope="module")
+def alembic_db_path(tmp_path_factory):
+    """Path to a fresh SQLite DB initialised via alembic upgrade head."""
+    tmp = tmp_path_factory.mktemp("baseline_parity_alembic")
+    db_path = str(tmp / "alembic.db")
+    _run_alembic_upgrade(f"sqlite+pysqlite:///{db_path}")
+    return db_path
+
+
+@pytest.fixture(scope="module")
+def legacy_schema(legacy_db_path):
+    """Schema of a DB initialised via legacy init_db()."""
+    return _inspect_schema(f"sqlite+pysqlite:///{legacy_db_path}")
+
+
+@pytest.fixture(scope="module")
+def alembic_schema(alembic_db_path):
+    """Schema of a DB initialised via alembic upgrade head."""
+    return _inspect_schema(f"sqlite+pysqlite:///{alembic_db_path}")
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def legacy_schema(tmp_path_factory):
-    """Schema of a DB initialised via legacy init_db()."""
-    from src.master.db import init_db
-    tmp = tmp_path_factory.mktemp("baseline_parity")
-    db_path = str(tmp / "legacy.db")
-    init_db(db_path)
-    return _inspect_schema(f"sqlite+pysqlite:///{db_path}")
-
-
-@pytest.fixture(scope="module")
-def alembic_schema(tmp_path_factory):
-    """Schema of a DB initialised via alembic upgrade head."""
-    tmp = tmp_path_factory.mktemp("baseline_parity")
-    db_path = str(tmp / "alembic.db")
-    url = f"sqlite+pysqlite:///{db_path}"
-    _run_alembic_upgrade(url)
-    return _inspect_schema(url)
-
-
 def test_same_table_names(legacy_schema, alembic_schema):
-    """Both schemas expose the same set of tables."""
+    """Both schemas expose the same set of tables.
+
+    alembic_version is Alembic's internal bookkeeping table and is not
+    part of the application schema; it is filtered out before comparison.
+    """
+    # alembic_version must be excluded — it is Alembic's own tracking table.
+    alembic_tables = set(alembic_schema.keys()) - {"alembic_version"}
     assert set(legacy_schema.keys()) == set(EXPECTED_TABLES), (
         f"Legacy schema tables: {sorted(legacy_schema.keys())}"
     )
-    assert set(alembic_schema.keys()) == set(EXPECTED_TABLES), (
-        f"Alembic schema tables: {sorted(alembic_schema.keys())}"
+    assert alembic_tables == set(EXPECTED_TABLES), (
+        f"Alembic schema tables (excl. alembic_version): {sorted(alembic_tables)}"
     )
 
 
@@ -227,13 +280,33 @@ def test_primary_keys_match(table, legacy_schema, alembic_schema):
     )
 
 
-def test_chunks_id_is_autoincrement(legacy_schema, alembic_schema):
-    """chunks.id must be autoincrement in both schemas."""
-    assert legacy_schema["chunks"]["columns"]["id"]["autoincrement"] is True, (
-        "chunks.id is not autoincrement in legacy schema"
+def test_chunks_id_is_autoincrement(legacy_db_path, alembic_db_path):
+    """chunks.id must be declared AUTOINCREMENT in both schemas.
+
+    SQLAlchemy's SQLite reflection dialect never populates autoincrement=True
+    via inspect() — the flag is unreliable for this check.  Instead we read
+    the CREATE TABLE DDL from sqlite_master and look for the AUTOINCREMENT
+    keyword directly.  If the Alembic baseline omits the keyword this test
+    will (correctly) fail, signalling a real baseline defect.
+    """
+    def _has_autoincrement(db_path: str) -> bool:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'"
+            ).fetchone()
+            if row is None:
+                return False
+            return bool(re.search(r"\bAUTOINCREMENT\b", row[0], re.IGNORECASE))
+        finally:
+            conn.close()
+
+    assert _has_autoincrement(legacy_db_path), (
+        "chunks.id is not AUTOINCREMENT in legacy schema (sqlite_master DDL)"
     )
-    assert alembic_schema["chunks"]["columns"]["id"]["autoincrement"] is True, (
-        "chunks.id is not autoincrement in alembic schema"
+    assert _has_autoincrement(alembic_db_path), (
+        "chunks.id is not AUTOINCREMENT in alembic schema (sqlite_master DDL) — "
+        "baseline defect: Alembic migration must use autoincrement=True on chunks.id"
     )
 
 
@@ -248,27 +321,80 @@ def test_foreign_keys_match(table, legacy_schema, alembic_schema):
     )
 
 
-def test_staffs_unique_scope_name_index(legacy_schema, alembic_schema):
+def test_staffs_unique_scope_name_index(legacy_db_path, alembic_db_path):
     """idx_staffs_scope_name unique expression index present in both schemas.
 
-    SQLite inspect() does not expose COALESCE() expression indexes as regular
-    unique constraints — they appear as indexes. Assert that a unique index
-    covering (scope_type, scope_id, name) or the expression equivalent exists.
+    SQLAlchemy skips expression-based indexes with a SAWarning, so
+    inspect() returns no data for idx_staffs_scope_name.  We query
+    sqlite_master directly on both DBs, assert the index is UNIQUE,
+    and compare normalised SQL to verify the expression is identical.
     """
-    for label, schema in [("legacy", legacy_schema), ("alembic", alembic_schema)]:
-        staffs_indexes = schema["staffs"]["indexes"]
-        # Either a regular unique index covering those three columns exists,
-        # or an expression index (dialect_options will show up).
-        has_scope_name_index = any(
-            idx["unique"] and
-            (set(idx["columns"]) >= {"scope_type", "name"}
-             or "scope_type" in str(idx.get("dialect_options", "")))
-            for idx in staffs_indexes
-        )
-        assert has_scope_name_index, (
-            f"{label} schema: no unique index covering scope_type+name on staffs; "
-            f"indexes={staffs_indexes}"
-        )
+    def _get_index_sql(db_path: str) -> str | None:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='index' AND name='idx_staffs_scope_name'"
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    legacy_sql = _get_index_sql(legacy_db_path)
+    alembic_sql = _get_index_sql(alembic_db_path)
+
+    assert legacy_sql is not None, (
+        "idx_staffs_scope_name missing from legacy sqlite_master"
+    )
+    assert alembic_sql is not None, (
+        "idx_staffs_scope_name missing from alembic sqlite_master"
+    )
+
+    legacy_norm = _normalise_sql(legacy_sql)
+    alembic_norm = _normalise_sql(alembic_sql)
+
+    assert "UNIQUE" in legacy_norm, (
+        f"idx_staffs_scope_name is not UNIQUE in legacy: {legacy_sql}"
+    )
+    assert "UNIQUE" in alembic_norm, (
+        f"idx_staffs_scope_name is not UNIQUE in alembic: {alembic_sql}"
+    )
+
+    assert legacy_norm == alembic_norm, (
+        f"idx_staffs_scope_name DDL differs:\n"
+        f"  legacy:  {legacy_sql}\n"
+        f"  alembic: {alembic_sql}"
+    )
+
+
+def test_all_named_indexes_match(legacy_db_path, alembic_db_path):
+    """All named indexes (expression and partial included) match between schemas.
+
+    SQLAlchemy's reflect layer silently skips expression-based indexes.
+    This test queries sqlite_master on both DBs and compares the full set
+    of normalised CREATE INDEX statements, providing a safety net for any
+    index type that inspect() cannot represent.
+    """
+    legacy_idxs = _sqlite_master_indexes(legacy_db_path)
+    alembic_idxs = _sqlite_master_indexes(alembic_db_path)
+
+    assert set(legacy_idxs.keys()) == set(alembic_idxs.keys()), (
+        f"Index name sets differ:\n"
+        f"  legacy-only={sorted(set(legacy_idxs) - set(alembic_idxs))}\n"
+        f"  alembic-only={sorted(set(alembic_idxs) - set(legacy_idxs))}"
+    )
+
+    mismatches = []
+    for name in sorted(legacy_idxs):
+        if legacy_idxs[name] != alembic_idxs[name]:
+            mismatches.append(
+                f"  {name!r}:\n"
+                f"    legacy:  {legacy_idxs[name]}\n"
+                f"    alembic: {alembic_idxs[name]}"
+            )
+    assert not mismatches, (
+        "Index DDL mismatches between legacy and Alembic:\n" + "\n".join(mismatches)
+    )
 
 
 def test_workspaces_partial_unique_index(legacy_schema, alembic_schema):
