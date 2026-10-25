@@ -259,35 +259,28 @@ _LOCK_TIMEOUT_MSG = (
 )
 
 
-def _acquire_truncate_locks(engine: Engine, dialect: str, timeout: str) -> None:
-    """Set a lock timeout, then pre-lock every application table with ACCESS EXCLUSIVE.
+def _acquire_truncate_locks_in_txn(conn: Any, dialect: str, timeout: str) -> None:
+    """Set lock timeout and acquire ACCESS EXCLUSIVE locks on all tables.
 
-    If any lock cannot be acquired within *timeout* the function prints an
-    actionable error message and calls sys.exit(1) rather than hanging.
+    Must be called from within an already-open transaction.  Locks are held
+    until that transaction commits or rolls back, so the truncate-plus-load
+    phase stays atomic.
+
+    Raises OperationalError (re-raised by the caller as sys.exit after message)
+    if any lock cannot be acquired within *timeout*.
     """
     if dialect not in ("postgresql", "mysql"):
         return
 
-    from sqlalchemy.exc import OperationalError
-
-    try:
-        with engine.begin() as conn:
-            if dialect == "postgresql":
-                conn.execute(sa_text(f"SET LOCAL lock_timeout = '{timeout}'"))
-                for table in TRUNCATE_ORDER:
-                    conn.execute(
-                        sa_text(f'LOCK TABLE "{table}" IN ACCESS EXCLUSIVE MODE')  # noqa: S608
-                    )
-            elif dialect == "mysql":
-                # Convert Postgres-style timeout string (e.g. "30s") to integer seconds.
-                secs = _parse_timeout_to_seconds(timeout)
-                conn.execute(sa_text(f"SET SESSION innodb_lock_wait_timeout = {secs}"))
-    except OperationalError as exc:
-        msg = str(exc).lower()
-        if "lock" in msg and ("timeout" in msg or "wait" in msg):
-            print(_LOCK_TIMEOUT_MSG.format(timeout=timeout), file=sys.stderr)
-            sys.exit(1)
-        raise
+    if dialect == "postgresql":
+        conn.execute(sa_text(f"SET LOCAL lock_timeout = '{timeout}'"))
+        for table in TRUNCATE_ORDER:
+            conn.execute(
+                sa_text(f'LOCK TABLE "{table}" IN ACCESS EXCLUSIVE MODE')  # noqa: S608
+            )
+    elif dialect == "mysql":
+        secs = _parse_timeout_to_seconds(timeout)
+        conn.execute(sa_text(f"SET SESSION innodb_lock_wait_timeout = {secs}"))
 
 
 def _parse_timeout_to_seconds(timeout: str) -> int:
@@ -392,70 +385,100 @@ def import_snapshot(
             )
             sys.exit(1)
 
+        # --- Single atomic transaction: locks + deletes (if --yes) + inserts ---
+        # Locks are acquired at the start of the transaction and held until it
+        # commits, so no other writer can slip in between the truncate and load.
+        # Rows are streamed from JSONL files line-by-line to avoid loading the
+        # entire dataset into memory.
         if non_empty_tables and yes:
             print("--yes given: truncating all tables before reload...")
-            _acquire_truncate_locks(engine, dialect, lock_timeout)
+
+        table_insert_counts: dict[str, int] = {}
+
+        from sqlalchemy.exc import OperationalError as _SAOperationalError
+
+        try:
             with engine.begin() as conn:
-                if dialect == "postgresql":
-                    conn.execute(sa_text("SET session_replication_role = replica"))
-                elif dialect == "sqlite":
-                    conn.execute(sa_text("PRAGMA foreign_keys = OFF"))
-                for table in TRUNCATE_ORDER:
+                # Acquire locks (Postgres/MySQL); no-op on SQLite.
+                try:
+                    _acquire_truncate_locks_in_txn(conn, dialect, lock_timeout)
+                except _SAOperationalError as exc:
+                    msg = str(exc).lower()
+                    if "lock" in msg and ("timeout" in msg or "wait" in msg):
+                        print(_LOCK_TIMEOUT_MSG.format(timeout=lock_timeout), file=sys.stderr)
+                        sys.exit(1)
+                    raise
+
+                if non_empty_tables and yes:
+                    if dialect == "sqlite":
+                        conn.execute(sa_text("PRAGMA foreign_keys = OFF"))
+                    for table in TRUNCATE_ORDER:
+                        if table not in manifest["tables"]:
+                            continue
+                        conn.execute(sa_text(f"DELETE FROM \"{table}\""))  # noqa: S608
+                    if dialect == "sqlite":
+                        conn.execute(sa_text("PRAGMA foreign_keys = ON"))
+
+                # Stream and insert each table within this same transaction.
+                print("Loading rows...")
+                for table in EXPORT_ORDER:
                     if table not in manifest["tables"]:
                         continue
-                    conn.execute(sa_text(f"DELETE FROM \"{table}\""))  # noqa: S608
-                if dialect == "postgresql":
-                    conn.execute(sa_text("SET session_replication_role = DEFAULT"))
-                elif dialect == "sqlite":
-                    conn.execute(sa_text("PRAGMA foreign_keys = ON"))
+                    jsonl = in_dir / f"{table}.jsonl"
+                    bool_cols = BOOLEAN_COLUMNS.get(table, set())
+                    json_cols = JSON_TEXT_COLUMNS.get(table, set())
+                    float_cols = FLOAT_COLUMNS.get(table, set())
 
-        # --- Load rows ---
-        print("Loading rows...")
-        for table in EXPORT_ORDER:
-            if table not in manifest["tables"]:
-                continue
-            jsonl = in_dir / f"{table}.jsonl"
-            bool_cols = BOOLEAN_COLUMNS.get(table, set())
-            json_cols = JSON_TEXT_COLUMNS.get(table, set())
-            float_cols = FLOAT_COLUMNS.get(table, set())
+                    batch: list[dict] = []
+                    inserted = 0
+                    col_names: list[str] | None = None
+                    insert_sql = None
 
-            lines = [l for l in jsonl.read_text(encoding="utf-8").splitlines() if l.strip()]
-            if not lines:
-                print(f"  {table}: 0 rows (empty JSONL)")
-                continue
+                    with jsonl.open(encoding="utf-8") as fh:
+                        for raw_line in fh:
+                            line = raw_line.strip()
+                            if not line:
+                                continue
+                            row = json.loads(line)
 
-            first = json.loads(lines[0])
-            col_names = list(first.keys())
-            placeholders = ", ".join(f":{c}" for c in col_names)
-            quoted_cols = ", ".join(f'"{c}"' for c in col_names)
-            insert_sql = sa_text(
-                f'INSERT INTO "{table}" ({quoted_cols}) VALUES ({placeholders})'  # noqa: S608
-            )
+                            # Derive column list and INSERT statement from the first row.
+                            if col_names is None:
+                                col_names = list(row.keys())
+                                placeholders = ", ".join(f":{c}" for c in col_names)
+                                quoted_cols = ", ".join(f'"{c}"' for c in col_names)
+                                insert_sql = sa_text(
+                                    f'INSERT INTO "{table}" ({quoted_cols}) VALUES ({placeholders})'  # noqa: S608
+                                )
 
-            batch: list[dict] = []
-            inserted = 0
-            with engine.begin() as conn:
-                for line in lines:
-                    row = json.loads(line)
-                    decoded = {
-                        col: _decode_value(
-                            table, col, row.get(col),
-                            bool_cols, json_cols, float_cols, dialect,
-                        )
-                        for col in col_names
-                    }
-                    batch.append(decoded)
-                    if len(batch) >= _BATCH_SIZE:
+                            decoded = {
+                                col: _decode_value(
+                                    table, col, row.get(col),
+                                    bool_cols, json_cols, float_cols, dialect,
+                                )
+                                for col in col_names
+                            }
+                            batch.append(decoded)
+                            if len(batch) >= _BATCH_SIZE:
+                                conn.execute(insert_sql, batch)
+                                inserted += len(batch)
+                                batch = []
+
+                    if batch and insert_sql is not None:
                         conn.execute(insert_sql, batch)
                         inserted += len(batch)
-                        batch = []
-                if batch:
-                    conn.execute(insert_sql, batch)
-                    inserted += len(batch)
 
-            print(f"  {table}: {inserted} rows inserted")
+                    if col_names is None:
+                        print(f"  {table}: 0 rows (empty JSONL)")
+                    else:
+                        table_insert_counts[table] = inserted
+                        print(f"  {table}: {inserted} rows inserted")
 
-        # --- Reset sequences ---
+        except Exception:
+            # Any failure inside the transaction causes an automatic rollback
+            # (engine.begin() rolls back on exception).
+            raise
+
+        # --- Reset sequences (outside the load transaction) ---
         print("Resetting sequences...")
         with engine.begin() as conn:
             for table, col in AUTOINCREMENT_TABLES.items():
@@ -495,10 +518,9 @@ def _reset_sequence(conn: Any, table: str, col: str, dialect: str) -> None:
     if dialect == "postgresql":
         conn.execute(
             sa_text(
-                f"SELECT setval(pg_get_serial_sequence('{table}', '{col}'), "
-                f":max_val, true)"
+                "SELECT setval(pg_get_serial_sequence(:tbl, :col_name), :max_val, true)"
             ),
-            {"max_val": max(max_val, 1)},
+            {"tbl": table, "col_name": col, "max_val": max(max_val, 1)},
         )
     elif dialect == "mysql":
         conn.execute(
