@@ -250,17 +250,75 @@ def export_snapshot(source_url: str, out_dir: Path, repo_root: Path) -> None:
 # Import
 # ---------------------------------------------------------------------------
 
+_DEFAULT_LOCK_TIMEOUT = "30s"
+
+_LOCK_TIMEOUT_MSG = (
+    "ERROR: target database is in use (lock timeout after {timeout}) — "
+    "stop master before importing; "
+    "see docs/guides/runbooks/migrate-sqlite-to-postgres.md"
+)
+
+
+def _acquire_truncate_locks(engine: Engine, dialect: str, timeout: str) -> None:
+    """Set a lock timeout, then pre-lock every application table with ACCESS EXCLUSIVE.
+
+    If any lock cannot be acquired within *timeout* the function prints an
+    actionable error message and calls sys.exit(1) rather than hanging.
+    """
+    if dialect not in ("postgresql", "mysql"):
+        return
+
+    from sqlalchemy.exc import OperationalError
+
+    try:
+        with engine.begin() as conn:
+            if dialect == "postgresql":
+                conn.execute(sa_text(f"SET LOCAL lock_timeout = '{timeout}'"))
+                for table in TRUNCATE_ORDER:
+                    conn.execute(
+                        sa_text(f'LOCK TABLE "{table}" IN ACCESS EXCLUSIVE MODE')  # noqa: S608
+                    )
+            elif dialect == "mysql":
+                # Convert Postgres-style timeout string (e.g. "30s") to integer seconds.
+                secs = _parse_timeout_to_seconds(timeout)
+                conn.execute(sa_text(f"SET SESSION innodb_lock_wait_timeout = {secs}"))
+    except OperationalError as exc:
+        msg = str(exc).lower()
+        if "lock" in msg and ("timeout" in msg or "wait" in msg):
+            print(_LOCK_TIMEOUT_MSG.format(timeout=timeout), file=sys.stderr)
+            sys.exit(1)
+        raise
+
+
+def _parse_timeout_to_seconds(timeout: str) -> int:
+    """Convert a timeout string like '30s' or '2min' to integer seconds."""
+    timeout = timeout.strip()
+    if timeout.endswith("ms"):
+        return max(1, int(timeout[:-2]) // 1000)
+    if timeout.endswith("min"):
+        return int(timeout[:-3]) * 60
+    if timeout.endswith("s"):
+        return int(timeout[:-1])
+    return int(timeout)
+
+
 def import_snapshot(
     in_dir: Path,
     target_url: str,
     repo_root: Path,
     *,
     yes: bool = False,
+    lock_timeout: str = _DEFAULT_LOCK_TIMEOUT,
 ) -> None:
     """Import a snapshot directory into the target database.
 
     Checks SHA-256 integrity and schema version before modifying anything.
     Refuses non-empty target unless --yes is given.
+
+    On Postgres the TRUNCATE phase sets lock_timeout so that a concurrent
+    reader (e.g. a running master process) causes a fast failure rather than
+    an indefinite hang.  On MySQL the session-level lock_wait_timeout is set
+    for the same reason.  Pass lock_timeout='0' to disable (not recommended).
     """
     manifest_path = in_dir / "manifest.json"
     if not manifest_path.exists():
@@ -336,6 +394,7 @@ def import_snapshot(
 
         if non_empty_tables and yes:
             print("--yes given: truncating all tables before reload...")
+            _acquire_truncate_locks(engine, dialect, lock_timeout)
             with engine.begin() as conn:
                 if dialect == "postgresql":
                     conn.execute(sa_text("SET session_replication_role = replica"))

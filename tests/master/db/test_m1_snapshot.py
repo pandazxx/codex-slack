@@ -911,15 +911,16 @@ class TestSqliteToPostgresRoundtrip:
 
         engine = create_engine(pg_url)
         try:
-            for table, expected in seeded_counts.items():
-                row = engine.connect().execute(
-                    text(f'SELECT COUNT(*) FROM "{table}"')  # noqa: S608
-                ).fetchone()
-                got = row[0]
-                assert got == expected, (
-                    f"Row count mismatch in '{table}' after SQLite→Postgres import: "
-                    f"expected {expected}, got {got}"
-                )
+            with engine.connect() as conn:
+                for table, expected in seeded_counts.items():
+                    row = conn.execute(
+                        text(f'SELECT COUNT(*) FROM "{table}"')  # noqa: S608
+                    ).fetchone()
+                    got = row[0]
+                    assert got == expected, (
+                        f"Row count mismatch in '{table}' after SQLite→Postgres import: "
+                        f"expected {expected}, got {got}"
+                    )
         finally:
             engine.dispose()
 
@@ -960,3 +961,86 @@ class TestSqliteToPostgresRoundtrip:
             )
         finally:
             engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# TC-24: import fails fast when another connection holds a lock (PG only)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES_URL"),
+    reason="TEST_POSTGRES_URL not set; skipping Postgres lock-timeout test",
+)
+class TestImportLockTimeout:
+    """import_snapshot exits non-zero when target tables are locked."""
+
+    def test_import_fails_fast_when_locked(self, snapshot_dir, tmp_path):
+        """Holding an ACCESS EXCLUSIVE lock causes import to fail with a clear message."""
+        from src.master.db import startup_db
+        from src.master.db.snapshot import import_snapshot
+        from sqlalchemy import create_engine, text
+
+        out_dir, _, _ = snapshot_dir
+        pg_url = os.environ["TEST_POSTGRES_URL"]
+        startup_db(pg_url)
+
+        # Seed one row so import needs to TRUNCATE.
+        engine = create_engine(pg_url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO workspaces (id, name) VALUES ('ws-lock-test', 'Lock Test')"
+                ))
+        finally:
+            engine.dispose()
+
+        # Hold an ACCESS EXCLUSIVE lock on workspaces in a separate thread.
+        import threading
+        import time
+
+        lock_held = threading.Event()
+        release_lock = threading.Event()
+        error_in_thread: list[Exception] = []
+
+        def hold_lock() -> None:
+            holder = create_engine(pg_url)
+            try:
+                with holder.begin() as conn:
+                    conn.execute(text("LOCK TABLE workspaces IN ACCESS EXCLUSIVE MODE"))
+                    lock_held.set()
+                    # Hold until the main thread signals we can release.
+                    release_lock.wait(timeout=10)
+            except Exception as exc:
+                error_in_thread.append(exc)
+            finally:
+                holder.dispose()
+
+        t = threading.Thread(target=hold_lock, daemon=True)
+        t.start()
+        lock_held.wait(timeout=5)
+
+        try:
+            import io
+            from contextlib import redirect_stderr
+
+            buf = io.StringIO()
+            try:
+                with redirect_stderr(buf):
+                    import_snapshot(
+                        out_dir, pg_url, REPO_ROOT,
+                        yes=True,
+                        lock_timeout="500ms",
+                    )
+                pytest.fail("import_snapshot should have raised SystemExit")
+            except SystemExit as exc:
+                assert exc.code != 0, "SystemExit code must be non-zero"
+                stderr_output = buf.getvalue()
+                assert "in use" in stderr_output or "lock" in stderr_output.lower(), (
+                    f"Expected lock-timeout message in stderr, got:\n{stderr_output}"
+                )
+        finally:
+            release_lock.set()
+            t.join(timeout=5)
+
+        if error_in_thread:
+            raise error_in_thread[0]

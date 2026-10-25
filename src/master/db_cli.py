@@ -72,6 +72,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Truncate and reload even if the target already has rows.",
     )
+    imp.add_argument(
+        "--lock-timeout",
+        dest="lock_timeout",
+        default="30s",
+        metavar="TIMEOUT",
+        help=(
+            "Lock-acquisition timeout for Postgres TRUNCATE (e.g. '30s', '2min'). "
+            "Fails fast with a clear error if the target DB is held by another "
+            "connection.  Pass '0' to disable (not recommended)."
+        ),
+    )
 
     # snapshot-and-migrate
     sam = sub.add_parser(
@@ -145,7 +156,11 @@ def _cmd_snapshot_export(args: argparse.Namespace) -> None:
 def _cmd_snapshot_import(args: argparse.Namespace) -> None:
     from src.master.db.snapshot import import_snapshot
     in_dir = Path(args.in_dir)
-    import_snapshot(in_dir, args.target_url, REPO_ROOT, yes=args.yes)
+    import_snapshot(
+        in_dir, args.target_url, REPO_ROOT,
+        yes=args.yes,
+        lock_timeout=args.lock_timeout,
+    )
 
 
 def _cmd_snapshot_and_migrate(args: argparse.Namespace) -> None:

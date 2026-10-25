@@ -24,6 +24,7 @@ jobs:
   test:
     name: Build and test (${{ matrix.db }})
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: read
@@ -54,6 +55,7 @@ jobs:
   test-mysql:
     name: Build and test (mysql)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # NON-BLOCKING until Phase 2 (MySQL hardening: functional-index conversions,
     # VARCHAR(36) UUID columns, CHECK enforcement; design section 12). The suite
     # is expected to fail on MySQL today. Runs on every PR for visibility; remove

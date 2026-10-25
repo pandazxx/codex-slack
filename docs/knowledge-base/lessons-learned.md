@@ -628,3 +628,19 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 - **Root cause:** `alembic/env.py` called `logging.config.fileConfig(alembic.ini)`, whose default `disable_existing_loggers=True` disables every logger not named in `alembic.ini` for the rest of the process. That affects production logging too, not just tests.
 - **Fix:** `fileConfig(..., disable_existing_loggers=False)` in `alembic/env.py`.
 - **Prevention:** Never call `fileConfig` without `disable_existing_loggers=False` in code that runs inside the app process.
+
+---
+
+## 2026-10-25 — Unclosed SQLAlchemy connections on Postgres cause indefinite CI hang
+
+**Summary:** CI postgres leg hung for 1h47m (job 40179109315). The last test to log was `test_sqlite_to_postgres_row_counts_match`. Every subsequent test that called `snapshot import --yes` waited indefinitely for ACCESS EXCLUSIVE on tables that were already locked.
+
+**Root cause:** `engine.connect().execute(...)` called in a loop without a context manager. Each iteration opens a DBAPI connection and immediately abandons it — the connection stays in "idle in transaction" state (SQLAlchemy 2 auto-begins). `engine.dispose()` in the `finally` block does not close already-checked-out connections; it only invalidates the pool for future checkouts. The abandoned connections held ACCESS SHARE locks. The next test ran `snapshot import --yes` in a subprocess, which tried to DELETE from those tables and waited forever for ACCESS EXCLUSIVE.
+
+**Fix applied:**
+- `tests/master/db/test_m1_snapshot.py`: changed `engine.connect().execute(...)` inside the loop to a single `with engine.connect() as conn:` wrapping the entire loop — one connection, all SELECTs inside it, closed deterministically on exit.
+- `src/master/db/snapshot.py`: added `_acquire_truncate_locks()` which sets `SET LOCAL lock_timeout` (Postgres) or `SET SESSION innodb_lock_wait_timeout` (MySQL), then pre-locks all application tables before the DELETE phase. On `LockNotAvailable`/`OperationalError`, prints "target database is in use (lock timeout after …) — stop master before importing; see docs/guides/runbooks/migrate-sqlite-to-postgres.md" and exits non-zero.
+- `.sre/test-db.sh`: added `PGOPTIONS=-c lock_timeout=60s` to the postgres RUN_ENV so every libpq/psycopg connection in CI has a 60 s lock ceiling — a background safety net.
+- `.github/workflows/ci.yml`: added `timeout-minutes: 25` to the `test` and `test-mysql` jobs so a future hang kills the job rather than burning the 6-hour runner limit.
+
+**Prevention:** Always use `with engine.connect() as conn:` (or `engine.begin()`). Never call `engine.connect()` without a context manager or explicit `.close()`. `engine.dispose()` is not a substitute — it does not close checked-out connections. Test code that runs destructive operations (TRUNCATE, DROP, bulk DELETE) in a subprocess must ensure the in-process connections from the previous step are closed before the subprocess is launched.

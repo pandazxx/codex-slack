@@ -42,7 +42,15 @@ case "$DB" in
         # DATABASE_URL is passed explicitly: with the postgres overlay layered
         # the key would otherwise exist but be empty, and conftest only falls
         # back to TEST_DATABASE_URL / per-test SQLite when the key is absent.
-        RUN_ENV=(-e "DATABASE_URL=${URL}" -e "TEST_DATABASE_URL=${URL}" -e "TEST_POSTGRES_URL=${XURL}")
+        # PGOPTIONS sets lock_timeout for every libpq/psycopg connection so that
+        # a leaked "idle in transaction" connection from one test cannot silently
+        # block the next one for more than 60 s (senior-sre review: see ci.yml).
+        RUN_ENV=(
+            -e "DATABASE_URL=${URL}"
+            -e "TEST_DATABASE_URL=${URL}"
+            -e "TEST_POSTGRES_URL=${XURL}"
+            -e "PGOPTIONS=-c lock_timeout=60s"
+        )
         ;;
     mysql)
         export COMPOSE_PROFILES="ci-mysql" MYSQL_PASSWORD="$PW"
