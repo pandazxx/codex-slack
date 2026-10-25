@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -97,12 +98,13 @@ def _save_chunk(db_path: str, topic_id: str, payload: dict) -> None:  # type: ig
                 )
             conn.execute(
                 sa_text(
-                    "INSERT INTO chunks (message_id, topic_id, seq, event, agent_name)"
-                    " VALUES (:message_id, :topic_id, :seq, :event, :agent_name)"
+                    "INSERT INTO chunks (message_id, topic_id, seq, event, agent_name, created_at)"
+                    " VALUES (:message_id, :topic_id, :seq, :event, :agent_name, :created_at)"
                 ),
                 {
                     "message_id": message_id, "topic_id": topic_id,
                     "seq": seq, "event": json.dumps(event), "agent_name": agent_name,
+                    "created_at": time.time(),
                 },
             )
             conn.commit()

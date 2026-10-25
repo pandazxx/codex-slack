@@ -212,8 +212,11 @@ def upgrade() -> None:
         sa.Column("seq", sa.Integer(), nullable=False),
         sa.Column("event", sa.Text(), nullable=False),
         sa.Column("agent_name", sa.Text()),
-        sa.Column("created_at", sa.Float(), nullable=False,
-                  server_default=sa.text("(unixepoch('now','subsec'))")),
+        # created_at is a Unix timestamp (float).  The server_default was
+        # previously unixepoch('now','subsec') which is SQLite-only.  The
+        # design (§6) moves this default into Python: every INSERT site
+        # now provides the value explicitly via time.time().
+        sa.Column("created_at", sa.Float(), nullable=False),
         sqlite_autoincrement=True,
     )
     op.create_index("idx_chunks_message", "chunks", ["message_id", "seq"])

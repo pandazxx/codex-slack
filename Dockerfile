@@ -44,6 +44,12 @@ COPY --chown=appuser:appuser src ./src
 COPY --chown=appuser:appuser frontend ./frontend
 RUN cd frontend && npm run build && rm -rf node_modules
 
+# Alembic migration runner — required by startup_db() at application startup.
+# scripts/ contains db.sh which operators and startup_db error messages reference.
+COPY --chown=appuser:appuser alembic ./alembic
+COPY --chown=appuser:appuser alembic.ini ./alembic.ini
+COPY --chown=appuser:appuser scripts ./scripts
+
 COPY --chown=appuser:appuser config ./config
 COPY --chown=appuser:appuser docs ./docs
 COPY --chown=appuser:appuser docker-compose.yml ./

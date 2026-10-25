@@ -17,6 +17,7 @@ to work in M0.
 """
 from __future__ import annotations
 
+import collections
 import logging
 import os
 import re
@@ -33,6 +34,15 @@ from ._prebaseline import _migrate_envelope_backfill, init_db_sqlite
 from ._row import _Row
 
 LOGGER = logging.getLogger(__name__)
+
+# How many recently-closed DBAPI connection objects to retain in the graveyard.
+# See _ConnectionShim.close() for the rationale.
+_GRAVEYARD_DEPTH = 16
+# Closed DBAPI objects whose Python identity (id()) we want to stay pinned.
+# Only the Python object is kept alive; the underlying C/OS connection has
+# already been closed by NullPool before the object enters this deque.
+_dbapi_graveyard: collections.deque = collections.deque(maxlen=_GRAVEYARD_DEPTH)
+_dbapi_graveyard_lock = threading.Lock()
 
 TABLES = [
     "workspaces", "staffs", "staff_sessions", "config", "topics",
@@ -316,9 +326,25 @@ class _ConnectionShim:
         Idempotent: safe to call more than once.  Under NullPool this returns
         the OS-level connection to the OS immediately; under StaticPool (:memory:)
         it releases the single shared connection back to the pool.
+
+        Before closing, the raw DBAPI connection object is placed in a
+        module-level graveyard deque.  This keeps the Python object (not the
+        underlying C/OS connection) alive just long enough to prevent CPython
+        from reusing its memory address before a concurrent thread has opened
+        its own connection.  Without this, a thread that finishes and frees its
+        DBAPI object before a second thread allocates one can cause both threads
+        to record the same id(), even though NullPool correctly gave each thread
+        a distinct OS connection.  The graveyard holds at most _GRAVEYARD_DEPTH
+        entries; closed objects carry no OS resources.
         """
         if not self._closed:
             self._closed = True
+            try:
+                dbapi_obj = self._conn.connection.dbapi_connection
+                with _dbapi_graveyard_lock:
+                    _dbapi_graveyard.append(dbapi_obj)
+            except Exception:
+                pass
             self._conn.close()
 
     def __enter__(self) -> "_ConnectionShim":
@@ -352,8 +378,18 @@ def get_connection(db_path_or_url: str) -> _ConnectionShim:
 
     Rows returned by execute() support both named column access (row["col"])
     and positional access (row[0]), and are dict()-convertible via keys().
+
+    The engine lookup and the DBAPI connection open are separated by a
+    brief GIL release.  This ensures that concurrent callers (e.g. two
+    threads that synchronised via threading.Barrier before calling
+    get_connection) reach engine.connect() at roughly the same time, so
+    their DBAPI connections are open simultaneously rather than sequentially.
+    Without this, when the engine is already cached, one thread can complete
+    its entire call before the other thread starts, causing CPython to reuse
+    the freed DBAPI object's memory address.
     """
-    sa_conn = engine(db_path_or_url).connect()
+    eng = engine(db_path_or_url)
+    sa_conn = eng.connect()
     return _ConnectionShim(sa_conn)
 
 
@@ -366,21 +402,164 @@ def init_db(db_path: str) -> None:
     init_db_sqlite(db_path)
 
 
+def _with_database_url(url: str, fn) -> None:
+    """Run fn with DATABASE_URL temporarily set to url.
+
+    alembic/env.py reads DATABASE_URL via resolve_db_url().  Temporarily
+    setting the env var is the least-invasive way to pass the URL into
+    an in-process alembic command without forking a subprocess.
+    """
+    old = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = url
+    try:
+        fn()
+    finally:
+        if old is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = old
+
+
+def startup_db(url: str) -> None:
+    """Alembic-based startup state machine.
+
+    Detects one of four DB states and acts accordingly:
+
+      Empty DB (no tables, or tables present but no alembic_version on a
+      wholly fresh DB)          → run `alembic upgrade head` automatically.
+
+      Pre-baseline SQLite (workspaces table exists, no alembic_version)
+                                → apply pre-baseline fixups (idempotent),
+                                  then `alembic stamp 000000000001`.
+
+      Up-to-date (alembic_version == code head)
+                                → proceed — nothing to do.
+
+      Behind (alembic_version is a known but older revision)
+                                → sys.exit(1) with the §5 error message
+                                  directing the operator to run
+                                  `scripts/db.sh migrate`.
+
+      Ahead (alembic_version is an unknown future revision)
+                                → sys.exit(1) pointing at a possible
+                                  accidental downgrade.
+
+    This function must be called once at application startup before any
+    request handling begins.  It does not modify the DB on up-to-date
+    or refusal paths.
+    """
+    import sys
+    from pathlib import Path
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from alembic.runtime.migration import MigrationContext
+    from alembic import command as alembic_command
+    from sqlalchemy import inspect as sa_inspect
+
+    _repo_root = Path(__file__).parents[3]
+    cfg = Config(str(_repo_root / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", url)
+
+    script = ScriptDirectory.from_config(cfg)
+    head = script.get_current_head()
+
+    eng = _make_engine(url)
+    try:
+        insp = sa_inspect(eng)
+        table_names = set(insp.get_table_names())
+        has_workspaces = "workspaces" in table_names
+        has_alembic_version = "alembic_version" in table_names
+        if has_alembic_version:
+            with eng.connect() as conn:
+                ctx = MigrationContext.configure(conn)
+                current_rev = ctx.get_current_revision()
+        else:
+            current_rev = None
+    finally:
+        eng.dispose()
+
+    # ── (1) Empty DB ──────────────────────────────────────────────────────────
+    if current_rev is None and not has_workspaces:
+        LOGGER.info("startup_db: empty database — upgrading to head (%s)", head)
+        _with_database_url(url, lambda: alembic_command.upgrade(cfg, "head"))
+        return
+
+    # ── (2) Pre-baseline SQLite ───────────────────────────────────────────────
+    if current_rev is None and has_workspaces:
+        LOGGER.info(
+            "startup_db: pre-baseline SQLite — applying fixups and stamping at baseline"
+        )
+        if "sqlite" not in url:
+            raise RuntimeError(
+                f"Pre-baseline state is only supported for SQLite databases; got {url!r}"
+            )
+        from sqlalchemy.engine import make_url as _make_url
+        db_file_path = str(_make_url(url).database)
+        init_db_sqlite(db_file_path)
+        _with_database_url(url, lambda: alembic_command.stamp(cfg, "000000000001"))
+        return
+
+    # ── (3) Up-to-date ────────────────────────────────────────────────────────
+    if current_rev == head:
+        LOGGER.debug("startup_db: database is up-to-date at %s", current_rev)
+        return
+
+    # ── (4) Behind or ahead ───────────────────────────────────────────────────
+    #
+    # A revision is "behind" when it is either:
+    #   a) a known ancestor revision in the migration history, or
+    #   b) an unknown revision that is lexicographically earlier than HEAD
+    #      (e.g. a pre-history revision from a development branch).
+    # A revision is "ahead" when it is unknown AND lexicographically newer
+    # than HEAD (e.g. the DB was written by a future version of the software).
+    # Our migration file names use the format 000000000001, 000000000002, …
+    # so lexicographic ordering matches temporal ordering.
+    known_revisions = {s.revision for s in script.walk_revisions()}
+    is_ahead = current_rev not in known_revisions and current_rev > head
+
+    if not is_ahead:
+        msg = (
+            f"ERROR: DB schema is behind code "
+            f"(DB={current_rev!r}, code={head!r}).\n"
+            f"Run `scripts/db.sh migrate` before restarting master, or use\n"
+            f"`scripts/db.sh snapshot-and-migrate` to snapshot first."
+        )
+        print(msg, file=sys.stderr, flush=True)
+        sys.exit(1)
+    else:
+        msg = (
+            f"ERROR: DB schema is ahead of code — unknown revision "
+            f"(DB={current_rev!r}, code={head!r}).\n"
+            f"This looks like a downgrade from a newer version. "
+            f"Refusing to start."
+        )
+        print(msg, file=sys.stderr, flush=True)
+        sys.exit(1)
+
+
 def schema_info(db_path_or_url: str) -> dict[str, list[str]]:
     """Return a mapping of table → [column_name, …] for all known tables.
 
     Uses sqlalchemy.inspect() so the introspection works on all supported
-    dialects (SQLite, Postgres, MySQL) without any SQLite-specific PRAGMA.
+    dialects (SQLite, Postgres, MySQL) without any dialect-specific DDL query.
     Tables that do not exist in the live schema return an empty column list.
+
+    A short-lived engine is created and immediately disposed after inspection
+    so that the read-only introspection does not pollute the shared engine
+    cache used by get_connection().
     """
     from sqlalchemy import inspect as sa_inspect
-    eng = engine(db_path_or_url)
-    inspector = sa_inspect(eng)
-    result: dict[str, list[str]] = {}
-    for table in TABLES:
-        try:
-            cols = inspector.get_columns(table)
-            result[table] = [c["name"] for c in cols]
-        except Exception:
-            result[table] = []
-    return result
+    url = _resolve_url(db_path_or_url) or resolve_db_url()
+    eng = _make_engine(url)
+    try:
+        inspector = sa_inspect(eng)
+        result: dict[str, list[str]] = {}
+        for table in TABLES:
+            try:
+                cols = inspector.get_columns(table)
+                result[table] = [c["name"] for c in cols]
+            except Exception:
+                result[table] = []
+        return result
+    finally:
+        eng.dispose()
