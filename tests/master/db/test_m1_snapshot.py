@@ -989,7 +989,8 @@ class TestImportLockTimeout:
         try:
             with engine.begin() as conn:
                 conn.execute(text(
-                    "INSERT INTO workspaces (id, name) VALUES ('ws-lock-test', 'Lock Test')"
+                    "INSERT INTO workspaces (id, name, repo_url, created_at)"
+                    " VALUES ('ws-lock-test', 'Lock Test', 'https://example.com/repo', '2026-01-01T00:00:00Z')"
                 ))
         finally:
             engine.dispose()

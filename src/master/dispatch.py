@@ -215,7 +215,7 @@ async def dispatch_to_staff(
                 ),
                 {
                     "id": message_id, "topic_id": topic_id, "sender": sender, "text": raw_text,
-                    "event_action_id": event_action_id, "silent": 1 if silent else 0, "created_at": now,
+                    "event_action_id": event_action_id, "silent": bool(silent), "created_at": now,
                     "sender_kind": sender_kind, "sender_name": sender_name,
                     "receiver_kind": receiver_kind, "receiver_name": receiver_name,
                     "task_id": task_id, "reply_to_message_id": reply_to_message_id,

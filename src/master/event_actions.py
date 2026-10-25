@@ -275,9 +275,9 @@ def create_event_action(
                 "prompt_template": body.prompt_template,
                 "timing": body.timing,
                 "cron_expr": body.cron_expr,
-                "enabled": 1 if body.enabled else 0,
-                "structured_output": 1 if body.structured_output else 0,
-                "silent": 1 if body.silent else 0,
+                "enabled": bool(body.enabled),
+                "structured_output": bool(body.structured_output),
+                "silent": bool(body.silent),
                 "created_at": now,
                 "updated_at": now,
             },
@@ -343,9 +343,9 @@ def patch_event_action(
         new_template = sent["prompt_template"] if "prompt_template" in sent else existing["prompt_template"]
         new_timing = sent["timing"] if "timing" in sent else existing["timing"]
         new_cron = sent["cron_expr"] if "cron_expr" in sent else existing["cron_expr"]
-        new_enabled = (1 if sent["enabled"] else 0) if "enabled" in sent else existing["enabled"]
-        new_structured_output = (1 if sent["structured_output"] else 0) if "structured_output" in sent else existing["structured_output"]
-        new_silent = (1 if sent["silent"] else 0) if "silent" in sent else existing["silent"]
+        new_enabled = (bool(sent["enabled"])) if "enabled" in sent else existing["enabled"]
+        new_structured_output = (bool(sent["structured_output"])) if "structured_output" in sent else existing["structured_output"]
+        new_silent = (bool(sent["silent"])) if "silent" in sent else existing["silent"]
 
         _validate_merged_state(
             event_type=existing["event_type"],
@@ -452,9 +452,9 @@ def create_workspace_event_action(
                 "staff_name": body.staff_name,
                 "prompt_template": body.prompt_template,
                 "timing": body.timing,
-                "enabled": 1 if body.enabled else 0,
-                "structured_output": 1 if body.structured_output else 0,
-                "silent": 1 if body.silent else 0,
+                "enabled": bool(body.enabled),
+                "structured_output": bool(body.structured_output),
+                "silent": bool(body.silent),
                 "created_at": now,
                 "updated_at": now,
             },
@@ -514,9 +514,9 @@ def patch_workspace_event_action(
         new_template = sent["prompt_template"] if "prompt_template" in sent else existing["prompt_template"]
         new_timing = sent["timing"] if "timing" in sent else existing["timing"]
         new_cron = sent["cron_expr"] if "cron_expr" in sent else existing["cron_expr"]
-        new_enabled = (1 if sent["enabled"] else 0) if "enabled" in sent else existing["enabled"]
-        new_structured_output = (1 if sent["structured_output"] else 0) if "structured_output" in sent else existing["structured_output"]
-        new_silent = (1 if sent["silent"] else 0) if "silent" in sent else existing["silent"]
+        new_enabled = (bool(sent["enabled"])) if "enabled" in sent else existing["enabled"]
+        new_structured_output = (bool(sent["structured_output"])) if "structured_output" in sent else existing["structured_output"]
+        new_silent = (bool(sent["silent"])) if "silent" in sent else existing["silent"]
 
         _validate_merged_state(
             event_type=existing["event_type"],

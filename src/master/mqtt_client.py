@@ -213,7 +213,7 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
                     "agent_name": agent_name, "text": text, "transcript": transcript,
                     "usage_json": usage_json, "attachments_json": None,
                     "interrupt_reason": interrupt_reason,
-                    "silent": 1 if silent else 0, "created_at": _now(),
+                    "silent": bool(silent), "created_at": _now(),
                     "sender_kind": reply_sender_kind, "sender_name": reply_sender_name,
                     "receiver_kind": reply_receiver_kind, "receiver_name": reply_receiver_name,
                     "task_id": inherited_task_id,

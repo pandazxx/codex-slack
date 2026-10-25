@@ -127,7 +127,7 @@ def create_workspace(body: WorkspaceCreate, request: Request) -> WorkspaceOut:
                     " 'topic', :is_default, NULL, :now, :now)"
                 ),
                 {"id": str(uuid.uuid4()), "workspace_id": workspace_id, "name": staff_name,
-                 "adapter": adapter, "is_default": 1 if is_default else 0, "now": now},
+                 "adapter": adapter, "is_default": bool(is_default), "now": now},
             )
         conn.commit()
         result = _fetch_workspace(conn, workspace_id)
