@@ -239,6 +239,112 @@ class _ResultProxy:
 # Param-style conversion
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Columns that are BOOLEAN in the schema.  Test code (and pre-M0 legacy helpers)
+# sometimes embeds literal 0/1 in SQL text rather than binding Python bool values.
+# On Postgres, integer literals for BOOLEAN columns are rejected (no implicit
+# int4→boolean cast).  _fix_insert_bool_literals rewrites those literals in the
+# SQL text before execution on non-SQLite dialects.
+#
+# Production code post-M1 binds Python bool() via text() named params and never
+# goes through this path.  The shim is kept for backward-compat with test
+# fixtures that use old-style embedded-literal SQL.
+_BOOLEAN_COLS: dict[str, frozenset[str]] = {
+    "messages":      frozenset({"silent"}),
+    "staffs":        frozenset({"is_default"}),
+    "event_actions": frozenset({"enabled", "structured_output", "silent"}),
+}
+
+
+def _fix_insert_bool_literals(sql: str) -> str:
+    """Replace literal 0/1 at BOOLEAN column positions in a single-row VALUES clause.
+
+    Handles INSERT statements where boolean values are hardcoded as integer literals
+    in the SQL text (e.g. legacy test fixtures).  PostgreSQL rejects integer literals
+    for BOOLEAN columns; SQLite accepts them natively.  Only called for non-SQLite
+    dialects.
+
+    Limitation: only handles single-row VALUES clauses.  Multi-row VALUES
+    (INSERT INTO t (c) VALUES (0), (1)) are not rewritten; production code must
+    bind Python bool values explicitly via text() named params.
+    """
+    import re as _re
+
+    m = _re.match(
+        r"(?i)\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]+)\)",
+        sql,
+    )
+    if not m:
+        return sql
+
+    table = m.group(1).lower()
+    bool_cols = _BOOLEAN_COLS.get(table)
+    if not bool_cols:
+        return sql
+
+    col_names = [c.strip().strip('"').lower() for c in m.group(2).split(",")]
+    bool_col_positions = frozenset(i for i, col in enumerate(col_names) if col in bool_cols)
+    if not bool_col_positions:
+        return sql
+
+    vm = _re.search(r"(?i)\bVALUES\s*\(", sql)
+    if not vm:
+        return sql
+
+    body_start = vm.end()  # index after opening '('
+
+    spans: list[tuple[int, int]] = []
+    depth = 1
+    tok_start = body_start
+    i = body_start
+
+    while i < len(sql):
+        c = sql[i]
+        if c == "'":
+            i += 1
+            while i < len(sql):
+                if sql[i] == "'":
+                    if i + 1 < len(sql) and sql[i + 1] == "'":
+                        i += 2
+                    else:
+                        i += 1
+                        break
+                else:
+                    i += 1
+        elif c == "(":
+            depth += 1
+            i += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                spans.append((tok_start, i))
+                break
+            i += 1
+        elif c == "," and depth == 1:
+            spans.append((tok_start, i))
+            tok_start = i + 1
+            i += 1
+        else:
+            i += 1
+
+    if not spans:
+        return sql
+
+    chars = list(sql)
+    for pos, (start, end) in enumerate(spans):
+        if pos not in bool_col_positions:
+            continue
+        token = sql[start:end]
+        stripped = token.strip()
+        if stripped not in ("0", "1"):
+            continue
+        replacement = "false" if stripped == "0" else "true"
+        leading = len(token) - len(token.lstrip())
+        digit_pos = start + leading
+        chars[digit_pos : digit_pos + 1] = list(replacement)
+
+    return "".join(chars)
+
+
 def _qmark_to_named(
     sql: str,
     params: tuple | list,
@@ -317,6 +423,13 @@ class _ConnectionShim:
             return _ResultProxy(result)
 
         # Old style: plain string, params may be tuple/list or None.
+        # Rewrite literal 0/1 for BOOLEAN columns on non-SQLite dialects so
+        # that legacy test fixtures with embedded integer literals work on
+        # Postgres.  Production code uses text() with named params + bool(),
+        # so this path is only hit by old-style callers.
+        dialect_name = self._conn.dialect.name
+        if dialect_name != "sqlite":
+            sql = _fix_insert_bool_literals(sql)
         if params is not None and isinstance(params, (tuple, list)):
             converted_sql, named_params = _qmark_to_named(sql, params)
             sql_obj = sa_text(converted_sql)
