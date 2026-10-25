@@ -413,7 +413,7 @@ def _scheduler_tick(db_path: str, app_state, now_utc_aware) -> None:
             " JOIN topics t ON t.id = a.scope_id"
             " JOIN workspaces w ON w.id = t.workspace_id"
             " WHERE a.event_type='topic_scheduler'"
-            "   AND a.enabled=1"
+            "   AND a.enabled=TRUE"
             "   AND t.archived_at IS NULL"
         ).fetchall()
         for row in rows:

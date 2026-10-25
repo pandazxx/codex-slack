@@ -157,10 +157,7 @@ def _decode_value(
     if value is None:
         return None
     if col in bool_cols:
-        v = bool(value)
-        if dialect in ("sqlite", "mysql"):
-            return 1 if v else 0
-        return v
+        return bool(value)
     if col in float_cols:
         return float(value)
     if col in json_cols:

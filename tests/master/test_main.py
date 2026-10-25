@@ -62,6 +62,7 @@ def test_schema_staffs_columns(client):
         assert expected in cols, f"missing column: {expected}"
 
 
+@pytest.mark.sqlite_only
 def test_db_file_created_on_startup(tmp_path, monkeypatch):
     monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CONTAINER_RUNTIME", "docker")

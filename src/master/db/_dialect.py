@@ -108,6 +108,31 @@ def table_exists(conn: Connection, table_name: str) -> bool:
     return inspector.has_table(table_name)
 
 
+def json_array_contains_fragment(column: str, param: str, dialect: str) -> str:
+    """Return a dialect-appropriate SQL fragment for testing membership in a JSON text array.
+
+    Returns a self-contained boolean expression (no leading AND) that is TRUE
+    when the text value bound to `param` appears in the JSON array stored in
+    `column`.  Embed in a WHERE clause::
+
+        frag = json_array_contains_fragment("tags", ":tag", dialect)
+        sql = f"SELECT ... FROM notes WHERE scope_id=:sid AND {frag}"
+
+    Dialect mapping
+    ---------------
+    postgresql  EXISTS (SELECT 1 FROM jsonb_array_elements_text(col::jsonb) AS _t WHERE _t = :param)
+    mysql       JSON_CONTAINS(col, JSON_QUOTE(:param))
+    sqlite      EXISTS (SELECT 1 FROM json_each(col) WHERE value = :param)
+    """
+    if dialect == "postgresql":
+        return (
+            f"EXISTS (SELECT 1 FROM jsonb_array_elements_text({column}::jsonb) AS _t WHERE _t = {param})"
+        )
+    if dialect == "mysql":
+        return f"JSON_CONTAINS({column}, JSON_QUOTE({param}))"
+    return f"EXISTS (SELECT 1 FROM json_each({column}) WHERE value = {param})"
+
+
 def reset_sequences_for_table(conn: Connection, table_name: str) -> None:
     """Reset identity sequences after a bulk import so subsequent inserts
     do not collide with imported rows.

@@ -25,6 +25,7 @@ from typing import NamedTuple
 from sqlalchemy import text
 
 from .db import get_connection
+from .db._dialect import json_array_contains_fragment
 from .staffs import resolve_staff
 
 LOGGER = logging.getLogger(__name__)
@@ -83,11 +84,13 @@ def render_template(
                 return ""
             conn = get_connection(db_path)
             try:
+                dialect = conn._conn.dialect.name
+                tag_fragment = json_array_contains_fragment("tags", ":tag", dialect)
                 rows = conn.execute(
                     text(
                         "SELECT key, value FROM notes"
                         " WHERE scope_type='workspace' AND scope_id=:scope_id"
-                        "   AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value=:tag)"
+                        f"   AND {tag_fragment}"
                         " ORDER BY key"
                     ),
                     {"scope_id": workspace_id, "tag": tag},
@@ -194,7 +197,7 @@ async def _handle_event(app_state, event: dict) -> None:
                 " WHERE scope_type='topic'"
                 "   AND scope_id=:scope_id"
                 "   AND event_type=:event_type"
-                "   AND enabled=1"
+                "   AND enabled=TRUE"
                 "   AND (timing IS NULL OR timing=:timing)"
             ),
             {"scope_id": event["topic_id"], "event_type": event["event_type"], "timing": event["timing"]},
@@ -205,7 +208,7 @@ async def _handle_event(app_state, event: dict) -> None:
                 " WHERE scope_type='workspace'"
                 "   AND scope_id=:scope_id"
                 "   AND event_type=:event_type"
-                "   AND enabled=1"
+                "   AND enabled=TRUE"
                 "   AND (timing IS NULL OR timing=:timing)"
             ),
             {"scope_id": event["workspace_id"], "event_type": event["event_type"], "timing": event["timing"]},
@@ -353,8 +356,8 @@ async def run_gate_actions(
                 " WHERE scope_type='topic' AND scope_id=:scope_id"
                 "   AND event_type='topic_message_sent'"
                 "   AND timing='before'"
-                "   AND structured_output=1"
-                "   AND enabled=1"
+                "   AND structured_output=TRUE"
+                "   AND enabled=TRUE"
             ),
             {"scope_id": topic_id},
         ).fetchall()
@@ -364,8 +367,8 @@ async def run_gate_actions(
                 " WHERE scope_type='workspace' AND scope_id=:scope_id"
                 "   AND event_type='topic_message_sent'"
                 "   AND timing='before'"
-                "   AND structured_output=1"
-                "   AND enabled=1"
+                "   AND structured_output=TRUE"
+                "   AND enabled=TRUE"
             ),
             {"scope_id": workspace_id},
         ).fetchall()
@@ -528,7 +531,7 @@ async def veto_dispatch(
                 " WHERE scope_type='topic'"
                 "   AND scope_id=:scope_id"
                 "   AND event_type='topic_archiving'"
-                "   AND enabled=1"
+                "   AND enabled=TRUE"
             ),
             {"scope_id": topic_id},
         ).fetchall()
@@ -538,7 +541,7 @@ async def veto_dispatch(
                 " WHERE scope_type='workspace'"
                 "   AND scope_id=:scope_id"
                 "   AND event_type='topic_archiving'"
-                "   AND enabled=1"
+                "   AND enabled=TRUE"
             ),
             {"scope_id": workspace_id},
         ).fetchall()

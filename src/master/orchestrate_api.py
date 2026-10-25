@@ -1537,7 +1537,7 @@ def _mark_reply_silent(db_path: str, reply_message_id: str) -> None:
     conn = get_connection(db_path)
     try:
         conn.execute(
-            text("UPDATE messages SET silent = 1 WHERE id = :id"), {"id": reply_message_id}
+            text("UPDATE messages SET silent = TRUE WHERE id = :id"), {"id": reply_message_id}
         )
         conn.commit()
     finally:

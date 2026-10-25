@@ -288,7 +288,7 @@ def _get_structured_output_action(db_path: str, message_id: str) -> Any | None:
                 return None
             action_row = conn.execute(
                 sa_text(
-                    "SELECT * FROM event_actions WHERE id = :action_id AND structured_output = 1"
+                    "SELECT * FROM event_actions WHERE id = :action_id AND structured_output = TRUE"
                 ),
                 {"action_id": msg_row["event_action_id"]},
             ).fetchone()

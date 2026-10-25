@@ -117,12 +117,12 @@ def resolve_staff(
 def resolve_default_staff(
     conn: Any, workspace_id: str, topic_id: str | None
 ) -> Any | None:
-    """Cascade resolution for the default staff (is_default=1)."""
+    """Cascade resolution for the default staff (is_default=TRUE)."""
     if topic_id:
         row = conn.execute(
             text(
                 f"SELECT {_SELECT_COLS} FROM staffs"
-                " WHERE scope_type='topic' AND scope_id=:scope_id AND is_default=1"
+                " WHERE scope_type='topic' AND scope_id=:scope_id AND is_default=TRUE"
             ),
             {"scope_id": topic_id},
         ).fetchone()
@@ -131,7 +131,7 @@ def resolve_default_staff(
     row = conn.execute(
         text(
             f"SELECT {_SELECT_COLS} FROM staffs"
-            " WHERE scope_type='workspace' AND scope_id=:scope_id AND is_default=1"
+            " WHERE scope_type='workspace' AND scope_id=:scope_id AND is_default=TRUE"
         ),
         {"scope_id": workspace_id},
     ).fetchone()
@@ -140,7 +140,7 @@ def resolve_default_staff(
     return conn.execute(
         text(
             f"SELECT {_SELECT_COLS} FROM staffs"
-            " WHERE scope_type='global' AND scope_id IS NULL AND is_default=1"
+            " WHERE scope_type='global' AND scope_id IS NULL AND is_default=TRUE"
         ),
     ).fetchone()
 
@@ -173,7 +173,7 @@ def _insert_staff(
                 "system_prompt": body.system_prompt,
                 "agent": body.agent,
                 "session_scope": body.session_scope,
-                "is_default": 1 if body.is_default else 0,
+                "is_default": bool(body.is_default),
                 "extra_flags": body.extra_flags,
                 "created_at": now,
                 "updated_at": now,
@@ -217,7 +217,7 @@ def _update_staff(
         {
             "adapter": body.adapter, "model": body.model, "system_prompt": body.system_prompt,
             "agent": body.agent, "session_scope": body.session_scope,
-            "is_default": 1 if body.is_default else 0,
+            "is_default": bool(body.is_default),
             "extra_flags": body.extra_flags, "updated_at": now, "id": row["id"],
         },
     )
@@ -247,13 +247,13 @@ def _set_default_staff(
     now = _now()
     conn.execute(
         text(
-            f"UPDATE staffs SET is_default=0, updated_at=:updated_at"
+            f"UPDATE staffs SET is_default=FALSE, updated_at=:updated_at"
             f" WHERE scope_type=:scope_type AND {_scope_clause}"
         ),
         {"updated_at": now, "scope_type": scope_type, **_scope_params},
     )
     conn.execute(
-        text("UPDATE staffs SET is_default=1, updated_at=:updated_at WHERE id=:id"),
+        text("UPDATE staffs SET is_default=TRUE, updated_at=:updated_at WHERE id=:id"),
         {"updated_at": now, "id": row["id"]},
     )
     conn.commit()
