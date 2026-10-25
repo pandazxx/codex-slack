@@ -410,6 +410,11 @@ class _ConnectionShim:
         self._conn = sa_conn
         self._closed = False
 
+    @property
+    def dialect_name(self) -> str:
+        """Return the SQLAlchemy dialect name, e.g. 'sqlite', 'postgresql'."""
+        return self._conn.dialect.name
+
     def execute(self, sql, params=None) -> _ResultProxy:
         if isinstance(sql, TextClause):
             # New style: sqlalchemy text() with dict params.
