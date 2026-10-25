@@ -12,5 +12,10 @@ ruff>=0.4.0
 mcp>=1.0.0,<2  # 2.0.0 (2026-07-28) removed mcp.server.fastmcp; migration tracked separately
 sqlalchemy>=2.0
 alembic>=1.13
+# psycopg and pymysql are installed unconditionally so that operators can
+# switch DATABASE_URL to any supported backend without reinstalling packages.
+# psycopg[binary] is the async-capable Postgres driver; the [binary] extra
+# bundles libpq so no system-level postgres-dev package is required.
+# pymysql is the pure-Python MySQL driver; no system packages needed.
 psycopg[binary]>=3.1
 pymysql>=1.1

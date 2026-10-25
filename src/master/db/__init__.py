@@ -366,14 +366,21 @@ def init_db(db_path: str) -> None:
     init_db_sqlite(db_path)
 
 
-def schema_info(db_path: str) -> dict[str, list[str]]:
-    """Return a mapping of table → [column_name, …] for all known tables."""
-    conn = get_connection(db_path)
-    try:
-        result: dict[str, list[str]] = {}
-        for table in TABLES:
-            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-            result[table] = [row["name"] for row in rows]
-        return result
-    finally:
-        conn.close()
+def schema_info(db_path_or_url: str) -> dict[str, list[str]]:
+    """Return a mapping of table → [column_name, …] for all known tables.
+
+    Uses sqlalchemy.inspect() so the introspection works on all supported
+    dialects (SQLite, Postgres, MySQL) without any SQLite-specific PRAGMA.
+    Tables that do not exist in the live schema return an empty column list.
+    """
+    from sqlalchemy import inspect as sa_inspect
+    eng = engine(db_path_or_url)
+    inspector = sa_inspect(eng)
+    result: dict[str, list[str]] = {}
+    for table in TABLES:
+        try:
+            cols = inspector.get_columns(table)
+            result[table] = [c["name"] for c in cols]
+        except Exception:
+            result[table] = []
+    return result
