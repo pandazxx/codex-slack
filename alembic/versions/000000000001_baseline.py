@@ -37,12 +37,15 @@ def upgrade() -> None:
         sa.Column("last_agent_state", sa.Text()),
         sa.Column("repo_ref", sa.Text(), nullable=False, server_default="master"),
     )
+    # MySQL has no partial indexes; phase 2 converts this to a functional index
+    # over a generated column per the design doc §6 MySQL partial-index conversion.
     op.create_index(
         "idx_workspaces_active_name",
         "workspaces",
         ["name"],
         unique=True,
         sqlite_where=sa.text("archived_at IS NULL"),
+        postgresql_where=sa.text("archived_at IS NULL"),
     )
 
     op.create_table(
@@ -171,11 +174,14 @@ def upgrade() -> None:
     )
     op.create_index("idx_messages_task", "messages", ["task_id", "created_at"])
     op.create_index("idx_messages_reply_to", "messages", ["reply_to_message_id"])
+    # MySQL has no partial indexes; phase 2 converts this to a functional index
+    # over a generated column per the design doc §6 MySQL partial-index conversion.
     op.create_index(
         "idx_messages_envelope_backfill",
         "messages",
         ["id"],
         sqlite_where=sa.text("sender_kind IS NULL"),
+        postgresql_where=sa.text("sender_kind IS NULL"),
     )
 
     op.create_table(
@@ -287,11 +293,14 @@ def upgrade() -> None:
         "event_actions",
         ["scope_type", "scope_id", "event_type", "enabled"],
     )
+    # MySQL has no partial indexes; phase 2 converts this to a functional index
+    # over a generated column per the design doc §6 MySQL partial-index conversion.
     op.create_index(
         "idx_event_actions_scheduler",
         "event_actions",
         ["event_type", "enabled"],
         sqlite_where=sa.text("event_type = 'topic_scheduler'"),
+        postgresql_where=sa.text("event_type = 'topic_scheduler'"),
     )
 
     op.create_table(
@@ -375,11 +384,14 @@ def upgrade() -> None:
     op.create_index(
         "idx_staged_dispatches_prompt", "staged_dispatches", ["prompt_message_id"]
     )
+    # MySQL has no partial indexes; phase 2 converts this to a functional index
+    # over a generated column per the design doc §6 MySQL partial-index conversion.
     op.create_index(
         "idx_staged_dispatches_undispatched",
         "staged_dispatches",
         ["dispatched_at"],
         sqlite_where=sa.text("dispatched_at IS NULL"),
+        postgresql_where=sa.text("dispatched_at IS NULL"),
     )
 
 

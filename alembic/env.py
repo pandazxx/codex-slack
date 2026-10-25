@@ -1,7 +1,6 @@
-"""Alembic environment — uses the same URL resolution as src/master/db/__init__.py."""
+"""Alembic environment — delegates URL resolution to src/master/db/__init__.py."""
 from __future__ import annotations
 
-import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
@@ -12,26 +11,28 @@ from sqlalchemy import engine_from_config, pool
 # Make the src package importable when running alembic from the project root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+# Import after sys.path is set so the src package is visible.
+from src.master.db import resolve_db_url  # noqa: E402
+
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 
-def _resolve_db_url() -> str:
-    """Mirror the resolution order in src/master/db/__init__.py engine()."""
-    database_url = os.getenv("DATABASE_URL", "").strip()
-    if database_url:
-        return database_url
-    data_dir = os.getenv("MASTER_DATA_DIR", "").strip()
-    if data_dir:
-        return f"sqlite+pysqlite:///{data_dir}/master.db"
-    # Fall back to the placeholder URL from alembic.ini so offline mode works.
-    return config.get_main_option("sqlalchemy.url", "")
+def _resolve_alembic_url() -> str:
+    """Return the database URL using the same resolution as src/master/db.engine().
+
+    Falls back to the alembic.ini placeholder URL so offline mode (SQL script
+    generation without a live connection) works without environment variables.
+    """
+    return resolve_db_url(
+        alembic_ini_fallback=config.get_main_option("sqlalchemy.url", "")
+    )
 
 
 def run_migrations_offline() -> None:
     """Run migrations in offline mode (generate SQL script, no live connection)."""
-    url = _resolve_db_url()
+    url = _resolve_alembic_url()
     context.configure(
         url=url,
         target_metadata=None,
@@ -44,7 +45,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations against a live database connection."""
-    url = _resolve_db_url()
+    url = _resolve_alembic_url()
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = url
     connectable = engine_from_config(

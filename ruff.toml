@@ -23,9 +23,8 @@ select = ["DTZ", "TID251"]
 # that handles pre-Z strings and immediately attaches UTC tzinfo.
 "src/master/main.py" = ["DTZ007"]
 # The db package uses sqlite3 directly for legacy pre-baseline DDL.
+# _dialect.py and _row.py do not import sqlite3; no ignore needed there.
 "src/master/db/__init__.py" = ["TID251"]
 "src/master/db/_prebaseline.py" = ["TID251"]
-"src/master/db/_dialect.py" = ["TID251"]
-"src/master/db/_row.py" = ["TID251"]
 # Tests may import sqlite3 for fixtures and introspection.
 "tests/**" = ["TID251"]

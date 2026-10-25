@@ -11,7 +11,7 @@
 #
 # Environment:
 #   DATABASE_URL     Full SQLAlchemy URL — highest priority.
-#   MASTER_DATA_DIR  Fallback; resolves to sqlite:///{MASTER_DATA_DIR}/master.db.
+#   MASTER_DATA_DIR  Fallback; resolves to sqlite:///{MASTER_DATA_DIR}/master_data.db.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -57,7 +57,17 @@ _engine_lock = threading.Lock()
 
 
 def _make_engine(url: str) -> Engine:
-    """Build a SQLAlchemy engine for the given URL with sensible defaults."""
+    """Build a SQLAlchemy engine for the given URL with sensible defaults.
+
+    SQLite pool selection:
+      - :memory: databases use StaticPool so the single in-memory DB is shared
+        across all checkouts (closing the connection would destroy it).
+      - File-based SQLite databases use NullPool so each checkout opens a fresh
+        OS-level connection, matching the old sqlite3.connect() behaviour.
+        This prevents a single DBAPI connection from being shared across the
+        FastAPI threadpool, the MQTT callback thread, and background threads
+        without a mutex.
+    """
     pool_size = int(os.getenv("DB_POOL_SIZE", "5") or "5")
     pool_max_overflow = int(os.getenv("DB_POOL_MAX_OVERFLOW", "10") or "10")
     echo = os.getenv("DB_ECHO_SQL", "false").lower() in ("1", "true", "yes")
@@ -65,8 +75,13 @@ def _make_engine(url: str) -> Engine:
     kwargs: dict[str, Any] = {"echo": echo}
 
     if url.startswith("sqlite"):
-        from sqlalchemy.pool import StaticPool
-        kwargs["poolclass"] = StaticPool
+        is_memory = ":memory:" in url
+        if is_memory:
+            from sqlalchemy.pool import StaticPool
+            kwargs["poolclass"] = StaticPool
+        else:
+            from sqlalchemy.pool import NullPool
+            kwargs["poolclass"] = NullPool
         kwargs["connect_args"] = {"check_same_thread": False}
     else:
         kwargs["pool_size"] = pool_size
@@ -102,6 +117,31 @@ def _resolve_url(db_path_or_url: str | None) -> str:
     return ""
 
 
+def resolve_db_url(*, alembic_ini_fallback: str = "") -> str:
+    """Resolve the database URL from environment variables.
+
+    Resolution order:
+      1. DATABASE_URL environment variable.
+      2. MASTER_DATA_DIR environment variable →
+         sqlite+pysqlite:///{MASTER_DATA_DIR}/master_data.db
+      3. alembic_ini_fallback — alembic offline-mode placeholder only;
+         empty by default.
+
+    Raises ValueError when no source is available and alembic_ini_fallback
+    is empty.  alembic/env.py imports this function so both paths use one
+    source of truth for the default filename (master_data.db).
+    """
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if database_url:
+        return database_url
+    data_dir = os.getenv("MASTER_DATA_DIR", "").strip()
+    if data_dir:
+        return f"sqlite+pysqlite:///{data_dir}/master_data.db"
+    if alembic_ini_fallback:
+        return alembic_ini_fallback
+    raise ValueError("Provide DATABASE_URL or MASTER_DATA_DIR")
+
+
 def engine(db_path_or_url: str | None = None) -> Engine:
     """Return the SQLAlchemy engine.
 
@@ -109,11 +149,13 @@ def engine(db_path_or_url: str | None = None) -> Engine:
       1. DATABASE_URL environment variable (explicit operator setting).
       2. db_path_or_url argument — full URL used as-is; plain path converted
          to sqlite+pysqlite:///{path}.
-      3. MASTER_DATA_DIR environment variable → sqlite+pysqlite:///{MASTER_DATA_DIR}/master.db
+      3. resolve_db_url() → MASTER_DATA_DIR/master_data.db, or raises.
 
     Engines are cached per URL so a single pool is reused across requests.
-    The cache is exposed as _engine (a dict) so tests can invalidate it via
-    monkeypatch.setattr(db_mod, "_engine", None).
+    The cache is intentionally typed as dict | None: tests may monkeypatch
+    _engine to None to invalidate the cache; the isinstance guard below
+    handles that without relying on reload().  Prefer _reset_engine_cache()
+    in new code.
     """
     global _engine
     database_url = os.getenv("DATABASE_URL", "").strip()
@@ -122,13 +164,7 @@ def engine(db_path_or_url: str | None = None) -> Engine:
     else:
         url = _resolve_url(db_path_or_url)
         if not url:
-            data_dir = os.getenv("MASTER_DATA_DIR", "").strip()
-            if data_dir:
-                url = f"sqlite+pysqlite:///{data_dir}/master.db"
-            else:
-                raise ValueError(
-                    "Provide DATABASE_URL, db_path_or_url, or MASTER_DATA_DIR"
-                )
+            url = resolve_db_url()  # raises ValueError when MASTER_DATA_DIR unset
 
     with _engine_lock:
         if not isinstance(_engine, dict):
@@ -136,6 +172,19 @@ def engine(db_path_or_url: str | None = None) -> Engine:
         if url not in _engine:
             _engine[url] = _make_engine(url)
         return _engine[url]
+
+
+def _reset_engine_cache() -> None:
+    """Clear the per-URL engine cache.
+
+    Use this in tests that need a fresh engine, rather than monkeypatching
+    _engine directly.  Both approaches work: engine() re-initialises _engine
+    to {} when it finds None, so monkeypatch.setattr(db_mod, "_engine", None)
+    also invalidates the cache for existing test fixtures.
+    """
+    global _engine
+    with _engine_lock:
+        _engine = {}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -221,10 +270,11 @@ class _ConnectionShim:
     so that tests doing pytest.raises(sqlite3.IntegrityError) continue to pass.
     """
 
-    __slots__ = ("_conn",)
+    __slots__ = ("_conn", "_closed")
 
     def __init__(self, sa_conn) -> None:
         self._conn = sa_conn
+        self._closed = False
 
     def execute(self, sql, params=None) -> _ResultProxy:
         if isinstance(sql, TextClause):
@@ -261,16 +311,27 @@ class _ConnectionShim:
         self._conn.rollback()
 
     def close(self) -> None:
-        self._conn.close()
+        """Close the underlying SQLAlchemy connection.
+
+        Idempotent: safe to call more than once.  Under NullPool this returns
+        the OS-level connection to the OS immediately; under StaticPool (:memory:)
+        it releases the single shared connection back to the pool.
+        """
+        if not self._closed:
+            self._closed = True
+            self._conn.close()
 
     def __enter__(self) -> "_ConnectionShim":
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
-        if exc_type is None:
-            self._conn.commit()
-        else:
-            self._conn.rollback()
+        try:
+            if exc_type is None:
+                self._conn.commit()
+            else:
+                self._conn.rollback()
+        finally:
+            self.close()
         return False
 
 
