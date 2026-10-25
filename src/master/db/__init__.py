@@ -168,21 +168,42 @@ class _ResultProxy:
 def _qmark_to_named(sql: str, params: tuple | list) -> tuple[str, dict[str, Any]]:
     """Convert qmark ? placeholders to :_p0, :_p1, … named params for SQLAlchemy.
 
-    Simple regex-based replacement — sufficient for all production SQL in this
-    codebase where ? never appears inside a string literal.
+    Walks the SQL character by character so that ? inside single-quoted string
+    literals is left untouched.  Standard SQL string literal rules apply:
+      - A single-quoted literal begins with ' and ends with the next '
+      - Two consecutive '' inside a literal is an escaped single quote
     """
     param_dict: dict[str, Any] = {}
+    result: list[str] = []
     idx = 0
-
-    def _replace(m: re.Match) -> str:
-        nonlocal idx
-        name = f"_p{idx}"
-        param_dict[name] = params[idx]
-        idx += 1
-        return f":{name}"
-
-    converted = re.sub(r"\?", _replace, sql)
-    return converted, param_dict
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if ch == "'":
+            # Consume the entire single-quoted literal without substitution.
+            result.append(ch)
+            i += 1
+            while i < len(sql):
+                c = sql[i]
+                result.append(c)
+                i += 1
+                if c == "'":
+                    # A second consecutive ' is an escaped quote; continue literal.
+                    if i < len(sql) and sql[i] == "'":
+                        result.append(sql[i])
+                        i += 1
+                    else:
+                        break
+        elif ch == "?":
+            name = f"_p{idx}"
+            param_dict[name] = params[idx]
+            idx += 1
+            result.append(f":{name}")
+            i += 1
+        else:
+            result.append(ch)
+            i += 1
+    return "".join(result), param_dict
 
 
 # ──────────────────────────────────────────────────────────────────────────────
