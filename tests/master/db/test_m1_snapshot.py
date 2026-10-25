@@ -1007,10 +1007,14 @@ class TestImportLockTimeout:
             holder = create_engine(pg_url)
             try:
                 with holder.begin() as conn:
-                    conn.execute(text("LOCK TABLE workspaces IN ACCESS EXCLUSIVE MODE"))
+                    # ROW EXCLUSIVE conflicts with ACCESS EXCLUSIVE (needed by
+                    # TRUNCATE/LOCK TABLE AE) but allows concurrent SELECT
+                    # (ACCESS SHARE) — so import's SELECT COUNT(*) proceeds but
+                    # _acquire_truncate_locks fails fast on the lock timeout.
+                    conn.execute(text("LOCK TABLE workspaces IN ROW EXCLUSIVE MODE"))
                     lock_held.set()
                     # Hold until the main thread signals we can release.
-                    release_lock.wait(timeout=10)
+                    release_lock.wait(timeout=30)
             except Exception as exc:
                 error_in_thread.append(exc)
             finally:

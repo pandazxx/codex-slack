@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from .db import get_connection
+from .db import DBIntegrityError, get_connection
 from .db._dialect import scope_id_match
 
 _VALID_ADAPTERS = {"claude-code", "codex"}
@@ -180,10 +180,8 @@ def _insert_staff(
             },
         )
         conn.commit()
-    except Exception as exc:
-        if "UNIQUE constraint" in str(exc):
-            raise HTTPException(409, f"staff '{name}' already exists in this scope")
-        raise
+    except DBIntegrityError:
+        raise HTTPException(409, f"staff '{name}' already exists in this scope")
     row = conn.execute(
         text(f"SELECT {_SELECT_COLS} FROM staffs WHERE id=:id"), {"id": staff_id}
     ).fetchone()

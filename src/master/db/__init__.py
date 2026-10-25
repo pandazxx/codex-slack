@@ -40,10 +40,16 @@ TABLES = [
 ]
 
 # Re-export so production code can catch DB integrity errors without
-# importing sqlite3 directly.  In M0 this is sqlite3.IntegrityError
-# because the shim re-raises e.orig; in M1 it becomes
-# sqlalchemy.exc.IntegrityError when the Postgres path is live.
-DBIntegrityError = sqlite3.IntegrityError
+# importing dialect-specific modules.  The shim re-raises exc.orig, so
+# callers see the DBAPI-level exception:
+#   SQLite  → sqlite3.IntegrityError
+#   Postgres → psycopg.errors.IntegrityError (UniqueViolation is a subclass)
+#   MySQL   → pymysql.err.IntegrityError  (added when Phase 2 lands)
+try:
+    from psycopg.errors import IntegrityError as _psycopg_IntegrityError
+    DBIntegrityError: type | tuple = (sqlite3.IntegrityError, _psycopg_IntegrityError)
+except ImportError:
+    DBIntegrityError = sqlite3.IntegrityError
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Engine management
@@ -233,13 +239,53 @@ class _ResultProxy:
 # Param-style conversion
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _qmark_to_named(sql: str, params: tuple | list) -> tuple[str, dict[str, Any]]:
+# Columns that are BOOLEAN in the schema.  On Postgres, integer 0/1 must be
+# coerced to bool before binding, because psycopg3 sends Python int as int4
+# and Postgres has no implicit int4→boolean cast.  SQLite accepts 0/1 natively.
+_BOOLEAN_COLS: dict[str, frozenset[str]] = {
+    "messages":      frozenset({"silent"}),
+    "staffs":        frozenset({"is_default"}),
+    "event_actions": frozenset({"enabled", "structured_output", "silent"}),
+}
+
+
+def _extract_insert_bool_positions(sql: str) -> frozenset[int]:
+    """Return positional indices (0-based) of qmark params that map to BOOLEAN columns.
+
+    Only handles INSERT INTO <table> (<col1>, <col2>, ...) VALUES (?...) syntax.
+    Returns an empty frozenset for any other statement or on parse failure.
+    """
+    import re
+    m = re.match(
+        r"(?i)\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]+)\)",
+        sql,
+    )
+    if not m:
+        return frozenset()
+    table = m.group(1).lower()
+    bool_cols = _BOOLEAN_COLS.get(table)
+    if not bool_cols:
+        return frozenset()
+    col_names = [c.strip().strip('"').lower() for c in m.group(2).split(",")]
+    return frozenset(i for i, col in enumerate(col_names) if col in bool_cols)
+
+
+def _qmark_to_named(
+    sql: str,
+    params: tuple | list,
+    *,
+    coerce_bool_positions: frozenset[int] | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Convert qmark ? placeholders to :_p0, :_p1, … named params for SQLAlchemy.
 
     Walks the SQL character by character so that ? inside single-quoted string
     literals is left untouched.  Standard SQL string literal rules apply:
       - A single-quoted literal begins with ' and ends with the next '
       - Two consecutive '' inside a literal is an escaped single quote
+
+    When coerce_bool_positions is provided, integer values at those positions
+    are cast to bool.  Used on Postgres where the BOOLEAN column type rejects
+    Python int (psycopg3 sends int as int4; Postgres has no implicit cast).
     """
     param_dict: dict[str, Any] = {}
     result: list[str] = []
@@ -264,7 +310,15 @@ def _qmark_to_named(sql: str, params: tuple | list) -> tuple[str, dict[str, Any]
                         break
         elif ch == "?":
             name = f"_p{idx}"
-            param_dict[name] = params[idx]
+            value = params[idx]
+            if (
+                coerce_bool_positions
+                and idx in coerce_bool_positions
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+            ):
+                value = bool(value)
+            param_dict[name] = value
             idx += 1
             result.append(f":{name}")
             i += 1
@@ -309,7 +363,15 @@ class _ConnectionShim:
 
         # Old style: plain string, params may be tuple/list or None.
         if params is not None and isinstance(params, (tuple, list)):
-            converted_sql, named_params = _qmark_to_named(sql, params)
+            dialect_name = self._conn.dialect.name
+            bool_positions = (
+                _extract_insert_bool_positions(sql)
+                if dialect_name != "sqlite"
+                else None
+            )
+            converted_sql, named_params = _qmark_to_named(
+                sql, params, coerce_bool_positions=bool_positions
+            )
             sql_obj = sa_text(converted_sql)
         else:
             sql_obj = sa_text(sql)
