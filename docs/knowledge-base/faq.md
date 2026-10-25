@@ -12,13 +12,15 @@ codex-slack v3 is a self-hosted web application that lets you chat with LLM codi
 
 **Q: What services does the stack include?**
 
-Two: `master` (FastAPI app on port 8080) and `mosquitto` (MQTT broker, internal only). Agent containers are spawned dynamically by master when you create a workspace — they are not defined in `docker-compose.yml`.
+Three in the default configuration: `master` (FastAPI app on port 8080), `mosquitto` (MQTT broker, internal only), and `postgres` (bundled `postgres:17-alpine`, internal only, started when `COMPOSE_PROFILES=db-bundled`). Agent containers are spawned dynamically by master when you create a workspace — they are not defined in `docker-compose.yml`. When using a managed (external) database, `postgres` is not started and only `master` and `mosquitto` run.
 
 ---
 
 **Q: Where is my data stored?**
 
-All workspace, topic, message, session, and agent configuration data is in a SQLite database at `/opt/codex-slack/data/master/master_data.db` inside the master container. This path is mounted from the `master_data` Docker volume. Each agent container has two persistent named volumes: `codex-claude-{workspace_id}` mounted at `/home/appuser/.claude` (Claude session state) and `codex-codex-{workspace_id}` mounted at `/home/appuser/.codex` (Codex config and auth).
+Since v5.0, all workspace, topic, message, session, and agent configuration data is in Postgres by default. The bundled `postgres:17-alpine` service stores its data in the `postgres_data` Docker volume. Attachments are in the `master_data` volume under `attachments/`. Each agent container has two persistent named volumes: `codex-claude-{workspace_id}` mounted at `/home/appuser/.claude` (Claude session state) and `codex-codex-{workspace_id}` mounted at `/home/appuser/.codex` (Codex config and auth).
+
+For SQLite installs (opt-in via `DATABASE_URL=sqlite+pysqlite:///...`), the database file is at `/opt/codex-slack/data/master/master_data.db` inside the `master_data` volume.
 
 ---
 
@@ -54,12 +56,55 @@ The agent detects the string `No conversation found with session ID` in the clau
 
 **Q: Where is the SQLite database?**
 
-Inside the master container at `/opt/codex-slack/data/master/master_data.db`. This file lives on the `master_data` Docker volume. To inspect it:
+SQLite is no longer the default since v5.0 — Postgres is. If you opted in to SQLite by setting `DATABASE_URL=sqlite+pysqlite:///...`, the file is at the path in that URL (typically `/opt/codex-slack/data/master/master_data.db` inside the `master_data` volume):
 
 ```bash
 docker cp codex-slack-master:/opt/codex-slack/data/master/master_data.db ./master_data.db
 sqlite3 ./master_data.db ".tables"
 ```
+
+---
+
+**Q: Master refuses to start after upgrading to v5.0 — what do I do?**
+
+You are seeing the SQLite-upgrade safety net. Master found a non-empty `master_data.db` in `MASTER_DATA_DIR` while `DATABASE_URL` is unset. The default is now Postgres, and master refuses to silently ignore existing SQLite data.
+
+You have two options:
+
+- **Keep SQLite:** Add `DATABASE_URL=sqlite+pysqlite:////opt/codex-slack/data/master/master_data.db` to `.env` and restart. No data migration needed.
+- **Migrate to Postgres:** Follow [`docs/guides/runbooks/migrate-sqlite-to-postgres.md`](../guides/runbooks/migrate-sqlite-to-postgres.md). The short version: set `COMPOSE_PROFILES=db-bundled` and `POSTGRES_PASSWORD=<hex>`, start Postgres, run `scripts/db.sh snapshot-and-migrate`, then set `DATABASE_URL` to the Postgres URL.
+
+---
+
+**Q: Master exits with "DB schema is behind code" — what do I do?**
+
+A code upgrade introduced a new Alembic migration that has not been applied to the database yet. Master refuses to start to prevent running against a mismatched schema.
+
+Apply the pending migrations before restarting:
+
+```bash
+# From inside the master container (or a one-off container with --no-deps):
+bash scripts/db.sh snapshot-and-migrate   # snapshot first (recommended)
+# or, if you don't need the snapshot:
+bash scripts/db.sh migrate
+```
+
+For a running staging stack, use the SRE runbook: `.sre/operations/db-snapshot-migrate.md`.
+
+---
+
+**Q: Snapshot import says "database is in use" — what does that mean?**
+
+The exact message is: `ERROR: target database is in use (lock timeout after 30s) — stop master before importing`.
+
+This occurs when `snapshot import` tries to acquire an exclusive table lock on Postgres (needed for `--yes` truncate-and-reload) but another connection — typically a running master process — is holding the lock. Stop master before running the import:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml stop master
+# Then re-run the import
+```
+
+Pass `--lock-timeout 0` to disable the timeout (not recommended — the import will hang indefinitely if master is still connected).
 
 ---
 

@@ -111,14 +111,22 @@ The chunks before the cut-off are preserved in `messages.transcript` for the int
 
 ```bash
 DOCKER_HOST=ssh://ubuntu@<prod-host> docker exec codex-slack-master python -c "
-import sqlite3, json
-conn = sqlite3.connect('/opt/codex-slack/data/master/master_data.db')
-row = conn.execute(\"SELECT transcript FROM messages WHERE id=?\", ('<message-id>',)).fetchone()
+import os, json
+from src.master.db import get_connection
+db_url = os.environ.get('DATABASE_URL') or 'postgresql+psycopg://master:' + os.environ['POSTGRES_PASSWORD'] + '@postgres:5432/master'
+conn = get_connection(db_url)
+row = conn.execute('SELECT transcript FROM messages WHERE id=:id', {'id': '<message-id>'}).fetchone()
 events = json.loads(row[0])
 for e in events[-10:]:
     item = e.get('item', {}) if isinstance(e.get('item'), dict) else {}
-    print(e.get('type'), item.get('command', '')[:120])
+    print(e.get('type'), item.get('command', '')[:120))
 "
+
+# Or via psql directly (Postgres):
+DOCKER_HOST=ssh://ubuntu@<prod-host> docker compose -p codex-slack \
+  -f docker-compose.yml -f docker-compose.deploy.yml -f docker-compose.postgres.yml \
+  exec postgres psql -U master -d master \
+  -c "SELECT transcript FROM messages WHERE id='<message-id>'"
 ```
 
 The last `item.started` (without matching `item.completed`) is the command the model was running when it died. If it correlates with shell commands that allocate memory, write to disk, or fork heavily, that's a strong signal.
@@ -239,7 +247,7 @@ The row predates PR #222 / v4.14. No diagnostic information was captured. There'
 
 | What | Where |
 |---|---|
-| Master DB | `/opt/codex-slack/data/master/master_data.db` inside `codex-slack-master` |
+| Master DB (Postgres) | `postgres_data` volume; connect via `docker compose exec postgres psql -U master -d master` |
 | Agent persisted `_active_procs` snapshot (v4.15-rc6+) | `/tmp/master-agent/active_procs.json` inside the agent container |
 | Master logs | `docker logs codex-slack-master` |
 | Agent logs | `docker logs codex-agent-<workspace-id>` |

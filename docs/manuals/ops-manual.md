@@ -18,7 +18,8 @@ codex-slack v3 is a self-hosted chat platform for LLM coding agents. There is no
 
 | Location | What is stored |
 |----------|---------------|
-| `master_data` Docker volume → `/opt/codex-slack/data/master/master_data.db` | SQLite: workspaces, topics, messages, sessions, agent configs |
+| `postgres_data` Docker volume → `/var/lib/postgresql/data` | Postgres: workspaces, topics, messages, sessions, agent configs (default since v5.0; bundled Postgres only) |
+| `master_data` Docker volume → `/opt/codex-slack/data/master/` | Attachments, DB snapshots, and — for SQLite installs — `master_data.db` |
 | `codex-claude-{workspace_id}` Docker volume → `/home/appuser/.claude` | Per-workspace Claude Code session state |
 
 ## Prerequisites
@@ -37,8 +38,9 @@ cd codex-slack
 
 # 2. Create an env file from the example and fill in your secrets
 cp .env.example .env
-# Set at minimum: ANTHROPIC_API_KEY, GH_TOKEN, and
-# DEV_DOCKER_HOST=unix:///var/run/docker.sock (for a local Docker socket)
+# Set at minimum: ANTHROPIC_API_KEY, GH_TOKEN,
+# DEV_DOCKER_HOST=unix:///var/run/docker.sock (for a local Docker socket),
+# COMPOSE_PROFILES=db-bundled, and POSTGRES_PASSWORD=<openssl rand -hex 24>
 
 # 3. Create the shared Traefik network once (dev stacks route through it)
 docker network create sre-traefik-public
@@ -50,7 +52,7 @@ just dev-up
 #    http://master.<branch-slug>.<host-ip-dashed>.nip.io
 ```
 
-The base compose file (`docker-compose.yml`) is a neutral shared layer — it has no `build:` and publishes no ports, so it is never used alone. `just dev-up` pairs it with `docker-compose.dev.yml` (builds from your working tree, routes via Traefik); `just deploy <env> <tag>` pairs it with `docker-compose.deploy.yml` (CI-built image pinned by digest, published on host port 8080). Both start `master` and `mosquitto`; agent containers are spawned by master when you create a workspace in the UI. Dev-shape routing requires the host Traefik harness — see [`docs/sre.md`](../sre.md).
+The base compose file (`docker-compose.yml`) is a neutral shared layer — it has no `build:` and publishes no ports, so it is never used alone. `just dev-up` pairs it with `docker-compose.dev.yml` (builds from your working tree, routes via Traefik) and `docker-compose.postgres.yml` (starts the bundled Postgres service); `just deploy <env> <tag>` pairs it with `docker-compose.deploy.yml` (CI-built image pinned by digest, published on host port 8080) and `docker-compose.postgres.yml`. Both start `master`, `mosquitto`, and the bundled Postgres when `COMPOSE_PROFILES=db-bundled` is set. Agent containers are spawned by master when you create a workspace in the UI. Dev-shape routing requires the host Traefik harness — see [`docs/sre.md`](../sre.md).
 
 ## Compose Configuration
 
@@ -66,13 +68,96 @@ Key environment variables and bind-mounts (see [`docs/references/config.md`](../
 
 For rootless Podman, set `CONTAINER_SOCKET_PATH=/run/user/$(id -u)/podman/podman.sock` and add the `DOCKER_GID` of the socket owner.
 
+## Database
+
+### Supported providers
+
+Postgres (PostgreSQL 17) is the default provider since v5.0 and is the production-supported target. SQLite and MySQL (8.0.16+) are also supported with full CI coverage. MySQL dialect hardening (functional indexes, VARCHAR widths) is Phase 2 work; MySQL is CI-only and not UAT'd.
+
+### Configuration
+
+See [`docs/references/config.md`](../references/config.md) § Database for the full variable reference. The short version:
+
+- **Bundled Postgres**: set `COMPOSE_PROFILES=db-bundled` and `POSTGRES_PASSWORD=<hex>` in `.env`. Master builds `postgresql+psycopg://master:<pw>@postgres:5432/master` automatically.
+- **Managed (external) Postgres**: leave `COMPOSE_PROFILES` unset, set `DATABASE_URL=postgresql+psycopg://user:pw@host:5432/db`.
+- **SQLite (opt-in)**: set `DATABASE_URL=sqlite+pysqlite:////path/to/master_data.db`.
+
+Master refuses to start if neither `DATABASE_URL` nor `POSTGRES_PASSWORD` is set.
+
+### Startup migration behaviour
+
+On every start, `startup_db()` checks the Alembic revision:
+
+- **Empty DB** (no tables): `alembic upgrade head` runs automatically, then master starts.
+- **Up-to-date**: master starts immediately.
+- **Behind** (older revision): master exits 1 with the message `ERROR: DB schema is behind code`. Run the migration before restarting:
+
+  ```bash
+  # In the running master container or a one-off container:
+  bash scripts/db.sh migrate
+  # — or, to snapshot first (recommended):
+  bash scripts/db.sh snapshot-and-migrate
+  ```
+
+  For a running stack, use the SRE runbook: `.sre/operations/db-snapshot-migrate.md`.
+
+- **Ahead** (newer revision than this code knows): master exits 1 pointing at a possible accidental downgrade. Do not modify the database; restore the correct version of the code.
+
+- **Pre-baseline SQLite** (existing install from before v5.0, no `alembic_version` table): pre-baseline fixups are applied in-place and the baseline is stamped automatically. No operator action needed.
+
+### Backup
+
+#### Bundled Postgres
+
+```bash
+# pg_dump from inside the running container (streaming, no temp file on host)
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  exec postgres pg_dump -U master -d master --no-owner \
+  > "master-pg-$(date +%Y%m%d%H%M).sql"
+```
+
+Or export a provider-neutral JSONL snapshot (useful when migrating providers):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  exec master bash scripts/db.sh snapshot-and-migrate
+# Snapshot written to: /opt/codex-slack/data/master/snapshots/<UTC timestamp>/
+# Copy it out of the master_data volume with docker cp or a bind-mount.
+```
+
+#### Attachments
+
+Attachment files live in the `master_data` Docker volume under `attachments/`. Back them up separately:
+
+```bash
+docker run --rm \
+  -v codex-slack_master_data:/data:ro \
+  -v $(pwd)/backup:/backup \
+  alpine tar czf /backup/master_data-$(date +%Y%m%d).tar.gz /data/attachments
+```
+
+#### Claude session state
+
+```bash
+docker run --rm \
+  -v codex-claude-<workspace_id>:/data:ro \
+  -v $(pwd)/backup:/backup \
+  alpine tar czf /backup/claude-sessions-<workspace_id>.tar.gz /data
+```
+
+### Upgrading from SQLite (v4.x and earlier)
+
+If you are upgrading from a release that used SQLite as the default storage, master will refuse to start and print a migration message. See [`docs/guides/runbooks/migrate-sqlite-to-postgres.md`](../guides/runbooks/migrate-sqlite-to-postgres.md) for the full procedure. For SRE-managed staging/prod deploys, see `.sre/operations/deploy.md` § "Staging cut-over: SQLite to bundled Postgres".
+
+---
+
 ## Day-to-Day Operations
 
 ### Creating a workspace
 
 1. Open `http://master-host:8080`.
 2. Click **New Workspace**, enter a name and repository URL.
-3. Master clones the repo into the agent container and registers the workspace in SQLite.
+3. Master clones the repo into the agent container and registers the workspace in the database.
 4. Two default agents are created automatically: `claude` (claude-code adapter) and `codex` (codex adapter).
 
 ### Archiving (soft-deleting) a workspace
@@ -116,20 +201,12 @@ Local and non-tagged CI builds report `version: "dev"`, which is an unambiguous 
 
 ## Data Backup
 
-The entire state (workspaces, topics, messages, sessions) is in the SQLite file:
+See the Database section above for backup procedures. The complete summary:
 
-```bash
-docker cp codex-slack-master:/opt/codex-slack/data/master/master_data.db ./backup-$(date +%Y%m%d).db
-```
-
-Claude session state (resumes across container restarts) lives in named volumes `codex-claude-{workspace_id}`. Back these up with:
-
-```bash
-docker run --rm \
-  -v codex-claude-<workspace_id>:/data:ro \
-  -v $(pwd)/backup:/backup \
-  alpine tar czf /backup/claude-sessions-<workspace_id>.tar.gz /data
-```
+- **Postgres (default):** `pg_dump` via `docker compose exec postgres pg_dump ...`
+- **SQLite (opt-in):** copy `master_data.db` out of the `master_data` volume
+- **Attachments:** tar the `attachments/` subdirectory of the `master_data` volume
+- **Claude session state:** tar each `codex-claude-{workspace_id}` volume
 
 ## Related References
 

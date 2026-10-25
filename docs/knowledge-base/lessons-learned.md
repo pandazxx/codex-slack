@@ -2,7 +2,7 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-10-04 -->
+<!-- last updated: 2026-10-25 -->
 
 ---
 
@@ -65,6 +65,36 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 *Fix applied:* Added an `ARG CODEX_CLI_CACHE_BUST=0` immediately before the install `RUN` in both Dockerfiles, referenced inside the `RUN` so changing it invalidates the cache from that instruction onward (prior layers, e.g. apt installs, stay cached). `build-push.yml` passes `CODEX_CLI_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}` as a build-arg for both the `master` and `agent-minimal` jobs, guaranteeing a fresh value — and therefore a fresh `npm install -g` — on every CI run. Also added `npm list -g --depth=0` after the install so the resolved CLI versions are visible in build logs for future debugging.
 
 *Prevention:* Any `RUN` step whose job is "always fetch the latest X" (not pinned to a version) is incompatible with `cache-from: type=gha` unless it has an explicit cache-busting input. When adding GHA layer caching to a Dockerfile, audit for `RUN` steps that intentionally float (no version pin, no lockfile) and give each one a cache-bust ARG wired to a per-run-unique value in the workflow.
+
+---
+
+## 2026-10-25 — Postgres rejects Python int (0/1) for BOOLEAN columns; `_fix_insert_bool_literals` and bool coercion are the remedies
+
+*Summary:* After the M1 database provider switch, INSERT statements that bound Python integer `0` or `1` to BOOLEAN columns (e.g. `messages.silent`, `staffs.is_default`, `event_actions.enabled`) silently failed on Postgres with `psycopg.errors.ProgrammingError: column "silent" is of type boolean but expression is of type integer` — even though the same statements worked fine on SQLite (which stores booleans as 0/1 natively).
+
+*Root cause:* psycopg3 sends Python `int` as Postgres `int4`. Postgres has no implicit `int4 → boolean` cast. SQLite accepts 0/1 for any affinity. Two separate code paths triggered this:
+1. **Literal 0/1 in SQL text** (e.g. `INSERT INTO messages (..., silent, ...) VALUES (..., 0, ...)`): these don't go through parameter binding at all.
+2. **Integer parameters at BOOLEAN column positions** in qmark-style legacy SQL: the conversion to named params preserves the Python `int` type, which psycopg3 sends as `int4`.
+
+*Fix applied:* Two helpers in `src/master/db/__init__.py`:
+- `_fix_insert_bool_literals(sql)`: parses INSERT column lists, identifies BOOLEAN column positions from `_BOOLEAN_COLS`, and rewrites literal `0`/`1` in the VALUES clause to `false`/`true` before passing SQL to SQLAlchemy. Only called for non-SQLite dialects.
+- `_qmark_to_named(..., coerce_bool_positions=...)`: during qmark→named conversion, casts `int` values at BOOLEAN column positions to `bool` so psycopg3 sends them as `boolean` not `int4`.
+
+The `_BOOLEAN_COLS` dict enumerates every BOOLEAN column per table; it must be kept in sync when new BOOLEAN columns are added.
+
+*Prevention:* When adding a BOOLEAN column to any table, also add it to `_BOOLEAN_COLS` in `db/__init__.py` and `BOOLEAN_COLUMNS` in `db/snapshot.py`. Write a test that inserts `False`/`True` via the shim and reads the row back on Postgres — SQLite will not catch this class of bug.
+
+---
+
+## 2026-10-25 — `DATABASE_URL` is intentionally empty in docker-compose.postgres.yml; the safety net depends on it
+
+*Summary:* During review of the Postgres compose overlay, it was tempting to default `DATABASE_URL` to the bundled Postgres URL inside the compose file itself (e.g. `DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://master:${POSTGRES_PASSWORD}@postgres:5432/master}`). Doing so would break the SQLite-upgrade safety net in `sqlite_safety_check()`.
+
+*Root cause:* `sqlite_safety_check()` checks `os.getenv("DATABASE_URL", "").strip()`. If the compose file injects a non-empty `DATABASE_URL`, the check sees it as "operator has expressed intent" and skips the safety check — meaning an operator who upgrades from SQLite to v5.0 without reading the release notes could silently start against an empty Postgres and lose their SQLite data from view (it's still on disk, but master doesn't see it). The design explicitly requires the compose file to pass `DATABASE_URL: ${DATABASE_URL:-}` (empty fallback) so master is responsible for building the bundled URL and also for running the safety check when the variable is not set.
+
+*Fix applied:* `docker-compose.postgres.yml` uses `DATABASE_URL: ${DATABASE_URL:-}`. Master builds the bundled URL from `POSTGRES_PASSWORD` in `resolve_db_url()` when `DATABASE_URL` is unset. The comment in the compose file explains this explicitly.
+
+*Prevention:* Never default `DATABASE_URL` to a Postgres URL in compose. The safety net, the URL-building logic, and the test fixture behavior all depend on "unset DATABASE_URL means Postgres default, but only after the safety check". Any attempt to "help" by filling in the URL in compose defeats the check.
 
 ---
 

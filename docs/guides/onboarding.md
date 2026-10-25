@@ -21,7 +21,7 @@ codex-slack v3 is a self-hosted chat interface for LLM coding agents. The system
 - **Master service** — a FastAPI app (`src/master/`) served on port 8080. Hosts the REST API, serves the Vue 3 SPA, runs a WebSocket hub for real-time agent output, and bridges MQTT messages from agents to browser clients.
 - **Agent containers** — one Docker/Podman container per workspace. Runs `src/agent/mqtt_loop.py`, which subscribes to MQTT prompts and invokes `claude` or `codex` CLI.
 - **Mosquitto** — MQTT broker that decouples master and agent containers.
-- **SQLite** — the master's durable store (`master_data.db`). Five tables: `workspaces`, `workspace_agents`, `topics`, `sessions`, `messages`.
+- **Postgres** — the master's durable store (default since v5.0). The dev env starts a bundled `postgres:17-alpine` container alongside master. Thirteen tables: `workspaces`, `staffs`, `staff_sessions`, `config`, `topics`, `sessions`, `messages`, `attachments`, `chunks`, `event_actions`, `notes`, `tasks`, `staged_dispatches`.
 
 There are no Slack or Discord integrations in v3. The web UI is the only frontend.
 
@@ -47,25 +47,38 @@ The standard feature workflow (design → build → test → review → document
 
 ```bash
 # Copy and configure environment
-cp .env.example .env   # edit ANTHROPIC_API_KEY, GH_TOKEN, etc.
+cp .env.example .env
+# Edit at minimum: ANTHROPIC_API_KEY, GH_TOKEN
+# Add for Postgres (required since v5.0):
+#   COMPOSE_PROFILES=db-bundled
+#   POSTGRES_PASSWORD=<openssl rand -hex 24>
 
-# Build and start (builds frontend inside the Dockerfile)
-docker compose up --build
+# Build and start (includes bundled Postgres)
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build
 
-# Open the UI
-open http://localhost:8080
+# Or use the justfile (sets up Traefik routing):
+just dev-up
 ```
 
-The compose stack starts `master` (port 8080) and `mosquitto` (internal only). Agent containers are spawned by master on workspace creation.
+The compose stack starts `master` (port 8080), `mosquitto` (internal only), and `postgres` (internal only, bundled). Agent containers are spawned by master on workspace creation.
 
 ## Running the test suite
 
 ```bash
+# SQLite (fast, no external service needed)
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pytest -q
+
+# Postgres (requires DEV_DOCKER_HOST)
+just test "" postgres
+
+# MySQL
+just test "" mysql
 ```
+
+The `just test` recipes spin up an ephemeral database container on `DEV_DOCKER_HOST`, run the full suite against it, and tear down the container on exit.
 
 ## Building the frontend standalone
 

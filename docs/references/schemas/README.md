@@ -1,8 +1,12 @@
 # Schemas
 
-## SQLite Database Schema (v3)
+## Master Database Schema
 
-Database file: `/opt/codex-slack/data/master/master_data.db`
+The master service uses PostgreSQL by default (since v5.0). SQLite and MySQL are also supported. The schema is managed by Alembic; the canonical definition is in `alembic/versions/`. This file documents the table structure for reference.
+
+For SQLite installs (opt-in via `DATABASE_URL=sqlite+pysqlite:///...`), the database file is at `/opt/codex-slack/data/master/master_data.db`.
+
+> **Note:** This schema document was last updated for v3. The tables listed below reflect the v3 initial schema. Additional tables added in later releases (`staffs`, `staff_sessions`, `event_actions`, `notes`, `tasks`, `staged_dispatches`, `attachments`, `chunks`) are not yet documented here. Refer to `alembic/versions/000000000001_baseline.py` for the authoritative schema definition.
 
 ### workspaces
 
