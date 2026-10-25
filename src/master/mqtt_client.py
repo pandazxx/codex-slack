@@ -13,6 +13,7 @@ from sqlalchemy import text as sa_text
 from . import notify
 from .config import MasterSettings
 from .db import get_connection
+from .db._dialect import upsert as _upsert
 
 LOGGER = logging.getLogger(__name__)
 
@@ -203,28 +204,20 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
                     "sentinel": "(message interrupted)",
                 },
             )
-            conn.execute(
-                sa_text(
-                    "INSERT OR IGNORE INTO messages"
-                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
-                    "  interrupt_reason, silent, created_at,"
-                    "  sender_kind, sender_name, receiver_kind, receiver_name,"
-                    "  task_id, reply_to_message_id)"
-                    " VALUES (:id, :topic_id, 'agent', :agent_name, :text, :transcript, :usage_json, NULL,"
-                    "         :interrupt_reason, :silent, :created_at,"
-                    "         :sender_kind, :sender_name, :receiver_kind, :receiver_name,"
-                    "         :task_id, :reply_to)"
-                ),
+            _upsert(
+                conn, "messages",
                 {
-                    "id": message_id, "topic_id": topic_id, "agent_name": agent_name,
-                    "text": text, "transcript": transcript, "usage_json": usage_json,
+                    "id": message_id, "topic_id": topic_id, "sender": "agent",
+                    "agent_name": agent_name, "text": text, "transcript": transcript,
+                    "usage_json": usage_json, "attachments_json": None,
                     "interrupt_reason": interrupt_reason,
                     "silent": 1 if silent else 0, "created_at": _now(),
                     "sender_kind": reply_sender_kind, "sender_name": reply_sender_name,
                     "receiver_kind": reply_receiver_kind, "receiver_name": reply_receiver_name,
                     "task_id": inherited_task_id,
-                    "reply_to": reply_to if reply_to else None,
+                    "reply_to_message_id": reply_to if reply_to else None,
                 },
+                conflict_cols=["id"],
             )
             conn.execute(
                 sa_text("DELETE FROM chunks WHERE message_id = :message_id"),

@@ -21,6 +21,7 @@ from ..version import get_app_version
 from .agent_runner import build_spawn_kwargs, container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
 from .db import get_connection, init_db, schema_info
+from .db._dialect import upsert as _upsert
 from .runtime_config import load_global_env
 from .attachments import router as attachments_router
 from .messages import router as messages_router
@@ -205,17 +206,15 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
                             pass
                     if events:
                         transcript_json = json.dumps(events)
-                conn.execute(
-                    sa_text(
-                        "INSERT OR IGNORE INTO messages"
-                        " (id, topic_id, sender, agent_name, text, transcript, interrupt_reason, created_at)"
-                        " VALUES (:id, :topic_id, 'agent', :agent_name, :text, :transcript, :interrupt_reason, :now)"
-                    ),
+                _upsert(
+                    conn, "messages",
                     {
-                        "id": message_id, "topic_id": topic_id, "agent_name": agent_name,
-                        "text": "(message interrupted)", "transcript": transcript_json,
-                        "interrupt_reason": interrupt_reason, "now": now_str,
+                        "id": message_id, "topic_id": topic_id, "sender": "agent",
+                        "agent_name": agent_name, "text": "(message interrupted)",
+                        "transcript": transcript_json, "interrupt_reason": interrupt_reason,
+                        "created_at": now_str,
                     },
+                    conflict_cols=["id"],
                 )
                 conn.execute(
                     sa_text("DELETE FROM chunks WHERE message_id = :message_id"),

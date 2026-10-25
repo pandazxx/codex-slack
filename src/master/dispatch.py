@@ -20,6 +20,7 @@ from .agent_runner import (
     ensure_agent_running,
 )
 from .db import get_connection
+from .db._dialect import upsert as _upsert
 
 LOGGER = logging.getLogger(__name__)
 
@@ -144,15 +145,17 @@ async def dispatch_to_staff(
             )
 
         # Ensure a sessions row exists for this topic+agent so the agent response
-        # handler's UPDATE can store llm_session_id. INSERT OR IGNORE is a no-op on
-        # subsequent turns when the row already exists.
-        conn.execute(
-            sa_text(
-                "INSERT OR IGNORE INTO sessions (id, topic_id, agent_name, adapter, llm_session_id, updated_at)"
-                " VALUES (:id, :topic_id, :agent_name, :adapter, NULL, :updated_at)"
-            ),
-            {"id": str(uuid.uuid4()), "topic_id": topic_id,
-             "agent_name": staff["name"], "adapter": staff["adapter"], "updated_at": _now()},
+        # handler's UPDATE can store llm_session_id. This is a no-op when the
+        # row already exists (the unique index on topic_id, agent_name triggers
+        # the conflict path which does nothing).
+        _upsert(
+            conn, "sessions",
+            {
+                "id": str(uuid.uuid4()), "topic_id": topic_id,
+                "agent_name": staff["name"], "adapter": staff["adapter"],
+                "llm_session_id": None, "updated_at": _now(),
+            },
+            conflict_cols=["topic_id", "agent_name"],
         )
 
         # For adapters like codex whose LLM session id differs from the internal
