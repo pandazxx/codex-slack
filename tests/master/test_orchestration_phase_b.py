@@ -670,7 +670,7 @@ def test_submit_result_not_assignee_403(client, workspace_topic, architect_staff
             "INSERT INTO messages"
             " (id, topic_id, sender, agent_name, text, silent, created_at,"
             "  sender_kind, sender_name, receiver_kind, receiver_name, task_id, dispatch_token)"
-            " VALUES (?, ?, 'event', 'architect', 'synthetic', 0, '2024-01-01T00:00:00Z',"
+            " VALUES (?, ?, 'event', 'architect', 'synthetic', false, '2024-01-01T00:00:00Z',"
             "         'staff', 'architect', 'staff', 'architect', ?, ?)",
             (syn_msg_id, topic_id, task_id, syn_token),
         )
@@ -1435,14 +1435,14 @@ def test_delegation_chain_no_event_loop(tmp_path):
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at,"
             " sender_kind, sender_name, receiver_kind)"
-            " VALUES ('reentry', 't1', 'event', 'architect', 'Build it', 0,"
+            " VALUES ('reentry', 't1', 'event', 'architect', 'Build it', false,"
             " '2024-01-01T00:00:00Z', 'staff', 'architect', 'staff')"
         )
         # Genuine user prompt
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at,"
             " sender_kind, receiver_kind)"
-            " VALUES ('user-prompt', 't1', 'user', NULL, 'hello', 0,"
+            " VALUES ('user-prompt', 't1', 'user', NULL, 'hello', false,"
             " '2024-01-01T00:00:00Z', 'user', 'staff')"
         )
         conn.commit()

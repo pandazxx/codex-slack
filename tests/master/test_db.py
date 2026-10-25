@@ -69,16 +69,16 @@ def test_staffs_unique_constraint(db_path):
     conn.execute(
         "INSERT INTO staffs (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
         " session_scope, is_default, extra_flags, created_at, updated_at)"
-        " VALUES (?, 'workspace', ?, 'claude', 'claude-code', NULL, NULL, NULL, 'topic', 1, NULL, ?, ?)",
-        ("s1", "w1", now, now),
+        " VALUES (?, 'workspace', ?, 'claude', 'claude-code', NULL, NULL, NULL, 'topic', ?, NULL, ?, ?)",
+        ("s1", "w1", True, now, now),
     )
     conn.commit()
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
             "INSERT INTO staffs (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
             " session_scope, is_default, extra_flags, created_at, updated_at)"
-            " VALUES (?, 'workspace', ?, 'claude', 'codex', NULL, NULL, NULL, 'topic', 0, NULL, ?, ?)",
-            ("s2", "w1", now, now),
+            " VALUES (?, 'workspace', ?, 'claude', 'codex', NULL, NULL, NULL, 'topic', ?, NULL, ?, ?)",
+            ("s2", "w1", False, now, now),
         )
         conn.commit()
     conn.close()

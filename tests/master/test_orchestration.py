@@ -178,7 +178,7 @@ def test_backfill_user_message(tmp_path):
         )
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at)"
-            " VALUES ('m1', 't1', 'user', NULL, 'hi', 0, '2024-01-01T00:00:00Z')"
+            " VALUES ('m1', 't1', 'user', NULL, 'hi', false, '2024-01-01T00:00:00Z')"
         )
         conn.commit()
 
@@ -211,7 +211,7 @@ def test_backfill_agent_message(tmp_path):
         )
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at)"
-            " VALUES ('m2', 't1', 'agent', 'claude', 'hi', 0, '2024-01-01T00:00:00Z')"
+            " VALUES ('m2', 't1', 'agent', 'claude', 'hi', false, '2024-01-01T00:00:00Z')"
         )
         conn.commit()
 
@@ -244,7 +244,7 @@ def test_backfill_is_idempotent(tmp_path):
         )
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at)"
-            " VALUES ('m1', 't1', 'user', NULL, 'hi', 0, '2024-01-01T00:00:00Z')"
+            " VALUES ('m1', 't1', 'user', NULL, 'hi', false, '2024-01-01T00:00:00Z')"
         )
         conn.commit()
 
@@ -529,7 +529,7 @@ def test_delegate_rejects_fan_out_exceeded(client, workspace_topic, architect_st
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at,"
             " sender_kind, task_id, dispatch_token)"
-            " VALUES (?, ?, 'user', NULL, 'root msg', 0, '2024-01-01T00:00:00Z', 'user', ?, ?)",
+            " VALUES (?, ?, 'user', NULL, 'root msg', false, '2024-01-01T00:00:00Z', 'user', ?, ?)",
             ("root-msg", topic_id, root_id, root_msg_token),
         )
         conn.commit()
@@ -676,7 +676,7 @@ def test_agent_reply_gets_staff_sender_kind(tmp_path):
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at,"
             " sender_kind, receiver_kind)"
-            " VALUES ('prompt-1', 't1', 'user', NULL, 'hello', 0, '2024-01-01T00:00:00Z',"
+            " VALUES ('prompt-1', 't1', 'user', NULL, 'hello', false, '2024-01-01T00:00:00Z',"
             " 'user', 'staff')"
         )
         conn.commit()
@@ -727,7 +727,7 @@ def test_agent_reply_to_staff_prompt_routes_back(tmp_path):
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at,"
             " sender_kind, sender_name, receiver_kind, receiver_name, task_id)"
-            " VALUES ('prompt-eng', 't1', 'event', 'architect', 'Build it', 0,"
+            " VALUES ('prompt-eng', 't1', 'event', 'architect', 'Build it', false,"
             " '2024-01-01T00:00:00Z', 'staff', 'architect', 'staff', 'engineer', 'task-1')"
         )
         conn.commit()
@@ -890,7 +890,7 @@ def test_back05_event_dispatch_stores_sender_kind_staff(tmp_path):
             " (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
             "  session_scope, is_default, extra_flags, created_at, updated_at)"
             " VALUES ('s1', 'workspace', 'ws1', 'architect', 'claude-code', NULL, NULL, NULL,"
-            "         'topic', 0, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')"
+            "         'topic', false, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')"
         )
         conn.commit()
         staff = conn.execute("SELECT * FROM staffs WHERE id='s1'").fetchone()
@@ -1196,7 +1196,7 @@ def test_delt11_cycle_detected_synthetic_depth2(client, workspace_topic, archite
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, agent_name, text, silent, created_at,"
             " sender_kind, task_id, dispatch_token)"
-            " VALUES (?, ?, 'event', 'engineer', 'eng prompt', 0, '2024-01-01T00:00:00Z',"
+            " VALUES (?, ?, 'event', 'engineer', 'eng prompt', false, '2024-01-01T00:00:00Z',"
             " 'staff', ?, ?)",
             ("cycle-msg", topic_id, child_id, cycle_msg_token),
         )
