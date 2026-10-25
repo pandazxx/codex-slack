@@ -569,3 +569,29 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* Added `sqlite_autoincrement=True` as a table-level kwarg to `op.create_table("chunks", ...)` in `alembic/versions/000000000001_baseline.py`. With this flag, SQLite emits `INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT`; PostgreSQL emits `SERIAL`; MySQL emits `AUTO_INCREMENT` — all correct for those dialects. Only `chunks` uses `AUTOINCREMENT` in the legacy DDL (confirmed via grep on `_prebaseline.py`); no other tables required changes.
 
 *Prevention:* (1) To emit SQLite `AUTOINCREMENT` via Alembic, always set `sqlite_autoincrement=True` on `op.create_table`, not just `autoincrement=True` on the Column. (2) Never trust `inspect().get_columns()[n]["autoincrement"]` on SQLite — the flag is always `False` regardless of DDL; use `sqlite_master` DDL text instead. (3) Expression-based and partial indexes are also skipped by SQLAlchemy reflection with a `SAWarning`; parity tests for those must also query `sqlite_master` directly, comparing normalised DDL strings rather than inspect() results.
+
+---
+
+## 2026-10-25 — M1 chunk B: engine() resolution order and test isolation
+
+**Summary:** Changing `engine()` to prefer DATABASE_URL over explicit `db_path_or_url` arguments breaks tests that create per-test SQLite DBs by passing explicit paths to `get_connection()`.
+
+**Root cause:** M0 engine() precedence was: DATABASE_URL > explicit arg. In M1, setting a session DATABASE_URL in conftest.py caused all `get_connection(explicit_path)` calls to connect to the session DB instead of the test-specific DB, breaking test isolation.
+
+**Fix applied:** Flipped engine() resolution order so explicit `db_path_or_url` wins over DATABASE_URL. Integration tests that set MASTER_DATA_DIR and pass a plain path continue to use that path. Production code in main.py stores the resolved URL (not a plain path) in `app.state.db_path`, so production is unaffected.
+
+`main.py` was updated to compute the DB URL as `DATABASE_URL or sqlite+pysqlite:///MASTER_DATA_DIR/master_data.db` directly rather than calling `resolve_db_url()`, preserving backward compatibility for tests that only set MASTER_DATA_DIR without DATABASE_URL.
+
+**Prevention:** When switching a default DB URL, audit all call sites that pass explicit db_path arguments to engine()/get_connection(). Explicit paths and session-level env overrides should not silently conflict.
+
+---
+
+## 2026-10-25 — M1 chunk B: _dbapi_graveyard pattern is wrong
+
+**Summary:** Keeping closed DBAPI connection objects alive in a module-level deque to prevent CPython from reusing their memory address is production-unsafe and incorrect. The graveyard was added to make a test pass rather than fixing the test itself.
+
+**Root cause:** Test `test_concurrent_threads_get_distinct_dbapi_connections` used `id()` on DBAPI objects AFTER closing the connections, making the comparison meaningless (CPython may reuse the freed memory). Rather than fixing the test, the original implementation added a graveyard to keep closed objects alive.
+
+**Fix applied:** Removed `_dbapi_graveyard` from production code. Fixed the test by (1) adding a second barrier so both threads hold their connections open simultaneously while recording object references, and (2) comparing object identity (`is not`) rather than `id()` which is only meaningful when both objects are alive.
+
+**Prevention:** Never add production-code workarounds for test inadequacies. Fixing the test's comparison strategy is the correct approach.
