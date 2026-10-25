@@ -29,7 +29,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError as _SAIntegrityError
 from sqlalchemy.sql.elements import TextClause
 
-from ._prebaseline import init_db_sqlite
+from ._prebaseline import _migrate_envelope_backfill, init_db_sqlite
 from ._row import _Row
 
 LOGGER = logging.getLogger(__name__)
