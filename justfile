@@ -74,6 +74,12 @@ dev-up branch="":
     fi
     echo "==> APP_VERSION=${APP_VERSION}"
 
+    # Bundled Postgres per branch stack (compose project = slug, so the
+    # postgres_data volume and internal network are project-scoped).
+    # shellcheck source=.sre/db-env.sh
+    source "${PROJECT_ROOT}/.sre/db-env.sh"
+    sre_db_env_dev
+
     export DOCKER_HOST="$DEV_DOCKER_HOST"
     export BRANCH_SLUG
     export HOST_IP_DASHED
@@ -88,6 +94,7 @@ dev-up branch="":
         -p "${BRANCH_SLUG}" \
         -f "${PROJECT_ROOT}/docker-compose.yml" \
         -f "${PROJECT_ROOT}/docker-compose.dev.yml" \
+        -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
         build master
 
     echo "==> Bringing up services..."
@@ -95,6 +102,7 @@ dev-up branch="":
         -p "${BRANCH_SLUG}" \
         -f "${PROJECT_ROOT}/docker-compose.yml" \
         -f "${PROJECT_ROOT}/docker-compose.dev.yml" \
+        -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
         up -d --remove-orphans
 
     echo "==> Waiting for master healthcheck..."
@@ -103,6 +111,7 @@ dev-up branch="":
         -p "${BRANCH_SLUG}" \
         -f "${PROJECT_ROOT}/docker-compose.yml" \
         -f "${PROJECT_ROOT}/docker-compose.dev.yml" \
+        -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
         exec master curl -sf http://localhost:8080/health > /dev/null 2>&1; do
         RETRIES=$((RETRIES - 1))
         if [ "$RETRIES" -eq 0 ]; then
@@ -110,6 +119,7 @@ dev-up branch="":
             docker compose -p "${BRANCH_SLUG}" \
                 -f "${PROJECT_ROOT}/docker-compose.yml" \
                 -f "${PROJECT_ROOT}/docker-compose.dev.yml" \
+                -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
                 logs --tail=50 master >&2
             exit 1
         fi
@@ -123,8 +133,11 @@ dev-up branch="":
     echo "Exec into services:"
     echo "  DOCKER_HOST=${DEV_DOCKER_HOST} docker compose -p ${BRANCH_SLUG} exec master bash"
     echo "  DOCKER_HOST=${DEV_DOCKER_HOST} docker compose -p ${BRANCH_SLUG} exec mosquitto sh"
+    echo "  DOCKER_HOST=${DEV_DOCKER_HOST} docker compose -p ${BRANCH_SLUG} exec postgres psql -U master -d master"
 
 # Tear down the dev environment for a branch on DEV_DOCKER_HOST.
+# Deletes the branch stack's volumes (master_data and postgres_data): dev data
+# is disposable and never survives teardown.
 # Defaults to the current git branch when branch is omitted.
 dev-down branch="":
     #!/usr/bin/env bash
@@ -139,6 +152,10 @@ dev-down branch="":
     BRANCH_SLUG="$(echo "$BRANCH" | tr '/_.' '-' | tr '[:upper:]' '[:lower:]')"
     PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 
+    # shellcheck source=.sre/db-env.sh
+    source "${PROJECT_ROOT}/.sre/db-env.sh"
+    sre_db_env_dev
+
     export DOCKER_HOST="$DEV_DOCKER_HOST"
 
     echo "==> dev-down: branch=${BRANCH} slug=${BRANCH_SLUG}"
@@ -146,12 +163,15 @@ dev-down branch="":
         -p "${BRANCH_SLUG}" \
         -f "${PROJECT_ROOT}/docker-compose.yml" \
         -f "${PROJECT_ROOT}/docker-compose.dev.yml" \
+        -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
         down --volumes --remove-orphans
 
     echo "==> Dev env ${BRANCH_SLUG} torn down."
 
 # Resolve tag to digest and deploy (or upgrade in place) the singleton stack
 # on <env>_DOCKER_HOST. Fixed project name: codex-slack.
+# Database: COMPOSE_PROFILES=db-bundled + POSTGRES_PASSWORD starts the bundled
+# Postgres (volume postgres_data); otherwise DATABASE_URL must be set.
 # env: staging | prod
 deploy env tag:
     #!/usr/bin/env bash
@@ -201,6 +221,15 @@ deploy env tag:
 
     PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 
+    # Database settings (COMPOSE_PROFILES / DATABASE_URL / POSTGRES_PASSWORD)
+    # come from the shell or .env. Fail before touching the host if incomplete
+    # or if the upgrade would strand a legacy SQLite database.
+    # shellcheck source=.sre/db-env.sh
+    source "${PROJECT_ROOT}/.sre/db-env.sh"
+    sre_db_env_singleton
+    sre_db_require_config
+    sre_db_legacy_sqlite_guard "$TARGET_HOST"
+
     export DOCKER_HOST="$TARGET_HOST"
     export MASTER_RUNTIME_IMAGE
     export IMAGE_DIGEST
@@ -213,6 +242,7 @@ deploy env tag:
         -p codex-slack \
         -f "${PROJECT_ROOT}/docker-compose.yml" \
         -f "${PROJECT_ROOT}/docker-compose.deploy.yml" \
+        -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
         pull
 
     echo "==> Bringing up singleton stack..."
@@ -220,6 +250,7 @@ deploy env tag:
         -p codex-slack \
         -f "${PROJECT_ROOT}/docker-compose.yml" \
         -f "${PROJECT_ROOT}/docker-compose.deploy.yml" \
+        -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
         up -d --remove-orphans
 
     echo "==> Waiting for master healthcheck on http://${HOST_IP}:${MASTER_PORT}/health..."
@@ -231,6 +262,7 @@ deploy env tag:
             docker compose -p codex-slack \
                 -f "${PROJECT_ROOT}/docker-compose.yml" \
                 -f "${PROJECT_ROOT}/docker-compose.deploy.yml" \
+                -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
                 logs --tail=50 master >&2
             exit 1
         fi
@@ -242,9 +274,15 @@ deploy env tag:
     echo "  env:    ${ENV}"
     echo "  image:  ${MASTER_RUNTIME_IMAGE}@${IMAGE_DIGEST}"
     echo "  url:    http://${HOST_IP}:${MASTER_PORT}"
+    if [ -n "${DATABASE_URL// /}" ]; then
+        echo "  db:     DATABASE_URL (explicit)"
+    else
+        echo "  db:     bundled Postgres (profiles=${COMPOSE_PROFILES})"
+    fi
 
 # Bring down the singleton codex-slack stack on <env>_DOCKER_HOST.
-# Preserves named volumes (master_data) — use `just destroy <env>` to wipe them.
+# Preserves named volumes (master_data, postgres_data) — use `just destroy <env>`
+# to wipe them.
 # env: staging | prod
 undeploy env:
     #!/usr/bin/env bash
@@ -269,6 +307,10 @@ undeploy env:
 
     PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 
+    # shellcheck source=.sre/db-env.sh
+    source "${PROJECT_ROOT}/.sre/db-env.sh"
+    sre_db_env_singleton
+
     export DOCKER_HOST="$TARGET_HOST"
     # deploy.yml requires these vars but they are not meaningful for down;
     # provide placeholders so compose can parse the file without error.
@@ -280,12 +322,14 @@ undeploy env:
         -p codex-slack \
         -f "${PROJECT_ROOT}/docker-compose.yml" \
         -f "${PROJECT_ROOT}/docker-compose.deploy.yml" \
+        -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
         down --remove-orphans
 
-    echo "==> ${ENV} stack torn down (volumes preserved)."
+    echo "==> ${ENV} stack torn down (volumes preserved: master_data, postgres_data)."
 
 # DESTRUCTIVE: bring down the singleton stack AND delete its named volumes,
-# including master_data (application SQLite). Requires typing the env name
+# including master_data (attachments, legacy SQLite) and postgres_data (the
+# bundled Postgres database). Requires typing the env name
 # to confirm. env: staging | prod
 destroy env:
     #!/usr/bin/env bash
@@ -308,7 +352,7 @@ destroy env:
             ;;
     esac
 
-    echo "WARNING: this deletes ALL named volumes for ${ENV}, including master_data."
+    echo "WARNING: this deletes ALL named volumes for ${ENV}, including master_data and postgres_data (the database)."
     printf "Type '%s' to confirm: " "$ENV"
     read -r CONFIRM
     if [ "$CONFIRM" != "$ENV" ]; then
@@ -321,12 +365,16 @@ destroy env:
     export DOCKER_HOST="$TARGET_HOST"
     export MASTER_RUNTIME_IMAGE="${MASTER_RUNTIME_IMAGE:-placeholder}"
     export IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}"
+    # Activate every profile so postgres_data is removed even if the profile
+    # was switched off after the volume was created.
+    export COMPOSE_PROFILES="*"
 
     echo "==> destroy: env=${ENV} host=${TARGET_HOST}"
     docker compose \
         -p codex-slack \
         -f "${PROJECT_ROOT}/docker-compose.yml" \
         -f "${PROJECT_ROOT}/docker-compose.deploy.yml" \
+        -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
         down --volumes --remove-orphans
 
     echo "==> ${ENV} stack and volumes destroyed."
@@ -355,7 +403,7 @@ status:
         DOCKER_HOST="$PROD_DOCKER_HOST" docker compose ls 2>/dev/null || echo "  (no projects or unreachable)"
     fi
 
-# Stream logs for a service.
+# Stream logs for a service (master, mosquitto, postgres).
 # env: dev | staging | prod
 # key: branch slug (dev only); omit for singleton envs
 logs env service key="":
@@ -366,6 +414,8 @@ logs env service key="":
     SERVICE="{{ service }}"
     KEY="{{ key }}"
     PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+    # shellcheck source=.sre/db-env.sh
+    source "${PROJECT_ROOT}/.sre/db-env.sh"
 
     case "$ENV" in
         dev)
@@ -375,23 +425,26 @@ logs env service key="":
                 KEY="$(git rev-parse --abbrev-ref HEAD | tr '/_.' '-' | tr '[:upper:]' '[:lower:]')"
             fi
             PROJECT_NAME="$KEY"
-            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.dev.yml")
+            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.dev.yml" -f "${PROJECT_ROOT}/docker-compose.postgres.yml")
+            sre_db_env_dev
             ;;
         staging)
             : "${STAGING_DOCKER_HOST:?STAGING_DOCKER_HOST must be set}"
             TARGET_HOST="$STAGING_DOCKER_HOST"
             PROJECT_NAME="codex-slack"
+            sre_db_env_singleton
             export MASTER_RUNTIME_IMAGE="${MASTER_RUNTIME_IMAGE:-placeholder}"
             export IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}"
-            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.deploy.yml")
+            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.deploy.yml" -f "${PROJECT_ROOT}/docker-compose.postgres.yml")
             ;;
         prod)
             : "${PROD_DOCKER_HOST:?PROD_DOCKER_HOST must be set}"
             TARGET_HOST="$PROD_DOCKER_HOST"
             PROJECT_NAME="codex-slack"
+            sre_db_env_singleton
             export MASTER_RUNTIME_IMAGE="${MASTER_RUNTIME_IMAGE:-placeholder}"
             export IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}"
-            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.deploy.yml")
+            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.deploy.yml" -f "${PROJECT_ROOT}/docker-compose.postgres.yml")
             ;;
         *)
             echo "ERROR: env must be 'dev', 'staging', or 'prod', got: ${ENV}" >&2
@@ -402,7 +455,8 @@ logs env service key="":
     export DOCKER_HOST="$TARGET_HOST"
     docker compose -p "${PROJECT_NAME}" "${COMPOSE_FILES[@]}" logs -f "$SERVICE"
 
-# Open an interactive shell in a running service container.
+# Open an interactive shell in a running service container
+# (master, mosquitto, postgres).
 # env: dev | staging | prod
 # key: branch slug (dev only); omit for singleton envs
 shell env service key="":
@@ -413,6 +467,8 @@ shell env service key="":
     SERVICE="{{ service }}"
     KEY="{{ key }}"
     PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+    # shellcheck source=.sre/db-env.sh
+    source "${PROJECT_ROOT}/.sre/db-env.sh"
 
     case "$ENV" in
         dev)
@@ -422,23 +478,26 @@ shell env service key="":
                 KEY="$(git rev-parse --abbrev-ref HEAD | tr '/_.' '-' | tr '[:upper:]' '[:lower:]')"
             fi
             PROJECT_NAME="$KEY"
-            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.dev.yml")
+            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.dev.yml" -f "${PROJECT_ROOT}/docker-compose.postgres.yml")
+            sre_db_env_dev
             ;;
         staging)
             : "${STAGING_DOCKER_HOST:?STAGING_DOCKER_HOST must be set}"
             TARGET_HOST="$STAGING_DOCKER_HOST"
             PROJECT_NAME="codex-slack"
+            sre_db_env_singleton
             export MASTER_RUNTIME_IMAGE="${MASTER_RUNTIME_IMAGE:-placeholder}"
             export IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}"
-            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.deploy.yml")
+            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.deploy.yml" -f "${PROJECT_ROOT}/docker-compose.postgres.yml")
             ;;
         prod)
             : "${PROD_DOCKER_HOST:?PROD_DOCKER_HOST must be set}"
             TARGET_HOST="$PROD_DOCKER_HOST"
             PROJECT_NAME="codex-slack"
+            sre_db_env_singleton
             export MASTER_RUNTIME_IMAGE="${MASTER_RUNTIME_IMAGE:-placeholder}"
             export IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}"
-            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.deploy.yml")
+            COMPOSE_FILES=(-f "${PROJECT_ROOT}/docker-compose.yml" -f "${PROJECT_ROOT}/docker-compose.deploy.yml" -f "${PROJECT_ROOT}/docker-compose.postgres.yml")
             ;;
         *)
             echo "ERROR: env must be 'dev', 'staging', or 'prod', got: ${ENV}" >&2
@@ -452,41 +511,23 @@ shell env service key="":
         sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'
 
 # Build the test stage and run pytest on DEV_DOCKER_HOST.
-# Optional pattern filters tests via pytest -k.
-test pattern="":
+# pattern: optional pytest -k filter ("" for the whole suite).
+# db: sqlite (default) | postgres | mysql. postgres/mysql start an ephemeral
+# database in the same throwaway compose project and run the whole suite
+# against it. Examples:
+#   just test                      # sqlite, whole suite
+#   just test "" postgres          # postgres, whole suite
+#   just test test_m1_startup postgres
+test pattern="" db="sqlite":
     #!/usr/bin/env bash
     set -euo pipefail
     : "${DEV_DOCKER_HOST:?DEV_DOCKER_HOST must be set}"
 
-    PATTERN="{{ pattern }}"
     PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-    TEST_PROJECT="ci-tests-$$"
-
+    export TEST_PROJECT="ci-tests-$$"
     export DOCKER_HOST="$DEV_DOCKER_HOST"
 
-    cleanup() {
-        docker compose \
-            -p "${TEST_PROJECT}" \
-            -f "${PROJECT_ROOT}/docker-compose.yml" \
-            -f "${PROJECT_ROOT}/docker-compose.ci.yml" \
-            down --volumes --remove-orphans 2>/dev/null || true
-    }
-    trap cleanup EXIT
-
-    echo "==> Building test image..."
-    docker compose \
-        -p "${TEST_PROJECT}" \
-        -f "${PROJECT_ROOT}/docker-compose.yml" \
-        -f "${PROJECT_ROOT}/docker-compose.ci.yml" \
-        build master
-
-    echo "==> Running tests${PATTERN:+ (pattern: $PATTERN)}..."
-    docker compose \
-        -p "${TEST_PROJECT}" \
-        -f "${PROJECT_ROOT}/docker-compose.yml" \
-        -f "${PROJECT_ROOT}/docker-compose.ci.yml" \
-        run --rm master \
-        python -m pytest ${PATTERN:+-k "$PATTERN"} -v --tb=short
+    "${PROJECT_ROOT}/.sre/test-db.sh" "{{ db }}" "{{ pattern }}"
 
 # Refresh the staging singleton with the latest image for a merged branch,
 # then tear down that branch's dev environment.
@@ -502,6 +543,9 @@ post-merge-cleanup branch tag="master":
 
     echo "==> post-merge-cleanup: branch=${BRANCH} tag=${TAG}"
 
+    # deploy layers docker-compose.postgres.yml and reads COMPOSE_PROFILES /
+    # POSTGRES_PASSWORD / DATABASE_URL from .env, so the refresh keeps the
+    # staging database configuration (postgres_data is preserved).
     echo "==> Refreshing staging singleton..."
     just deploy staging "$TAG"
 

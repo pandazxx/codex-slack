@@ -25,3 +25,34 @@ services:
         condition: service_healthy
     networks:
       - internal
+
+  # --- Database services for the CI matrix (design section 10) --------------
+  # Started explicitly by .sre/test-db.sh. The postgres leg layers
+  # docker-compose.postgres.yml instead (same postgres:17-alpine pin).
+  mysql:
+    profiles: ["ci-mysql"]
+    # >= 8.0.16 is the floor for CHECK enforcement (design section 12, Phase 2).
+    image: mysql:8.0
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-ci-test-only}
+      MYSQL_DATABASE: master
+      MYSQL_USER: master
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ci-test-only}
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      # TCP ping: the init-time temporary server has networking disabled, so
+      # this only passes once the real server is up.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+    networks:
+      - internal

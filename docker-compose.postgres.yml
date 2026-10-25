@@ -1,0 +1,64 @@
+# Bundled-Postgres overlay (design: docs/design/backend-database-provider.md §9).
+# Layered by the justfile on top of docker-compose.yml and the shape overlay
+# (dev or deploy). The `postgres` service only exists when the `db-bundled`
+# Compose profile is active (COMPOSE_PROFILES=db-bundled):
+#   dev-up   -> profile forced on, dev-only password default
+#   deploy   -> profile and POSTGRES_PASSWORD come from .env / the caller's shell
+# Managed-DB mode: leave COMPOSE_PROFILES unset and set DATABASE_URL.
+# Requires Docker Compose >= 2.20 (depends_on `required: false`).
+#
+# DATABASE_URL is passed through verbatim and never defaulted here. master
+# builds the bundled URL itself from POSTGRES_PASSWORD, so an unset
+# DATABASE_URL still trips the SQLite-upgrade safety net (design section 11).
+# Injecting a URL here would count as an explicit choice and bypass that check.
+services:
+  postgres:
+    profiles: ["db-bundled"]
+    # Major pinned: 17 is supported to Nov 2029 and a major pin keeps the
+    # on-disk format fixed while minor/security releases remain drop-in.
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: master
+      POSTGRES_DB: master
+      # NOT `:?`: Compose interpolates inactive-profile services too, so a
+      # required-variable check would break managed-DB mode (no password).
+      # Enforcement lives in the justfile (deploy/dev-up guards); the postgres
+      # image itself also refuses to initialise with an empty password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U master -d master"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+    networks:
+      - internal
+    restart: unless-stopped
+
+  master:
+    environment:
+      # Empty means unset: resolve_db_url() strips DATABASE_URL, and the pool
+      # settings fall back to their defaults (5 / 10) via `or`. With the
+      # profile on and DATABASE_URL empty, master builds the bundled URL from
+      # POSTGRES_PASSWORD. With the profile off, set DATABASE_URL (managed DB).
+      # Note: the key is always present in the container, even when empty
+      # (tests/conftest.py checks key presence; the CI sqlite leg therefore
+      # does not layer this file).
+      DATABASE_URL: ${DATABASE_URL:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-}
+      DB_POOL_MAX_OVERFLOW: ${DB_POOL_MAX_OVERFLOW:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+
+volumes:
+  postgres_data:
