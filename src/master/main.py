@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+from sqlalchemy import text as sa_text
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -104,16 +105,17 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
     _STALE_STREAM_TIMEOUT_SECONDS.
     """
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(db_path)
         try:
             orphaned = conn.execute(
-                "SELECT c.message_id, c.topic_id, c.agent_name,"
-                " MAX(c.created_at) AS last_chunk_at"
-                " FROM chunks c"
-                " LEFT JOIN messages m ON m.id = c.message_id"
-                " WHERE m.id IS NULL"
-                " GROUP BY c.message_id"
+                sa_text(
+                    "SELECT c.message_id, c.topic_id, c.agent_name,"
+                    " MAX(c.created_at) AS last_chunk_at"
+                    " FROM chunks c"
+                    " LEFT JOIN messages m ON m.id = c.message_id"
+                    " WHERE m.id IS NULL"
+                    " GROUP BY c.message_id"
+                )
             ).fetchall()
         finally:
             conn.close()
@@ -141,14 +143,15 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
         mqtt_client = getattr(app_state, "mqtt", None) if app_state else None
 
         try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
+            conn = get_connection(db_path)
             try:
                 ws_row = conn.execute(
-                    "SELECT w.id AS workspace_id, w.container_name FROM workspaces w"
-                    " JOIN topics t ON t.workspace_id = w.id"
-                    " WHERE t.id = ?",
-                    (topic_id,),
+                    sa_text(
+                        "SELECT w.id AS workspace_id, w.container_name FROM workspaces w"
+                        " JOIN topics t ON t.workspace_id = w.id"
+                        " WHERE t.id = :topic_id"
+                    ),
+                    {"topic_id": topic_id},
                 ).fetchone()
             finally:
                 conn.close()
@@ -186,12 +189,12 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
 
         transcript_json = None
         try:
-            conn = sqlite3.connect(db_path)
+            conn = get_connection(db_path)
             try:
                 now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 chunk_rows = conn.execute(
-                    "SELECT event FROM chunks WHERE message_id = ? ORDER BY seq",
-                    (message_id,),
+                    sa_text("SELECT event FROM chunks WHERE message_id = :message_id ORDER BY seq"),
+                    {"message_id": message_id},
                 ).fetchall()
                 if chunk_rows:
                     events = []
@@ -202,14 +205,23 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
                             pass
                     if events:
                         transcript_json = json.dumps(events)
-                with conn:
-                    conn.execute(
+                conn.execute(
+                    sa_text(
                         "INSERT OR IGNORE INTO messages"
                         " (id, topic_id, sender, agent_name, text, transcript, interrupt_reason, created_at)"
-                        " VALUES (?, ?, 'agent', ?, ?, ?, ?, ?)",
-                        (message_id, topic_id, agent_name, "(message interrupted)", transcript_json, interrupt_reason, now_str),
-                    )
-                    conn.execute("DELETE FROM chunks WHERE message_id = ?", (message_id,))
+                        " VALUES (:id, :topic_id, 'agent', :agent_name, :text, :transcript, :interrupt_reason, :now)"
+                    ),
+                    {
+                        "id": message_id, "topic_id": topic_id, "agent_name": agent_name,
+                        "text": "(message interrupted)", "transcript": transcript_json,
+                        "interrupt_reason": interrupt_reason, "now": now_str,
+                    },
+                )
+                conn.execute(
+                    sa_text("DELETE FROM chunks WHERE message_id = :message_id"),
+                    {"message_id": message_id},
+                )
+                conn.commit()
             finally:
                 conn.close()
         except Exception:
@@ -332,8 +344,8 @@ def _background_tasks(settings, db_path: str, stop_event: threading.Event, app_s
                         conn = get_connection(db_path)
                         try:
                             conn.execute(
-                                "UPDATE workspaces SET last_refreshed_at = ? WHERE id = ?",
-                                (now_str, ws_id),
+                                sa_text("UPDATE workspaces SET last_refreshed_at = :now WHERE id = :ws_id"),
+                                {"now": now_str, "ws_id": ws_id},
                             )
                             conn.commit()
                         finally:
@@ -366,8 +378,8 @@ def _parse_iso_utc(value: str | None):
 
 def _update_last_fired(conn, action_id: str, next_fire_utc) -> None:
     conn.execute(
-        "UPDATE event_actions SET last_fired_at = ? WHERE id = ?",
-        (next_fire_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), action_id),
+        sa_text("UPDATE event_actions SET last_fired_at = :fired_at WHERE id = :action_id"),
+        {"fired_at": next_fire_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), "action_id": action_id},
     )
     conn.commit()
 
@@ -582,21 +594,22 @@ async def _replay_in_progress_chunks(ws: WebSocket, db_path: str) -> None:
     topics; the frontend filters by `topic_id` in the frame.
     """
     def _query() -> list[tuple[str, str, str | None, list[dict]]]:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(db_path)
         try:
             in_progress = [
                 (r["message_id"], r["topic_id"]) for r in conn.execute(
-                    "SELECT DISTINCT c.message_id, c.topic_id FROM chunks c"
-                    " LEFT JOIN messages m ON m.id = c.message_id"
-                    " WHERE m.id IS NULL"
+                    sa_text(
+                        "SELECT DISTINCT c.message_id, c.topic_id FROM chunks c"
+                        " LEFT JOIN messages m ON m.id = c.message_id"
+                        " WHERE m.id IS NULL"
+                    )
                 ).fetchall()
             ]
             result = []
             for mid, tid in in_progress:
                 rows = conn.execute(
-                    "SELECT event, agent_name FROM chunks WHERE message_id = ? ORDER BY seq",
-                    (mid,),
+                    sa_text("SELECT event, agent_name FROM chunks WHERE message_id = :mid ORDER BY seq"),
+                    {"mid": mid},
                 ).fetchall()
                 agent_name = rows[0]["agent_name"] if rows else None
                 result.append((mid, tid, agent_name, [json.loads(r["event"]) for r in rows]))

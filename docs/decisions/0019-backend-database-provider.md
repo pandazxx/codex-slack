@@ -1,6 +1,6 @@
 ---
 title: "ADR-0019: Backend database provider — Postgres default, SQLite and MySQL supported, via SQLAlchemy Core + Alembic"
-status: proposed
+status: accepted
 date: 2026-10-24
 decision-makers: [architect, project-owner]
 consulted: [engineer, tester, sre]

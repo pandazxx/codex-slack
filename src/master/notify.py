@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib import error as url_error
 from urllib import request
+
+from sqlalchemy import text as sa_text
+
+from .db import get_connection
 
 if TYPE_CHECKING:
     from .config import MasterSettings
@@ -162,14 +165,15 @@ def _fetch_topic_workspace(
     db_path: str, topic_id: str
 ) -> tuple[str, str, str] | None:
     """Return (workspace_id, workspace_name, topic_subject) or None if not found."""
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     try:
         row = conn.execute(
-            "SELECT w.id, w.name, t.subject"
-            " FROM topics t JOIN workspaces w ON t.workspace_id = w.id"
-            " WHERE t.id = ?",
-            (topic_id,),
+            sa_text(
+                "SELECT w.id, w.name, t.subject"
+                " FROM topics t JOIN workspaces w ON t.workspace_id = w.id"
+                " WHERE t.id = :topic_id"
+            ),
+            {"topic_id": topic_id},
         ).fetchone()
         if row is None:
             return None
@@ -190,14 +194,15 @@ def _resolve_effective_config(
     if settings.notify_telegram_chat_id:
         global_defaults["NOTIFY_TELEGRAM_CHAT_ID"] = settings.notify_telegram_chat_id
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            "SELECT key, value, scope_type FROM config"
-            " WHERE (scope_type='global' OR (scope_type='workspace' AND scope_id=?))"
-            " ORDER BY scope_type",
-            (workspace_id,),
+            sa_text(
+                "SELECT key, value, scope_type FROM config"
+                " WHERE (scope_type='global' OR (scope_type='workspace' AND scope_id=:workspace_id))"
+                " ORDER BY scope_type"
+            ),
+            {"workspace_id": workspace_id},
         ).fetchall()
     finally:
         conn.close()

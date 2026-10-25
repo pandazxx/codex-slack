@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
+from sqlalchemy import text
 
 from .db import get_connection
 
@@ -78,30 +79,35 @@ def export_topic(
     conn = get_connection(request.app.state.db_path)
     try:
         ws_row = conn.execute(
-            "SELECT id, name FROM workspaces WHERE id = ?", (workspace_id,)
+            text("SELECT id, name FROM workspaces WHERE id = :id"),
+            {"id": workspace_id},
         ).fetchone()
         if ws_row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
 
         topic_row = conn.execute(
-            "SELECT id, subject FROM topics WHERE id = ? AND workspace_id = ?",
-            (topic_id, workspace_id),
+            text("SELECT id, subject FROM topics WHERE id = :id AND workspace_id = :workspace_id"),
+            {"id": topic_id, "workspace_id": workspace_id},
         ).fetchone()
         if topic_row is None:
             raise HTTPException(status_code=404, detail="topic not found")
 
         msg_rows = conn.execute(
-            "SELECT id, sender, agent_name, text, transcript, created_at FROM messages"
-            " WHERE topic_id = ? ORDER BY created_at, rowid",
-            (topic_id,),
+            text(
+                "SELECT id, sender, agent_name, text, transcript, created_at FROM messages"
+                " WHERE topic_id = :topic_id ORDER BY created_at, rowid"
+            ),
+            {"topic_id": topic_id},
         ).fetchall()
 
         messages = []
         for r in msg_rows:
             att_rows = conn.execute(
-                "SELECT id, filename, mime_type FROM attachments"
-                " WHERE message_id = ? ORDER BY created_at",
-                (r["id"],),
+                text(
+                    "SELECT id, filename, mime_type FROM attachments"
+                    " WHERE message_id = :message_id ORDER BY created_at"
+                ),
+                {"message_id": r["id"]},
             ).fetchall()
             messages.append({
                 "sender": r["sender"],

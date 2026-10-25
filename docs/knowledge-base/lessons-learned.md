@@ -557,3 +557,15 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* `dispatch_token` added to the orch-env dict in `mqtt_loop._process_prompt` and `DISPATCH_TOKEN=$DISPATCH_TOKEN` added to both MCP config commands. Regression test asserts the prompt payload's token reaches the subprocess env. v4.20-rc4.
 
 *Prevention:* When a value must cross process boundaries (payload → env → child process → HTTP), write at least one test per hop, or one test that spans the transport chain — endpoint-level tests that synthesize the value prove nothing about delivery. UAT on a real agent image is the only leg-2/leg-3 coverage we currently have; treat "agent improvised around a tool failure" in a trace as a red flag, not a curiosity.
+
+---
+
+## 2026-10-25 — SQLAlchemy needs `sqlite_autoincrement=True` for SQLite AUTOINCREMENT; reflection and parity checks need sqlite_master
+
+*Summary:* `test_chunks_id_is_autoincrement` failed because the Alembic baseline created `chunks.id` without the SQLite `AUTOINCREMENT` keyword, even though the Column was declared `autoincrement=True`. The legacy DDL uses `INTEGER PRIMARY KEY AUTOINCREMENT`, so the two schemas diverged.
+
+*Root cause:* SQLAlchemy's `autoincrement=True` on a `Column` controls Python-side INSERT behaviour (whether SQLAlchemy attempts to retrieve the generated key) but does **not** affect the emitted DDL. On SQLite, the `AUTOINCREMENT` keyword in `CREATE TABLE` requires a separate table-level option: `sqlite_autoincrement=True` on `op.create_table(...)`. Without it, `INTEGER PRIMARY KEY` is emitted, which SQLite treats as a rowid alias (monotonically increasing but reusing deleted max+1 rowids) — subtly different from strict `AUTOINCREMENT` (never reuses a rowid). Additionally, SQLAlchemy's SQLite reflect layer never populates `autoincrement=True` via `inspect()` even for tables that do carry the keyword, so a parity test that compares inspect() results would silently pass regardless. The only reliable check is to read the raw `CREATE TABLE` DDL from `sqlite_master` and search for the `AUTOINCREMENT` keyword directly.
+
+*Fix applied:* Added `sqlite_autoincrement=True` as a table-level kwarg to `op.create_table("chunks", ...)` in `alembic/versions/000000000001_baseline.py`. With this flag, SQLite emits `INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT`; PostgreSQL emits `SERIAL`; MySQL emits `AUTO_INCREMENT` — all correct for those dialects. Only `chunks` uses `AUTOINCREMENT` in the legacy DDL (confirmed via grep on `_prebaseline.py`); no other tables required changes.
+
+*Prevention:* (1) To emit SQLite `AUTOINCREMENT` via Alembic, always set `sqlite_autoincrement=True` on `op.create_table`, not just `autoincrement=True` on the Column. (2) Never trust `inspect().get_columns()[n]["autoincrement"]` on SQLite — the flag is always `False` regardless of DDL; use `sqlite_master` DDL text instead. (3) Expression-based and partial indexes are also skipped by SQLAlchemy reflection with a `SAWarning`; parity tests for those must also query `sqlite_master` directly, comparing normalised DDL strings rather than inspect() results.

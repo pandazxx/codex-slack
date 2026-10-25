@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 import uuid
 from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import text as sa_text
 
 from .agent_runner import (
     build_spawn_kwargs,
@@ -33,29 +35,34 @@ def _make_session_uuid(scope_type: str, scope_id: str, staff_name: str) -> str:
 
 
 def _get_staff_session(
-    conn: sqlite3.Connection,
+    conn: Any,
     scope_type: str,
     scope_id: str,
     staff_name: str,
 ) -> tuple[str, bool]:
     """Return (session_uuid, is_new_session). Creates staff_sessions row on first use."""
     row = conn.execute(
-        "SELECT session_id FROM staff_sessions"
-        " WHERE scope_type=? AND scope_id=? AND staff_name=?",
-        (scope_type, scope_id, staff_name),
+        sa_text(
+            "SELECT session_id FROM staff_sessions"
+            " WHERE scope_type=:scope_type AND scope_id=:scope_id AND staff_name=:staff_name"
+        ),
+        {"scope_type": scope_type, "scope_id": scope_id, "staff_name": staff_name},
     ).fetchone()
     if row:
         return row["session_id"], False
     session_uuid = _make_session_uuid(scope_type, scope_id, staff_name)
     conn.execute(
-        "INSERT INTO staff_sessions (scope_type, scope_id, staff_name, session_id, started_at)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (scope_type, scope_id, staff_name, session_uuid, _now()),
+        sa_text(
+            "INSERT INTO staff_sessions (scope_type, scope_id, staff_name, session_id, started_at)"
+            " VALUES (:scope_type, :scope_id, :staff_name, :session_id, :started_at)"
+        ),
+        {"scope_type": scope_type, "scope_id": scope_id, "staff_name": staff_name,
+         "session_id": session_uuid, "started_at": _now()},
     )
     return session_uuid, True
 
 
-def _staff_session_key(staff: sqlite3.Row, workspace_id: str, topic_id: str) -> tuple[str, str]:
+def _staff_session_key(staff: Any, workspace_id: str, topic_id: str) -> tuple[str, str]:
     """Map staff.session_scope to (scope_type, scope_id) for staff_sessions."""
     ss = staff["session_scope"] or "topic"
     if ss == "workspace":
@@ -71,7 +78,7 @@ async def dispatch_to_staff(
     app_state,
     workspace_id: str,
     topic_id: str,
-    staff: sqlite3.Row,
+    staff: Any,
     prompt_text: str,
     sender: str,
     raw_text: str | None = None,
@@ -122,8 +129,8 @@ async def dispatch_to_staff(
     conn = get_connection(app_state.db_path)
     try:
         topic = conn.execute(
-            "SELECT worktree_path, branch_name, repo_ref, base_sha FROM topics WHERE id = ?",
-            (topic_id,),
+            sa_text("SELECT worktree_path, branch_name, repo_ref, base_sha FROM topics WHERE id = :topic_id"),
+            {"topic_id": topic_id},
         ).fetchone()
         if topic is None:
             raise ValueError(f"topic {topic_id!r} not found")
@@ -140,9 +147,12 @@ async def dispatch_to_staff(
         # handler's UPDATE can store llm_session_id. INSERT OR IGNORE is a no-op on
         # subsequent turns when the row already exists.
         conn.execute(
-            "INSERT OR IGNORE INTO sessions (id, topic_id, agent_name, adapter, llm_session_id, updated_at)"
-            " VALUES (?, ?, ?, ?, NULL, ?)",
-            (str(uuid.uuid4()), topic_id, staff["name"], staff["adapter"], _now()),
+            sa_text(
+                "INSERT OR IGNORE INTO sessions (id, topic_id, agent_name, adapter, llm_session_id, updated_at)"
+                " VALUES (:id, :topic_id, :agent_name, :adapter, NULL, :updated_at)"
+            ),
+            {"id": str(uuid.uuid4()), "topic_id": topic_id,
+             "agent_name": staff["name"], "adapter": staff["adapter"], "updated_at": _now()},
         )
 
         # For adapters like codex whose LLM session id differs from the internal
@@ -154,25 +164,31 @@ async def dispatch_to_staff(
             scope = staff["session_scope"] or "topic"
             if scope == "workspace":
                 row = conn.execute(
-                    "SELECT s.llm_session_id FROM sessions s"
-                    " JOIN topics t ON s.topic_id = t.id"
-                    " WHERE t.workspace_id = ? AND s.agent_name = ?"
-                    " AND s.llm_session_id IS NOT NULL"
-                    " ORDER BY s.updated_at DESC LIMIT 1",
-                    (workspace_id, staff["name"]),
+                    sa_text(
+                        "SELECT s.llm_session_id FROM sessions s"
+                        " JOIN topics t ON s.topic_id = t.id"
+                        " WHERE t.workspace_id = :workspace_id AND s.agent_name = :agent_name"
+                        " AND s.llm_session_id IS NOT NULL"
+                        " ORDER BY s.updated_at DESC LIMIT 1"
+                    ),
+                    {"workspace_id": workspace_id, "agent_name": staff["name"]},
                 ).fetchone()
             elif scope == "global":
                 row = conn.execute(
-                    "SELECT llm_session_id FROM sessions"
-                    " WHERE agent_name = ? AND llm_session_id IS NOT NULL"
-                    " ORDER BY updated_at DESC LIMIT 1",
-                    (staff["name"],),
+                    sa_text(
+                        "SELECT llm_session_id FROM sessions"
+                        " WHERE agent_name = :agent_name AND llm_session_id IS NOT NULL"
+                        " ORDER BY updated_at DESC LIMIT 1"
+                    ),
+                    {"agent_name": staff["name"]},
                 ).fetchone()
             else:
                 row = conn.execute(
-                    "SELECT llm_session_id FROM sessions"
-                    " WHERE topic_id = ? AND agent_name = ?",
-                    (topic_id, staff["name"]),
+                    sa_text(
+                        "SELECT llm_session_id FROM sessions"
+                        " WHERE topic_id = :topic_id AND agent_name = :agent_name"
+                    ),
+                    {"topic_id": topic_id, "agent_name": staff["name"]},
                 ).fetchone()
             if row:
                 llm_session_id = row["llm_session_id"]
@@ -183,29 +199,41 @@ async def dispatch_to_staff(
             if dispatch_token is None:
                 dispatch_token = str(uuid.uuid4())
             conn.execute(
-                "INSERT INTO messages"
-                " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
-                "  event_action_id, silent, created_at,"
-                "  sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,"
-                "  dispatch_token)"
-                " VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    message_id, topic_id, sender, raw_text, event_action_id, 1 if silent else 0, now,
-                    sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,
-                    dispatch_token,
+                sa_text(
+                    "INSERT INTO messages"
+                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
+                    "  event_action_id, silent, created_at,"
+                    "  sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id,"
+                    "  dispatch_token)"
+                    " VALUES (:id, :topic_id, :sender, NULL, :text, NULL, NULL, NULL,"
+                    "  :event_action_id, :silent, :created_at,"
+                    "  :sender_kind, :sender_name, :receiver_kind, :receiver_name,"
+                    "  :task_id, :reply_to_message_id, :dispatch_token)"
                 ),
+                {
+                    "id": message_id, "topic_id": topic_id, "sender": sender, "text": raw_text,
+                    "event_action_id": event_action_id, "silent": 1 if silent else 0, "created_at": now,
+                    "sender_kind": sender_kind, "sender_name": sender_name,
+                    "receiver_kind": receiver_kind, "receiver_name": receiver_name,
+                    "task_id": task_id, "reply_to_message_id": reply_to_message_id,
+                    "dispatch_token": dispatch_token,
+                },
             )
             if sender == "user":
                 conn.execute(
-                    "UPDATE workspaces SET last_message_at = ?, last_dispatched_at = ? WHERE id = ?",
-                    (now, now, workspace_id),
+                    sa_text(
+                        "UPDATE workspaces SET last_message_at = :now, last_dispatched_at = :now"
+                        " WHERE id = :workspace_id"
+                    ),
+                    {"now": now, "workspace_id": workspace_id},
                 )
         else:
             # Row was pre-inserted by the caller (e.g. ask_sender for staff receivers).
             # Fetch the dispatch_token from the existing row so the MQTT payload is consistent.
             if dispatch_token is None:
                 existing = conn.execute(
-                    "SELECT dispatch_token FROM messages WHERE id = ?", (message_id,)
+                    sa_text("SELECT dispatch_token FROM messages WHERE id = :message_id"),
+                    {"message_id": message_id},
                 ).fetchone()
                 dispatch_token = existing["dispatch_token"] if existing else str(uuid.uuid4())
         conn.commit()
@@ -230,7 +258,8 @@ async def dispatch_to_staff(
         _task_conn = get_connection(app_state.db_path)
         try:
             _task_row = _task_conn.execute(
-                "SELECT depth, assignee_name FROM tasks WHERE id = ?", (task_id,)
+                sa_text("SELECT depth, assignee_name FROM tasks WHERE id = :task_id"),
+                {"task_id": task_id},
             ).fetchone()
             if _task_row is not None:
                 if receiver_name == _task_row["assignee_name"]:
@@ -281,7 +310,8 @@ async def dispatch_to_staff(
     disp_conn = get_connection(app_state.db_path)
     try:
         disp_conn.execute(
-            "UPDATE messages SET transcript = ? WHERE id = ?", (scrubbed_payload, message_id)
+            sa_text("UPDATE messages SET transcript = :transcript WHERE id = :message_id"),
+            {"transcript": scrubbed_payload, "message_id": message_id},
         )
         disp_conn.commit()
     finally:
@@ -308,7 +338,8 @@ async def dispatch_to_staff(
     ws_conn = get_connection(app_state.db_path)
     try:
         ws_row = ws_conn.execute(
-            "SELECT container_name, repo_url FROM workspaces WHERE id = ?", (workspace_id,)
+            sa_text("SELECT container_name, repo_url FROM workspaces WHERE id = :workspace_id"),
+            {"workspace_id": workspace_id},
         ).fetchone()
         cname = (ws_row["container_name"] if ws_row else None) or _agent_container_name(workspace_id)
         repo_url = ws_row["repo_url"] if ws_row else ""
@@ -350,10 +381,13 @@ async def post_message_direct(
         message_id = str(uuid.uuid4())
         now = _now()
         conn.execute(
-            "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, event_action_id, created_at)"
-            " VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)",
-            (message_id, topic_id, sender, agent_name, text, now),
+            sa_text(
+                "INSERT INTO messages"
+                " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, event_action_id, created_at)"
+                " VALUES (:id, :topic_id, :sender, :agent_name, :text, NULL, NULL, NULL, NULL, :created_at)"
+            ),
+            {"id": message_id, "topic_id": topic_id, "sender": sender, "agent_name": agent_name,
+             "text": text, "created_at": now},
         )
         conn.commit()
     finally:

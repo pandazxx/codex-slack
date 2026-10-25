@@ -22,6 +22,8 @@ import re
 from datetime import datetime, timezone
 from typing import NamedTuple
 
+from sqlalchemy import text
+
 from .db import get_connection
 from .staffs import resolve_staff
 
@@ -82,11 +84,13 @@ def render_template(
             conn = get_connection(db_path)
             try:
                 rows = conn.execute(
-                    "SELECT key, value FROM notes"
-                    " WHERE scope_type='workspace' AND scope_id=?"
-                    "   AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value=?)"
-                    " ORDER BY key",
-                    (workspace_id, tag),
+                    text(
+                        "SELECT key, value FROM notes"
+                        " WHERE scope_type='workspace' AND scope_id=:scope_id"
+                        "   AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value=:tag)"
+                        " ORDER BY key"
+                    ),
+                    {"scope_id": workspace_id, "tag": tag},
                 ).fetchall()
             finally:
                 conn.close()
@@ -185,22 +189,26 @@ async def _handle_event(app_state, event: dict) -> None:
     conn = get_connection(app_state.db_path)
     try:
         topic_rows = conn.execute(
-            "SELECT * FROM event_actions"
-            " WHERE scope_type='topic'"
-            "   AND scope_id=?"
-            "   AND event_type=?"
-            "   AND enabled=1"
-            "   AND (timing IS NULL OR timing=?)",
-            (event["topic_id"], event["event_type"], event["timing"]),
+            text(
+                "SELECT * FROM event_actions"
+                " WHERE scope_type='topic'"
+                "   AND scope_id=:scope_id"
+                "   AND event_type=:event_type"
+                "   AND enabled=1"
+                "   AND (timing IS NULL OR timing=:timing)"
+            ),
+            {"scope_id": event["topic_id"], "event_type": event["event_type"], "timing": event["timing"]},
         ).fetchall()
         workspace_rows = conn.execute(
-            "SELECT * FROM event_actions"
-            " WHERE scope_type='workspace'"
-            "   AND scope_id=?"
-            "   AND event_type=?"
-            "   AND enabled=1"
-            "   AND (timing IS NULL OR timing=?)",
-            (event["workspace_id"], event["event_type"], event["timing"]),
+            text(
+                "SELECT * FROM event_actions"
+                " WHERE scope_type='workspace'"
+                "   AND scope_id=:scope_id"
+                "   AND event_type=:event_type"
+                "   AND enabled=1"
+                "   AND (timing IS NULL OR timing=:timing)"
+            ),
+            {"scope_id": event["workspace_id"], "event_type": event["event_type"], "timing": event["timing"]},
         ).fetchall()
         rows = list(topic_rows) + list(workspace_rows)
     finally:
@@ -237,10 +245,12 @@ async def _dispatch_one(app_state, row, event: dict) -> None:
                 event["topic_id"],
             )
             topic_row = conn.execute(
-                "SELECT t.id, t.subject, t.workspace_id, w.name AS workspace_name"
-                " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
-                " WHERE t.id = ?",
-                (event["topic_id"],),
+                text(
+                    "SELECT t.id, t.subject, t.workspace_id, w.name AS workspace_name"
+                    " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
+                    " WHERE t.id = :id"
+                ),
+                {"id": event["topic_id"]},
             ).fetchone()
         finally:
             conn.close()
@@ -338,29 +348,35 @@ async def run_gate_actions(
     conn = get_connection(app_state.db_path)
     try:
         topic_rows = conn.execute(
-            "SELECT * FROM event_actions"
-            " WHERE scope_type='topic' AND scope_id=?"
-            "   AND event_type='topic_message_sent'"
-            "   AND timing='before'"
-            "   AND structured_output=1"
-            "   AND enabled=1",
-            (topic_id,),
+            text(
+                "SELECT * FROM event_actions"
+                " WHERE scope_type='topic' AND scope_id=:scope_id"
+                "   AND event_type='topic_message_sent'"
+                "   AND timing='before'"
+                "   AND structured_output=1"
+                "   AND enabled=1"
+            ),
+            {"scope_id": topic_id},
         ).fetchall()
         workspace_rows = conn.execute(
-            "SELECT * FROM event_actions"
-            " WHERE scope_type='workspace' AND scope_id=?"
-            "   AND event_type='topic_message_sent'"
-            "   AND timing='before'"
-            "   AND structured_output=1"
-            "   AND enabled=1",
-            (workspace_id,),
+            text(
+                "SELECT * FROM event_actions"
+                " WHERE scope_type='workspace' AND scope_id=:scope_id"
+                "   AND event_type='topic_message_sent'"
+                "   AND timing='before'"
+                "   AND structured_output=1"
+                "   AND enabled=1"
+            ),
+            {"scope_id": workspace_id},
         ).fetchall()
         rows = list(topic_rows) + list(workspace_rows)
         topic_row = conn.execute(
-            "SELECT t.id, t.subject, t.workspace_id, w.name AS workspace_name"
-            " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
-            " WHERE t.id = ?",
-            (topic_id,),
+            text(
+                "SELECT t.id, t.subject, t.workspace_id, w.name AS workspace_name"
+                " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
+                " WHERE t.id = :id"
+            ),
+            {"id": topic_id},
         ).fetchone()
     finally:
         conn.close()
@@ -466,10 +482,17 @@ def _record_run(db_path: str, action_id: str, *, status: str, output: str) -> No
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE event_actions"
-            "   SET last_run_at=?, last_run_status=?, last_run_output=?"
-            " WHERE id=?",
-            (_now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"), status, output[:4096], action_id),
+            text(
+                "UPDATE event_actions"
+                "   SET last_run_at=:last_run_at, last_run_status=:status, last_run_output=:output"
+                " WHERE id=:id"
+            ),
+            {
+                "last_run_at": _now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "status": status,
+                "output": output[:4096],
+                "id": action_id,
+            },
         )
         conn.commit()
     finally:
@@ -500,20 +523,24 @@ async def veto_dispatch(
     conn = get_connection(app_state.db_path)
     try:
         topic_rows = conn.execute(
-            "SELECT * FROM event_actions"
-            " WHERE scope_type='topic'"
-            "   AND scope_id=?"
-            "   AND event_type='topic_archiving'"
-            "   AND enabled=1",
-            (topic_id,),
+            text(
+                "SELECT * FROM event_actions"
+                " WHERE scope_type='topic'"
+                "   AND scope_id=:scope_id"
+                "   AND event_type='topic_archiving'"
+                "   AND enabled=1"
+            ),
+            {"scope_id": topic_id},
         ).fetchall()
         workspace_rows = conn.execute(
-            "SELECT * FROM event_actions"
-            " WHERE scope_type='workspace'"
-            "   AND scope_id=?"
-            "   AND event_type='topic_archiving'"
-            "   AND enabled=1",
-            (workspace_id,),
+            text(
+                "SELECT * FROM event_actions"
+                " WHERE scope_type='workspace'"
+                "   AND scope_id=:scope_id"
+                "   AND event_type='topic_archiving'"
+                "   AND enabled=1"
+            ),
+            {"scope_id": workspace_id},
         ).fetchall()
         rows = list(topic_rows) + list(workspace_rows)
     finally:

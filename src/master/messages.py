@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from sqlalchemy import text as sa_text
 from .db import get_connection
 from .dispatch import dispatch_to_staff, _make_session_uuid  # re-exported for backwards compat
 from .staffs import resolve_staff, resolve_default_staff
@@ -35,7 +36,9 @@ def _now() -> str:
 def _topic_subject(db_path: str, topic_id: str) -> str:
     conn = get_connection(db_path)
     try:
-        row = conn.execute("SELECT subject FROM topics WHERE id = ?", (topic_id,)).fetchone()
+        row = conn.execute(
+            sa_text("SELECT subject FROM topics WHERE id = :topic_id"), {"topic_id": topic_id}
+        ).fetchone()
         return row["subject"] if row else ""
     finally:
         conn.close()
@@ -79,15 +82,17 @@ async def send_message(
     conn = get_connection(request.app.state.db_path)
     try:
         ws_row = conn.execute(
-            "SELECT id, container_name FROM workspaces WHERE id = ? AND archived_at IS NULL",
-            (workspace_id,),
+            sa_text("SELECT id, container_name FROM workspaces WHERE id = :wid AND archived_at IS NULL"),
+            {"wid": workspace_id},
         ).fetchone()
         if ws_row is None:
             raise HTTPException(404, "workspace not found")
         topic = conn.execute(
-            "SELECT id, current_staff_name FROM topics"
-            " WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
-            (topic_id, workspace_id),
+            sa_text(
+                "SELECT id, current_staff_name FROM topics"
+                " WHERE id = :topic_id AND workspace_id = :workspace_id AND archived_at IS NULL"
+            ),
+            {"topic_id": topic_id, "workspace_id": workspace_id},
         ).fetchone()
         if topic is None:
             raise HTTPException(404, "topic not found")
@@ -179,10 +184,15 @@ async def send_message(
         try:
             for att_id, fname, mime, size, storage_uri, _ in attachment_uploads:
                 att_conn.execute(
-                    "INSERT INTO attachments"
-                    " (id, message_id, topic_id, filename, mime_type, size_bytes, storage_uri, created_at, direction)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inbound')",
-                    (att_id, message_id, topic_id, fname, mime, size, storage_uri, now),
+                    sa_text(
+                        "INSERT INTO attachments"
+                        " (id, message_id, topic_id, filename, mime_type, size_bytes, storage_uri, created_at, direction)"
+                        " VALUES (:att_id, :message_id, :topic_id, :fname, :mime, :size, :storage_uri, :now, 'inbound')"
+                    ),
+                    {
+                        "att_id": att_id, "message_id": message_id, "topic_id": topic_id,
+                        "fname": fname, "mime": mime, "size": size, "storage_uri": storage_uri, "now": now,
+                    },
                 )
             att_conn.commit()
         finally:
@@ -211,7 +221,9 @@ async def send_message(
 def _read_transcript(db_path: str, message_id: str) -> str | None:
     conn = get_connection(db_path)
     try:
-        row = conn.execute("SELECT transcript FROM messages WHERE id = ?", (message_id,)).fetchone()
+        row = conn.execute(
+            sa_text("SELECT transcript FROM messages WHERE id = :message_id"), {"message_id": message_id}
+        ).fetchone()
         return row["transcript"] if row else None
     finally:
         conn.close()
@@ -242,23 +254,31 @@ async def cancel_message(
 def list_messages(workspace_id: str, topic_id: str, request: Request) -> list[MessageOut]:
     conn = get_connection(request.app.state.db_path)
     try:
-        if conn.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone() is None:
+        if conn.execute(
+            sa_text("SELECT 1 FROM workspaces WHERE id = :workspace_id"), {"workspace_id": workspace_id}
+        ).fetchone() is None:
             raise HTTPException(404, "workspace not found")
         if conn.execute(
-            "SELECT 1 FROM topics WHERE id = ? AND workspace_id = ?", (topic_id, workspace_id)
+            sa_text("SELECT 1 FROM topics WHERE id = :topic_id AND workspace_id = :workspace_id"),
+            {"topic_id": topic_id, "workspace_id": workspace_id},
         ).fetchone() is None:
             raise HTTPException(404, "topic not found")
         rows = conn.execute(
-            "SELECT id, sender, agent_name, text, transcript, usage_json, interrupt_reason, silent, created_at,"
-            " sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id"
-            " FROM messages WHERE topic_id = ? ORDER BY created_at",
-            (topic_id,),
+            sa_text(
+                "SELECT id, sender, agent_name, text, transcript, usage_json, interrupt_reason, silent, created_at,"
+                " sender_kind, sender_name, receiver_kind, receiver_name, task_id, reply_to_message_id"
+                " FROM messages WHERE topic_id = :topic_id ORDER BY created_at"
+            ),
+            {"topic_id": topic_id},
         ).fetchall()
         result = []
         for r in rows:
             att_rows = conn.execute(
-                "SELECT id, filename, mime_type, size_bytes FROM attachments WHERE message_id = ? ORDER BY created_at",
-                (r["id"],),
+                sa_text(
+                    "SELECT id, filename, mime_type, size_bytes FROM attachments"
+                    " WHERE message_id = :message_id ORDER BY created_at"
+                ),
+                {"message_id": r["id"]},
             ).fetchall()
             attachments = [
                 AttachmentMeta(

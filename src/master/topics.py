@@ -11,6 +11,7 @@ LOGGER = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from .db import get_connection
 from .runtime_config import load_agent_env
@@ -27,16 +28,16 @@ def _set_veto_status(db_path: str, topic_id: str, status: str, reason: str) -> N
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE topics SET veto_status = ?, veto_reason = ? WHERE id = ?",
-            (status, reason, topic_id),
+            text("UPDATE topics SET veto_status = :status, veto_reason = :reason WHERE id = :id"),
+            {"status": status, "reason": reason, "id": topic_id},
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def _slugify(text: str) -> str:
-    slug = text.lower().strip()
+def _slugify(text_: str) -> str:
+    slug = text_.lower().strip()
     slug = re.sub(r"[^\w\s-]", "", slug)
     slug = re.sub(r"[\s_]+", "-", slug)
     slug = re.sub(r"-+", "-", slug).strip("-")
@@ -45,13 +46,15 @@ def _slugify(text: str) -> str:
 
 def _workspace_exists(conn, workspace_id: str) -> bool:
     return conn.execute(
-        "SELECT 1 FROM workspaces WHERE id = ? AND archived_at IS NULL", (workspace_id,)
+        text("SELECT 1 FROM workspaces WHERE id = :id AND archived_at IS NULL"),
+        {"id": workspace_id},
     ).fetchone() is not None
 
 
 def _workspace_exists_any(conn, workspace_id: str) -> bool:
     return conn.execute(
-        "SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)
+        text("SELECT 1 FROM workspaces WHERE id = :id"),
+        {"id": workspace_id},
     ).fetchone() is not None
 
 
@@ -135,7 +138,8 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
     conn = get_connection(request.app.state.db_path)
     try:
         ws_row = conn.execute(
-            "SELECT repo_url FROM workspaces WHERE id = ? AND archived_at IS NULL", (workspace_id,)
+            text("SELECT repo_url FROM workspaces WHERE id = :id AND archived_at IS NULL"),
+            {"id": workspace_id},
         ).fetchone()
         if ws_row is None:
             raise HTTPException(status_code=404, detail="workspace not found")
@@ -145,13 +149,24 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
         worktree_path = f"/workspace/worktrees/{topic_id}"
         now = _now()
         conn.execute(
-            "INSERT INTO topics (id, workspace_id, subject, branch_name, repo_ref, worktree_path, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (topic_id, workspace_id, body.subject.strip(), branch_name, repo_ref, worktree_path, now),
+            text(
+                "INSERT INTO topics (id, workspace_id, subject, branch_name, repo_ref, worktree_path, created_at)"
+                " VALUES (:id, :workspace_id, :subject, :branch_name, :repo_ref, :worktree_path, :created_at)"
+            ),
+            {
+                "id": topic_id,
+                "workspace_id": workspace_id,
+                "subject": body.subject.strip(),
+                "branch_name": branch_name,
+                "repo_ref": repo_ref,
+                "worktree_path": worktree_path,
+                "created_at": now,
+            },
         )
         conn.commit()
         row = conn.execute(
-            "SELECT * FROM topics WHERE id = ?", (topic_id,)
+            text("SELECT * FROM topics WHERE id = :id"),
+            {"id": topic_id},
         ).fetchone()
     finally:
         conn.close()
@@ -165,9 +180,15 @@ def create_topic(workspace_id: str, body: TopicCreate, request: Request) -> Topi
     if base_sha:
         conn2 = get_connection(request.app.state.db_path)
         try:
-            conn2.execute("UPDATE topics SET base_sha = ? WHERE id = ?", (base_sha, topic_id))
+            conn2.execute(
+                text("UPDATE topics SET base_sha = :base_sha WHERE id = :id"),
+                {"base_sha": base_sha, "id": topic_id},
+            )
             conn2.commit()
-            row = conn2.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+            row = conn2.execute(
+                text("SELECT * FROM topics WHERE id = :id"),
+                {"id": topic_id},
+            ).fetchone()
         finally:
             conn2.close()
 
@@ -183,8 +204,8 @@ def list_topics(workspace_id: str, request: Request, archived: bool = False) -> 
             raise HTTPException(status_code=404, detail="workspace not found")
         where = "archived_at IS NOT NULL" if archived else "archived_at IS NULL"
         rows = conn.execute(
-            f"SELECT * FROM topics WHERE workspace_id = ? AND {where} ORDER BY created_at",
-            (workspace_id,),
+            text(f"SELECT * FROM topics WHERE workspace_id = :workspace_id AND {where} ORDER BY created_at"),
+            {"workspace_id": workspace_id},
         ).fetchall()
     finally:
         conn.close()
@@ -196,8 +217,8 @@ def get_topic(workspace_id: str, topic_id: str, request: Request) -> TopicOut:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM topics WHERE id = ? AND workspace_id = ?",
-            (topic_id, workspace_id),
+            text("SELECT * FROM topics WHERE id = :id AND workspace_id = :workspace_id"),
+            {"id": topic_id, "workspace_id": workspace_id},
         ).fetchone()
     finally:
         conn.close()
@@ -215,17 +236,20 @@ def set_current_staff(workspace_id: str, topic_id: str, body: TopicStaffPatch, r
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM topics WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
-            (topic_id, workspace_id),
+            text("SELECT * FROM topics WHERE id = :id AND workspace_id = :workspace_id AND archived_at IS NULL"),
+            {"id": topic_id, "workspace_id": workspace_id},
         ).fetchone()
         if row is None:
             raise HTTPException(404, "topic not found")
         conn.execute(
-            "UPDATE topics SET current_staff_name = ? WHERE id = ?",
-            (body.name, topic_id),
+            text("UPDATE topics SET current_staff_name = :name WHERE id = :id"),
+            {"name": body.name, "id": topic_id},
         )
         conn.commit()
-        updated = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+        updated = conn.execute(
+            text("SELECT * FROM topics WHERE id = :id"),
+            {"id": topic_id},
+        ).fetchone()
     finally:
         conn.close()
     return _row_to_topic(updated)
@@ -241,10 +265,12 @@ async def delete_topic(
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT t.id, t.subject, w.name AS workspace_name"
-            " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
-            " WHERE t.id = ? AND t.workspace_id = ? AND t.archived_at IS NULL",
-            (topic_id, workspace_id),
+            text(
+                "SELECT t.id, t.subject, w.name AS workspace_name"
+                " FROM topics t JOIN workspaces w ON w.id = t.workspace_id"
+                " WHERE t.id = :id AND t.workspace_id = :workspace_id AND t.archived_at IS NULL"
+            ),
+            {"id": topic_id, "workspace_id": workspace_id},
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="topic not found")
@@ -277,8 +303,8 @@ async def delete_topic(
     conn = get_connection(request.app.state.db_path)
     try:
         conn.execute(
-            "UPDATE topics SET archived_at = ?, veto_status = NULL, veto_reason = NULL WHERE id = ?",
-            (_now(), topic_id),
+            text("UPDATE topics SET archived_at = :now, veto_status = NULL, veto_reason = NULL WHERE id = :id"),
+            {"now": _now(), "id": topic_id},
         )
         conn.commit()
     finally:
@@ -316,7 +342,7 @@ def list_recent_topics(request: Request, limit: int = 20) -> list[RecentTopicOut
     conn = get_connection(request.app.state.db_path)
     try:
         rows = conn.execute(
-            """
+            text("""
             SELECT t.id AS topic_id, t.workspace_id, w.name AS workspace_name, t.subject,
                    COALESCE(MAX(m.created_at), t.created_at) AS last_activity_at
             FROM topics t
@@ -325,9 +351,9 @@ def list_recent_topics(request: Request, limit: int = 20) -> list[RecentTopicOut
             WHERE t.archived_at IS NULL AND w.archived_at IS NULL
             GROUP BY t.id
             ORDER BY last_activity_at DESC
-            LIMIT ?
-            """,
-            (min(limit, 50),),
+            LIMIT :limit
+            """),
+            {"limit": min(limit, 50)},
         ).fetchall()
     finally:
         conn.close()

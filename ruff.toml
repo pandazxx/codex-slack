@@ -9,9 +9,22 @@
 # DTZ007 – datetime.datetime.strptime() used without %z
 # DTZ011 – datetime.date.today()
 # DTZ012 – datetime.date.fromtimestamp()
-select = ["DTZ"]
+#
+# TID251: ban direct `import sqlite3` outside the db package and tests.
+# All production code must go through src/master/db which abstracts the
+# underlying database.  The db package itself and tests are allowed.
+select = ["DTZ", "TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"sqlite3" = {msg = "Use src/master/db (get_connection / engine) instead of importing sqlite3 directly."}
 
 [lint.per-file-ignores]
 # strptime without %z is intentional in _parse_iso_utc — the fallback
 # that handles pre-Z strings and immediately attaches UTC tzinfo.
 "src/master/main.py" = ["DTZ007"]
+# The db package uses sqlite3 directly for legacy pre-baseline DDL.
+# _dialect.py and _row.py do not import sqlite3; no ignore needed there.
+"src/master/db/__init__.py" = ["TID251"]
+"src/master/db/_prebaseline.py" = ["TID251"]
+# Tests may import sqlite3 for fixtures and introspection.
+"tests/**" = ["TID251"]

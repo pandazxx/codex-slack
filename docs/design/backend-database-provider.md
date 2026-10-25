@@ -1,12 +1,15 @@
 # Design: Backend database provider — Postgres default, SQLite and MySQL supported
 
-**Status:** review
+**Status:** accepted
 **Author:** architect
 **Date:** 2026-10-24
 **Related ADRs:** [ADR-0019](../decisions/0019-backend-database-provider.md); supersedes the "SQLite deferred migration" note in [ADR-0005 §4](../decisions/0005-v3-system-architecture.md); respects the single-user plaintext-secret posture of [ADR-0009](../decisions/0009-runtime-configuration-and-staff-system.md) and [ADR-0010](../decisions/0010-workspace-env-var-overrides.md); builds on the singleton deploy shape in [ADR-0016](../decisions/0016-singleton-justfile-deploys.md).
 
 ## Revision history
 
+- **2026-10-24 (rev 3)** — Design approved by project-owner and
+  PR #269 merged. OQ10 resolved as replace-only (the recommendation).
+  ADR-0019 accepted.
 - **2026-10-24 (rev 2)** — Postgres becomes the default (was: SQLite
   default, Postgres opt-in). All OQs resolved per project-owner
   decisions and code-review findings except OQ10, which is reworded
@@ -674,6 +677,26 @@ never writes to the source.
 
 **Phase 1 — Postgres default**
 
+*Carried from M0 code review (must be addressed before or alongside the
+Postgres switch):*
+
+- **M-3 (carried):** `scope_id IS :scope_id` in `staffs.py` is invalid on
+  Postgres (`IS` requires a literal, not a parameter; replace with
+  `scope_id = :scope_id OR (scope_id IS NULL AND :scope_id IS NULL)` or
+  use a dialect helper).
+- **m-2 (carried):** `schema_info()` in `src/master/db/__init__.py` uses
+  `PRAGMA table_info`, which is SQLite-only. Replace with
+  `sqlalchemy.inspect()` so it works on all dialects.
+- **m-3 (carried):** Driver packages (`psycopg[binary]`, `pymysql`) are
+  installed unconditionally. This is intentional (the design wants them
+  available); keep as-is but note in the dependency rationale.
+- **m-5 (carried):** Mixed commit ownership in `_prebaseline.py` helpers —
+  some call `conn.commit()` inside the helper, others leave commit to the
+  caller. Standardise to caller-commits before the first Alembic revision
+  that touches any of these tables.
+
+*Phase 1 primary work:*
+
 - Switch `DATABASE_URL` default to the bundled Postgres URL.
 - Convert all SQLite-only SQL at call sites to the dialect helpers
   (`upsert`, timestamp defaults in Python, PRAGMAs replaced by
@@ -793,27 +816,10 @@ the reasoning that led to the current shape.
 
 ## Open Questions
 
-- [ ] **OQ10 — Snapshot *import* semantics: replace-only, or
-      allow append/merge?** Clarified: this is about `scripts/db.sh
-      snapshot import`, not export.
-      - **Replace-only** means the import targets an empty DB. If
-        the target DB is empty (fresh schema, zero rows in every
-        user-data table), the import proceeds. Otherwise it either
-        refuses (default) or, with `--yes`, truncates every target
-        table and reloads from the snapshot. Result: an exact
-        copy of the snapshot. No data from the target is
-        preserved.
-      - **Merge** means the import loads rows into a target DB
-        that already has data. Primary-key collisions have to be
-        resolved somehow — snapshot wins, target wins, or error
-        — and foreign keys can point at rows that only exist on
-        one side. Merge is a much bigger surface and introduces
-        silent-data-loss foot-guns.
-      - Recommendation: **replace-only** in v1 (default refuses on
-        non-empty target; `--yes` truncates and reloads).
-        Revisit when a real demand for merge semantics shows up.
-        Owner: project-owner. Awaiting confirmation of the
-        recommendation.
+None. OQ10 resolved on design approval: snapshot import is
+**replace-only**. Import refuses a non-empty target by default; with `--yes` it
+truncates and reloads, so the result is an exact copy of the snapshot. Merge
+is out of scope for v1.
 
 ## Implementation Plan
 

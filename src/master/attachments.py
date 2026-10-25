@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
+from sqlalchemy import text
 from .db import get_connection
 
 LOGGER = logging.getLogger(__name__)
@@ -25,9 +26,11 @@ def list_attachments(workspace_id: str, topic_id: str, request: Request) -> list
     conn = get_connection(request.app.state.db_path)
     try:
         rows = conn.execute(
-            "SELECT id, message_id, topic_id, filename, mime_type, size_bytes, created_at, direction"
-            " FROM attachments WHERE topic_id = ? ORDER BY created_at",
-            (topic_id,),
+            text(
+                "SELECT id, message_id, topic_id, filename, mime_type, size_bytes, created_at, direction"
+                " FROM attachments WHERE topic_id = :topic_id ORDER BY created_at"
+            ),
+            {"topic_id": topic_id},
         ).fetchall()
     finally:
         conn.close()
@@ -39,8 +42,8 @@ def download_attachment(attachment_id: str, request: Request) -> Response:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT filename, mime_type, storage_uri FROM attachments WHERE id = ?",
-            (attachment_id,),
+            text("SELECT filename, mime_type, storage_uri FROM attachments WHERE id = :attachment_id"),
+            {"attachment_id": attachment_id},
         ).fetchone()
     finally:
         conn.close()
