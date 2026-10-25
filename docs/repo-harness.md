@@ -25,7 +25,7 @@ All overlays are applied with explicit `-f` flags by justfile recipes. No overla
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yml` | PR to master, push to master | Build test image, run pytest |
+| `ci.yml` | PR to master, push to master | Lint; build test image and run pytest on sqlite, postgres (blocking) and mysql (non-blocking); compose config check |
 | `build-push.yml` | Push to master or version tag | Build prod image, push to registry (jobs: `build-master`, `build-agent-minimal`, `promote`) |
 
 ## Branch Protection
@@ -34,7 +34,7 @@ Rules defined in `.github/rulesets/master-protection.json`:
 - Direct push to `master` blocked.
 - PR required with 1 approving review.
 - Code owner review required for SRE-domain files (per `.github/CODEOWNERS`).
-- `Build and test` CI check must pass.
+- `Build and test` CI check must pass. It is a gate job that fails unless the `Build and test (sqlite)` and `Build and test (postgres)` legs pass; `Build and test (mysql)` is informational until Phase 2.
 
 ## Justfile Recipes
 

@@ -595,3 +595,22 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 **Fix applied:** Removed `_dbapi_graveyard` from production code. Fixed the test by (1) adding a second barrier so both threads hold their connections open simultaneously while recording object references, and (2) comparing object identity (`is not`) rather than `id()` which is only meaningful when both objects are alive.
 
 **Prevention:** Never add production-code workarounds for test inadequacies. Fixing the test's comparison strategy is the correct approach.
+
+---
+
+## 2026-10-25 — M1 infra: Postgres overlay, Compose profiles and shared .env
+
+**Summary:** Design section 9's overlay sketch would have broken managed-DB mode and silently disarmed the SQLite-upgrade safety net; several other traps surfaced while wiring dev, deploy and CI.
+
+**Root cause / findings:**
+- Compose interpolates every service, including those in inactive profiles, so `POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?...}` on the `postgres` service fails `config` even when `COMPOSE_PROFILES` is unset. Verified with Compose v5.6.
+- Setting `DATABASE_URL` to the bundled URL in the overlay makes it an explicit choice, so master's legacy-SQLite check (design section 11) would never fire. The overlay passes `DATABASE_URL` through verbatim and lets master build the default URL from `POSTGRES_PASSWORD`.
+- `tests/conftest.py` checks `"DATABASE_URL" in os.environ`. A passthrough like `DATABASE_URL: ${DATABASE_URL:-}` makes the key exist (empty) in the container and disables the `TEST_DATABASE_URL` and per-test SQLite fallbacks. The passthrough therefore lives in the postgres overlay (not the base), and CI passes `DATABASE_URL` explicitly when that overlay is layered.
+- There is one repo-root `.env` (ADR-0016), not `.env.staging`. Dev recipes read the same file, so a staging `DATABASE_URL` or `POSTGRES_PASSWORD` would leak into branch stacks. Dev recipes now export their own values (an exported empty value beats the `.env` file that Compose also reads).
+- After migrating SQLite to Postgres the old `master_data.db` stays in the volume, so `DATABASE_URL` must be set explicitly or master refuses to start. `snapshot-and-migrate` also needs the legacy SQLite brought to the current schema first (booting the new image once on SQLite does this).
+- The cross-dialect db tests DROP tables on `TEST_POSTGRES_URL`, so CI points it at a second database (`master_xdialect`), not the one used by `TEST_DATABASE_URL`.
+
+**Fix applied:** `.sre/db-env.sh`, `docker-compose.postgres.yml`, `.sre/test-db.sh`, justfile and CI changes (see commits referencing #268); staging cut-over written into `.sre/operations/deploy.md`.
+
+**Prevention:** Validate overlays with `docker compose config` under every profile combination (the `Compose config` CI job does). Never default `DATABASE_URL` in compose. Do not add env passthroughs to the base file without checking `tests/conftest.py` presence semantics.
+

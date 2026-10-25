@@ -22,7 +22,7 @@ User asks to bring down the staging or prod stack entirely (not a rollback — u
    The recipe:
    - Sets `DOCKER_HOST` from `<ENV>_DOCKER_HOST`.
    - Runs `docker compose -p codex-slack -f docker-compose.yml -f docker-compose.deploy.yml down --remove-orphans`.
-   - Removes the containers and networks belonging to the `codex-slack` project on the target host. Named volumes (including `master_data`, the application SQLite data) are preserved.
+   - Removes the containers and networks belonging to the `codex-slack` project on the target host. Named volumes are preserved: `master_data` (attachments, snapshots, any legacy SQLite file) and `postgres_data` (the bundled Postgres database).
 
 2. Confirm the stack is gone:
    ```
@@ -37,7 +37,7 @@ User asks to bring down the staging or prod stack entirely (not a rollback — u
 
 ## Notes
 
-- Volumes are preserved: a later `just deploy <env> <tag>` reattaches `master_data` and the application data survives the undeploy/deploy cycle.
-- To permanently delete the volumes as well, use `just destroy <env>`. It is interactive (requires typing the env name to confirm) and is intended for human operators only — the `sre` agent must never run it without an explicit, quoted user instruction naming the environment.
+- Volumes are preserved: a later `just deploy <env> <tag>` reattaches `master_data` and `postgres_data`; the database survives the undeploy/deploy cycle. `just undeploy` never passes `--volumes`.
+- To permanently delete the volumes as well (this DELETES THE DATABASE), use `just destroy <env>`. It is interactive (requires typing the env name to confirm) and is intended for human operators only — the `sre` agent must never run it without an explicit, quoted user instruction naming the environment.
 - There is no "partial" undeploy — the entire `codex-slack` singleton project comes down.
 - To bring the stack back after undeploy, use `just deploy <env> <tag>` (see `deploy.md`).

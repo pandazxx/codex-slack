@@ -20,11 +20,12 @@
    just post-merge-cleanup <merged-branch> [<tag>]
    ```
    The recipe:
-   - Refreshes the staging singleton: runs `just deploy staging <tag>` (default `<tag>=master`), which resolves the tag to a digest and replaces the running singleton in place.
-   - Checks if a dev env for `<merged-branch>` is running on `DEV_DOCKER_HOST`. If found, tears it down via `just dev-down <merged-branch>`.
+   - Refreshes the staging singleton: runs `just deploy staging <tag>` (default `<tag>=master`), which resolves the tag to a digest and replaces the running singleton in place. Database settings (`COMPOSE_PROFILES`, `POSTGRES_PASSWORD`, `DATABASE_URL`) come from `.env`; the bundled Postgres keeps running on its `postgres_data` volume and is not reset.
+   - Checks if a dev env for `<merged-branch>` is running on `DEV_DOCKER_HOST`. If found, tears it down via `just dev-down <merged-branch>`, which deletes that branch's own `postgres_data` and `master_data` volumes (dev data only; staging is untouched).
    - If no dev env exists for the branch, skips silently.
 
 ## On failure
+- Deploy refuses with `no database configured`, `POSTGRES_PASSWORD is empty`, or `legacy SQLite database`: staging has not been cut over to Postgres yet. Stop and escalate; do NOT run the cut-over in `deploy.md` unless the user explicitly asks. The dev env is left running.
 - Deploy step failure: stop and escalate. The staging singleton may be in a degraded state — investigate before retrying.
 - Dev teardown failure: escalate; staging is already refreshed so this is non-critical.
 

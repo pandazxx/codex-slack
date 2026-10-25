@@ -2,7 +2,7 @@
 
 ## Inputs
 - `<env>` — `dev`, `staging`, or `prod`
-- `<service>` — service name: `master` or `mosquitto`
+- `<service>` — service name: `master`, `mosquitto`, or `postgres`
 - `<key>` — branch slug (dev only); omit for singleton envs (`staging`, `prod`)
 
 ## Required env vars

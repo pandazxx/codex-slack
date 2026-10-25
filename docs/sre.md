@@ -14,6 +14,11 @@ All variables live in a single `.env` file at the repo root. `justfile` loads it
 | `REGISTRY` | Image namespace for staging/prod pulls | `ghcr.io/pandazxx` | **Requires human to set** |
 | `REGISTRY_TOKEN` | Pushing images to non-GHCR registries | (from secret manager) | Optional — GHCR uses `GITHUB_TOKEN` |
 | `MASTER_PORT` | Host port for singleton `just deploy` targets | `8080` | Optional (default `8080`) |
+| `COMPOSE_PROFILES` | Singleton deploys: `db-bundled` starts the bundled Postgres. Leave unset for a managed DB. Dev ignores it (always bundled). | `db-bundled` | **Requires human to set in `.env`** (staging) |
+| `POSTGRES_PASSWORD` | Singleton deploys with `db-bundled`; master builds `postgresql+psycopg://master:<pw>@postgres:5432/master` from it. Use a hex value. | `openssl rand -hex 24` | **Requires human to set in `.env`** (staging) |
+| `DATABASE_URL` | Managed DB or SQLite (leave `COMPOSE_PROFILES` unset), or the explicit Postgres URL after a SQLite migration | `postgresql+psycopg://u:p@host:5432/master` | Optional |
+| `DB_POOL_SIZE`, `DB_POOL_MAX_OVERFLOW` | SQLAlchemy pool tunables (defaults 5 / 10) | `5` | Optional |
+| `DEV_POSTGRES_PASSWORD` | Overrides the dev-only Postgres password (`master-dev-only`) | — | Optional |
 | `PROD_DOCKER_HOST` | Prod deploys (reserved — no prod host provisioned yet) | `ssh://ubuntu@prod.example.com` | Optional |
 
 No fallback to local Docker. `DEV_DOCKER_HOST` must always be set. For local Docker, set `DEV_DOCKER_HOST=unix:///var/run/docker.sock` explicitly.
@@ -32,6 +37,16 @@ The `docker` group GID on the remote host is `988` (confirmed). This is passed v
 |---|---|---|---|
 | `master` | FastAPI HTTP service (port 8080) | Dev: Traefik HTTP on `sre-traefik-public`. Staging/prod: direct host port `${MASTER_PORT:-8080}`. | Dev: `http://master.<branch-slug>.<host-ip-dashed>.nip.io`. Staging/prod: `http://<host>:8080` |
 | `mosquitto` | MQTT broker (port 1883) | Internal only | `docker compose exec mosquitto mosquitto_sub -t '#'` |
+| `postgres` | Bundled `postgres:17-alpine`, profile `db-bundled`, volume `postgres_data` | Internal only, no published port | `docker compose exec postgres psql -U master -d master` |
+
+## Database
+
+- Master requires `DATABASE_URL`, or `POSTGRES_PASSWORD` to build the bundled-Postgres URL. It refuses to start when neither is set, when `DATABASE_URL` is empty and a legacy `master_data.db` is in `MASTER_DATA_DIR`, and on schema drift. Empty `DATABASE_URL` counts as unset.
+- Dev: every branch stack gets its own Postgres (`COMPOSE_PROFILES=db-bundled` forced by the dev recipes; `.env` DB settings are ignored). Volume `<slug>_postgres_data` and network `<slug>_internal` are project-scoped and deleted by `just dev-down`.
+- Staging/prod: `COMPOSE_PROFILES`, `POSTGRES_PASSWORD`, `DATABASE_URL` come from the shell or `.env` (the single repo-root `.env`; there is no `.env.staging`). `just deploy` refuses to run if neither bundled nor `DATABASE_URL` is configured, and refuses to replace a stack whose `master_data` holds legacy SQLite while `DATABASE_URL` is empty. `just undeploy` keeps `postgres_data`; only `just destroy` removes it.
+- Why `POSTGRES_PASSWORD` is not `:?` in the overlay: Compose interpolates services in inactive profiles, so a required-variable check would break managed-DB mode. `.sre/db-env.sh` enforces it instead.
+- Postgres 17 is pinned to the major (`postgres:17-alpine`): the major fixes the on-disk format, minors are drop-in. Moving to 18 needs a dump/restore, not an image bump.
+- Requires Docker Compose >= 2.20 (`depends_on.required: false`). Staging cut-over from SQLite: `.sre/operations/deploy.md`.
 
 ## URL Pattern (dev shape)
 
@@ -82,8 +97,9 @@ One Traefik instance runs per Docker host as project `sre-host-infra`. It owns p
 |---|---|
 | `docker-compose.yml` | Base definition — shared intersection (no `build:`, no `ports:`, no digest pin) |
 | `docker-compose.dev.yml` | Dev overlay — adds `build:` (target: `dev`), Traefik labels, `sre-traefik-public` network |
+| `docker-compose.postgres.yml` | Bundled Postgres overlay — `postgres` service (profile `db-bundled`), `postgres_data` volume, master DB env passthrough. Layered after the dev/deploy overlay by every dev and singleton recipe |
 | `docker-compose.deploy.yml` | Singleton overlay — used by `just deploy` / `just undeploy`; publishes `${MASTER_PORT:-8080}:8080`, pins image by digest, no Traefik |
-| `docker-compose.ci.yml` | CI — builds `test` stage, no Traefik labels |
+| `docker-compose.ci.yml` | CI — builds `test` stage, no Traefik labels; `mysql` service (profile `ci-mysql`) for the MySQL leg |
 
 The justfile always passes explicit `-f` pairs. No overlay is ever auto-merged.
 
@@ -100,7 +116,7 @@ All operations go through `just`. Shell variables already exported override `.en
 | `just status` | List active compose projects on all configured hosts | — |
 | `just logs <env> <service> [key]` | Stream logs | `key` = branch slug for dev; omit for singleton envs |
 | `just shell <env> <service> [key]` | Open interactive shell | same `key` semantics as `logs` |
-| `just test [pattern]` | Build test stage and run pytest on `DEV_DOCKER_HOST` | `pattern` (optional pytest `-k` filter) |
+| `just test [pattern] [db]` | Build test stage and run pytest on `DEV_DOCKER_HOST` | `pattern` (optional pytest `-k` filter, `""` for all); `db` = `sqlite` (default), `postgres`, `mysql` |
 | `just post-merge-cleanup <branch> [tag]` | Refresh staging singleton + tear down dev env for branch | `tag` defaults to `master` |
 
 ## Operator Runbooks
@@ -116,12 +132,13 @@ All runbooks are in `.sre/operations/`. Operators read the runbook for the reque
 | `logs.md` | Tail logs for a service |
 | `shell.md` | Open a shell in a service |
 | `status.md` | List active envs |
-| `test.md` | Run tests |
+| `test.md` | Run tests (sqlite, postgres, mysql) |
+| `db-snapshot-migrate.md` | Snapshot and migrate the database of a running master |
 | `post-merge-cleanup.md` | Refresh staging singleton + tear down merged-branch dev env |
 
 ## CI/CD
 
-- `ci.yml`: runs on every PR and push to master. Builds `test` stage, runs `pytest`.
+- `ci.yml`: runs on every PR and push to master. Jobs: `ruff lint`; `Build and test (sqlite)` and `Build and test (postgres)` (blocking); `Build and test (mysql)` (non-blocking, `continue-on-error` until Phase 2 MySQL hardening); `Build and test`, a gate that fails unless the sqlite and postgres legs pass (this is the required check in `.github/rulesets/master-protection.json`); `Compose config` (static overlay validation). Each leg runs `.sre/test-db.sh <db>`, which starts the database as a compose service on the test project's network and runs the whole suite against it (`TEST_DATABASE_URL`) plus the cross-dialect tests (`TEST_POSTGRES_URL` / `TEST_MYSQL_URL`, a second database).
 - `build-push.yml`: runs on push to master and version tags. Builds `prod` stage, pushes to `ghcr.io/<repo-owner>/codex-slack-master`. Jobs: `build-master`, `build-agent-minimal`, `promote`.
 
 Staging and prod receive deploys via `just deploy <env> <tag>` — no CD daemon. Post-merge staging refresh is triggered by the `post-merge-cleanup` runbook (`just deploy staging master`). Branch protection: CI must pass before merge. Code owner review required for SRE-domain files.
