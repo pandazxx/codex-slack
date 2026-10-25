@@ -249,6 +249,99 @@ _BOOLEAN_COLS: dict[str, frozenset[str]] = {
 }
 
 
+def _fix_insert_bool_literals(sql: str) -> str:
+    """Replace literal 0/1 in VALUES clause at BOOLEAN column positions with false/true.
+
+    Handles INSERT statements where boolean values are hardcoded as integer literals
+    in the SQL text rather than as bound parameters.  PostgreSQL rejects integer
+    literals for BOOLEAN columns (no implicit int4→boolean cast); SQLite accepts
+    them natively, so this function is only called for non-SQLite dialects.
+
+    Parses the column list to find BOOLEAN column positions, then walks the VALUES
+    token by token and replaces bare '0' with 'false' and bare '1' with 'true' at
+    those positions.  Quoted strings and NULL are left untouched.
+    """
+    import re as _re
+
+    m = _re.match(
+        r"(?i)\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]+)\)",
+        sql,
+    )
+    if not m:
+        return sql
+
+    table = m.group(1).lower()
+    bool_cols = _BOOLEAN_COLS.get(table)
+    if not bool_cols:
+        return sql
+
+    col_names = [c.strip().strip('"').lower() for c in m.group(2).split(",")]
+    bool_col_positions = frozenset(i for i, col in enumerate(col_names) if col in bool_cols)
+    if not bool_col_positions:
+        return sql
+
+    vm = _re.search(r"(?i)\bVALUES\s*\(", sql)
+    if not vm:
+        return sql
+
+    body_start = vm.end()  # index after opening '('
+
+    # Tokenize the VALUES list: record (start, end) for each comma-separated item
+    # at depth 1, stopping when the matching closing ')' is found.
+    spans: list[tuple[int, int]] = []
+    depth = 1
+    tok_start = body_start
+    i = body_start
+
+    while i < len(sql):
+        c = sql[i]
+        if c == "'":
+            i += 1
+            while i < len(sql):
+                if sql[i] == "'":
+                    if i + 1 < len(sql) and sql[i + 1] == "'":
+                        i += 2
+                    else:
+                        i += 1
+                        break
+                else:
+                    i += 1
+        elif c == "(":
+            depth += 1
+            i += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                spans.append((tok_start, i))
+                break
+            i += 1
+        elif c == "," and depth == 1:
+            spans.append((tok_start, i))
+            tok_start = i + 1
+            i += 1
+        else:
+            i += 1
+
+    if not spans:
+        return sql
+
+    chars = list(sql)
+    for pos, (start, end) in enumerate(spans):
+        if pos not in bool_col_positions:
+            continue
+        token = sql[start:end]
+        stripped = token.strip()
+        if stripped not in ("0", "1"):
+            continue
+        replacement = "false" if stripped == "0" else "true"
+        # Find the exact character position of the digit within this token span.
+        leading = len(token) - len(token.lstrip())
+        digit_pos = start + leading
+        chars[digit_pos : digit_pos + 1] = list(replacement)
+
+    return "".join(chars)
+
+
 def _extract_insert_bool_positions(sql: str) -> frozenset[int]:
     """Return positional indices (0-based) of qmark params that map to BOOLEAN columns.
 
@@ -362,8 +455,10 @@ class _ConnectionShim:
             return _ResultProxy(result)
 
         # Old style: plain string, params may be tuple/list or None.
+        dialect_name = self._conn.dialect.name
+        if dialect_name != "sqlite":
+            sql = _fix_insert_bool_literals(sql)
         if params is not None and isinstance(params, (tuple, list)):
-            dialect_name = self._conn.dialect.name
             bool_positions = (
                 _extract_insert_bool_positions(sql)
                 if dialect_name != "sqlite"
