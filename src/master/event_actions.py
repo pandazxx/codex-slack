@@ -13,6 +13,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, model_validator
+from sqlalchemy import text
 
 from .db import get_connection
 
@@ -158,8 +159,8 @@ def _validate_merged_state(
 
 def _require_topic(conn, workspace_id: str, topic_id: str) -> None:
     if conn.execute(
-        "SELECT 1 FROM topics WHERE id = ? AND workspace_id = ?",
-        (topic_id, workspace_id),
+        text("SELECT 1 FROM topics WHERE id = :id AND workspace_id = :workspace_id"),
+        {"id": topic_id, "workspace_id": workspace_id},
     ).fetchone() is None:
         raise HTTPException(404, "topic not found")
 
@@ -223,8 +224,8 @@ class WorkspaceEventActionIn(BaseModel):
 
 def _require_workspace(conn, workspace_id: str) -> None:
     if conn.execute(
-        "SELECT 1 FROM workspaces WHERE id = ? AND archived_at IS NULL",
-        (workspace_id,),
+        text("SELECT 1 FROM workspaces WHERE id = :id AND archived_at IS NULL"),
+        {"id": workspace_id},
     ).fetchone() is None:
         raise HTTPException(404, "workspace not found")
 
@@ -237,8 +238,8 @@ def list_event_actions(workspace_id: str, topic_id: str, request: Request) -> li
     try:
         _require_topic(conn, workspace_id, topic_id)
         rows = conn.execute(
-            "SELECT * FROM event_actions WHERE scope_type='topic' AND scope_id=? ORDER BY created_at",
-            (topic_id,),
+            text("SELECT * FROM event_actions WHERE scope_type='topic' AND scope_id=:scope_id ORDER BY created_at"),
+            {"scope_id": topic_id},
         ).fetchall()
     finally:
         conn.close()
@@ -258,29 +259,33 @@ def create_event_action(
         action_id = str(uuid.uuid4())
         now = _now()
         conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, last_fired_at, last_run_at, last_run_status,"
-            "  last_run_output, enabled, structured_output, silent, created_at, updated_at)"
-            " VALUES (?, ?, 'topic', ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)",
-            (
-                action_id,
-                body.event_type,
-                topic_id,
-                body.staff_name,
-                body.prompt_template,
-                body.timing,
-                body.cron_expr,
-                1 if body.enabled else 0,
-                1 if body.structured_output else 0,
-                1 if body.silent else 0,
-                now,
-                now,
+            text(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, last_fired_at, last_run_at, last_run_status,"
+                "  last_run_output, enabled, structured_output, silent, created_at, updated_at)"
+                " VALUES (:id, :event_type, 'topic', :scope_id, :staff_name, :prompt_template,"
+                "  :timing, :cron_expr, NULL, NULL, NULL, NULL, :enabled, :structured_output, :silent, :created_at, :updated_at)"
             ),
+            {
+                "id": action_id,
+                "event_type": body.event_type,
+                "scope_id": topic_id,
+                "staff_name": body.staff_name,
+                "prompt_template": body.prompt_template,
+                "timing": body.timing,
+                "cron_expr": body.cron_expr,
+                "enabled": 1 if body.enabled else 0,
+                "structured_output": 1 if body.structured_output else 0,
+                "silent": 1 if body.silent else 0,
+                "created_at": now,
+                "updated_at": now,
+            },
         )
         conn.commit()
         row = conn.execute(
-            "SELECT * FROM event_actions WHERE id = ?", (action_id,)
+            text("SELECT * FROM event_actions WHERE id = :id"),
+            {"id": action_id},
         ).fetchone()
     finally:
         conn.close()
@@ -298,8 +303,8 @@ def get_event_action(
     try:
         _require_topic(conn, workspace_id, topic_id)
         row = conn.execute(
-            "SELECT * FROM event_actions WHERE id = ? AND scope_id = ?",
-            (action_id, topic_id),
+            text("SELECT * FROM event_actions WHERE id = :id AND scope_id = :scope_id"),
+            {"id": action_id, "scope_id": topic_id},
         ).fetchone()
     finally:
         conn.close()
@@ -320,8 +325,8 @@ def patch_event_action(
     try:
         _require_topic(conn, workspace_id, topic_id)
         existing = conn.execute(
-            "SELECT * FROM event_actions WHERE id = ? AND scope_id = ?",
-            (action_id, topic_id),
+            text("SELECT * FROM event_actions WHERE id = :id AND scope_id = :scope_id"),
+            {"id": action_id, "scope_id": topic_id},
         ).fetchone()
         if existing is None:
             raise HTTPException(404, "event action not found")
@@ -350,15 +355,29 @@ def patch_event_action(
 
         now = _now()
         conn.execute(
-            "UPDATE event_actions"
-            "   SET staff_name=?, prompt_template=?, timing=?, cron_expr=?, enabled=?,"
-            "       structured_output=?, silent=?, updated_at=?"
-            " WHERE id=?",
-            (new_staff, new_template, new_timing, new_cron, new_enabled, new_structured_output, new_silent, now, action_id),
+            text(
+                "UPDATE event_actions"
+                "   SET staff_name=:staff_name, prompt_template=:prompt_template, timing=:timing,"
+                "       cron_expr=:cron_expr, enabled=:enabled,"
+                "       structured_output=:structured_output, silent=:silent, updated_at=:updated_at"
+                " WHERE id=:id"
+            ),
+            {
+                "staff_name": new_staff,
+                "prompt_template": new_template,
+                "timing": new_timing,
+                "cron_expr": new_cron,
+                "enabled": new_enabled,
+                "structured_output": new_structured_output,
+                "silent": new_silent,
+                "updated_at": now,
+                "id": action_id,
+            },
         )
         conn.commit()
         row = conn.execute(
-            "SELECT * FROM event_actions WHERE id = ?", (action_id,)
+            text("SELECT * FROM event_actions WHERE id = :id"),
+            {"id": action_id},
         ).fetchone()
     finally:
         conn.close()
@@ -376,12 +395,15 @@ def delete_event_action(
     try:
         _require_topic(conn, workspace_id, topic_id)
         row = conn.execute(
-            "SELECT id FROM event_actions WHERE id = ? AND scope_id = ?",
-            (action_id, topic_id),
+            text("SELECT id FROM event_actions WHERE id = :id AND scope_id = :scope_id"),
+            {"id": action_id, "scope_id": topic_id},
         ).fetchone()
         if row is None:
             raise HTTPException(404, "event action not found")
-        conn.execute("DELETE FROM event_actions WHERE id = ?", (action_id,))
+        conn.execute(
+            text("DELETE FROM event_actions WHERE id = :id"),
+            {"id": action_id},
+        )
         conn.commit()
     finally:
         conn.close()
@@ -395,8 +417,8 @@ def list_workspace_event_actions(workspace_id: str, request: Request) -> list[Ev
     try:
         _require_workspace(conn, workspace_id)
         rows = conn.execute(
-            "SELECT * FROM event_actions WHERE scope_type='workspace' AND scope_id=? ORDER BY created_at",
-            (workspace_id,),
+            text("SELECT * FROM event_actions WHERE scope_type='workspace' AND scope_id=:scope_id ORDER BY created_at"),
+            {"scope_id": workspace_id},
         ).fetchall()
     finally:
         conn.close()
@@ -415,28 +437,32 @@ def create_workspace_event_action(
         action_id = str(uuid.uuid4())
         now = _now()
         conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, last_fired_at, last_run_at, last_run_status,"
-            "  last_run_output, enabled, structured_output, silent, created_at, updated_at)"
-            " VALUES (?, ?, 'workspace', ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)",
-            (
-                action_id,
-                body.event_type,
-                workspace_id,
-                body.staff_name,
-                body.prompt_template,
-                body.timing,
-                1 if body.enabled else 0,
-                1 if body.structured_output else 0,
-                1 if body.silent else 0,
-                now,
-                now,
+            text(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, last_fired_at, last_run_at, last_run_status,"
+                "  last_run_output, enabled, structured_output, silent, created_at, updated_at)"
+                " VALUES (:id, :event_type, 'workspace', :scope_id, :staff_name, :prompt_template,"
+                "  :timing, NULL, NULL, NULL, NULL, NULL, :enabled, :structured_output, :silent, :created_at, :updated_at)"
             ),
+            {
+                "id": action_id,
+                "event_type": body.event_type,
+                "scope_id": workspace_id,
+                "staff_name": body.staff_name,
+                "prompt_template": body.prompt_template,
+                "timing": body.timing,
+                "enabled": 1 if body.enabled else 0,
+                "structured_output": 1 if body.structured_output else 0,
+                "silent": 1 if body.silent else 0,
+                "created_at": now,
+                "updated_at": now,
+            },
         )
         conn.commit()
         row = conn.execute(
-            "SELECT * FROM event_actions WHERE id = ?", (action_id,)
+            text("SELECT * FROM event_actions WHERE id = :id"),
+            {"id": action_id},
         ).fetchone()
     finally:
         conn.close()
@@ -453,8 +479,8 @@ def get_workspace_event_action(
     try:
         _require_workspace(conn, workspace_id)
         row = conn.execute(
-            "SELECT * FROM event_actions WHERE id = ? AND scope_type='workspace' AND scope_id = ?",
-            (action_id, workspace_id),
+            text("SELECT * FROM event_actions WHERE id = :id AND scope_type='workspace' AND scope_id = :scope_id"),
+            {"id": action_id, "scope_id": workspace_id},
         ).fetchone()
     finally:
         conn.close()
@@ -474,8 +500,8 @@ def patch_workspace_event_action(
     try:
         _require_workspace(conn, workspace_id)
         existing = conn.execute(
-            "SELECT * FROM event_actions WHERE id = ? AND scope_type='workspace' AND scope_id = ?",
-            (action_id, workspace_id),
+            text("SELECT * FROM event_actions WHERE id = :id AND scope_type='workspace' AND scope_id = :scope_id"),
+            {"id": action_id, "scope_id": workspace_id},
         ).fetchone()
         if existing is None:
             raise HTTPException(404, "event action not found")
@@ -500,15 +526,29 @@ def patch_workspace_event_action(
 
         now = _now()
         conn.execute(
-            "UPDATE event_actions"
-            "   SET staff_name=?, prompt_template=?, timing=?, cron_expr=?, enabled=?,"
-            "       structured_output=?, silent=?, updated_at=?"
-            " WHERE id=?",
-            (new_staff, new_template, new_timing, new_cron, new_enabled, new_structured_output, new_silent, now, action_id),
+            text(
+                "UPDATE event_actions"
+                "   SET staff_name=:staff_name, prompt_template=:prompt_template, timing=:timing,"
+                "       cron_expr=:cron_expr, enabled=:enabled,"
+                "       structured_output=:structured_output, silent=:silent, updated_at=:updated_at"
+                " WHERE id=:id"
+            ),
+            {
+                "staff_name": new_staff,
+                "prompt_template": new_template,
+                "timing": new_timing,
+                "cron_expr": new_cron,
+                "enabled": new_enabled,
+                "structured_output": new_structured_output,
+                "silent": new_silent,
+                "updated_at": now,
+                "id": action_id,
+            },
         )
         conn.commit()
         row = conn.execute(
-            "SELECT * FROM event_actions WHERE id = ?", (action_id,)
+            text("SELECT * FROM event_actions WHERE id = :id"),
+            {"id": action_id},
         ).fetchone()
     finally:
         conn.close()
@@ -525,12 +565,15 @@ def delete_workspace_event_action(
     try:
         _require_workspace(conn, workspace_id)
         row = conn.execute(
-            "SELECT id FROM event_actions WHERE id = ? AND scope_type='workspace' AND scope_id = ?",
-            (action_id, workspace_id),
+            text("SELECT id FROM event_actions WHERE id = :id AND scope_type='workspace' AND scope_id = :scope_id"),
+            {"id": action_id, "scope_id": workspace_id},
         ).fetchone()
         if row is None:
             raise HTTPException(404, "event action not found")
-        conn.execute("DELETE FROM event_actions WHERE id = ?", (action_id,))
+        conn.execute(
+            text("DELETE FROM event_actions WHERE id = :id"),
+            {"id": action_id},
+        )
         conn.commit()
     finally:
         conn.close()

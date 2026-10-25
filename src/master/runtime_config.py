@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from .db import get_connection
 
@@ -22,8 +23,8 @@ def get_configured_timezone(app_state) -> ZoneInfo:
     conn = get_connection(app_state.db_path)
     try:
         row = conn.execute(
-            "SELECT value FROM config WHERE scope_type='global' AND scope_id='' AND key=?",
-            (_SYSTEM_TIMEZONE_KEY,),
+            text("SELECT value FROM config WHERE scope_type='global' AND scope_id='' AND key=:key"),
+            {"key": _SYSTEM_TIMEZONE_KEY},
         ).fetchone()
     finally:
         conn.close()
@@ -82,15 +83,15 @@ class ConfigPatch(BaseModel):
 
 def _get_global_config(conn) -> dict[str, str]:
     rows = conn.execute(
-        "SELECT key, value FROM config WHERE scope_type='global' AND scope_id=''",
+        text("SELECT key, value FROM config WHERE scope_type='global' AND scope_id=''"),
     ).fetchall()
     return {r["key"]: r["value"] for r in rows}
 
 
 def _get_workspace_config_raw(conn, workspace_id: str) -> dict[str, str]:
     rows = conn.execute(
-        "SELECT key, value FROM config WHERE scope_type='workspace' AND scope_id=?",
-        (workspace_id,),
+        text("SELECT key, value FROM config WHERE scope_type='workspace' AND scope_id=:scope_id"),
+        {"scope_id": workspace_id},
     ).fetchall()
     return {r["key"]: r["value"] for r in rows}
 
@@ -113,15 +114,17 @@ def _apply_patch(conn, scope_type: str, scope_id: str, patch: ConfigPatch) -> No
     now = _now()
     for key, value in patch.set.items():
         conn.execute(
-            "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
-            " VALUES (?, ?, ?, ?, ?)"
-            " ON CONFLICT(scope_type, scope_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-            (scope_type, scope_id, key, value, now),
+            text(
+                "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
+                " VALUES (:scope_type, :scope_id, :key, :value, :updated_at)"
+                " ON CONFLICT(scope_type, scope_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at"
+            ),
+            {"scope_type": scope_type, "scope_id": scope_id, "key": key, "value": value, "updated_at": now},
         )
     for key in patch.delete:
         conn.execute(
-            "DELETE FROM config WHERE scope_type=? AND scope_id=? AND key=?",
-            (scope_type, scope_id, key),
+            text("DELETE FROM config WHERE scope_type=:scope_type AND scope_id=:scope_id AND key=:key"),
+            {"scope_type": scope_type, "scope_id": scope_id, "key": key},
         )
     conn.commit()
 
@@ -145,8 +148,8 @@ def get_system_settings(request: Request) -> SystemSettings:
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT value FROM config WHERE scope_type='global' AND scope_id='' AND key=?",
-            (_SYSTEM_TIMEZONE_KEY,),
+            text("SELECT value FROM config WHERE scope_type='global' AND scope_id='' AND key=:key"),
+            {"key": _SYSTEM_TIMEZONE_KEY},
         ).fetchone()
     finally:
         conn.close()
@@ -165,10 +168,12 @@ def patch_system_settings(body: SystemSettings, request: Request) -> SystemSetti
     conn = get_connection(request.app.state.db_path)
     try:
         conn.execute(
-            "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
-            " VALUES ('global', '', ?, ?, ?)"
-            " ON CONFLICT(scope_type, scope_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-            (_SYSTEM_TIMEZONE_KEY, body.timezone, _now()),
+            text(
+                "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
+                " VALUES ('global', '', :key, :value, :updated_at)"
+                " ON CONFLICT(scope_type, scope_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at"
+            ),
+            {"key": _SYSTEM_TIMEZONE_KEY, "value": body.timezone, "updated_at": _now()},
         )
         conn.commit()
     finally:
@@ -202,7 +207,8 @@ def get_workspace_config(workspace_id: str, request: Request) -> dict[str, str]:
     conn = get_connection(request.app.state.db_path)
     try:
         if conn.execute(
-            "SELECT 1 FROM workspaces WHERE id=?", (workspace_id,)
+            text("SELECT 1 FROM workspaces WHERE id=:id"),
+            {"id": workspace_id},
         ).fetchone() is None:
             raise HTTPException(404, "workspace not found")
         return _merged_config(conn, workspace_id)
@@ -215,7 +221,8 @@ def patch_workspace_config(workspace_id: str, body: ConfigPatch, request: Reques
     conn = get_connection(request.app.state.db_path)
     try:
         if conn.execute(
-            "SELECT 1 FROM workspaces WHERE id=?", (workspace_id,)
+            text("SELECT 1 FROM workspaces WHERE id=:id"),
+            {"id": workspace_id},
         ).fetchone() is None:
             raise HTTPException(404, "workspace not found")
         _apply_patch(conn, "workspace", workspace_id, body)

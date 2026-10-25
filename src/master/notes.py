@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import text
 
 from .db import get_connection
 
@@ -74,8 +75,8 @@ async def list_workspace_notes(workspace_id: str, request: Request) -> list[Note
     conn = get_connection(request.app.state.db_path)
     try:
         rows = conn.execute(
-            "SELECT * FROM notes WHERE scope_type='workspace' AND scope_id=? ORDER BY key",
-            (workspace_id,),
+            text("SELECT * FROM notes WHERE scope_type='workspace' AND scope_id=:scope_id ORDER BY key"),
+            {"scope_id": workspace_id},
         ).fetchall()
         return [_row_to_out(r) for r in rows]
     finally:
@@ -87,19 +88,34 @@ async def create_workspace_note(workspace_id: str, body: NoteIn, request: Reques
     conn = get_connection(request.app.state.db_path)
     try:
         if conn.execute(
-            "SELECT 1 FROM notes WHERE scope_type='workspace' AND scope_id=? AND key=?",
-            (workspace_id, body.key),
+            text("SELECT 1 FROM notes WHERE scope_type='workspace' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": workspace_id, "key": body.key},
         ).fetchone():
             raise HTTPException(409, f"note {body.key!r} already exists in this workspace")
         now = _now()
         note_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO notes (id, scope_type, scope_id, key, value, tags, created_at, updated_at)"
-            " VALUES (?, 'workspace', ?, ?, ?, ?, ?, ?)",
-            (note_id, workspace_id, body.key, body.value, json.dumps(body.tags), now, now),
+            text(
+                "INSERT INTO notes (id, scope_type, scope_id, key, value, tags, created_at, updated_at)"
+                " VALUES (:id, 'workspace', :scope_id, :key, :value, :tags, :created_at, :updated_at)"
+            ),
+            {
+                "id": note_id,
+                "scope_id": workspace_id,
+                "key": body.key,
+                "value": body.value,
+                "tags": json.dumps(body.tags),
+                "created_at": now,
+                "updated_at": now,
+            },
         )
         conn.commit()
-        return _row_to_out(conn.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone())
+        return _row_to_out(
+            conn.execute(
+                text("SELECT * FROM notes WHERE id=:id"),
+                {"id": note_id},
+            ).fetchone()
+        )
     finally:
         conn.close()
 
@@ -109,8 +125,8 @@ async def get_workspace_note(workspace_id: str, key: str, request: Request) -> N
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM notes WHERE scope_type='workspace' AND scope_id=? AND key=?",
-            (workspace_id, key),
+            text("SELECT * FROM notes WHERE scope_type='workspace' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": workspace_id, "key": key},
         ).fetchone()
         if not row:
             raise HTTPException(404, f"note {key!r} not found")
@@ -126,8 +142,8 @@ async def patch_workspace_note(
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM notes WHERE scope_type='workspace' AND scope_id=? AND key=?",
-            (workspace_id, key),
+            text("SELECT * FROM notes WHERE scope_type='workspace' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": workspace_id, "key": key},
         ).fetchone()
         if not row:
             raise HTTPException(404, f"note {key!r} not found")
@@ -135,15 +151,17 @@ async def patch_workspace_note(
         new_tags = json.dumps(body.tags) if body.tags is not None else row["tags"]
         now = _now()
         conn.execute(
-            "UPDATE notes SET value=?, tags=?, updated_at=?"
-            " WHERE scope_type='workspace' AND scope_id=? AND key=?",
-            (new_value, new_tags, now, workspace_id, key),
+            text(
+                "UPDATE notes SET value=:value, tags=:tags, updated_at=:updated_at"
+                " WHERE scope_type='workspace' AND scope_id=:scope_id AND key=:key"
+            ),
+            {"value": new_value, "tags": new_tags, "updated_at": now, "scope_id": workspace_id, "key": key},
         )
         conn.commit()
         return _row_to_out(
             conn.execute(
-                "SELECT * FROM notes WHERE scope_type='workspace' AND scope_id=? AND key=?",
-                (workspace_id, key),
+                text("SELECT * FROM notes WHERE scope_type='workspace' AND scope_id=:scope_id AND key=:key"),
+                {"scope_id": workspace_id, "key": key},
             ).fetchone()
         )
     finally:
@@ -155,13 +173,13 @@ async def delete_workspace_note(workspace_id: str, key: str, request: Request) -
     conn = get_connection(request.app.state.db_path)
     try:
         if not conn.execute(
-            "SELECT 1 FROM notes WHERE scope_type='workspace' AND scope_id=? AND key=?",
-            (workspace_id, key),
+            text("SELECT 1 FROM notes WHERE scope_type='workspace' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": workspace_id, "key": key},
         ).fetchone():
             raise HTTPException(404, f"note {key!r} not found")
         conn.execute(
-            "DELETE FROM notes WHERE scope_type='workspace' AND scope_id=? AND key=?",
-            (workspace_id, key),
+            text("DELETE FROM notes WHERE scope_type='workspace' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": workspace_id, "key": key},
         )
         conn.commit()
     finally:
@@ -181,8 +199,8 @@ async def list_topic_notes(workspace_id: str, topic_id: str, request: Request) -
     conn = get_connection(request.app.state.db_path)
     try:
         rows = conn.execute(
-            "SELECT * FROM notes WHERE scope_type='topic' AND scope_id=? ORDER BY key",
-            (topic_id,),
+            text("SELECT * FROM notes WHERE scope_type='topic' AND scope_id=:scope_id ORDER BY key"),
+            {"scope_id": topic_id},
         ).fetchall()
         return [_row_to_out(r) for r in rows]
     finally:
@@ -196,19 +214,34 @@ async def create_topic_note(
     conn = get_connection(request.app.state.db_path)
     try:
         if conn.execute(
-            "SELECT 1 FROM notes WHERE scope_type='topic' AND scope_id=? AND key=?",
-            (topic_id, body.key),
+            text("SELECT 1 FROM notes WHERE scope_type='topic' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": topic_id, "key": body.key},
         ).fetchone():
             raise HTTPException(409, f"note {body.key!r} already exists in this topic")
         now = _now()
         note_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO notes (id, scope_type, scope_id, key, value, tags, created_at, updated_at)"
-            " VALUES (?, 'topic', ?, ?, ?, ?, ?, ?)",
-            (note_id, topic_id, body.key, body.value, json.dumps(body.tags), now, now),
+            text(
+                "INSERT INTO notes (id, scope_type, scope_id, key, value, tags, created_at, updated_at)"
+                " VALUES (:id, 'topic', :scope_id, :key, :value, :tags, :created_at, :updated_at)"
+            ),
+            {
+                "id": note_id,
+                "scope_id": topic_id,
+                "key": body.key,
+                "value": body.value,
+                "tags": json.dumps(body.tags),
+                "created_at": now,
+                "updated_at": now,
+            },
         )
         conn.commit()
-        return _row_to_out(conn.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone())
+        return _row_to_out(
+            conn.execute(
+                text("SELECT * FROM notes WHERE id=:id"),
+                {"id": note_id},
+            ).fetchone()
+        )
     finally:
         conn.close()
 
@@ -220,8 +253,8 @@ async def get_topic_note(
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM notes WHERE scope_type='topic' AND scope_id=? AND key=?",
-            (topic_id, key),
+            text("SELECT * FROM notes WHERE scope_type='topic' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": topic_id, "key": key},
         ).fetchone()
         if not row:
             raise HTTPException(404, f"note {key!r} not found")
@@ -237,8 +270,8 @@ async def patch_topic_note(
     conn = get_connection(request.app.state.db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM notes WHERE scope_type='topic' AND scope_id=? AND key=?",
-            (topic_id, key),
+            text("SELECT * FROM notes WHERE scope_type='topic' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": topic_id, "key": key},
         ).fetchone()
         if not row:
             raise HTTPException(404, f"note {key!r} not found")
@@ -246,15 +279,17 @@ async def patch_topic_note(
         new_tags = json.dumps(body.tags) if body.tags is not None else row["tags"]
         now = _now()
         conn.execute(
-            "UPDATE notes SET value=?, tags=?, updated_at=?"
-            " WHERE scope_type='topic' AND scope_id=? AND key=?",
-            (new_value, new_tags, now, topic_id, key),
+            text(
+                "UPDATE notes SET value=:value, tags=:tags, updated_at=:updated_at"
+                " WHERE scope_type='topic' AND scope_id=:scope_id AND key=:key"
+            ),
+            {"value": new_value, "tags": new_tags, "updated_at": now, "scope_id": topic_id, "key": key},
         )
         conn.commit()
         return _row_to_out(
             conn.execute(
-                "SELECT * FROM notes WHERE scope_type='topic' AND scope_id=? AND key=?",
-                (topic_id, key),
+                text("SELECT * FROM notes WHERE scope_type='topic' AND scope_id=:scope_id AND key=:key"),
+                {"scope_id": topic_id, "key": key},
             ).fetchone()
         )
     finally:
@@ -268,13 +303,13 @@ async def delete_topic_note(
     conn = get_connection(request.app.state.db_path)
     try:
         if not conn.execute(
-            "SELECT 1 FROM notes WHERE scope_type='topic' AND scope_id=? AND key=?",
-            (topic_id, key),
+            text("SELECT 1 FROM notes WHERE scope_type='topic' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": topic_id, "key": key},
         ).fetchone():
             raise HTTPException(404, f"note {key!r} not found")
         conn.execute(
-            "DELETE FROM notes WHERE scope_type='topic' AND scope_id=? AND key=?",
-            (topic_id, key),
+            text("DELETE FROM notes WHERE scope_type='topic' AND scope_id=:scope_id AND key=:key"),
+            {"scope_id": topic_id, "key": key},
         )
         conn.commit()
     finally:
