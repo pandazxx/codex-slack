@@ -362,7 +362,6 @@ def _migrate_workspace_name_uniqueness(conn: sqlite3.Connection) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_active_name"
             " ON workspaces(name) WHERE archived_at IS NULL"
         )
-        conn.commit()
         return
     LOGGER.info("db.migration_start relax_workspace_name_unique")
     conn.execute("PRAGMA foreign_keys = OFF")
@@ -412,7 +411,6 @@ def _migrate_agents_to_staffs(conn: sqlite3.Connection) -> None:
             " VALUES (?, 'workspace', ?, ?, ?, NULL, NULL, ?, 'topic', ?, NULL, ?, ?)",
             (r[0], r[1], r[2], r[3], r[4], is_default, r[5], now),
         )
-    conn.commit()
     LOGGER.info("db.migration_done agents_to_staffs")
 
 
@@ -493,7 +491,6 @@ def _migrate_event_actions_v2(conn: sqlite3.Connection) -> None:
             ON event_actions (event_type, enabled) WHERE event_type = 'topic_scheduler';
     """)
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.commit()
     LOGGER.info("db.migration_done event_actions_v2")
 
 
@@ -576,7 +573,6 @@ def _migrate_event_actions_v3(conn: sqlite3.Connection) -> None:
             ON event_actions (event_type, enabled) WHERE event_type = 'topic_scheduler';
     """)
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.commit()
     LOGGER.info("db.migration_done event_actions_v3")
 
 
@@ -617,7 +613,6 @@ def _migrate_staffs_session_scope_none(conn: sqlite3.Connection) -> None:
             ON staffs(scope_type, COALESCE(scope_id, ''), name);
     """)
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.commit()
     LOGGER.info("db.migration_done staffs_session_scope_none")
 
 
