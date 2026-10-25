@@ -299,7 +299,14 @@ def test_save_agent_response_does_not_delete_other_message_chunks(db_path):
 
 def test_save_agent_response_atomicity_on_failure(db_path):
     """If the transaction fails after the INSERT but before the DELETE (or vice
-    versa), neither change should be committed — both or neither."""
+    versa), neither change should be committed — both or neither.
+
+    M0 replaced sqlite3.connect() with src.master.db.get_connection() (SQLAlchemy
+    NullPool shim).  We inject the failure by patching get_connection in the
+    mqtt_client module namespace so the real SQLAlchemy code path is exercised.
+    SQLAlchemy 2.x rolls back the active transaction on Connection.close() when
+    commit() was never called, so atomicity is preserved at the engine level.
+    """
     # Seed chunks
     for seq in range(2):
         _save_chunk(db_path, "t1", {
@@ -309,50 +316,49 @@ def test_save_agent_response_atomicity_on_failure(db_path):
             "event": {"type": "assistant"},
         })
 
-    original_connect = sqlite3.connect
+    from src.master.db import get_connection as _real_get_connection
+    import src.master.mqtt_client as mqtt_mod
 
-    class FailingConn:
-        """Wraps a real connection but raises on execute after the INSERT."""
-        def __init__(self, path: str):
-            self._inner = original_connect(path)
-            self._inner.row_factory = sqlite3.Row
-            self._execute_count = 0
+    class _FailingShim:
+        """Wraps a real _ConnectionShim; raises after INSERT into messages executes.
 
-        def execute(self, sql: str, params=()):
-            self._execute_count += 1
-            result = self._inner.execute(sql, params)
-            # Raise after the INSERT into messages to simulate mid-transaction failure
-            if "INSERT" in sql.upper() and "messages" in sql.lower():
-                raise sqlite3.OperationalError("simulated disk full")
+        The INSERT is sent to SQLAlchemy's uncommitted transaction before the
+        exception is raised, so the rollback triggered by close()-without-commit
+        must undo it.  This proves the atomicity guarantee.
+        """
+        def __init__(self, shim):
+            self._shim = shim
+
+        def execute(self, sql, params=None):
+            # Execute against the real connection first (within the open transaction).
+            result = self._shim.execute(sql, params)
+            sql_upper = str(sql).upper()
+            # Raise after the INSERT into messages succeeds but before DELETE from chunks.
+            if "INSERT" in sql_upper and "MESSAGES" in sql_upper:
+                raise Exception("simulated disk full after INSERT")
             return result
 
         def commit(self):
-            self._inner.commit()
+            self._shim.commit()
+
+        def rollback(self):
+            self._shim.rollback()
 
         def close(self):
-            self._inner.close()
+            # Delegates to _ConnectionShim.close() → SQLAlchemy Connection.close()
+            # which rolls back the uncommitted transaction (NullPool, autobegin).
+            self._shim.close()
 
         def __enter__(self):
             return self
 
-        def __exit__(self, *args):
-            self._inner.rollback()
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return self._shim.__exit__(exc_type, exc_val, exc_tb)
 
-        @property
-        def row_factory(self):
-            return self._inner.row_factory
+    def _failing_get_connection(path):
+        return _FailingShim(_real_get_connection(path))
 
-        @row_factory.setter
-        def row_factory(self, value):
-            self._inner.row_factory = value
-
-    # We call _save_agent_response with the real db so prior state is valid;
-    # we monkeypatch sqlite3.connect to inject a failing connection.
-    import src.master.mqtt_client as mqtt_mod
-
-    failing_conn_instance = FailingConn(db_path)
-
-    with patch.object(sqlite3, "connect", return_value=failing_conn_instance):
+    with patch.object(mqtt_mod, "get_connection", side_effect=_failing_get_connection):
         try:
             _save_agent_response(db_path, "t1", {
                 "message_id": "msg-atomic",
@@ -365,7 +371,7 @@ def test_save_agent_response_atomicity_on_failure(db_path):
         except Exception:
             pass  # failure is expected; we check the state below
 
-    # Re-check state using real connection
+    # Re-check state using a fresh real connection (outside the patched scope).
     assert _count_messages(db_path, "msg-atomic") == 0, \
         "messages row must not be committed if transaction failed"
     assert _count_chunks(db_path, "msg-atomic") == 2, \

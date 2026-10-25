@@ -223,42 +223,19 @@ def test_replay_includes_topic_id_per_frame(db_path):
 
 
 def test_replay_empty_events_list_skipped(db_path):
-    """A message_id with no chunk rows (can't happen in practice via normal flow,
-    but if it did the replay should not emit an empty frame)."""
-    # Manually produce a scenario where the ids query returns something but the
-    # events query returns nothing — this tests the `if not events: continue`
-    # guard in the implementation.  We simulate by mocking the inner query.
+    """A topic with no in-progress chunks should not emit any frame.
+
+    The implementation queries chunks LEFT JOIN messages to find message_ids
+    with no completed messages row; with an empty chunks table the result set
+    is empty and send_json must never be called.
+
+    Note: a previous version of this test contained a PatchedConn class that
+    monkeypatched sqlite3.connect.  That approach stopped working when M0
+    replaced sqlite3.connect() with src.master.db.get_connection() (SQLAlchemy).
+    The real-empty-DB approach below exercises the same guard without patching
+    the connection layer.
+    """
     ws = AsyncMock()
-
-    original_connect = sqlite3.connect
-
-    class PatchedConn:
-        def __init__(self, path):
-            self._inner = original_connect(path)
-            self._inner.row_factory = sqlite3.Row
-            self._call_count = 0
-
-        @property
-        def row_factory(self):
-            return self._inner.row_factory
-
-        @row_factory.setter
-        def row_factory(self, v):
-            self._inner.row_factory = v
-
-        def execute(self, sql, params=()):
-            self._call_count += 1
-            result = self._inner.execute(sql, params)
-            return result
-
-        def fetchall(self):
-            return self._inner.execute("SELECT 1 WHERE 0").fetchall()  # always empty
-
-        def close(self):
-            self._inner.close()
-
-    # Instead of monkeypatching the internal connection, just test with a real
-    # empty topic and assert send_json is never called.
     _run(_replay_in_progress_chunks(ws, db_path))
     ws.send_json.assert_not_called()
 
