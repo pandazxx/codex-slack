@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from .db import get_connection
 from .orchestration import (
@@ -84,8 +85,8 @@ def _verify_caller_identity(
     without receiver_name/agent_name) bypass the name-match and are accepted.
     """
     row = conn.execute(
-        "SELECT topic_id, receiver_name, agent_name FROM messages WHERE id = ?",
-        (caller_message_id,),
+        text("SELECT topic_id, receiver_name, agent_name FROM messages WHERE id = :id"),
+        {"id": caller_message_id},
     ).fetchone()
     if row is None:
         LOGGER.warning(
@@ -128,8 +129,8 @@ def _verify_dispatch_token(
     in messages.dispatch_token.  A mismatch indicates a forged or replayed call.
     """
     row = conn.execute(
-        "SELECT dispatch_token FROM messages WHERE id = ?",
-        (caller_message_id,),
+        text("SELECT dispatch_token FROM messages WHERE id = :id"),
+        {"id": caller_message_id},
     ).fetchone()
     if row is None or row["dispatch_token"] != dispatch_token:
         LOGGER.warning(
@@ -144,7 +145,7 @@ def _verify_dispatch_token(
 # ── Helper: workspace lookup for a topic ────────────────────────────────────
 
 def _get_workspace_id(conn, topic_id: str) -> str | None:
-    row = conn.execute("SELECT workspace_id FROM topics WHERE id = ?", (topic_id,)).fetchone()
+    row = conn.execute(text("SELECT workspace_id FROM topics WHERE id = :id"), {"id": topic_id}).fetchone()
     return row["workspace_id"] if row else None
 
 
@@ -164,22 +165,33 @@ def _stage_dispatch(
     """Insert a staged_dispatches row and return its id."""
     row_id = str(uuid.uuid4())
     conn.execute(
-        "INSERT INTO staged_dispatches"
-        " (id, prompt_message_id, topic_id, sender_name, receiver_kind, receiver_name,"
-        "  task_id, kind, body, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            row_id, prompt_message_id, topic_id, sender_name, receiver_kind, receiver_name,
-            task_id, kind, body, _now(),
+        text(
+            "INSERT INTO staged_dispatches"
+            " (id, prompt_message_id, topic_id, sender_name, receiver_kind, receiver_name,"
+            "  task_id, kind, body, created_at)"
+            " VALUES (:id, :prompt_message_id, :topic_id, :sender_name, :receiver_kind, :receiver_name,"
+            "  :task_id, :kind, :body, :created_at)"
         ),
+        {
+            "id": row_id,
+            "prompt_message_id": prompt_message_id,
+            "topic_id": topic_id,
+            "sender_name": sender_name,
+            "receiver_kind": receiver_kind,
+            "receiver_name": receiver_name,
+            "task_id": task_id,
+            "kind": kind,
+            "body": body,
+            "created_at": _now(),
+        },
     )
     return row_id
 
 
 def _stamp_dispatched(conn, row_id: str) -> None:
     conn.execute(
-        "UPDATE staged_dispatches SET dispatched_at = ? WHERE id = ?",
-        (_now(), row_id),
+        text("UPDATE staged_dispatches SET dispatched_at = :now WHERE id = :id"),
+        {"now": _now(), "id": row_id},
     )
 
 
@@ -318,13 +330,13 @@ class TaskOut(BaseModel):
 
 def _assert_workspace_and_topic(conn, workspace_id: str, topic_id: str) -> None:
     if conn.execute(
-        "SELECT id FROM workspaces WHERE id = ? AND archived_at IS NULL",
-        (workspace_id,),
+        text("SELECT id FROM workspaces WHERE id = :id AND archived_at IS NULL"),
+        {"id": workspace_id},
     ).fetchone() is None:
         raise HTTPException(404, "workspace not found")
     if conn.execute(
-        "SELECT id FROM topics WHERE id = ? AND workspace_id = ? AND archived_at IS NULL",
-        (topic_id, workspace_id),
+        text("SELECT id FROM topics WHERE id = :id AND workspace_id = :workspace_id AND archived_at IS NULL"),
+        {"id": topic_id, "workspace_id": workspace_id},
     ).fetchone() is None:
         raise HTTPException(404, "topic not found")
 
@@ -368,11 +380,13 @@ async def delegate_task(
         caller_task_row = None
         caller_depth = 0
         prompt_row = conn.execute(
-            "SELECT task_id FROM messages WHERE id = ?", (body.caller_message_id,)
+            text("SELECT task_id FROM messages WHERE id = :id"),
+            {"id": body.caller_message_id},
         ).fetchone()
         if prompt_row and prompt_row["task_id"]:
             caller_task_row = conn.execute(
-                "SELECT * FROM tasks WHERE id = ?", (prompt_row["task_id"],)
+                text("SELECT * FROM tasks WHERE id = :id"),
+                {"id": prompt_row["task_id"]},
             ).fetchone()
             if caller_task_row:
                 caller_depth = caller_task_row["depth"]
@@ -396,7 +410,8 @@ async def delegate_task(
             root_task_id = caller_task_row["root_task_id"]
             parent_task_id = caller_task_row["id"]
             count = conn.execute(
-                "SELECT COUNT(*) FROM tasks WHERE root_task_id = ?", (root_task_id,)
+                text("SELECT COUNT(*) FROM tasks WHERE root_task_id = :root_task_id"),
+                {"root_task_id": root_task_id},
             ).fetchone()[0]
             if count >= effective_max_root:
                 LOGGER.warning(
@@ -411,8 +426,8 @@ async def delegate_task(
             ancestor_id: str | None = caller_task_row["parent_task_id"]
             while ancestor_id:
                 row = conn.execute(
-                    "SELECT assignee_name, dispatcher_name, parent_task_id FROM tasks WHERE id = ?",
-                    (ancestor_id,),
+                    text("SELECT assignee_name, dispatcher_name, parent_task_id FROM tasks WHERE id = :id"),
+                    {"id": ancestor_id},
                 ).fetchone()
                 if row is None:
                     break
@@ -449,17 +464,30 @@ async def delegate_task(
         now = _now()
 
         conn.execute(
-            "INSERT INTO tasks"
-            " (id, topic_id, root_task_id, parent_task_id, depth,"
-            "  dispatcher_kind, dispatcher_name, assignee_name,"
-            "  goal, acceptance_criteria, state, failure_score,"
-            "  created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', 0.0, ?, ?)",
-            (
-                task_id, topic_id, root_task_id, parent_task_id, new_depth,
-                dispatcher_kind, dispatcher_name, body.staff,
-                body.goal, body.acceptance_criteria, now, now,
+            text(
+                "INSERT INTO tasks"
+                " (id, topic_id, root_task_id, parent_task_id, depth,"
+                "  dispatcher_kind, dispatcher_name, assignee_name,"
+                "  goal, acceptance_criteria, state, failure_score,"
+                "  created_at, updated_at)"
+                " VALUES (:id, :topic_id, :root_task_id, :parent_task_id, :depth,"
+                "  :dispatcher_kind, :dispatcher_name, :assignee_name,"
+                "  :goal, :acceptance_criteria, 'submitted', 0.0, :created_at, :updated_at)"
             ),
+            {
+                "id": task_id,
+                "topic_id": topic_id,
+                "root_task_id": root_task_id,
+                "parent_task_id": parent_task_id,
+                "depth": new_depth,
+                "dispatcher_kind": dispatcher_kind,
+                "dispatcher_name": dispatcher_name,
+                "assignee_name": body.staff,
+                "goal": body.goal,
+                "acceptance_criteria": body.acceptance_criteria,
+                "created_at": now,
+                "updated_at": now,
+            },
         )
         conn.commit()
     finally:
@@ -500,8 +528,8 @@ def _count_queued_tasks(db_path: str, topic_id: str) -> int:
     conn = get_connection(db_path)
     try:
         return conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE topic_id = ? AND state = 'submitted'",
-            (topic_id,),
+            text("SELECT COUNT(*) FROM tasks WHERE topic_id = :topic_id AND state = 'submitted'"),
+            {"topic_id": topic_id},
         ).fetchone()[0]
     finally:
         conn.close()
@@ -539,8 +567,8 @@ async def _dispatch_task_first_prompt(
     state_conn = get_connection(db_path)
     try:
         state_conn.execute(
-            "UPDATE tasks SET state = 'working', updated_at = ? WHERE id = ?",
-            (_now(), task_id),
+            text("UPDATE tasks SET state = 'working', updated_at = :now WHERE id = :id"),
+            {"now": _now(), "id": task_id},
         )
         state_conn.commit()
     finally:
@@ -566,13 +594,15 @@ async def ask_sender(
         _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
 
         prompt_row = conn.execute(
-            "SELECT task_id FROM messages WHERE id = ?", (body.caller_message_id,)
+            text("SELECT task_id FROM messages WHERE id = :id"),
+            {"id": body.caller_message_id},
         ).fetchone()
 
         task_row = None
         if prompt_row and prompt_row["task_id"]:
             task_row = conn.execute(
-                "SELECT * FROM tasks WHERE id = ?", (prompt_row["task_id"],)
+                text("SELECT * FROM tasks WHERE id = :id"),
+                {"id": prompt_row["task_id"]},
             ).fetchone()
 
         task_state = "n/a"
@@ -589,8 +619,8 @@ async def ask_sender(
                 parent_task_id = task_row["parent_task_id"]
                 if parent_task_id:
                     parent_task = conn.execute(
-                        "SELECT dispatcher_kind, dispatcher_name FROM tasks WHERE id = ?",
-                        (parent_task_id,),
+                        text("SELECT dispatcher_kind, dispatcher_name FROM tasks WHERE id = :id"),
+                        {"id": parent_task_id},
                     ).fetchone()
                     if parent_task:
                         receiver_kind = parent_task["dispatcher_kind"]
@@ -640,26 +670,36 @@ async def ask_sender(
         question_sender = "agent" if receiver_kind == "user" else "event"
 
         conn.execute(
-            "INSERT INTO messages"
-            " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
-            "  silent, created_at,"
-            "  sender_kind, sender_name, receiver_kind, receiver_name,"
-            "  task_id, reply_to_message_id, dispatch_token)"
-            " VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?,"
-            "         'staff', ?, ?, ?, ?, ?, ?)",
-            (
-                message_id, topic_id, question_sender, body.caller_staff, body.question, _now(),
-                body.caller_staff, receiver_kind, receiver_name,
-                task_row["id"] if task_row else None,
-                body.caller_message_id,
-                dispatch_token_for_question,
+            text(
+                "INSERT INTO messages"
+                " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
+                "  silent, created_at,"
+                "  sender_kind, sender_name, receiver_kind, receiver_name,"
+                "  task_id, reply_to_message_id, dispatch_token)"
+                " VALUES (:id, :topic_id, :sender, :agent_name, :text, NULL, NULL, NULL, 0, :created_at,"
+                "         'staff', :sender_name, :receiver_kind, :receiver_name,"
+                "  :task_id, :reply_to_message_id, :dispatch_token)"
             ),
+            {
+                "id": message_id,
+                "topic_id": topic_id,
+                "sender": question_sender,
+                "agent_name": body.caller_staff,
+                "text": body.question,
+                "created_at": _now(),
+                "sender_name": body.caller_staff,
+                "receiver_kind": receiver_kind,
+                "receiver_name": receiver_name,
+                "task_id": task_row["id"] if task_row else None,
+                "reply_to_message_id": body.caller_message_id,
+                "dispatch_token": dispatch_token_for_question,
+            },
         )
 
         if task_row:
             conn.execute(
-                "UPDATE tasks SET state = 'input-required', updated_at = ? WHERE id = ?",
-                (_now(), task_row["id"]),
+                text("UPDATE tasks SET state = 'input-required', updated_at = :now WHERE id = :id"),
+                {"now": _now(), "id": task_row["id"]},
             )
             # Stage the question for BOTH receiver kinds. Staff receivers get an
             # MQTT publish at turn end (dispatch_to_staff with insert_row=False);
@@ -730,7 +770,8 @@ async def submit_result(
         _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
 
         prompt_row = conn.execute(
-            "SELECT task_id FROM messages WHERE id = ?", (body.caller_message_id,)
+            text("SELECT task_id FROM messages WHERE id = :id"),
+            {"id": body.caller_message_id},
         ).fetchone()
         if not prompt_row or not prompt_row["task_id"]:
             LOGGER.warning(
@@ -741,7 +782,8 @@ async def submit_result(
             raise HTTPException(422, "no_task_context")
 
         task_row = conn.execute(
-            "SELECT * FROM tasks WHERE id = ?", (prompt_row["task_id"],)
+            text("SELECT * FROM tasks WHERE id = :id"),
+            {"id": prompt_row["task_id"]},
         ).fetchone()
         if task_row is None:
             raise HTTPException(404, "task not found")
@@ -767,15 +809,25 @@ async def submit_result(
 
         # Remove any prior staged result for this prompt to implement last-call-wins.
         conn.execute(
-            "DELETE FROM staged_dispatches"
-            " WHERE prompt_message_id = ? AND kind = 'result_ready'",
-            (body.caller_message_id,),
+            text(
+                "DELETE FROM staged_dispatches"
+                " WHERE prompt_message_id = :prompt_message_id AND kind = 'result_ready'"
+            ),
+            {"prompt_message_id": body.caller_message_id},
         )
 
         conn.execute(
-            "UPDATE tasks SET result_summary = ?, result_artifacts = ?, result_status = ?,"
-            " updated_at = ? WHERE id = ?",
-            (body.summary, artifacts_json, body.status, _now(), task_row["id"]),
+            text(
+                "UPDATE tasks SET result_summary = :summary, result_artifacts = :artifacts,"
+                " result_status = :status, updated_at = :now WHERE id = :id"
+            ),
+            {
+                "summary": body.summary,
+                "artifacts": artifacts_json,
+                "status": body.status,
+                "now": _now(),
+                "id": task_row["id"],
+            },
         )
         _stage_dispatch(
             conn,
@@ -817,7 +869,8 @@ async def answer_question(
         _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
 
         task_row = conn.execute(
-            "SELECT * FROM tasks WHERE id = ?", (body.task_id,)
+            text("SELECT * FROM tasks WHERE id = :id"),
+            {"id": body.task_id},
         ).fetchone()
         if task_row is None:
             raise HTTPException(404, "task not found")
@@ -877,7 +930,8 @@ async def accept_result(
         _verify_dispatch_token(conn, body.caller_message_id, body.dispatch_token, topic_id)
 
         task_row = conn.execute(
-            "SELECT * FROM tasks WHERE id = ?", (body.task_id,)
+            text("SELECT * FROM tasks WHERE id = :id"),
+            {"id": body.task_id},
         ).fetchone()
         if task_row is None:
             raise HTTPException(404, "task not found")
@@ -901,8 +955,8 @@ async def accept_result(
 
         now = _now()
         conn.execute(
-            "UPDATE tasks SET state = 'completed', closed_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, body.task_id),
+            text("UPDATE tasks SET state = 'completed', closed_at = :now, updated_at = :now WHERE id = :id"),
+            {"now": now, "id": body.task_id},
         )
         conn.commit()
     finally:
@@ -933,8 +987,8 @@ def list_tasks(
     try:
         _assert_workspace_and_topic(conn, workspace_id, topic_id)
         rows = conn.execute(
-            "SELECT * FROM tasks WHERE topic_id = ? ORDER BY created_at",
-            (topic_id,),
+            text("SELECT * FROM tasks WHERE topic_id = :topic_id ORDER BY created_at"),
+            {"topic_id": topic_id},
         ).fetchall()
         return [
             TaskOut(
@@ -994,21 +1048,24 @@ async def process_turn_end(
     conn = get_connection(db_path)
     try:
         staged_rows = conn.execute(
-            "SELECT * FROM staged_dispatches"
-            " WHERE prompt_message_id = ? AND dispatched_at IS NULL"
-            " ORDER BY created_at",
-            (prompt_message_id,),
+            text(
+                "SELECT * FROM staged_dispatches"
+                " WHERE prompt_message_id = :prompt_message_id AND dispatched_at IS NULL"
+                " ORDER BY created_at"
+            ),
+            {"prompt_message_id": prompt_message_id},
         ).fetchall()
 
         prompt_row = conn.execute(
-            "SELECT task_id, sender_kind, sender_name FROM messages WHERE id = ?",
-            (prompt_message_id,),
+            text("SELECT task_id, sender_kind, sender_name FROM messages WHERE id = :id"),
+            {"id": prompt_message_id},
         ).fetchone()
 
         task_row = None
         if prompt_row and prompt_row["task_id"]:
             task_row = conn.execute(
-                "SELECT * FROM tasks WHERE id = ?", (prompt_row["task_id"],)
+                text("SELECT * FROM tasks WHERE id = :id"),
+                {"id": prompt_row["task_id"]},
             ).fetchone()
     finally:
         conn.close()
@@ -1120,7 +1177,7 @@ async def _apply_implicit_fallback(
     fresh_conn = get_connection(db_path)
     try:
         fresh_task = fresh_conn.execute(
-            "SELECT * FROM tasks WHERE id = ?", (task_id,)
+            text("SELECT * FROM tasks WHERE id = :id"), {"id": task_id}
         ).fetchone()
     finally:
         fresh_conn.close()
@@ -1187,8 +1244,8 @@ def _retarget_reply_to_user(db_path: str, reply_message_id: str) -> None:
     try:
         with conn:
             conn.execute(
-                "UPDATE messages SET receiver_kind='user', receiver_name=NULL WHERE id = ?",
-                (reply_message_id,),
+                text("UPDATE messages SET receiver_kind='user', receiver_name=NULL WHERE id = :id"),
+                {"id": reply_message_id},
             )
     finally:
         conn.close()
@@ -1214,7 +1271,7 @@ async def _execute_staged_row(
     conn = get_connection(db_path)
     try:
         task_row = conn.execute(
-            "SELECT * FROM tasks WHERE id = ?", (task_id,)
+            text("SELECT * FROM tasks WHERE id = :id"), {"id": task_id}
         ).fetchone()
     finally:
         conn.close()
@@ -1230,8 +1287,8 @@ async def _execute_staged_row(
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE staged_dispatches SET dispatched_at = ? WHERE id = ?",
-            (_now(), staged["id"]),
+            text("UPDATE staged_dispatches SET dispatched_at = :dispatched_at WHERE id = :id"),
+            {"dispatched_at": _now(), "id": staged["id"]},
         )
         conn.commit()
     finally:
@@ -1275,9 +1332,13 @@ async def _execute_staged_row(
             conn = get_connection(db_path)
             try:
                 conn.execute(
-                    "UPDATE tasks SET result_summary = ?, result_status = ?, updated_at = ?"
-                    " WHERE id = ?",
-                    (result_summary, result_status, _now(), task_id),
+                    text(
+                        "UPDATE tasks SET result_summary = :result_summary,"
+                        " result_status = :result_status, updated_at = :updated_at"
+                        " WHERE id = :id"
+                    ),
+                    {"result_summary": result_summary, "result_status": result_status,
+                     "updated_at": _now(), "id": task_id},
                 )
                 conn.commit()
             finally:
@@ -1303,8 +1364,8 @@ async def _execute_staged_row(
             _clear_conn = get_connection(db_path)
             try:
                 _clear_conn.execute(
-                    "UPDATE staged_dispatches SET dispatched_at = NULL WHERE id = ?",
-                    (staged["id"],),
+                    text("UPDATE staged_dispatches SET dispatched_at = NULL WHERE id = :id"),
+                    {"id": staged["id"]},
                 )
                 _clear_conn.commit()
             finally:
@@ -1398,8 +1459,8 @@ async def _dispatch_answer_to_assignee(
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE tasks SET state = 'working', updated_at = ? WHERE id = ?",
-            (_now(), task_row["id"]),
+            text("UPDATE tasks SET state = 'working', updated_at = :updated_at WHERE id = :id"),
+            {"updated_at": _now(), "id": task_row["id"]},
         )
         conn.commit()
     finally:
@@ -1476,7 +1537,7 @@ def _mark_reply_silent(db_path: str, reply_message_id: str) -> None:
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE messages SET silent = 1 WHERE id = ?", (reply_message_id,)
+            text("UPDATE messages SET silent = 1 WHERE id = :id"), {"id": reply_message_id}
         )
         conn.commit()
     finally:
@@ -1551,9 +1612,11 @@ async def _dispatch_next_queued(app_state, workspace_id: str, topic_id: str) -> 
             # SELECT and UPDATE in one connection/transaction to avoid TOCTOU between
             # the existence check and the state stamp (M-6).
             task_row = conn.execute(
-                "SELECT * FROM tasks WHERE topic_id = ? AND state = 'submitted'"
-                " ORDER BY created_at LIMIT 1",
-                (topic_id,),
+                text(
+                    "SELECT * FROM tasks WHERE topic_id = :topic_id AND state = 'submitted'"
+                    " ORDER BY created_at LIMIT 1"
+                ),
+                {"topic_id": topic_id},
             ).fetchone()
             if task_row is None:
                 # No queued task — release the lock before returning (C-1).
@@ -1561,9 +1624,11 @@ async def _dispatch_next_queued(app_state, workspace_id: str, topic_id: str) -> 
                 return
 
             ws_row = conn.execute(
-                "SELECT id FROM workspaces WHERE id = ("
-                " SELECT workspace_id FROM topics WHERE id = ?)",
-                (topic_id,),
+                text(
+                    "SELECT id FROM workspaces WHERE id = ("
+                    " SELECT workspace_id FROM topics WHERE id = :topic_id)"
+                ),
+                {"topic_id": topic_id},
             ).fetchone()
             ws_id = ws_row["id"] if ws_row else workspace_id
 
@@ -1572,8 +1637,11 @@ async def _dispatch_next_queued(app_state, workspace_id: str, topic_id: str) -> 
 
             if staff_found:
                 conn.execute(
-                    "UPDATE tasks SET state = 'working', updated_at = ? WHERE id = ?",
-                    (_now(), task_row["id"]),
+                    text(
+                        "UPDATE tasks SET state = 'working', updated_at = :updated_at"
+                        " WHERE id = :id"
+                    ),
+                    {"updated_at": _now(), "id": task_row["id"]},
                 )
                 conn.commit()
         finally:
@@ -1638,19 +1706,23 @@ def dispatch_undispatched_staged_rows(app_state, loop: asyncio.AbstractEventLoop
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            "SELECT sd.*, m.topic_id AS prompt_topic_id"
-            " FROM staged_dispatches sd"
-            " JOIN messages m ON m.id = sd.prompt_message_id"
-            " WHERE sd.dispatched_at IS NULL",
+            text(
+                "SELECT sd.*, m.topic_id AS prompt_topic_id"
+                " FROM staged_dispatches sd"
+                " JOIN messages m ON m.id = sd.prompt_message_id"
+                " WHERE sd.dispatched_at IS NULL"
+            ),
         ).fetchall()
         # For each undispatched row, find the agent response that already closed the turn
         # so we can pass the correct reply_message_id (M-1: preserves reply chain).
         orphaned: list[tuple] = []
         for r in rows:
             response_row = conn.execute(
-                "SELECT id FROM messages WHERE reply_to_message_id = ? AND sender = 'agent'"
-                " ORDER BY created_at DESC LIMIT 1",
-                (r["prompt_message_id"],),
+                text(
+                    "SELECT id FROM messages WHERE reply_to_message_id = :reply_to_message_id"
+                    " AND sender = 'agent' ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"reply_to_message_id": r["prompt_message_id"]},
             ).fetchone()
             if response_row:
                 orphaned.append((r, response_row["id"]))
@@ -1676,7 +1748,7 @@ def dispatch_undispatched_staged_rows(app_state, loop: asyncio.AbstractEventLoop
         ws_conn = get_connection(db_path)
         try:
             ws_row = ws_conn.execute(
-                "SELECT workspace_id FROM topics WHERE id = ?", (topic_id,)
+                text("SELECT workspace_id FROM topics WHERE id = :id"), {"id": topic_id}
             ).fetchone()
             workspace_id = ws_row["workspace_id"] if ws_row else ""
         finally:
