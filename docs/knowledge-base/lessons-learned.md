@@ -614,3 +614,17 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 
 **Prevention:** Validate overlays with `docker compose config` under every profile combination (the `Compose config` CI job does). Never default `DATABASE_URL` in compose. Do not add env passthroughs to the base file without checking `tests/conftest.py` presence semantics.
 
+
+## 2026-10-25 — CI test image missing Alembic files after M1 startup switch
+
+- **Summary:** After M1 made `startup_db()` run Alembic at app startup, every CI leg (sqlite/postgres/mysql) failed with `alembic.util.exc.CommandError: No 'script_location' key found in configuration` (~290 errors).
+- **Root cause:** CI builds its image from `Dockerfile.test`, a separate file from `Dockerfile`. Chunk A added `COPY alembic/ alembic.ini scripts/` only to `Dockerfile` (prod stage). M0 passed CI because its startup did not load Alembic. Local venv runs could not catch it because the repo root always has the files.
+- **Fix:** Copy `alembic`, `alembic.ini`, `scripts` in `Dockerfile.test`. Added `tests/test_image_contract.py::test_image_ships_alembic_and_db_tooling`, which runs inside the image and fails if they are missing.
+- **Prevention:** When adding a runtime file the app loads from disk, update *both* `Dockerfile` and `Dockerfile.test`, and add a contract test that runs in the image.
+
+## 2026-10-25 — Alembic `fileConfig` silenced app loggers (caplog tests failed)
+
+- **Summary:** After startup began running Alembic, caplog-based tests in `test_notify`, `test_notes`, `test_event_actions` and `test_master_chunks` saw no log records when they ran after any `TestClient(app)` test.
+- **Root cause:** `alembic/env.py` called `logging.config.fileConfig(alembic.ini)`, whose default `disable_existing_loggers=True` disables every logger not named in `alembic.ini` for the rest of the process. That affects production logging too, not just tests.
+- **Fix:** `fileConfig(..., disable_existing_loggers=False)` in `alembic/env.py`.
+- **Prevention:** Never call `fileConfig` without `disable_existing_loggers=False` in code that runs inside the app process.
