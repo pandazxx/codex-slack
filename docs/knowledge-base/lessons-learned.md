@@ -2,7 +2,27 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-10-25 -->
+<!-- last updated: 2026-10-29 -->
+
+---
+
+## 2026-10-29 — SQLite URL to missing file silently creates empty DB; Compose project name controls which volume gets mounted
+
+*Summary:* Two distinct but related hazards surfaced during code review of the snapshot/migrate tooling (PR #272, issue #268 M1).
+
+**Hazard 1 — pysqlite silently creates an empty database.** Passing a `sqlite+pysqlite:///file:...` URL to SQLAlchemy when the file does not exist causes pysqlite to create a new zero-byte database at that path rather than raising an error. The snapshot exporter would open the (now newly created) empty DB, find no rows in any table (since all are skipped with "warning: table not found"), write a valid-looking manifest with zero row counts, and report `Provider migration complete.` — silently losing all data.
+
+*Root cause:* SQLite's default open mode is read-write-create. Without an explicit `mode=ro` URI flag or a pre-existence check, any access to a non-existent path creates a new file.
+
+*Fix applied:* `export_snapshot` now extracts the filesystem path from any `sqlite+pysqlite://` URL via `sqlalchemy.engine.make_url`, checks `Path.exists()` before opening, and exits non-zero with a clear message when the file is absent. SQLite sources are opened via a read-only URI (`mode=ro&uri=true`) so the engine can never write to the source under any code path. Missing tables also cause an immediate error instead of a warn-and-skip.
+
+**Hazard 2 — Docker Compose project name controls which named volume is mounted.** `docker compose run` creates a one-off container from the service definition, inheriting all declared volumes. The `master_data` volume is mounted at `/opt/codex-slack/data/master` inside the container, so `master_data.db` is accessible there without an extra `-v` flag — but only when the command uses `-p <project>` matching the running stack. Without the correct project name, Compose silently mounts a new empty volume instead of the live data volume, and the migration tool would see a missing or empty SQLite file.
+
+*Root cause:* Docker Compose generates volume names as `<project>_<volume-name>`. If the project name differs between the running stack and the one-off `run` command, a different (possibly brand-new) volume is used.
+
+*Fix applied:* The runbook now documents the `-p <project>` flag on every `docker compose` command, explains how to find the project name (`docker compose ls`, `docker volume ls | grep master_data`), and adds a pre-flight `ls` step to confirm the SQLite file is visible inside the container before starting the migration.
+
+*Prevention:* (1) Always open SQLite sources with the URI `mode=ro` flag in any tool that must never modify the source. (2) In runbooks that use `docker compose run` against a named volume, always specify `-p <project>` and include a pre-flight step that verifies the expected files are visible inside the container before running the actual operation.
 
 ---
 

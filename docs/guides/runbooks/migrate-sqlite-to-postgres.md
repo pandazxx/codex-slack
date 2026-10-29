@@ -35,6 +35,20 @@ Master will not start until you choose one of the options below. All existing da
 - For the Postgres paths: ability to write to `.env`
 - For SRE-managed staging/prod deploys: see `.sre/operations/deploy.md` (section "Staging cut-over: SQLite to bundled Postgres") — it is the authoritative SRE procedure. Return here for the self-hosted `docker compose` path.
 
+> **Compose project name required.** Every `docker compose` command below needs
+> `-p <project>` to resolve the same named project (and therefore the same named
+> volumes) as the running stack.  Without it Docker Compose defaults to a project
+> name derived from the current directory, and `run` would mount a brand-new empty
+> volume instead of the live data volume.
+>
+> Find the project name:
+> ```bash
+> docker compose ls               # shows "codex-slack" or whatever name is in use
+> docker volume ls | grep master_data   # e.g. codex-slack_master_data
+> ```
+> The project name is the prefix before `_master_data`.  Use that value in place
+> of `<project>` throughout this runbook.
+
 ---
 
 ## Option (a) — Keep SQLite (no migration, zero downtime)
@@ -91,9 +105,9 @@ Use a hex password (letters and digits only): master splices it into the connect
 Start the Postgres service and wait for it to be ready:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d postgres
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml up -d postgres
 # Wait for healthcheck (pg_isready)
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml \
   exec postgres pg_isready -U master -d master
 ```
 
@@ -119,7 +133,7 @@ If master is already failing to start (the trigger condition above), it is not r
 
 ```bash
 # Bundled path
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml stop master
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml stop master
 
 # Or with justfile
 just undeploy staging   # (staging) — preserves volumes
@@ -135,12 +149,68 @@ PGPW="${POSTGRES_PASSWORD}"   # from .env or your shell
 PGURL="postgresql+psycopg://master:${PGPW}@postgres:5432/master"
 ```
 
+> **How `docker compose run` sees the SQLite file.**
+> `docker compose run --rm --no-deps` creates a one-off container from the
+> `master` service definition, which includes all of the service's declared
+> volumes.  The `master_data` volume is mounted at `/opt/codex-slack/data/master`
+> inside the container, exactly where `master_data.db` lives.  No extra `-v`
+> flag is needed.  This works only when the command resolves the **same Compose
+> project** as the running stack — hence the `-p <project>` flag on every
+> command below.
+
+#### Pre-flight — confirm the SQLite file is visible
+
+Before running the migration, verify the file is accessible inside the container:
+
+```bash
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml \
+  run --rm --no-deps \
+  -e "DATABASE_URL=${SQLITE_URL}" \
+  master ls -lh /opt/codex-slack/data/master/master_data.db
+```
+
+Expected: a non-zero file size.  If the file is not listed, the project name is
+wrong or the volume does not contain the database.  Stop and check with
+`docker volume ls | grep master_data`.
+
+#### Pre-baseline source (if applicable)
+
+The migration tool requires the source database to be fully up-to-date at the
+current Alembic schema before it can export.  If the source SQLite is on an older
+schema (pre-v5.0, before Alembic was introduced — recognisable by the `workspaces`
+table existing but no `alembic_version` table), you must bring it to the current
+schema first.
+
+Two equivalent approaches (use whichever fits your workflow):
+
+**Approach A — `db.sh migrate` (direct, recommended for this runbook):**
+
+```bash
+# Take a fresh backup first (step 1 above should already cover this)
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml \
+  run --rm --no-deps \
+  -e "DATABASE_URL=${SQLITE_URL}" \
+  master bash scripts/db.sh migrate
+```
+
+**Approach B — start master on SQLite once** (master's `startup_db` applies the
+same fixups on startup and stamps the baseline revision):
+```bash
+# This is the approach used in .sre/operations/deploy.md step 3.
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml \
+  -e "DATABASE_URL=${SQLITE_URL}" up -d master
+# Wait for master to report healthy, then stop it before running snapshot-and-migrate.
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml stop master
+```
+
+After either approach the source will be at the current head and the export will proceed.
+
 #### Bundled Postgres (Mode B1)
 
 Use `docker compose run --rm --no-deps` to run the migration tool in a one-off master container. Postgres must already be running (Step 2).
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml \
   run --rm --no-deps \
   -e "DATABASE_URL=${SQLITE_URL}" \
   master bash scripts/db.sh snapshot-and-migrate \
@@ -148,24 +218,39 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
     --target-url "${PGURL}"
 ```
 
-Expected output ends with `Provider migration complete.`
+The tool prints an export summary (per-table row counts) and an import summary.
+Note these counts for the verification step.
+
+Expected last line: `Provider migration complete.`
 
 The snapshot is written inside the container to `${MASTER_DATA_DIR}/snapshots/<UTC timestamp>/` (inside the `master_data` volume). For the staging path with the justfile, see `.sre/operations/db-snapshot-migrate.md` for the exact `exec` command.
 
 #### Managed Postgres (Mode B2)
 
-The `--source-url` points at the SQLite file (inside the master container's data volume); `--target-url` is your external Postgres URL.
+The `--source-url` points at the SQLite file (inside the master container's data
+volume); the target is your external Postgres URL.  Use a distinctly named
+variable (`TARGET_URL`) to avoid confusion with `DATABASE_URL`, which is
+overridden to the SQLite path in the same command:
 
 ```bash
-docker compose -f docker-compose.yml \
+TARGET_URL="postgresql+psycopg://user:password@db.example.com:5432/dbname"
+
+docker compose -p <project> -f docker-compose.yml \
   run --rm --no-deps \
   -e "DATABASE_URL=${SQLITE_URL}" \
   master bash scripts/db.sh snapshot-and-migrate \
     --source-url "${SQLITE_URL}" \
-    --target-url "${DATABASE_URL}"
+    --target-url "${TARGET_URL}"
 ```
 
-> **Cross-release snapshots are not supported.** The snapshot schema version must match the Alembic head of the running code. If the source SQLite is on an older schema (pre-v5.0 without Alembic), `snapshot-and-migrate` first applies the pre-baseline fixups and stamps the baseline, then exports. Both source and target end up at the same schema revision.
+The tool prints an export summary and an import summary.  Note these counts for
+the verification step.
+
+> **Cross-release snapshots are not supported.** The snapshot schema version must
+> match the Alembic head of the running code.  If the source SQLite needs
+> upgrading, run `scripts/db.sh migrate` (or start master on SQLite once, as
+> described in the "Pre-baseline source" section above) before running
+> snapshot-and-migrate.
 
 ### Step 5 — Point DATABASE_URL at Postgres
 
@@ -182,7 +267,7 @@ For managed Postgres, `DATABASE_URL` should already be set from Step 2.
 
 ```bash
 # Bundled path
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml up -d
 
 # Or with justfile
 just deploy staging <tag>
@@ -196,16 +281,24 @@ Master runs `startup_db()` on start. Because the DB has already been migrated an
 
 ```bash
 # Check schema matches code head
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml \
   exec master bash scripts/db.sh verify-schema
 
 # Check row counts on key tables
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml \
   exec postgres psql -U master -d master \
   -c 'select count(*) from workspaces; select count(*) from messages;'
 ```
 
-`verify-schema` exits 0 on success and prints `schema is up to date`. Compare the workspace and message counts against what you recall (or against the pre-migration volume backup you inspected earlier).
+`verify-schema` exits 0 on success and prints `schema is up to date`.
+
+**Row-count comparison:** The export step printed an "Export summary" with per-table row
+counts, and the import step printed an "Import summary".  Both totals must agree exactly.
+If the counts differ, stop — do not start master — and check the full output for error
+messages before retrying.
+
+Compare the workspace and message counts against what you recall (or against the
+pre-migration volume backup you inspected earlier).
 
 Open the UI and confirm workspaces, topics, and recent messages are visible.
 
@@ -229,12 +322,12 @@ To reset a failed Postgres import and retry from Step 4:
 
 ```bash
 # Stop and remove the postgres container, then delete its volume
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml stop postgres
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml rm -f postgres
-docker volume rm codex-slack_postgres_data
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml stop postgres
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml rm -f postgres
+docker volume rm <project>_postgres_data
 
 # Re-create the volume by starting postgres fresh
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d postgres
+docker compose -p <project> -f docker-compose.yml -f docker-compose.postgres.yml up -d postgres
 ```
 
 ---

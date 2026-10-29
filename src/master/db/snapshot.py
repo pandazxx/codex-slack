@@ -28,6 +28,7 @@ from typing import Any
 
 from sqlalchemy import create_engine, inspect as sa_inspect, text as sa_text
 from sqlalchemy.engine import Engine
+from sqlalchemy.pool import NullPool
 
 # ---------------------------------------------------------------------------
 # Table ordering: parents before children (FK dependency order)
@@ -91,6 +92,37 @@ _BATCH_SIZE = 500
 def _make_engine(url: str) -> Engine:
     from . import _make_engine as _db_make_engine
     return _db_make_engine(url)
+
+
+def _sqlite_file_path(url: str) -> Path | None:
+    """Extract the filesystem path from a SQLite SQLAlchemy URL, or None if not SQLite.
+
+    Returns None for :memory: databases and non-SQLite URLs.
+    """
+    if not url.startswith("sqlite"):
+        return None
+    from sqlalchemy.engine import make_url as _sa_make_url
+    try:
+        db = _sa_make_url(url).database
+    except Exception:
+        return None
+    if not db or db == ":memory:":
+        return None
+    return Path(db)
+
+
+def _make_readonly_sqlite_engine(file_path: Path) -> Engine:
+    """Build a read-only SQLAlchemy engine for a SQLite file.
+
+    Uses the SQLite URI mode with mode=ro so the source is never written to,
+    even if the exporter accidentally tries to create a table or write data.
+    """
+    ro_url = f"sqlite+pysqlite:///file:{file_path.as_posix()}?mode=ro&uri=true"
+    return create_engine(
+        ro_url,
+        poolclass=NullPool,
+        connect_args={"check_same_thread": False},
+    )
 
 
 def _alembic_head(repo_root: Path) -> str:
@@ -179,28 +211,101 @@ def _sha256_file(path: Path) -> str:
 # Export
 # ---------------------------------------------------------------------------
 
-def export_snapshot(source_url: str, out_dir: Path, repo_root: Path) -> None:
+def export_snapshot(
+    source_url: str,
+    out_dir: Path,
+    repo_root: Path,
+    *,
+    allow_behind: bool = False,
+) -> None:
     """Export the source database to a snapshot directory.
 
     Creates out_dir/manifest.json and out_dir/{table}.jsonl for each table.
+
+    allow_behind: when True, export proceeds even if the source revision is
+        behind the current code head.  Used by snapshot_and_migrate in same-URL
+        (in-place upgrade) mode so it can snapshot a schema-behind source before
+        upgrading it.  In provider-migration mode (different target URL) leave
+        this False so that a stale source is caught before any data moves.
+
+    Exits non-zero (via sys.exit(1)) when:
+      - the SQLite source file does not exist
+      - the source has no alembic_version (pre-baseline or empty DB)
+      - the source revision is behind the code head and allow_behind is False
+      - any table in EXPORT_ORDER is missing from the source schema
     """
+    # --- Pre-flight: SQLite source file must exist before we open anything ---
+    sqlite_path = _sqlite_file_path(source_url)
+    if sqlite_path is not None and not sqlite_path.exists():
+        print(
+            f"ERROR: SQLite source file does not exist: {sqlite_path}\n"
+            f"Check MASTER_DATA_DIR and the path in DATABASE_URL.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     head = _alembic_head(repo_root)
-    engine = _make_engine(source_url)
+
+    # Open SQLite sources read-only so export never creates or modifies the source.
+    if sqlite_path is not None:
+        engine = _make_readonly_sqlite_engine(sqlite_path)
+    else:
+        engine = _make_engine(source_url)
+
     dialect = _dialect_name(engine)
+    tables_meta: dict[str, dict] = {}
+    current_rev: str | None = None
 
     try:
         insp = sa_inspect(engine)
         existing_tables = set(insp.get_table_names())
 
-        tables_meta: dict[str, dict] = {}
+        # --- Source schema version checks ---
+        current_rev = _get_current_revision(engine)
+
+        if current_rev is None:
+            if "workspaces" in existing_tables:
+                print(
+                    f"ERROR: source database is pre-baseline (the 'workspaces' table\n"
+                    f"exists but there is no 'alembic_version' table).\n"
+                    f"Bring the source to the current schema first (take a backup first),\n"
+                    f"then retry the export:\n"
+                    f"\n"
+                    f"  DATABASE_URL='{source_url}' scripts/db.sh migrate\n",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"ERROR: source database is empty (no tables found). Nothing to export.",
+                    file=sys.stderr,
+                )
+            sys.exit(1)
+
+        if not allow_behind and current_rev != head:
+            print(
+                f"ERROR: source schema revision {current_rev!r} does not match the\n"
+                f"current code head {head!r}.\n"
+                f"Bring the source to the current schema first (take a backup first),\n"
+                f"then retry the export:\n"
+                f"\n"
+                f"  DATABASE_URL='{source_url}' scripts/db.sh migrate\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # --- All required tables must be present ---
+        missing_tables = [t for t in EXPORT_ORDER if t not in existing_tables]
+        if missing_tables:
+            print(
+                f"ERROR: source database is missing required tables: {missing_tables}\n"
+                f"The schema must be complete before export.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
         for table in EXPORT_ORDER:
-            if table not in existing_tables:
-                print(f"  warning: table '{table}' not found in source — skipping", file=sys.stderr)
-                continue
-
             jsonl_path = out_dir / f"{table}.jsonl"
             bool_cols = BOOLEAN_COLUMNS.get(table, set())
             json_cols = JSON_TEXT_COLUMNS.get(table, set())
@@ -208,7 +313,7 @@ def export_snapshot(source_url: str, out_dir: Path, repo_root: Path) -> None:
 
             row_count = 0
             with engine.connect() as conn:
-                result = conn.execute(sa_text(f"SELECT * FROM \"{table}\""))  # noqa: S608
+                result = conn.execute(sa_text(f'SELECT * FROM "{table}"'))  # noqa: S608
                 col_names = list(result.keys())
 
                 with jsonl_path.open("w", encoding="utf-8") as fh:
@@ -229,13 +334,12 @@ def export_snapshot(source_url: str, out_dir: Path, repo_root: Path) -> None:
 
             sha256 = _sha256_file(jsonl_path)
             tables_meta[table] = {"rows": row_count, "sha256": sha256}
-            print(f"  exported {table}: {row_count} rows")
 
     finally:
         engine.dispose()
 
     manifest = {
-        "schema_version": head,
+        "schema_version": current_rev,
         "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source_dialect": dialect,
         "tables": tables_meta,
@@ -243,6 +347,12 @@ def export_snapshot(source_url: str, out_dir: Path, repo_root: Path) -> None:
     }
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+
+    print("Export summary:")
+    total = sum(m["rows"] for m in tables_meta.values())
+    for table, meta in tables_meta.items():
+        print(f"  {table}: {meta['rows']} rows")
+    print(f"Total: {total} rows across {len(tables_meta)} tables")
     print(f"Snapshot written to {out_dir}")
 
 
@@ -468,6 +578,7 @@ def import_snapshot(
                         inserted += len(batch)
 
                     if col_names is None:
+                        table_insert_counts[table] = 0
                         print(f"  {table}: 0 rows (empty JSONL)")
                     else:
                         table_insert_counts[table] = inserted
@@ -502,6 +613,11 @@ def import_snapshot(
                         file=sys.stderr,
                     )
                     sys.exit(1)
+        print("Import summary:")
+        import_total = sum(table_insert_counts.values())
+        for table, count in table_insert_counts.items():
+            print(f"  {table}: {count} rows")
+        print(f"Total: {import_total} rows across {len(table_insert_counts)} tables")
         print("Import complete — all row counts verified.")
 
     finally:
@@ -556,9 +672,12 @@ def snapshot_and_migrate(
         (provider-migration case, e.g. SQLite → Postgres).
     """
     print(f"Snapshotting {source_url} → {out_dir}")
-    export_snapshot(source_url, out_dir, repo_root)
-
     same_target = (target_url is None) or (target_url == source_url)
+    # In same-URL (in-place upgrade) mode the source may be behind head; we
+    # snapshot its current state before upgrading it.  In provider-migration
+    # mode the source must already be at head so the manifest's schema_version
+    # matches what the importer expects.
+    export_snapshot(source_url, out_dir, repo_root, allow_behind=same_target)
 
     if same_target:
         print(f"Target is same as source — running alembic upgrade head on {source_url}")

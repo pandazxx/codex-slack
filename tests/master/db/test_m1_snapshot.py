@@ -1049,3 +1049,227 @@ class TestImportLockTimeout:
 
         if error_in_thread:
             raise error_in_thread[0]
+
+
+# ---------------------------------------------------------------------------
+# TC-25: Export pre-flight guards
+# ---------------------------------------------------------------------------
+
+class TestExportGuards:
+    """export_snapshot refuses bad source states before writing any output."""
+
+    def test_export_refuses_missing_sqlite_file(self, tmp_path):
+        """Export exits non-zero when the SQLite source file does not exist."""
+        missing_url = f"sqlite+pysqlite:///{tmp_path}/nonexistent.db"
+        out_dir = tmp_path / "snap_out"
+        result = _run_db_sh(
+            "snapshot", "export",
+            "--source-url", missing_url,
+            "--out", str(out_dir),
+        )
+        assert result.returncode != 0, (
+            "Export should refuse a missing SQLite source file"
+        )
+        assert "does not exist" in result.stderr, (
+            f"Expected 'does not exist' in stderr, got:\n{result.stderr}"
+        )
+
+    def test_export_does_not_create_sqlite_file(self, tmp_path):
+        """Export refuses a missing file and must not create a new SQLite file at that path."""
+        missing_path = tmp_path / "nonexistent.db"
+        missing_url = f"sqlite+pysqlite:///{missing_path}"
+        out_dir = tmp_path / "snap_out"
+        _run_db_sh(
+            "snapshot", "export",
+            "--source-url", missing_url,
+            "--out", str(out_dir),
+        )
+        assert not missing_path.exists(), (
+            "Export must not create the SQLite source file when the source is missing"
+        )
+
+    def test_export_refuses_empty_sqlite_file(self, tmp_path):
+        """Export exits non-zero when the SQLite source file exists but has no tables."""
+        empty_path = tmp_path / "empty.db"
+        empty_path.touch()  # zero-byte file; pysqlite would create an empty DB
+        empty_url = f"sqlite+pysqlite:///{empty_path}"
+        out_dir = tmp_path / "snap_out"
+        result = _run_db_sh(
+            "snapshot", "export",
+            "--source-url", empty_url,
+            "--out", str(out_dir),
+        )
+        assert result.returncode != 0, (
+            "Export should refuse when source SQLite file has no tables"
+        )
+
+    def test_export_refuses_missing_required_table(self, tmp_path):
+        """Export exits non-zero when the source DB is missing a required table."""
+        import sqlite3 as _sqlite3
+        from src.master.db import startup_db
+
+        db_path = str(tmp_path / "partial.db")
+        url = f"sqlite+pysqlite:///{db_path}"
+        startup_db(url)
+
+        # Drop a required table to simulate a partial schema.
+        conn = _sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("DROP TABLE IF EXISTS staged_dispatches")
+        conn.commit()
+        conn.close()
+
+        out_dir = tmp_path / "snap_out"
+        result = _run_db_sh(
+            "snapshot", "export",
+            "--source-url", url,
+            "--out", str(out_dir),
+        )
+        assert result.returncode != 0, (
+            "Export should refuse when a required table is missing"
+        )
+        assert "missing" in result.stderr.lower(), (
+            f"Expected 'missing' in stderr, got:\n{result.stderr}"
+        )
+
+    def test_export_refuses_prebaseline_source(self, tmp_path):
+        """Export exits non-zero for a pre-baseline source (workspaces present, no alembic_version)."""
+        import sqlite3 as _sqlite3
+        from src.master.db._prebaseline import init_db_sqlite
+
+        db_path = str(tmp_path / "prebaseline.db")
+        init_db_sqlite(db_path)
+
+        # Verify it really is pre-baseline (init_db_sqlite must not stamp alembic_version).
+        conn = _sqlite3.connect(db_path)
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'"
+        ).fetchone()
+        conn.close()
+        if row is not None:
+            pytest.skip("init_db_sqlite already stamps alembic_version; pre-baseline guard not applicable")
+
+        url = f"sqlite+pysqlite:///{db_path}"
+        out_dir = tmp_path / "snap_out"
+        result = _run_db_sh(
+            "snapshot", "export",
+            "--source-url", url,
+            "--out", str(out_dir),
+        )
+        assert result.returncode != 0, (
+            "Export should refuse a pre-baseline source"
+        )
+        assert "pre-baseline" in result.stderr.lower(), (
+            f"Expected 'pre-baseline' in stderr, got:\n{result.stderr}"
+        )
+
+    def test_manifest_records_source_revision_not_code_head(self, tmp_path):
+        """manifest.json schema_version records the source's actual alembic revision."""
+        from src.master.db import startup_db
+
+        db_path = str(tmp_path / "src_rev.db")
+        url = f"sqlite+pysqlite:///{db_path}"
+        startup_db(url)  # stamps at head
+
+        out_dir = tmp_path / "snap_rev_out"
+        result = _run_db_sh(
+            "snapshot", "export",
+            "--source-url", url,
+            "--out", str(out_dir),
+        )
+        assert result.returncode == 0, f"export failed:\n{result.stdout}\n{result.stderr}"
+
+        manifest = json.loads((out_dir / "manifest.json").read_text())
+        head = _alembic_head()
+        assert manifest["schema_version"] == head, (
+            f"manifest schema_version {manifest['schema_version']!r} should equal "
+            f"the source's actual revision which is head {head!r}"
+        )
+
+    def test_export_summary_printed(self, tmp_path):
+        """Export prints 'Export summary:' and a Total line on success."""
+        from src.master.db import startup_db
+
+        db_path = str(tmp_path / "summary_src.db")
+        url = f"sqlite+pysqlite:///{db_path}"
+        startup_db(url)
+
+        out_dir = tmp_path / "snap_summary_out"
+        result = _run_db_sh(
+            "snapshot", "export",
+            "--source-url", url,
+            "--out", str(out_dir),
+        )
+        assert result.returncode == 0, f"export failed:\n{result.stdout}\n{result.stderr}"
+        combined = result.stdout + result.stderr
+        assert "Export summary:" in combined, (
+            f"Expected 'Export summary:' in output:\n{combined}"
+        )
+        assert "Total:" in combined, (
+            f"Expected 'Total:' in output:\n{combined}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TC-26: db.sh migrate handles pre-baseline SQLite
+# ---------------------------------------------------------------------------
+
+class TestMigratePrebaseline:
+    """db.sh migrate stamps a pre-baseline SQLite source and upgrades to head."""
+
+    def test_migrate_stamps_and_upgrades_prebaseline_sqlite(self, tmp_path):
+        """migrate exits 0, reaches head, and preserves rows on a pre-baseline source."""
+        import sqlite3 as _sqlite3
+        from src.master.db._prebaseline import init_db_sqlite
+        from src.master.db import _make_engine
+        from alembic.runtime.migration import MigrationContext
+
+        db_path = str(tmp_path / "premigrate.db")
+        init_db_sqlite(db_path)
+
+        conn = _sqlite3.connect(db_path)
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'"
+        ).fetchone()
+        conn.close()
+        if row is not None:
+            pytest.skip("init_db_sqlite already stamps alembic_version; pre-baseline test not applicable")
+
+        # Seed a workspace row to verify rows survive the migration.
+        conn = _sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO workspaces (id, name, repo_url, container_name, created_at)"
+            " VALUES ('ws-pre-mig-001', 'pre-mig-ws',"
+            " 'https://github.com/x/y', 'container-x', '2026-01-01T00:00:00Z')"
+        )
+        conn.commit()
+        conn.close()
+
+        url = f"sqlite+pysqlite:///{db_path}"
+        result = _run_db_sh("migrate", extra_env={"DATABASE_URL": url})
+        assert result.returncode == 0, (
+            f"migrate should exit 0 on pre-baseline SQLite:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+
+        head = _alembic_head()
+        eng = _make_engine(url)
+        try:
+            with eng.connect() as conn:
+                ctx = MigrationContext.configure(conn)
+                current = ctx.get_current_revision()
+        finally:
+            eng.dispose()
+        assert current == head, (
+            f"After migrate, DB should be at head {head!r}, got {current!r}"
+        )
+
+        # Rows must be preserved.
+        conn = _sqlite3.connect(db_path)
+        preserved = conn.execute(
+            "SELECT id FROM workspaces WHERE id='ws-pre-mig-001'"
+        ).fetchone()
+        conn.close()
+        assert preserved is not None, (
+            "Pre-existing workspace row must be preserved after migrate"
+        )

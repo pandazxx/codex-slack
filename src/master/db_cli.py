@@ -15,6 +15,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).parents[2]
 
@@ -171,11 +172,65 @@ def _cmd_snapshot_and_migrate(args: argparse.Namespace) -> None:
     snapshot_and_migrate(source_url, target_url, out_dir, REPO_ROOT)
 
 
+def _stamp_prebaseline_sqlite_if_needed(url: str, cfg: Any) -> None:
+    """Apply pre-baseline fixups and stamp at the baseline revision for a SQLite DB.
+
+    No-op when the DB is not SQLite, not a file-based DB, or already has an
+    alembic_version entry (i.e. not pre-baseline).
+
+    Pre-baseline means: the 'workspaces' table is present but 'alembic_version'
+    is absent.  This is the state of SQLite installs that pre-date the Alembic
+    migration in M1.  The operator is expected to run 'scripts/db.sh migrate'
+    (with DATABASE_URL pointing at the SQLite file) to bring the source up to
+    the current schema before exporting.
+    """
+    if not url or not url.startswith("sqlite"):
+        return
+
+    from sqlalchemy.engine import make_url as _sa_make_url
+    db_str = str(_sa_make_url(url).database or "")
+    if not db_str or db_str == ":memory:":
+        return
+
+    from sqlalchemy import inspect as sa_inspect
+    from alembic.runtime.migration import MigrationContext
+    from alembic import command as alembic_command
+    from src.master.db import _make_engine, _with_database_url
+    from src.master.db._prebaseline import init_db_sqlite
+
+    eng = _make_engine(url)
+    try:
+        insp = sa_inspect(eng)
+        table_names = set(insp.get_table_names())
+        has_workspaces = "workspaces" in table_names
+        has_alembic_version = "alembic_version" in table_names
+
+        if not has_workspaces or has_alembic_version:
+            return  # empty DB or already Alembic-stamped; let alembic handle it
+    finally:
+        eng.dispose()
+
+    print(
+        "db_cli: pre-baseline SQLite detected — applying pre-baseline fixups "
+        "and stamping at baseline revision 000000000001"
+    )
+    init_db_sqlite(db_str)
+    _with_database_url(url, lambda: alembic_command.stamp(cfg, "000000000001"))
+    print("db_cli: pre-baseline stamp complete; running alembic upgrade head for any newer migrations")
+
+
 def _cmd_migrate() -> None:
     from alembic.config import Config
     from alembic import command as alembic_command
 
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
+
+    # Handle pre-baseline SQLite before alembic upgrade runs.  If DATABASE_URL
+    # points at a SQLite file that pre-dates Alembic, stamp it at the baseline
+    # first so that 'alembic upgrade head' can then walk forward from there.
+    url = os.environ.get("DATABASE_URL", "").strip()
+    _stamp_prebaseline_sqlite_if_needed(url, cfg)
+
     print("db_cli: running alembic upgrade head")
     alembic_command.upgrade(cfg, "head")
     print("db_cli: migrations complete")
