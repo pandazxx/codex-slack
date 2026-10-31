@@ -2,7 +2,55 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-10-04 -->
+<!-- last updated: 2026-10-31 -->
+
+---
+
+## 2026-10-31 — SQLite permissive GROUP BY hides Postgres failures; swallowed exceptions and hard-coded SQLite paths in tests compound the blind spot
+
+*Summary:* After migrating staging to Postgres, two SQL queries that worked fine on SQLite failed silently or visibly on Postgres. The "Recent Topics" sidebar was empty because `GET /api/topics/recent` returned 500. Stale-stream cleanup (`_close_stale_streams`) was permanently dead but logged no visible error because its exception handler swallowed the failure. Neither bug surfaced in CI because the tests for these paths either did not exist or were wired to hard-coded SQLite files, so the Postgres CI leg never exercised the broken queries.
+
+**Bug 1 — `list_recent_topics` GROUP BY (`src/master/topics.py`).** The query selected `w.name AS workspace_name` from a joined `workspaces` table while grouping only by `t.id`. SQLite accepts bare non-aggregated columns in a GROUP BY query; Postgres raises `column "w.name" must appear in the GROUP BY clause or be used in an aggregate function`. No test existed for `GET /api/topics/recent`, so the Postgres CI leg never caught it.
+
+*Root cause:* SQLite extends its GROUP BY permissiveness to all selected columns, not just those functionally dependent on the grouped key. Postgres enforces the SQL standard: only columns that are functionally dependent on the grouped key (via a primary-key relationship within the same table) may appear bare; columns from joined tables always require explicit inclusion in GROUP BY.
+
+*Fix applied:* Extended `GROUP BY t.id` to `GROUP BY t.id, t.workspace_id, t.subject, t.created_at, w.name`. All five columns are constant per grouped `t.id` row so the semantics are identical on both databases.
+
+**Bug 2 — `_close_stale_streams` GROUP BY (`src/master/main.py`).** The query grouped by `c.message_id` while selecting `c.topic_id` and `c.agent_name`. Because `message_id` is not the primary key of `chunks`, Postgres raised the same error class. The outer `except Exception: LOGGER.exception("master.stale_stream_query_failed"); return` block swallowed the error, so stale streams were never closed but no alarm fired. The existing tests for this function all passed a hard-coded SQLite file path directly to `_close_stale_streams`, bypassing `DATABASE_URL` entirely; the Postgres CI leg ran them on SQLite.
+
+*Root cause:* Same SQLite permissive GROUP BY. Additionally, `message_id` is not the primary key of `chunks`, so Postgres cannot infer functional dependency even within the same table.
+
+*Fix applied:* Extended `GROUP BY c.message_id` to `GROUP BY c.message_id, c.topic_id, c.agent_name`.
+
+**Coverage hole.** The `stale_db` fixture in `tests/master/test_main.py` creates a fresh SQLite DB at `tmp_path / "stale_test.db"` and calls `init_db(path)`, then passes that path directly to the function under test via `_close_stale_streams(stale_db, settings)`. Because `get_connection(explicit_sqlite_path)` resolves the path to a SQLite URL regardless of `DATABASE_URL`, all stale-stream tests ran on SQLite even on the Postgres CI leg. The new regression test `test_stale_stream_query_succeeds_on_configured_backend` uses `app.state.db_path` (set by the lifespan from `DATABASE_URL`) so it exercises the real configured backend.
+
+*Tests with hard-coded SQLite paths identified:* `tests/master/test_main.py` (the entire `stale_db` fixture group — 10 tests, acceptable because they test business logic that is dialect-independent once the GROUP BY is fixed); `tests/test_master_chunks.py` (4 occurrences); `tests/test_master_replay.py` (5 occurrences); `tests/master/test_event_actions.py` (~40 occurrences); `tests/master/test_orchestration.py` (~10 occurrences); plus smaller counts in `test_notify.py`, `test_mqtt_client.py`, `test_topic_export.py`, and the `tests/master/db/` suite. Most of these tests exercise business logic, not raw SQL, and their helper functions use `sqlite3.connect` only for seeding/reading — the application code paths they call go through `get_connection` and therefore exercise whatever `DATABASE_URL` resolves to.
+
+**Timestamp format.** No format mismatch found. All `created_at` columns in `topics` and `messages` are `sa.Text()` and are always written as `%Y-%m-%dT%H:%M:%SZ` by every code path in `_now()`. The `COALESCE(MAX(m.created_at), t.created_at)` in `list_recent_topics` mixes two TEXT columns in the same ISO 8601 / `Z`-suffix format, so lexicographic `ORDER BY` is correct. `chunks.created_at` is `sa.Float()` (Unix epoch); the comparison in `_close_stale_streams` is numeric, not textual — no issue.
+
+**Runbook fix.** `docs/guides/runbooks/master-agent.md` had two errors in the SQLite inspection snippet: the path `/data/master/master_data.db` is wrong (the `master_data` volume mounts to `/data` in the inspection container, so the file is at `/data/master_data.db`), and `python:3.11-slim` has no `sqlite3` CLI. Fixed to use `python -c "import sqlite3; ..."` with the correct path and the `mode=ro` URI flag.
+
+*Prevention:* (1) Every API endpoint must have at least one test that executes against the configured backend — use `TestClient(app)` with `_set_test_database_url` in effect, not a fixture that creates its own SQLite file. (2) Any fixture that seeds test data must use `get_connection(db_path)` (or the app's state), not `sqlite3.connect`, so it runs on the same backend as the code under test. (3) When a function wraps a DB query in a broad `except Exception: logger.exception(...)`, the exception label must appear in at least one test's `caplog` assertion so that a silent failure cannot slip through a CI run. (4) When adding a SQL query with `GROUP BY`, always check whether every selected non-aggregate column is either the grouped key, functionally dependent on it within the same table, or explicitly included in the `GROUP BY` list — SQLite's permissive mode will not catch violations.
+
+---
+
+## 2026-10-29 — SQLite URL to missing file silently creates empty DB; Compose project name controls which volume gets mounted
+
+*Summary:* Two distinct but related hazards surfaced during code review of the snapshot/migrate tooling (PR #272, issue #268 M1).
+
+**Hazard 1 — pysqlite silently creates an empty database.** Passing a `sqlite+pysqlite:///file:...` URL to SQLAlchemy when the file does not exist causes pysqlite to create a new zero-byte database at that path rather than raising an error. The snapshot exporter would open the (now newly created) empty DB, find no rows in any table (since all are skipped with "warning: table not found"), write a valid-looking manifest with zero row counts, and report `Provider migration complete.` — silently losing all data.
+
+*Root cause:* SQLite's default open mode is read-write-create. Without an explicit `mode=ro` URI flag or a pre-existence check, any access to a non-existent path creates a new file.
+
+*Fix applied:* `export_snapshot` now extracts the filesystem path from any `sqlite+pysqlite://` URL via `sqlalchemy.engine.make_url`, checks `Path.exists()` before opening, and exits non-zero with a clear message when the file is absent. SQLite sources are opened via a read-only URI (`mode=ro&uri=true`) so the engine can never write to the source under any code path. Missing tables also cause an immediate error instead of a warn-and-skip.
+
+**Hazard 2 — Docker Compose project name controls which named volume is mounted.** `docker compose run` creates a one-off container from the service definition, inheriting all declared volumes. The `master_data` volume is mounted at `/opt/codex-slack/data/master` inside the container, so `master_data.db` is accessible there without an extra `-v` flag — but only when the command uses `-p <project>` matching the running stack. Without the correct project name, Compose silently mounts a new empty volume instead of the live data volume, and the migration tool would see a missing or empty SQLite file.
+
+*Root cause:* Docker Compose generates volume names as `<project>_<volume-name>`. If the project name differs between the running stack and the one-off `run` command, a different (possibly brand-new) volume is used.
+
+*Fix applied:* The runbook now documents the `-p <project>` flag on every `docker compose` command, explains how to find the project name (`docker compose ls`, `docker volume ls | grep master_data`), and adds a pre-flight `ls` step to confirm the SQLite file is visible inside the container before starting the migration.
+
+*Prevention:* (1) Always open SQLite sources with the URI `mode=ro` flag in any tool that must never modify the source. (2) In runbooks that use `docker compose run` against a named volume, always specify `-p <project>` and include a pre-flight step that verifies the expected files are visible inside the container before running the actual operation.
 
 ---
 
@@ -65,6 +113,36 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 *Fix applied:* Added an `ARG CODEX_CLI_CACHE_BUST=0` immediately before the install `RUN` in both Dockerfiles, referenced inside the `RUN` so changing it invalidates the cache from that instruction onward (prior layers, e.g. apt installs, stay cached). `build-push.yml` passes `CODEX_CLI_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}` as a build-arg for both the `master` and `agent-minimal` jobs, guaranteeing a fresh value — and therefore a fresh `npm install -g` — on every CI run. Also added `npm list -g --depth=0` after the install so the resolved CLI versions are visible in build logs for future debugging.
 
 *Prevention:* Any `RUN` step whose job is "always fetch the latest X" (not pinned to a version) is incompatible with `cache-from: type=gha` unless it has an explicit cache-busting input. When adding GHA layer caching to a Dockerfile, audit for `RUN` steps that intentionally float (no version pin, no lockfile) and give each one a cache-bust ARG wired to a per-run-unique value in the workflow.
+
+---
+
+## 2026-10-25 — Postgres rejects Python int (0/1) for BOOLEAN columns; `_fix_insert_bool_literals` and bool coercion are the remedies
+
+*Summary:* After the M1 database provider switch, INSERT statements that bound Python integer `0` or `1` to BOOLEAN columns (e.g. `messages.silent`, `staffs.is_default`, `event_actions.enabled`) silently failed on Postgres with `psycopg.errors.ProgrammingError: column "silent" is of type boolean but expression is of type integer` — even though the same statements worked fine on SQLite (which stores booleans as 0/1 natively).
+
+*Root cause:* psycopg3 sends Python `int` as Postgres `int4`. Postgres has no implicit `int4 → boolean` cast. SQLite accepts 0/1 for any affinity. Two separate code paths triggered this:
+1. **Literal 0/1 in SQL text** (e.g. `INSERT INTO messages (..., silent, ...) VALUES (..., 0, ...)`): these don't go through parameter binding at all.
+2. **Integer parameters at BOOLEAN column positions** in qmark-style legacy SQL: the conversion to named params preserves the Python `int` type, which psycopg3 sends as `int4`.
+
+*Fix applied:* Two helpers in `src/master/db/__init__.py`:
+- `_fix_insert_bool_literals(sql)`: parses INSERT column lists, identifies BOOLEAN column positions from `_BOOLEAN_COLS`, and rewrites literal `0`/`1` in the VALUES clause to `false`/`true` before passing SQL to SQLAlchemy. Only called for non-SQLite dialects.
+- `_qmark_to_named(..., coerce_bool_positions=...)`: during qmark→named conversion, casts `int` values at BOOLEAN column positions to `bool` so psycopg3 sends them as `boolean` not `int4`.
+
+The `_BOOLEAN_COLS` dict enumerates every BOOLEAN column per table; it must be kept in sync when new BOOLEAN columns are added.
+
+*Prevention:* When adding a BOOLEAN column to any table, also add it to `_BOOLEAN_COLS` in `db/__init__.py` and `BOOLEAN_COLUMNS` in `db/snapshot.py`. Write a test that inserts `False`/`True` via the shim and reads the row back on Postgres — SQLite will not catch this class of bug.
+
+---
+
+## 2026-10-25 — `DATABASE_URL` is intentionally empty in docker-compose.postgres.yml; the safety net depends on it
+
+*Summary:* During review of the Postgres compose overlay, it was tempting to default `DATABASE_URL` to the bundled Postgres URL inside the compose file itself (e.g. `DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://master:${POSTGRES_PASSWORD}@postgres:5432/master}`). Doing so would break the SQLite-upgrade safety net in `sqlite_safety_check()`.
+
+*Root cause:* `sqlite_safety_check()` checks `os.getenv("DATABASE_URL", "").strip()`. If the compose file injects a non-empty `DATABASE_URL`, the check sees it as "operator has expressed intent" and skips the safety check — meaning an operator who upgrades from SQLite to v5.0 without reading the release notes could silently start against an empty Postgres and lose their SQLite data from view (it's still on disk, but master doesn't see it). The design explicitly requires the compose file to pass `DATABASE_URL: ${DATABASE_URL:-}` (empty fallback) so master is responsible for building the bundled URL and also for running the safety check when the variable is not set.
+
+*Fix applied:* `docker-compose.postgres.yml` uses `DATABASE_URL: ${DATABASE_URL:-}`. Master builds the bundled URL from `POSTGRES_PASSWORD` in `resolve_db_url()` when `DATABASE_URL` is unset. The comment in the compose file explains this explicitly.
+
+*Prevention:* Never default `DATABASE_URL` to a Postgres URL in compose. The safety net, the URL-building logic, and the test fixture behavior all depend on "unset DATABASE_URL means Postgres default, but only after the safety check". Any attempt to "help" by filling in the URL in compose defeats the check.
 
 ---
 
@@ -569,3 +647,104 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* Added `sqlite_autoincrement=True` as a table-level kwarg to `op.create_table("chunks", ...)` in `alembic/versions/000000000001_baseline.py`. With this flag, SQLite emits `INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT`; PostgreSQL emits `SERIAL`; MySQL emits `AUTO_INCREMENT` — all correct for those dialects. Only `chunks` uses `AUTOINCREMENT` in the legacy DDL (confirmed via grep on `_prebaseline.py`); no other tables required changes.
 
 *Prevention:* (1) To emit SQLite `AUTOINCREMENT` via Alembic, always set `sqlite_autoincrement=True` on `op.create_table`, not just `autoincrement=True` on the Column. (2) Never trust `inspect().get_columns()[n]["autoincrement"]` on SQLite — the flag is always `False` regardless of DDL; use `sqlite_master` DDL text instead. (3) Expression-based and partial indexes are also skipped by SQLAlchemy reflection with a `SAWarning`; parity tests for those must also query `sqlite_master` directly, comparing normalised DDL strings rather than inspect() results.
+
+---
+
+## 2026-10-25 — M1 chunk B: engine() resolution order and test isolation
+
+**Summary:** Changing `engine()` to prefer DATABASE_URL over explicit `db_path_or_url` arguments breaks tests that create per-test SQLite DBs by passing explicit paths to `get_connection()`.
+
+**Root cause:** M0 engine() precedence was: DATABASE_URL > explicit arg. In M1, setting a session DATABASE_URL in conftest.py caused all `get_connection(explicit_path)` calls to connect to the session DB instead of the test-specific DB, breaking test isolation.
+
+**Fix applied:** Flipped engine() resolution order so explicit `db_path_or_url` wins over DATABASE_URL. Integration tests that set MASTER_DATA_DIR and pass a plain path continue to use that path. Production code in main.py stores the resolved URL (not a plain path) in `app.state.db_path`, so production is unaffected.
+
+`main.py` was updated to compute the DB URL as `DATABASE_URL or sqlite+pysqlite:///MASTER_DATA_DIR/master_data.db` directly rather than calling `resolve_db_url()`, preserving backward compatibility for tests that only set MASTER_DATA_DIR without DATABASE_URL.
+
+**Prevention:** When switching a default DB URL, audit all call sites that pass explicit db_path arguments to engine()/get_connection(). Explicit paths and session-level env overrides should not silently conflict.
+
+---
+
+## 2026-10-25 — M1 chunk B: _dbapi_graveyard pattern is wrong
+
+**Summary:** Keeping closed DBAPI connection objects alive in a module-level deque to prevent CPython from reusing their memory address is production-unsafe and incorrect. The graveyard was added to make a test pass rather than fixing the test itself.
+
+**Root cause:** Test `test_concurrent_threads_get_distinct_dbapi_connections` used `id()` on DBAPI objects AFTER closing the connections, making the comparison meaningless (CPython may reuse the freed memory). Rather than fixing the test, the original implementation added a graveyard to keep closed objects alive.
+
+**Fix applied:** Removed `_dbapi_graveyard` from production code. Fixed the test by (1) adding a second barrier so both threads hold their connections open simultaneously while recording object references, and (2) comparing object identity (`is not`) rather than `id()` which is only meaningful when both objects are alive.
+
+**Prevention:** Never add production-code workarounds for test inadequacies. Fixing the test's comparison strategy is the correct approach.
+
+---
+
+## 2026-10-25 — M1 infra: Postgres overlay, Compose profiles and shared .env
+
+**Summary:** Design section 9's overlay sketch would have broken managed-DB mode and silently disarmed the SQLite-upgrade safety net; several other traps surfaced while wiring dev, deploy and CI.
+
+**Root cause / findings:**
+- Compose interpolates every service, including those in inactive profiles, so `POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?...}` on the `postgres` service fails `config` even when `COMPOSE_PROFILES` is unset. Verified with Compose v5.6.
+- Setting `DATABASE_URL` to the bundled URL in the overlay makes it an explicit choice, so master's legacy-SQLite check (design section 11) would never fire. The overlay passes `DATABASE_URL` through verbatim and lets master build the default URL from `POSTGRES_PASSWORD`.
+- `tests/conftest.py` checks `"DATABASE_URL" in os.environ`. A passthrough like `DATABASE_URL: ${DATABASE_URL:-}` makes the key exist (empty) in the container and disables the `TEST_DATABASE_URL` and per-test SQLite fallbacks. The passthrough therefore lives in the postgres overlay (not the base), and CI passes `DATABASE_URL` explicitly when that overlay is layered.
+- There is one repo-root `.env` (ADR-0016), not `.env.staging`. Dev recipes read the same file, so a staging `DATABASE_URL` or `POSTGRES_PASSWORD` would leak into branch stacks. Dev recipes now export their own values (an exported empty value beats the `.env` file that Compose also reads).
+- After migrating SQLite to Postgres the old `master_data.db` stays in the volume, so `DATABASE_URL` must be set explicitly or master refuses to start. `snapshot-and-migrate` also needs the legacy SQLite brought to the current schema first (booting the new image once on SQLite does this).
+- The cross-dialect db tests DROP tables on `TEST_POSTGRES_URL`, so CI points it at a second database (`master_xdialect`), not the one used by `TEST_DATABASE_URL`.
+
+**Fix applied:** `.sre/db-env.sh`, `docker-compose.postgres.yml`, `.sre/test-db.sh`, justfile and CI changes (see commits referencing #268); staging cut-over written into `.sre/operations/deploy.md`.
+
+**Prevention:** Validate overlays with `docker compose config` under every profile combination (the `Compose config` CI job does). Never default `DATABASE_URL` in compose. Do not add env passthroughs to the base file without checking `tests/conftest.py` presence semantics.
+
+
+## 2026-10-25 — CI test image missing Alembic files after M1 startup switch
+
+- **Summary:** After M1 made `startup_db()` run Alembic at app startup, every CI leg (sqlite/postgres/mysql) failed with `alembic.util.exc.CommandError: No 'script_location' key found in configuration` (~290 errors).
+- **Root cause:** CI builds its image from `Dockerfile.test`, a separate file from `Dockerfile`. Chunk A added `COPY alembic/ alembic.ini scripts/` only to `Dockerfile` (prod stage). M0 passed CI because its startup did not load Alembic. Local venv runs could not catch it because the repo root always has the files.
+- **Fix:** Copy `alembic`, `alembic.ini`, `scripts` in `Dockerfile.test`. Added `tests/test_image_contract.py::test_image_ships_alembic_and_db_tooling`, which runs inside the image and fails if they are missing.
+- **Prevention:** When adding a runtime file the app loads from disk, update *both* `Dockerfile` and `Dockerfile.test`, and add a contract test that runs in the image.
+
+## 2026-10-25 — Alembic `fileConfig` silenced app loggers (caplog tests failed)
+
+- **Summary:** After startup began running Alembic, caplog-based tests in `test_notify`, `test_notes`, `test_event_actions` and `test_master_chunks` saw no log records when they ran after any `TestClient(app)` test.
+- **Root cause:** `alembic/env.py` called `logging.config.fileConfig(alembic.ini)`, whose default `disable_existing_loggers=True` disables every logger not named in `alembic.ini` for the rest of the process. That affects production logging too, not just tests.
+- **Fix:** `fileConfig(..., disable_existing_loggers=False)` in `alembic/env.py`.
+- **Prevention:** Never call `fileConfig` without `disable_existing_loggers=False` in code that runs inside the app process.
+
+---
+
+## 2026-10-25 — Unclosed SQLAlchemy connections on Postgres cause indefinite CI hang
+
+**Summary:** CI postgres leg hung for 1h47m (job 40179109315). The last test to log was `test_sqlite_to_postgres_row_counts_match`. Every subsequent test that called `snapshot import --yes` waited indefinitely for ACCESS EXCLUSIVE on tables that were already locked.
+
+**Root cause:** `engine.connect().execute(...)` called in a loop without a context manager. Each iteration opens a DBAPI connection and immediately abandons it — the connection stays in "idle in transaction" state (SQLAlchemy 2 auto-begins). `engine.dispose()` in the `finally` block does not close already-checked-out connections; it only invalidates the pool for future checkouts. The abandoned connections held ACCESS SHARE locks. The next test ran `snapshot import --yes` in a subprocess, which tried to DELETE from those tables and waited forever for ACCESS EXCLUSIVE.
+
+**Fix applied:**
+- `tests/master/db/test_m1_snapshot.py`: changed `engine.connect().execute(...)` inside the loop to a single `with engine.connect() as conn:` wrapping the entire loop — one connection, all SELECTs inside it, closed deterministically on exit.
+- `src/master/db/snapshot.py`: added `_acquire_truncate_locks()` which sets `SET LOCAL lock_timeout` (Postgres) or `SET SESSION innodb_lock_wait_timeout` (MySQL), then pre-locks all application tables before the DELETE phase. On `LockNotAvailable`/`OperationalError`, prints "target database is in use (lock timeout after …) — stop master before importing; see docs/guides/runbooks/migrate-sqlite-to-postgres.md" and exits non-zero.
+- `.sre/test-db.sh`: added `PGOPTIONS=-c lock_timeout=60s` to the postgres RUN_ENV so every libpq/psycopg connection in CI has a 60 s lock ceiling — a background safety net.
+- `.github/workflows/ci.yml`: added `timeout-minutes: 25` to the `test` and `test-mysql` jobs so a future hang kills the job rather than burning the 6-hour runner limit.
+
+**Prevention:** Always use `with engine.connect() as conn:` (or `engine.begin()`). Never call `engine.connect()` without a context manager or explicit `.close()`. `engine.dispose()` is not a substitute — it does not close checked-out connections. Test code that runs destructive operations (TRUNCATE, DROP, bulk DELETE) in a subprocess must ensure the in-process connections from the previous step are closed before the subprocess is launched.
+
+---
+
+## 2026-10-25 — M1 code review: `_fix_insert_bool_literals` shim removed as unreachable dead code
+
+**Summary:** Code review of PR #272 (M1, #268) found that `_fix_insert_bool_literals`, `_extract_insert_bool_positions`, and the bool-coercion branch inside `_qmark_to_named` in `src/master/db/__init__.py` were unreachable in production: every INSERT and UPDATE touching boolean columns (`messages.silent`, `staffs.is_default`, `event_actions.enabled/structured_output/silent`) already uses `text()` with named `:param` bindings and explicit Python `bool()` values. The old-style qmark path that called the shim was never exercised. The shim also had a latent bug: multi-row VALUES clauses would fail to rewrite correctly.
+
+**Root cause:** The shim was introduced in commit `4679a32` to handle boolean coercion on Postgres for call sites that had not yet been converted to `text()`. By the time that commit landed, all boolean-column call sites had already been converted. The shim therefore never ran.
+
+**Fix applied:** Deleted `_BOOLEAN_COLS`, `_fix_insert_bool_literals`, `_extract_insert_bool_positions`, and the `coerce_bool_positions` parameter from `_qmark_to_named`. Simplified `_ConnectionShim.execute`'s old-style path accordingly. Added a static analysis guard test (`test_no_bare_bool_literals_in_boolean_columns`) that scans `src/` for INSERT/UPDATE string literals assigning bare `0` or `1` to known boolean columns, so the class of bug cannot reappear silently.
+
+**Prevention:** When adding a compatibility shim, add a test that verifies the shim is actually exercised. When all call sites for a feature are converted, delete the shim immediately rather than leaving it in place. Static analysis guards (AST or regex scans) in the test suite are more reliable than manual code review for catching literal-value mistakes in SQL strings.
+
+**Correction (same day):** The review finding was only partially correct.  `_fix_insert_bool_literals` IS reached by test-fixture code that uses old-style embedded-literal SQL (`VALUES (... 0 ...)`) without bound params.  Postgres Leg CI immediately failed with `DatatypeMismatch: column "silent" is of type boolean but expression is of type integer`.  `_BOOLEAN_COLS` and `_fix_insert_bool_literals` were restored for the old-style (no-params) code path in `_ConnectionShim.execute`.  Only the truly unreachable parts were removed: `_extract_insert_bool_positions` (qmark+bool-column path, never used in production) and the `coerce_bool_positions` branch inside `_qmark_to_named`.  The `test_no_bare_bool_literals_in_boolean_columns` guard allowlists `tests/` so test fixtures are not flagged.  The lessons: run the Postgres leg locally (or watch CI before pushing) when deleting anything that touches the type-coercion path; grep production code is not sufficient.
+
+---
+
+## 2026-10-25 — Runtime boolean SQL rewriter removed; bound bools enforced by guard test
+
+**Summary:** `_fix_insert_bool_literals` and `_BOOLEAN_COLS` were deleted from `src/master/db/__init__.py`. All test fixtures that embedded literal `0`/`1` for boolean columns (`enabled`, `structured_output`, `is_default`, `silent`) were converted to `?` placeholders with Python `True`/`False` bound values. The guard test `test_no_bare_bool_literals_in_boolean_columns` was extended to scan both `src/` and `tests/` with no allowlist for test fixtures, and now also checks INSERT VALUES positional slots in addition to UPDATE SET and WHERE comparisons.
+
+**Root cause:** The rewriter contained a confirmed bug: only the first row of a multi-row `VALUES (row1), (row2)` clause was rewritten. It was kept in production code solely to support test fixtures that embedded bare integer literals — an inversion of the correct dependency direction. Production code should not carry a correctness shim for test code.
+
+**Fix applied:** Converted all 12 test-fixture INSERT sites across `tests/master/test_event_actions.py`, `tests/master/test_timezone_audit.py`, and `tests/master/test_db.py` to bind `True`/`False` as `?` parameters. Deleted `_BOOLEAN_COLS`, `_fix_insert_bool_literals`, and the dialect-conditional call site in `_ConnectionProxy.execute`. Updated `_find_bare_bool_literals_in_sql` in the guard test to accept a list of roots, removed `tests/` from the allowlist, and added `_check_insert_values_positions` to catch positional literal violations in INSERT VALUES clauses.
+
+**Prevention:** SQL boolean columns must always receive Python `bool` values through bound parameters — never embedded integer literals in SQL text. The guard test now enforces this across the entire codebase (src and tests) with no escape hatches except the SQLite-only migration file `_prebaseline.py`.

@@ -395,8 +395,8 @@ def test_tc07_migration_old_schema_upgraded(tmp_path):
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, created_at, updated_at)"
             " VALUES (?, 'topic_archiving', 'topic', 'some-topic-id', 'bot',"
-            "         'Archive?', NULL, NULL, 1, ?, ?)",
-            (action_id, now, now),
+            "         'Archive?', NULL, NULL, ?, ?, ?)",
+            (action_id, True, now, now),
         )
         conn.commit()
         row = conn.execute(
@@ -477,16 +477,16 @@ def test_tc07_migration_preserves_structured_output_values(tmp_path):
         " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
         "  timing, enabled, structured_output, created_at, updated_at)"
         " VALUES (?, 'topic_message_sent', 'topic', 't1', 'bot', 'p',"
-        "         'before', 1, 1, ?, ?)",
-        (keeps_struct_on, now, now),
+        "         'before', ?, ?, ?, ?)",
+        (keeps_struct_on, True, True, now, now),
     )
     conn.execute(
         "INSERT INTO event_actions"
         " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
         "  timing, enabled, structured_output, created_at, updated_at)"
         " VALUES (?, 'topic_message_sent', 'topic', 't1', 'bot', 'p',"
-        "         'before', 1, 0, ?, ?)",
-        (keeps_struct_off, now, now),
+        "         'before', ?, ?, ?, ?)",
+        (keeps_struct_off, True, False, now, now),
     )
     conn.commit()
     conn.close()

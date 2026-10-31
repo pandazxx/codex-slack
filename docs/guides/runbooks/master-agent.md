@@ -22,15 +22,17 @@ See [`docs/test-plans/v3-core-uat.md`](../../test-plans/v3-core-uat.md) for user
 ## Starting the Stack
 
 ```bash
-# Standard Docker Compose
+# Standard Docker Compose (includes bundled Postgres)
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GH_TOKEN="ghp_..."
 export MASTER_GIT_USER_NAME="Your Name"
 export MASTER_GIT_USER_EMAIL="you@example.com"
 export CONTAINER_SOCKET_PATH="/var/run/docker.sock"  # or podman socket path
+export COMPOSE_PROFILES="db-bundled"
+export POSTGRES_PASSWORD="$(openssl rand -hex 24)"  # persist this in .env
 
-docker compose up -d
-docker compose logs -f
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml logs -f
 ```
 
 For rootless Podman, add:
@@ -44,7 +46,7 @@ export DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 999)"
 
 Check that startup logs contain:
 - `master.startup mqtt=mosquitto:1883 ...`
-- `master.db_init path=...master_data.db`
+- `startup_db: database is up-to-date` (or `startup_db: empty database — upgrading to head` on first start)
 - `master.mqtt_loop_start host=mosquitto port=1883`
 - No `docker connection refused` or socket permission errors
 
@@ -126,17 +128,30 @@ print('MQTT OK')
 
 ### Database recovery
 
-The SQLite database is in the `master_data` Docker volume. To inspect:
+The default database is Postgres (since v5.0), stored in the `postgres_data` volume. To inspect:
+
 ```bash
+# Postgres (default)
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  exec postgres psql -U master -d master -c '\dt'
+
+# SQLite (if opted in via DATABASE_URL)
+# The master_data volume is mounted at /data; master_data.db sits at the root.
 docker run --rm \
   -v codex-slack_master_data:/data:ro \
-  -it python:3.11-slim \
-  sqlite3 /data/master/master_data.db ".tables"
+  python:3.11-slim \
+  python -c "import sqlite3; print(sqlite3.connect('file:/data/master_data.db?mode=ro', uri=True).execute(\"select name from sqlite_master where type='table'\").fetchall())"
+```
+
+If master exits at startup with `ERROR: DB schema is behind code`, run:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  exec master bash scripts/db.sh migrate
 ```
 
 ## Operational Notes
 
-- Data source of truth: `master_data.db` in the `master_data` Docker volume.
+- Data source of truth: Postgres `postgres_data` volume (or `master_data.db` for SQLite opt-in installs). See [`docs/manuals/ops-manual.md`](../../manuals/ops-manual.md) § Database for backup procedures.
 - Removing a workspace volume `codex-claude-{workspace_id}` deletes Claude session history; do this only after archiving the workspace.
 - MQTT broker runs on the `internal` Docker network; it is not exposed on the host.
 - The WebSocket endpoint is `/ws/{topic_id}` (no `/api/` prefix).

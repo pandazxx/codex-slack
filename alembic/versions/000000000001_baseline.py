@@ -74,7 +74,7 @@ def upgrade() -> None:
             nullable=False,
             server_default="topic",
         ),
-        sa.Column("is_default", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("is_default", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("extra_flags", sa.Text()),
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.Text(), nullable=False),
@@ -161,7 +161,7 @@ def upgrade() -> None:
         sa.Column("usage_json", sa.Text()),
         sa.Column("attachments_json", sa.Text()),
         sa.Column("event_action_id", sa.Text()),
-        sa.Column("silent", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("silent", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("interrupt_reason", sa.Text()),
         sa.Column("sender_kind", sa.Text()),
@@ -212,8 +212,11 @@ def upgrade() -> None:
         sa.Column("seq", sa.Integer(), nullable=False),
         sa.Column("event", sa.Text(), nullable=False),
         sa.Column("agent_name", sa.Text()),
-        sa.Column("created_at", sa.Float(), nullable=False,
-                  server_default=sa.text("(unixepoch('now','subsec'))")),
+        # created_at is a Unix timestamp (float).  The server_default was
+        # previously unixepoch('now','subsec') which is SQLite-only.  The
+        # design (§6) moves this default into Python: every INSERT site
+        # now provides the value explicitly via time.time().
+        sa.Column("created_at", sa.Float(), nullable=False),
         sqlite_autoincrement=True,
     )
     op.create_index("idx_chunks_message", "chunks", ["message_id", "seq"])
@@ -258,25 +261,9 @@ def upgrade() -> None:
             ),
         ),
         sa.Column("last_run_output", sa.Text()),
-        sa.Column(
-            "enabled", sa.Integer(),
-            sa.CheckConstraint("enabled IN (0, 1)", name="ck_event_actions_enabled"),
-            nullable=False,
-            server_default="1",
-        ),
-        sa.Column(
-            "structured_output", sa.Integer(),
-            sa.CheckConstraint("structured_output IN (0, 1)",
-                               name="ck_event_actions_structured_output"),
-            nullable=False,
-            server_default="0",
-        ),
-        sa.Column(
-            "silent", sa.Integer(),
-            sa.CheckConstraint("silent IN (0, 1)", name="ck_event_actions_silent"),
-            nullable=False,
-            server_default="1",
-        ),
+        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("structured_output", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("silent", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.Text(), nullable=False),
         sa.CheckConstraint(

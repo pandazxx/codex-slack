@@ -92,10 +92,14 @@ def export_topic(
         if topic_row is None:
             raise HTTPException(status_code=404, detail="topic not found")
 
+        # rowid is SQLite's implicit sequential row counter and gives a stable
+        # insertion-order tiebreaker when two messages share the same created_at
+        # second.  Postgres does not expose rowid, so fall back to id (UUID).
+        tiebreaker = "rowid" if conn.dialect_name == "sqlite" else "id"
         msg_rows = conn.execute(
             text(
                 "SELECT id, sender, agent_name, text, transcript, created_at FROM messages"
-                " WHERE topic_id = :topic_id ORDER BY created_at, rowid"
+                f" WHERE topic_id = :topic_id ORDER BY created_at, {tiebreaker}"
             ),
             {"topic_id": topic_id},
         ).fetchall()

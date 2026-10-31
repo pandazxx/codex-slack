@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -13,6 +14,7 @@ from sqlalchemy import text as sa_text
 from . import notify
 from .config import MasterSettings
 from .db import get_connection
+from .db._dialect import upsert as _upsert
 
 LOGGER = logging.getLogger(__name__)
 
@@ -96,12 +98,13 @@ def _save_chunk(db_path: str, topic_id: str, payload: dict) -> None:  # type: ig
                 )
             conn.execute(
                 sa_text(
-                    "INSERT INTO chunks (message_id, topic_id, seq, event, agent_name)"
-                    " VALUES (:message_id, :topic_id, :seq, :event, :agent_name)"
+                    "INSERT INTO chunks (message_id, topic_id, seq, event, agent_name, created_at)"
+                    " VALUES (:message_id, :topic_id, :seq, :event, :agent_name, :created_at)"
                 ),
                 {
                     "message_id": message_id, "topic_id": topic_id,
                     "seq": seq, "event": json.dumps(event), "agent_name": agent_name,
+                    "created_at": time.time(),
                 },
             )
             conn.commit()
@@ -203,28 +206,20 @@ def _save_agent_response(db_path: str, topic_id: str, payload: dict) -> bool:  #
                     "sentinel": "(message interrupted)",
                 },
             )
-            conn.execute(
-                sa_text(
-                    "INSERT OR IGNORE INTO messages"
-                    " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json,"
-                    "  interrupt_reason, silent, created_at,"
-                    "  sender_kind, sender_name, receiver_kind, receiver_name,"
-                    "  task_id, reply_to_message_id)"
-                    " VALUES (:id, :topic_id, 'agent', :agent_name, :text, :transcript, :usage_json, NULL,"
-                    "         :interrupt_reason, :silent, :created_at,"
-                    "         :sender_kind, :sender_name, :receiver_kind, :receiver_name,"
-                    "         :task_id, :reply_to)"
-                ),
+            _upsert(
+                conn, "messages",
                 {
-                    "id": message_id, "topic_id": topic_id, "agent_name": agent_name,
-                    "text": text, "transcript": transcript, "usage_json": usage_json,
+                    "id": message_id, "topic_id": topic_id, "sender": "agent",
+                    "agent_name": agent_name, "text": text, "transcript": transcript,
+                    "usage_json": usage_json, "attachments_json": None,
                     "interrupt_reason": interrupt_reason,
-                    "silent": 1 if silent else 0, "created_at": _now(),
+                    "silent": bool(silent), "created_at": _now(),
                     "sender_kind": reply_sender_kind, "sender_name": reply_sender_name,
                     "receiver_kind": reply_receiver_kind, "receiver_name": reply_receiver_name,
                     "task_id": inherited_task_id,
-                    "reply_to": reply_to if reply_to else None,
+                    "reply_to_message_id": reply_to if reply_to else None,
                 },
+                conflict_cols=["id"],
             )
             conn.execute(
                 sa_text("DELETE FROM chunks WHERE message_id = :message_id"),
@@ -293,7 +288,7 @@ def _get_structured_output_action(db_path: str, message_id: str) -> Any | None:
                 return None
             action_row = conn.execute(
                 sa_text(
-                    "SELECT * FROM event_actions WHERE id = :action_id AND structured_output = 1"
+                    "SELECT * FROM event_actions WHERE id = :action_id AND structured_output = TRUE"
                 ),
                 {"action_id": msg_row["event_action_id"]},
             ).fetchone()

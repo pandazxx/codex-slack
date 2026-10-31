@@ -77,6 +77,45 @@ SKIP_NO_DB_SH = pytest.mark.skipif(
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _xdialect_fresh_db():
+    """Drop every table (including alembic_version) in the cross-dialect DB before each test.
+
+    Tests in this package call startup_db() against TEST_POSTGRES_URL / TEST_MYSQL_URL.
+    startup_db() writes alembic_version and creates application tables.  A test that
+    inserts a corrupt revision (e.g. test_behind_postgres_refuses) leaves behind a
+    broken state that prevents every subsequent test from running upgrade.  This
+    fixture guarantees a truly empty DB before each test, regardless of what the
+    previous test did.
+    """
+    xurl = (
+        os.environ.get("TEST_POSTGRES_URL", "").strip()
+        or os.environ.get("TEST_MYSQL_URL", "").strip()
+    )
+    if not xurl:
+        yield
+        return
+    from sqlalchemy import create_engine, text as sa_text, inspect as sa_inspect
+    eng = create_engine(xurl)
+    try:
+        with eng.connect() as conn:
+            insp = sa_inspect(conn)
+            tables = insp.get_table_names()
+            if tables:
+                if eng.dialect.name == "postgresql":
+                    quoted = ", ".join(f'"{t}"' for t in tables)
+                    conn.execute(sa_text(f"DROP TABLE IF EXISTS {quoted} CASCADE"))
+                else:
+                    conn.execute(sa_text("SET FOREIGN_KEY_CHECKS = 0"))
+                    for t in tables:
+                        conn.execute(sa_text(f"DROP TABLE IF EXISTS `{t}`"))
+                    conn.execute(sa_text("SET FOREIGN_KEY_CHECKS = 1"))
+            conn.commit()
+    finally:
+        eng.dispose()
+    yield
+
+
 @pytest.fixture()
 def legacy_sqlite_db(tmp_path):
     """A fresh SQLite DB initialised via the legacy init_db() path."""

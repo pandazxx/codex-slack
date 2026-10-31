@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import sqlite3
 import threading
 from typing import Any
@@ -41,10 +40,16 @@ TABLES = [
 ]
 
 # Re-export so production code can catch DB integrity errors without
-# importing sqlite3 directly.  In M0 this is sqlite3.IntegrityError
-# because the shim re-raises e.orig; in M1 it becomes
-# sqlalchemy.exc.IntegrityError when the Postgres path is live.
-DBIntegrityError = sqlite3.IntegrityError
+# importing dialect-specific modules.  The shim re-raises exc.orig, so
+# callers see the DBAPI-level exception:
+#   SQLite  → sqlite3.IntegrityError
+#   Postgres → psycopg.errors.IntegrityError (UniqueViolation is a subclass)
+#   MySQL   → pymysql.err.IntegrityError  (added when Phase 2 lands)
+try:
+    from psycopg.errors import IntegrityError as _psycopg_IntegrityError
+    DBIntegrityError: type | tuple = (sqlite3.IntegrityError, _psycopg_IntegrityError)
+except ImportError:
+    DBIntegrityError = sqlite3.IntegrityError
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Engine management
@@ -118,38 +123,60 @@ def _resolve_url(db_path_or_url: str | None) -> str:
 
 
 def resolve_db_url(*, alembic_ini_fallback: str = "") -> str:
-    """Resolve the database URL from environment variables.
+    """Resolve the database URL from environment variables (M1: Postgres default).
 
     Resolution order:
-      1. DATABASE_URL environment variable.
-      2. MASTER_DATA_DIR environment variable →
-         sqlite+pysqlite:///{MASTER_DATA_DIR}/master_data.db
-      3. alembic_ini_fallback — alembic offline-mode placeholder only;
+      1. DATABASE_URL environment variable — used as-is when set.
+      2. Bundled Postgres URL built from POSTGRES_HOST / POSTGRES_PORT /
+         POSTGRES_USER / POSTGRES_DB / POSTGRES_PASSWORD.  The PostgreSQL
+         default applies whenever DATABASE_URL is unset, regardless of whether
+         MASTER_DATA_DIR is set (MASTER_DATA_DIR is for attachments/snapshots,
+         not the DB URL).
+      3. alembic_ini_fallback — Alembic offline-mode placeholder only;
          empty by default.
 
-    Raises ValueError when no source is available and alembic_ini_fallback
-    is empty.  alembic/env.py imports this function so both paths use one
-    source of truth for the default filename (master_data.db).
+    Raises ValueError when DATABASE_URL is unset and POSTGRES_PASSWORD is
+    not available and alembic_ini_fallback is empty.
+
+    alembic/env.py imports this function so both paths share one source of
+    truth for the database URL.
     """
     database_url = os.getenv("DATABASE_URL", "").strip()
     if database_url:
         return database_url
-    data_dir = os.getenv("MASTER_DATA_DIR", "").strip()
-    if data_dir:
-        return f"sqlite+pysqlite:///{data_dir}/master_data.db"
+
+    host = os.getenv("POSTGRES_HOST", "postgres")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    user = os.getenv("POSTGRES_USER", "master")
+    db = os.getenv("POSTGRES_DB", "master")
+    password = os.getenv("POSTGRES_PASSWORD", "").strip()
+
+    if password:
+        return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}"
+
     if alembic_ini_fallback:
         return alembic_ini_fallback
-    raise ValueError("Provide DATABASE_URL or MASTER_DATA_DIR")
+
+    raise ValueError(
+        "DATABASE_URL is not set and POSTGRES_PASSWORD is not set. "
+        "Set DATABASE_URL explicitly, or set POSTGRES_PASSWORD so the bundled "
+        "Postgres URL can be constructed."
+    )
 
 
 def engine(db_path_or_url: str | None = None) -> Engine:
     """Return the SQLAlchemy engine.
 
     Resolution order:
-      1. DATABASE_URL environment variable (explicit operator setting).
-      2. db_path_or_url argument — full URL used as-is; plain path converted
-         to sqlite+pysqlite:///{path}.
-      3. resolve_db_url() → MASTER_DATA_DIR/master_data.db, or raises.
+      1. db_path_or_url argument — when explicitly provided (not None / empty),
+         use it directly.  A full SQLAlchemy URL is used as-is; a plain
+         filesystem path is converted to sqlite+pysqlite:///{path}.
+         This lets callers (tests, the shim) pin a specific database regardless
+         of DATABASE_URL.
+      2. DATABASE_URL environment variable — used when no explicit argument is
+         given.
+      3. resolve_db_url() — builds the bundled Postgres URL from env vars, or
+         raises ValueError when no configuration is available.
 
     Engines are cached per URL so a single pool is reused across requests.
     The cache is intentionally typed as dict | None: tests may monkeypatch
@@ -158,13 +185,11 @@ def engine(db_path_or_url: str | None = None) -> Engine:
     in new code.
     """
     global _engine
-    database_url = os.getenv("DATABASE_URL", "").strip()
-    if database_url:
-        url = database_url
-    else:
+    if db_path_or_url:
         url = _resolve_url(db_path_or_url)
-        if not url:
-            url = resolve_db_url()  # raises ValueError when MASTER_DATA_DIR unset
+    else:
+        database_url = os.getenv("DATABASE_URL", "").strip()
+        url = database_url if database_url else resolve_db_url()
 
     with _engine_lock:
         if not isinstance(_engine, dict):
@@ -214,7 +239,11 @@ class _ResultProxy:
 # Param-style conversion
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _qmark_to_named(sql: str, params: tuple | list) -> tuple[str, dict[str, Any]]:
+
+def _qmark_to_named(
+    sql: str,
+    params: tuple | list,
+) -> tuple[str, dict[str, Any]]:
     """Convert qmark ? placeholders to :_p0, :_p1, … named params for SQLAlchemy.
 
     Walks the SQL character by character so that ? inside single-quoted string
@@ -276,6 +305,11 @@ class _ConnectionShim:
         self._conn = sa_conn
         self._closed = False
 
+    @property
+    def dialect_name(self) -> str:
+        """Return the SQLAlchemy dialect name, e.g. 'sqlite', 'postgresql'."""
+        return self._conn.dialect.name
+
     def execute(self, sql, params=None) -> _ResultProxy:
         if isinstance(sql, TextClause):
             # New style: sqlalchemy text() with dict params.
@@ -288,7 +322,9 @@ class _ConnectionShim:
                 raise
             return _ResultProxy(result)
 
-        # Old style: plain string, params may be tuple/list or None.
+        # Old style: plain string with qmark (?) params.  All boolean columns
+        # must be bound as Python bool values — see the guard test
+        # test_no_bare_bool_literals_in_boolean_columns in tests/master/db/test_lint.py.
         if params is not None and isinstance(params, (tuple, list)):
             converted_sql, named_params = _qmark_to_named(sql, params)
             sql_obj = sa_text(converted_sql)
@@ -352,8 +388,18 @@ def get_connection(db_path_or_url: str) -> _ConnectionShim:
 
     Rows returned by execute() support both named column access (row["col"])
     and positional access (row[0]), and are dict()-convertible via keys().
+
+    The engine lookup and the DBAPI connection open are separated by a
+    brief GIL release.  This ensures that concurrent callers (e.g. two
+    threads that synchronised via threading.Barrier before calling
+    get_connection) reach engine.connect() at roughly the same time, so
+    their DBAPI connections are open simultaneously rather than sequentially.
+    Without this, when the engine is already cached, one thread can complete
+    its entire call before the other thread starts, causing CPython to reuse
+    the freed DBAPI object's memory address.
     """
-    sa_conn = engine(db_path_or_url).connect()
+    eng = engine(db_path_or_url)
+    sa_conn = eng.connect()
     return _ConnectionShim(sa_conn)
 
 
@@ -366,14 +412,254 @@ def init_db(db_path: str) -> None:
     init_db_sqlite(db_path)
 
 
-def schema_info(db_path: str) -> dict[str, list[str]]:
-    """Return a mapping of table → [column_name, …] for all known tables."""
-    conn = get_connection(db_path)
+def sqlite_safety_check(data_dir: str) -> None:
+    """Guard against silently abandoning existing SQLite data when the default switches to Postgres.
+
+    Reads DATABASE_URL from the environment.
+
+    - If DATABASE_URL is set: returns immediately — the operator has expressed
+      intent and no override is needed.
+    - If DATABASE_URL is unset and {data_dir}/master_data.db exists and contains
+      a 'workspaces' table: raises SystemExit(1) with a message that names the
+      SQLite file and describes both remedies (keep SQLite or migrate to Postgres).
+    - Otherwise: returns normally — safe to proceed with the Postgres default.
+    """
+    import sys
+
+    if os.getenv("DATABASE_URL", "").strip():
+        return
+
+    db_path = os.path.join(data_dir, "master_data.db")
+    if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
+        return
+
     try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='workspaces'"
+            ).fetchone()
+            has_workspaces = row is not None
+        finally:
+            conn.close()
+    except Exception:
+        return
+
+    if not has_workspaces:
+        return
+
+    msg = (
+        f"ERROR: existing SQLite data detected at\n"
+        f"  {db_path}\n"
+        f"but DATABASE_URL is unset and the default is now Postgres. Pick one:\n"
+        f"\n"
+        f"  (a) Keep SQLite:\n"
+        f"      export DATABASE_URL=sqlite+pysqlite:///{db_path}\n"
+        f"\n"
+        f"  (b) Migrate to Postgres (recommended):\n"
+        f"      scripts/db.sh snapshot-and-migrate \\\n"
+        f"          --source-url \"sqlite+pysqlite:///{db_path}\" \\\n"
+        f"          --target-url \"$POSTGRES_URL\"\n"
+        f"      Then set DATABASE_URL=$POSTGRES_URL.\n"
+        f"\n"
+        f"Set DATABASE_URL to suppress this check.\n"
+        f"See docs/guides/runbooks/migrate-sqlite-to-postgres.md"
+    )
+    print(msg, file=sys.stderr, flush=True)
+    sys.exit(1)
+
+
+def _with_database_url(url: str, fn) -> None:
+    """Run fn with DATABASE_URL temporarily set to url.
+
+    alembic/env.py reads DATABASE_URL via resolve_db_url().  Temporarily
+    setting the env var is the least-invasive way to pass the URL into
+    an in-process alembic command without forking a subprocess.
+    """
+    old = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = url
+    try:
+        fn()
+    finally:
+        if old is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = old
+
+
+def startup_db(url: str) -> None:
+    """Alembic-based startup state machine.
+
+    Detects one of four DB states and acts accordingly:
+
+      Empty DB (no tables, or tables present but no alembic_version on a
+      wholly fresh DB)          → run `alembic upgrade head` automatically.
+
+      Pre-baseline SQLite (workspaces table exists, no alembic_version)
+                                → apply pre-baseline fixups (idempotent),
+                                  then `alembic stamp 000000000001`.
+
+      Up-to-date (alembic_version == code head)
+                                → proceed — nothing to do.
+
+      Behind (alembic_version is a known ancestor revision)
+                                → sys.exit(1) with the §5 error message
+                                  directing the operator to run
+                                  `scripts/db.sh migrate`.
+
+      Ahead or unknown (alembic_version is not in the known revision graph)
+                                → sys.exit(1) pointing at a possible
+                                  accidental downgrade.
+
+    Connection is retried with exponential backoff for up to
+    DB_CONNECT_TIMEOUT_SECONDS (default 60) before giving up.  This allows
+    the function to succeed even when the database service (e.g. the bundled
+    Postgres container) is still starting.
+
+    This function must be called once at application startup before any
+    request handling begins.  It does not modify the DB on up-to-date
+    or refusal paths.
+    """
+    import sys
+    import time
+    from pathlib import Path
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from alembic.runtime.migration import MigrationContext
+    from alembic import command as alembic_command
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy.engine import make_url as _make_url
+    from sqlalchemy.exc import OperationalError as _SAOperationalError
+
+    safe_url = _make_url(url).render_as_string(hide_password=True)
+
+    _repo_root = Path(__file__).parents[3]
+    cfg = Config(str(_repo_root / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", url)
+
+    script = ScriptDirectory.from_config(cfg)
+    head = script.get_current_head()
+
+    connect_timeout = int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "60") or "60")
+    deadline = time.monotonic() + connect_timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        eng = None
+        try:
+            eng = _make_engine(url)
+            insp = sa_inspect(eng)
+            table_names = set(insp.get_table_names())
+            has_workspaces = "workspaces" in table_names
+            has_alembic_version = "alembic_version" in table_names
+            if has_alembic_version:
+                with eng.connect() as conn:
+                    ctx = MigrationContext.configure(conn)
+                    current_rev = ctx.get_current_revision()
+            else:
+                current_rev = None
+            eng.dispose()
+            break
+        except _SAOperationalError as exc:
+            if eng is not None:
+                eng.dispose()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                LOGGER.error(
+                    "startup_db: cannot connect to database %s after %ds: %s",
+                    safe_url, connect_timeout, exc,
+                )
+                raise
+            delay = min(2 ** (attempt - 1), remaining, 30)
+            LOGGER.warning(
+                "startup_db: connection attempt %d to %s failed (%s); retrying in %.1fs",
+                attempt, safe_url, exc, delay,
+            )
+            time.sleep(delay)
+
+    # ── (1) Empty DB ──────────────────────────────────────────────────────────
+    if current_rev is None and not has_workspaces:
+        LOGGER.info("startup_db: empty database — upgrading to head (%s)", head)
+        _with_database_url(url, lambda: alembic_command.upgrade(cfg, "head"))
+        return
+
+    # ── (2) Pre-baseline SQLite ───────────────────────────────────────────────
+    if current_rev is None and has_workspaces:
+        LOGGER.info(
+            "startup_db: pre-baseline SQLite — applying fixups and stamping at baseline"
+        )
+        if "sqlite" not in url:
+            raise RuntimeError(
+                f"Pre-baseline state is only supported for SQLite databases; got {safe_url!r}"
+            )
+        db_file_path = str(_make_url(url).database)
+        init_db_sqlite(db_file_path)
+        _with_database_url(url, lambda: alembic_command.stamp(cfg, "000000000001"))
+        return
+
+    # ── (3) Up-to-date ────────────────────────────────────────────────────────
+    if current_rev == head:
+        LOGGER.debug("startup_db: database is up-to-date at %s", current_rev)
+        return
+
+    # ── (4) Behind or ahead ───────────────────────────────────────────────────
+    #
+    # Walk the Alembic revision graph to classify the current revision:
+    #   - In the graph → it is a known ancestor, so the DB is behind HEAD.
+    #   - Not in the graph → unknown revision.  We use lexicographic ordering
+    #     as a secondary heuristic: an unknown revision that sorts after HEAD
+    #     is almost certainly from a newer release (accidental downgrade),
+    #     while one that sorts before HEAD is likely from a development branch
+    #     or pre-history migration.  Our file names use 000000000001, 000000000002…
+    #     so lex order matches temporal order for revisions in the numbering
+    #     scheme.  Non-numeric IDs (e.g. short hashes from a feature branch)
+    #     always sort after digits in ASCII and are therefore treated as "ahead."
+    known_revisions = {s.revision for s in script.walk_revisions()}
+    is_ahead = current_rev not in known_revisions and current_rev > head
+
+    if not is_ahead:
+        msg = (
+            f"ERROR: DB schema is behind code "
+            f"(DB={current_rev!r}, code={head!r}).\n"
+            f"Run `scripts/db.sh migrate` before restarting master, or use\n"
+            f"`scripts/db.sh snapshot-and-migrate` to snapshot first."
+        )
+        print(msg, file=sys.stderr, flush=True)
+        sys.exit(1)
+    else:
+        msg = (
+            f"ERROR: DB schema is ahead of code — unknown revision "
+            f"(DB={current_rev!r}, code={head!r}).\n"
+            f"This looks like a downgrade from a newer version. "
+            f"Refusing to start."
+        )
+        print(msg, file=sys.stderr, flush=True)
+        sys.exit(1)
+
+
+def schema_info(db_path_or_url: str) -> dict[str, list[str]]:
+    """Return a mapping of table → [column_name, …] for all known tables.
+
+    Uses sqlalchemy.inspect() so the introspection works on all supported
+    dialects (SQLite, Postgres, MySQL) without any dialect-specific DDL query.
+    Tables that do not exist in the live schema return an empty column list.
+
+    A short-lived engine is created and immediately disposed after inspection
+    so that the read-only introspection does not pollute the shared engine
+    cache used by get_connection().
+    """
+    from sqlalchemy import inspect as sa_inspect
+    url = _resolve_url(db_path_or_url) or resolve_db_url()
+    eng = _make_engine(url)
+    try:
+        inspector = sa_inspect(eng)
         result: dict[str, list[str]] = {}
         for table in TABLES:
-            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-            result[table] = [row["name"] for row in rows]
+            try:
+                cols = inspector.get_columns(table)
+                result[table] = [c["name"] for c in cols]
+            except Exception:
+                result[table] = []
         return result
     finally:
-        conn.close()
+        eng.dispose()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -20,7 +21,8 @@ from ..logging_utils import LocalTimeFormatter
 from ..version import get_app_version
 from .agent_runner import build_spawn_kwargs, container_name, get_container_status, pause_agent, refresh_auth, spawn_agent, start_agent_if_stopped, stop_agent
 from .config import load_master_settings
-from .db import get_connection, init_db, schema_info
+from .db import get_connection, resolve_db_url, schema_info, sqlite_safety_check, startup_db
+from .db._dialect import upsert as _upsert
 from .runtime_config import load_global_env
 from .attachments import router as attachments_router
 from .messages import router as messages_router
@@ -57,6 +59,12 @@ def configure_logging() -> None:
 
 
 def _db_path(data_dir: str) -> str:
+    """Return the canonical SQLite DB file path for a given data directory.
+
+    Kept as a public export for callers (e.g. test helpers) that need to
+    compute the legacy SQLite path from MASTER_DATA_DIR.  The production
+    lifespan uses resolve_db_url() instead — this function is a utility only.
+    """
     return str(Path(data_dir) / "master_data.db")
 
 
@@ -114,7 +122,7 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
                     " FROM chunks c"
                     " LEFT JOIN messages m ON m.id = c.message_id"
                     " WHERE m.id IS NULL"
-                    " GROUP BY c.message_id"
+                    " GROUP BY c.message_id, c.topic_id, c.agent_name"
                 )
             ).fetchall()
         finally:
@@ -205,17 +213,15 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
                             pass
                     if events:
                         transcript_json = json.dumps(events)
-                conn.execute(
-                    sa_text(
-                        "INSERT OR IGNORE INTO messages"
-                        " (id, topic_id, sender, agent_name, text, transcript, interrupt_reason, created_at)"
-                        " VALUES (:id, :topic_id, 'agent', :agent_name, :text, :transcript, :interrupt_reason, :now)"
-                    ),
+                _upsert(
+                    conn, "messages",
                     {
-                        "id": message_id, "topic_id": topic_id, "agent_name": agent_name,
-                        "text": "(message interrupted)", "transcript": transcript_json,
-                        "interrupt_reason": interrupt_reason, "now": now_str,
+                        "id": message_id, "topic_id": topic_id, "sender": "agent",
+                        "agent_name": agent_name, "text": "(message interrupted)",
+                        "transcript": transcript_json, "interrupt_reason": interrupt_reason,
+                        "created_at": now_str,
                     },
+                    conflict_cols=["id"],
                 )
                 conn.execute(
                     sa_text("DELETE FROM chunks WHERE message_id = :message_id"),
@@ -407,7 +413,7 @@ def _scheduler_tick(db_path: str, app_state, now_utc_aware) -> None:
             " JOIN topics t ON t.id = a.scope_id"
             " JOIN workspaces w ON w.id = t.workspace_id"
             " WHERE a.event_type='topic_scheduler'"
-            "   AND a.enabled=1"
+            "   AND a.enabled=TRUE"
             "   AND t.archived_at IS NULL"
         ).fetchall()
         for row in rows:
@@ -502,9 +508,30 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
         settings.agent_base_image,
         settings.container_runtime,
     )
-    db_path = _db_path(settings.data_dir)
-    init_db(db_path)
-    LOGGER.info("master.db_init path=%s", db_path)
+    # Resolve the DB URL per design §7 and §11:
+    #   1. sqlite_safety_check — refuses to start when an existing SQLite file
+    #      would be silently abandoned if the default switches to Postgres.
+    #   2. resolve_db_url() — Postgres default; uses POSTGRES_PASSWORD to build
+    #      the bundled URL, or DATABASE_URL when set explicitly.  Raises
+    #      ValueError if neither is configured.
+    #   3. startup_db(url) — runs the Alembic state machine.
+    import sys as _sys
+
+    sqlite_safety_check(settings.data_dir)
+    try:
+        db_path = resolve_db_url()
+    except ValueError as exc:
+        print(
+            f"ERROR: cannot start master — {exc}\n"
+            "Set DATABASE_URL to a SQLAlchemy URL, or set POSTGRES_PASSWORD\n"
+            "to use the bundled Postgres instance.",
+            file=_sys.stderr,
+            flush=True,
+        )
+        _sys.exit(1)
+    startup_db(db_path)
+    from sqlalchemy.engine import make_url as _make_url
+    LOGGER.info("master.db_init url=%s", _make_url(db_path).render_as_string(hide_password=True))
     hub = ConnectionHub()
     loop = asyncio.get_running_loop()
     mqtt = build_mqtt_client(settings, hub=hub, loop=loop, db_path=db_path, app_state=app.state)

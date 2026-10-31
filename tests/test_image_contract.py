@@ -25,3 +25,14 @@ def test_entrypoint_has_baked_in_codex_and_claude_global_fallbacks() -> None:
     assert 'entrypoint_log "startup ' in entrypoint
     assert 'entrypoint_log "codex_config_result ' in entrypoint
     assert 'entrypoint_log "claude_config_result ' in entrypoint
+
+
+def test_image_ships_alembic_and_db_tooling() -> None:
+    # startup_db() loads alembic.ini from the repo root; every image that runs
+    # the app or the test suite (Dockerfile prod/test stages, Dockerfile.test)
+    # must copy these.
+    root = Path(__file__).resolve().parents[1]
+    assert (root / "alembic.ini").is_file()
+    assert (root / "alembic" / "env.py").is_file()
+    assert any((root / "alembic" / "versions").glob("000000000001_*.py"))
+    assert (root / "scripts" / "db.sh").is_file()

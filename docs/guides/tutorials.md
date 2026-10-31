@@ -6,7 +6,7 @@ If you need a deeper reference, follow the link at the end of each tutorial.
 
 ## Tutorial 1: Bring up the stack
 
-Goal: get `master` and `mosquitto` running locally with Docker Compose.
+Goal: get `master`, `postgres`, and `mosquitto` running locally with Docker Compose.
 
 ```bash
 git clone https://github.com/<org>/codex-slack.git
@@ -19,10 +19,12 @@ MASTER_GIT_USER_NAME=Your Name
 MASTER_GIT_USER_EMAIL=you@example.com
 CONTAINER_RUNTIME=docker
 CONTAINER_SOCKET_PATH=/var/run/docker.sock
+COMPOSE_PROFILES=db-bundled
+POSTGRES_PASSWORD=changeme-use-openssl-rand-hex-24
 EOF
 
-docker compose up --build -d
-docker compose logs -f master
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build -d
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml logs -f master
 ```
 
 Verify:

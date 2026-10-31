@@ -8,7 +8,7 @@ The master service (`src/master/`) reads these environment variables on startup.
 
 | Key | Required | Default | Purpose |
 |-----|----------|---------|---------|
-| `MASTER_DATA_DIR` | No | `/opt/codex-slack/data/master` | Host-visible directory where `master_data.db` (SQLite) is stored |
+| `MASTER_DATA_DIR` | No | `/opt/codex-slack/data/master` | Host-visible directory for attachments and DB snapshots. No longer the DB location by default (Postgres is the default since v5.0). When `DATABASE_URL` is pointed at a SQLite file, that file conventionally lives here. |
 | `MASTER_DRY_RUN` | No | `false` | Disable side-effecting runtime actions (container spawn/stop) |
 | `MASTER_PORT` | No | `8080` | HTTP port the master FastAPI app listens on |
 | `MASTER_AGENT_BASE_IMAGE` | No | `codex-slack-master:latest` | Container image used when spawning agent containers |
@@ -73,11 +73,48 @@ global default.
 
 ### Database
 
-SQLite database file: `{MASTER_DATA_DIR}/master_data.db` (default `/opt/codex-slack/data/master/master_data.db`).
+The database provider and connection are configured through the following env vars. Postgres is the default since v5.0.
 
-Tables: `workspaces`, `workspace_agents`, `topics`, `sessions`, `messages`, `chunks`, `staffs`, `staff_sessions`, `event_actions`, `config`.
+| Key | Required | Default | Purpose |
+|-----|----------|---------|---------|
+| `DATABASE_URL` | No¹ | (built from `POSTGRES_PASSWORD`) | SQLAlchemy URL. Supported schemes: `postgresql+psycopg` (default), `sqlite+pysqlite`, `mysql+pymysql`. When set, it is used as-is and overrides all other DB config. Setting this to a SQLite path opts out of Postgres entirely. |
+| `POSTGRES_PASSWORD` | Yes¹ | — | Password for the bundled Postgres service. When `DATABASE_URL` is unset, master builds the connection URL as `postgresql+psycopg://master:<pw>@postgres:5432/master`. Master refuses to start if neither `DATABASE_URL` nor `POSTGRES_PASSWORD` is set. Use a hex value (e.g. `openssl rand -hex 24`): it is spliced into the URL unescaped. |
+| `POSTGRES_HOST` | No | `postgres` | Hostname used when building the bundled Postgres URL. |
+| `POSTGRES_PORT` | No | `5432` | Port used when building the bundled Postgres URL. |
+| `POSTGRES_USER` | No | `master` | Username used when building the bundled Postgres URL. |
+| `POSTGRES_DB` | No | `master` | Database name used when building the bundled Postgres URL. |
+| `DB_POOL_SIZE` | No | `5` | SQLAlchemy `pool_size`. Ignored for SQLite (uses `StaticPool` for `:memory:` or `NullPool` for file-based). |
+| `DB_POOL_MAX_OVERFLOW` | No | `10` | SQLAlchemy `max_overflow`. Ignored for SQLite. |
+| `DB_ECHO_SQL` | No | `false` | Log every SQL statement to stdout. Accepts `1`, `true`, or `yes`. Off in production; dev-only debugging aid. |
+| `COMPOSE_PROFILES` | No | — | Docker Compose variable. Set to `db-bundled` to start the bundled `postgres:17-alpine` service alongside master. Leave unset when using a managed (external) database and set `DATABASE_URL` instead. |
+
+¹ Exactly one of `DATABASE_URL` or `POSTGRES_PASSWORD` must be set (or both, when `DATABASE_URL` is an explicit Postgres URL and `POSTGRES_PASSWORD` is also needed by the compose service).
+
+**URL-building resolution order** (in `resolve_db_url()`):
+1. `DATABASE_URL` — used as-is when non-empty.
+2. Bundled URL built from `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` / `POSTGRES_DB` / `POSTGRES_PASSWORD`.
+3. `alembic_ini_fallback` — Alembic offline mode only; never used at runtime.
+
+**Startup behaviour** (in `startup_db()`):
+- Empty DB → auto-runs `alembic upgrade head`.
+- Up-to-date DB → proceeds.
+- DB behind code → exits 1 with: `ERROR: DB schema is behind code (DB=<rev>, code=<head>). Run \`scripts/db.sh migrate\` before restarting master, or use \`scripts/db.sh snapshot-and-migrate\` to snapshot first.`
+- DB ahead of code → exits 1 pointing at a likely accidental downgrade.
+- Pre-baseline SQLite (no `alembic_version` table, `workspaces` exists) → applies pre-baseline fixups, stamps at baseline, proceeds.
+
+Tables: `workspaces`, `staffs`, `staff_sessions`, `config`, `topics`, `sessions`, `messages`, `attachments`, `chunks`, `event_actions`, `notes`, `tasks`, `staged_dispatches`.
 
 Soft-delete columns: `workspaces.archived_at TEXT` and `topics.archived_at TEXT`. Active records have `archived_at IS NULL`.
+
+### Test-only database variables
+
+These are set by the test runner (`.sre/test-db.sh` / `just test`) and are not read by the master application at runtime.
+
+| Key | Purpose |
+|-----|---------|
+| `TEST_DATABASE_URL` | Primary database URL for the full test suite when running against Postgres or MySQL. |
+| `TEST_POSTGRES_URL` | Secondary Postgres URL used by cross-dialect tests that drop and recreate tables. Points at `master_xdialect` DB. |
+| `TEST_MYSQL_URL` | Secondary MySQL URL used by cross-dialect tests. Points at `master_xdialect` DB. |
 
 ## Agent Worker
 

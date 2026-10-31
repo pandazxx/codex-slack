@@ -18,7 +18,7 @@
    ```
    just dev-down <branch>
    ```
-   The recipe brings down services and volumes for the branch-slug compose project.
+   The recipe brings down services and DELETES the volumes for the branch-slug compose project, including that branch's `master_data` and `postgres_data` (the dev database). Dev data is disposable; production-shaped data is never in a dev project.
 
 ## On failure
 - Non-zero exit: stop and escalate.

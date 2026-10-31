@@ -670,9 +670,9 @@ class TestValidation:
                     (id, event_type, scope_type, scope_id, staff_name,
                      prompt_template, timing, cron_expr, enabled, created_at, updated_at)
                 VALUES (?, 'topic_scheduler', 'topic', 'fake-topic', 'staff',
-                        'hi', 'before', NULL, 1, ?, ?)
+                        'hi', 'before', NULL, ?, ?, ?)
                 """,
-                (action_id, now, now),
+                (action_id, True, now, now),
             )
             conn.commit()
         conn.close()
@@ -3040,8 +3040,8 @@ class TestStructuredOutput:
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, 1, 1, ?, ?)",
-            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
         )
         conn.commit()
         conn.close()
@@ -3130,8 +3130,8 @@ class TestStructuredOutput:
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, 1, 1, ?, ?)",
-            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
         )
 
         # Insert the prompt message with event_action_id set
@@ -3201,8 +3201,8 @@ class TestStructuredOutput:
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, 1, 1, ?, ?)",
-            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
         )
         prompt_msg_id = str(uuid.uuid4())
         conn.execute(
@@ -3265,8 +3265,8 @@ class TestStructuredOutput:
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_archived', 'topic', ?, 'reviewer', 'hi', NULL, NULL, 1, 1, ?, ?)",
-            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+            " VALUES (?, 'topic_archived', 'topic', ?, 'reviewer', 'hi', NULL, NULL, ?, ?, ?, ?)",
+            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
         )
         prompt_msg_id = str(uuid.uuid4())
         conn.execute(
@@ -3324,8 +3324,8 @@ class TestStructuredOutput:
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, 1, 1, ?, ?)",
-            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
         )
         prompt_msg_id = str(uuid.uuid4())
         conn.execute(
@@ -3477,8 +3477,8 @@ class TestGateActions:
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'Check: {msgbody}', 'before', NULL, 1, 1, ?, ?)",
-            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'Check: {msgbody}', 'before', NULL, ?, ?, ?, ?)",
+            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
         )
         conn.commit()
         conn.close()
@@ -3527,8 +3527,8 @@ class TestGateActions:
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, 1, 1, ?, ?)",
-            (action_id, tp_id, _NOW_UTC, _NOW_UTC),
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, ?, ?, ?, ?)",
+            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
         )
         conn.commit()
         conn.close()
@@ -3579,15 +3579,15 @@ class TestGateActions:
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, 1, 1, ?, ?)",
-            (gate_id, tp_id, _NOW_UTC, _NOW_UTC),
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, ?, ?, ?, ?)",
+            (gate_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
         )
         conn.execute(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
             "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'observer', 'hi', 'before', NULL, 1, 0, ?, ?)",
-            (obs_id, tp_id, _NOW_UTC, _NOW_UTC),
+            " VALUES (?, 'topic_message_sent', 'topic', ?, 'observer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+            (obs_id, tp_id, True, False, _NOW_UTC, _NOW_UTC),
         )
         conn.commit()
         conn.close()

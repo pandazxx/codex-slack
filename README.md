@@ -19,8 +19,9 @@ The project name reflects its v2 origin as a Slack/Discord bridge. v3 dropped ch
 | `mosquitto` | MQTT broker (Eclipse Mosquitto 2) | 1883 (internal only) |
 | agent containers | One per workspace; runs `src/agent/mqtt_loop.py`, invokes `claude` / `codex` CLI | none |
 
-State lives in two places:
-- `master_data` Docker volume (SQLite at `/opt/codex-slack/data/master/master_data.db`) — workspaces, topics, messages, sessions, agent configs.
+State lives in three places:
+- `postgres_data` Docker volume — Postgres database: workspaces, topics, messages, sessions, agent configs (default since v5.0; bundled Postgres only).
+- `master_data` Docker volume — attachments and DB snapshots (and `master_data.db` for SQLite installs).
 - `codex-claude-{workspace_id}` Docker volumes — per-workspace Claude Code session state.
 - `codex-codex-{workspace_id}` Docker volumes — per-workspace Codex config and auth (`~/.codex`).
 
@@ -31,7 +32,7 @@ State lives in two places:
 git clone https://github.com/<org>/codex-slack.git
 cd codex-slack
 
-# 2. Configure secrets — see "Critical environment variables" below
+# 2. Configure secrets and database — see "Critical environment variables" below
 cat > .env <<EOF
 ANTHROPIC_API_KEY=sk-ant-...
 GH_TOKEN=ghp_...
@@ -40,16 +41,18 @@ MASTER_GIT_USER_EMAIL=you@example.com
 CONTAINER_RUNTIME=docker
 CONTAINER_SOCKET_PATH=/var/run/docker.sock
 DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+COMPOSE_PROFILES=db-bundled
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
 EOF
 
-# 3. Build and start
-docker compose up --build -d
+# 3. Build and start (includes bundled Postgres)
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build -d
 
 # 4. Open the UI
 open http://localhost:8080
 ```
 
-`docker compose up` starts `master` and `mosquitto`. Agent containers are spawned by master when you create a workspace in the UI.
+`docker compose up` starts `master`, `mosquitto`, and `postgres`. Agent containers are spawned by master when you create a workspace in the UI.
 
 ## Critical environment variables
 
@@ -111,6 +114,12 @@ The default fallback `999` is a Linux convention that is **not** correct on most
 
 **Where to set:** `.env`. Use the identity you want recorded as the commit author.
 
+### `COMPOSE_PROFILES` and `POSTGRES_PASSWORD` — database
+
+Since v5.0, Postgres is the default database. Set `COMPOSE_PROFILES=db-bundled` to start the bundled `postgres:17-alpine` alongside master, and set `POSTGRES_PASSWORD` to a hex string (`openssl rand -hex 24`). Without these, master exits 1 with "DATABASE_URL is not set and POSTGRES_PASSWORD is not set".
+
+If you want to keep an existing SQLite database, set `DATABASE_URL=sqlite+pysqlite:////opt/codex-slack/data/master/master_data.db` instead. See [`docs/guides/runbooks/migrate-sqlite-to-postgres.md`](docs/guides/runbooks/migrate-sqlite-to-postgres.md) for the migration guide.
+
 ### Other notable optional vars
 
 - `MASTER_PUBLIC_URL` — externally reachable base URL of the web UI; used by the optional notification webhooks to build deep links into topics.
@@ -147,6 +156,7 @@ For the full list with types and defaults, see [`docs/references/config.md`](doc
 ├── docker-compose.yml            # Neutral base: shared service definitions, no build/ports/digest
 ├── docker-compose.dev.yml        # Dev overlay: build target dev, Traefik labels, sre-traefik-public
 ├── docker-compose.deploy.yml     # Singleton overlay: used by `just deploy`; host port, digest pin
+├── docker-compose.postgres.yml   # Bundled-Postgres overlay; activates the postgres service when COMPOSE_PROFILES=db-bundled
 ├── docker-compose.ssh.yml        # SSH agent forwarding overlay
 ├── docker-compose.ci.yml         # CI compose for the test image
 ├── docker-compose.master-agent.example.yml   # Master+agent example
@@ -164,6 +174,7 @@ For the full list with types and defaults, see [`docs/references/config.md`](doc
 - [`docs/guides/onboarding.md`](docs/guides/onboarding.md) — contributor onboarding
 - [`docs/guides/event-actions.md`](docs/guides/event-actions.md) — event-based staff actions (scheduler, message hooks, archive hooks)
 - [`docs/guides/runbooks/master-agent.md`](docs/guides/runbooks/master-agent.md) — master/agent operational runbook
+- [`docs/guides/runbooks/migrate-sqlite-to-postgres.md`](docs/guides/runbooks/migrate-sqlite-to-postgres.md) — SQLite to Postgres migration
 - [`docs/references/api.md`](docs/references/api.md) — REST API, WebSocket, and MQTT reference
 - [`docs/references/config.md`](docs/references/config.md) — configuration keys and defaults
 - [`docs/decisions/0005-v3-system-architecture.md`](docs/decisions/0005-v3-system-architecture.md) — v3 architecture ADR

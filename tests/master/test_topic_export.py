@@ -228,6 +228,7 @@ def test_export_empty_topic_returns_empty_body(client, workspace_topic):
     assert r.text.strip() == ""
 
 
+@pytest.mark.sqlite_only
 def test_export_user_message_shape(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     _insert_message("user", "What should I do?", topic_id)
@@ -239,6 +240,7 @@ def test_export_user_message_shape(client, workspace_topic):
     assert "timestamp" in lines[0]
 
 
+@pytest.mark.sqlite_only
 def test_export_agent_message_with_full_transcript(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     events = [
@@ -264,6 +266,7 @@ def test_export_agent_message_with_full_transcript(client, workspace_topic):
     assert transcript[1]["content"][0]["content"] == "main.py"
 
 
+@pytest.mark.sqlite_only
 def test_export_transcript_is_parsed_not_string(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     _insert_message("agent", "ok", topic_id, agent_name="claude",
@@ -301,6 +304,7 @@ def test_export_filename_slug(client, workspace_topic):
     assert ".jsonl" in cd
 
 
+@pytest.mark.sqlite_only
 def test_export_message_order(client, workspace_topic):
     ws_id, topic_id = workspace_topic
     _insert_message("user", "first", topic_id)

@@ -2,7 +2,7 @@
 
 ## Inputs
 - `<env>` — `dev`, `staging`, or `prod`
-- `<service>` — `master` or `mosquitto`
+- `<service>` — `master`, `mosquitto`, or `postgres`
 - `<key>` — branch slug (dev only); omit for singleton envs (`staging`, `prod`)
 
 ## Required env vars
@@ -21,7 +21,7 @@
    ```
    For `env=dev`: `<key>` is the branch slug; defaults to the current git branch slug if omitted.
    For `env=staging` or `env=prod`: `<key>` is not needed.
-   The recipe opens an interactive bash session in the named service container.
+   The recipe opens an interactive bash (or sh) session in the named service container. For a database prompt, run `psql -U master -d master` inside the `postgres` service. `postgres` exists only when the `db-bundled` profile is active (always true in dev).
 
 ## On failure
 - "no such container": confirm the env is up, then escalate.

@@ -62,6 +62,7 @@ def test_schema_staffs_columns(client):
         assert expected in cols, f"missing column: {expected}"
 
 
+@pytest.mark.sqlite_only
 def test_db_file_created_on_startup(tmp_path, monkeypatch):
     monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CONTAINER_RUNTIME", "docker")
@@ -330,3 +331,28 @@ def test_close_stale_streams_ping_timeout_closes(stale_db):
     assert msg is not None
     assert msg["text"] == "(message interrupted)"
     assert _count_chunks(stale_db, "msg-timeout-ping") == 0
+
+
+# ---------------------------------------------------------------------------
+# Configured-backend GROUP BY regression tests
+# ---------------------------------------------------------------------------
+
+def test_stale_stream_query_succeeds_on_configured_backend(client, caplog):
+    """The orphaned-chunks GROUP BY query must execute without error on the configured backend.
+
+    On Postgres, c.topic_id and c.agent_name must appear in the GROUP BY clause
+    because c.message_id is not the primary key of the chunks table.  Before the
+    fix the query failed with a ProgrammingError; the exception was silently
+    swallowed by the broad except-and-return, leaving stale-stream cleanup
+    permanently broken on Postgres.  This regression test verifies the query
+    executes cleanly on whatever backend DATABASE_URL points at.
+    """
+    import logging
+
+    db_path = app.state.db_path
+    settings = _make_settings()
+
+    with caplog.at_level(logging.ERROR, logger="src.master.main"):
+        _close_stale_streams(db_path, settings)
+
+    assert "master.stale_stream_query_failed" not in caplog.text

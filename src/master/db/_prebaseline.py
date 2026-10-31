@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS staffs (
     system_prompt TEXT,
     agent         TEXT,
     session_scope TEXT NOT NULL DEFAULT 'topic' CHECK (session_scope IN ('topic', 'workspace', 'global', 'none')),
-    is_default    INTEGER NOT NULL DEFAULT 0,
+    is_default    BOOLEAN NOT NULL DEFAULT FALSE,
     extra_flags   TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS messages (
     usage_json       TEXT,
     attachments_json TEXT,
     event_action_id  TEXT,
-    silent           INTEGER NOT NULL DEFAULT 0,
+    silent           BOOLEAN NOT NULL DEFAULT FALSE,
     created_at       TEXT NOT NULL
 );
 
@@ -150,9 +150,9 @@ CREATE TABLE IF NOT EXISTS event_actions (
                         'veto_timeout'
                     )),
     last_run_output   TEXT,
-    enabled           INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-    structured_output INTEGER NOT NULL DEFAULT 0 CHECK (structured_output IN (0, 1)),
-    silent            INTEGER NOT NULL DEFAULT 1 CHECK (silent IN (0, 1)),
+    enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+    structured_output BOOLEAN NOT NULL DEFAULT FALSE,
+    silent            BOOLEAN NOT NULL DEFAULT TRUE,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
 
@@ -246,15 +246,15 @@ _MIGRATIONS = [
     "ALTER TABLE workspaces ADD COLUMN last_responded_at TEXT",
     "ALTER TABLE workspaces ADD COLUMN last_agent_state TEXT",
     "ALTER TABLE chunks ADD COLUMN agent_name TEXT",
-    "ALTER TABLE event_actions ADD COLUMN structured_output INTEGER DEFAULT 0",
+    "ALTER TABLE event_actions ADD COLUMN structured_output BOOLEAN DEFAULT FALSE",
     "ALTER TABLE messages ADD COLUMN event_action_id TEXT",
     "ALTER TABLE topics ADD COLUMN veto_status TEXT",
     "ALTER TABLE topics ADD COLUMN veto_reason TEXT",
     "ALTER TABLE topics ADD COLUMN current_staff_name TEXT",
     "ALTER TABLE messages ADD COLUMN interrupt_reason TEXT",
     "ALTER TABLE workspaces ADD COLUMN repo_ref TEXT NOT NULL DEFAULT 'master'",
-    "ALTER TABLE event_actions ADD COLUMN silent INTEGER NOT NULL DEFAULT 1",
-    "ALTER TABLE messages ADD COLUMN silent INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE event_actions ADD COLUMN silent BOOLEAN NOT NULL DEFAULT TRUE",
+    "ALTER TABLE messages ADD COLUMN silent BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE messages ADD COLUMN sender_kind TEXT",
     "ALTER TABLE messages ADD COLUMN sender_name TEXT",
     "ALTER TABLE messages ADD COLUMN receiver_kind TEXT",
@@ -362,7 +362,6 @@ def _migrate_workspace_name_uniqueness(conn: sqlite3.Connection) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_active_name"
             " ON workspaces(name) WHERE archived_at IS NULL"
         )
-        conn.commit()
         return
     LOGGER.info("db.migration_start relax_workspace_name_unique")
     conn.execute("PRAGMA foreign_keys = OFF")
@@ -412,7 +411,6 @@ def _migrate_agents_to_staffs(conn: sqlite3.Connection) -> None:
             " VALUES (?, 'workspace', ?, ?, ?, NULL, NULL, ?, 'topic', ?, NULL, ?, ?)",
             (r[0], r[1], r[2], r[3], r[4], is_default, r[5], now),
         )
-    conn.commit()
     LOGGER.info("db.migration_done agents_to_staffs")
 
 
@@ -463,10 +461,10 @@ def _migrate_event_actions_v2(conn: sqlite3.Connection) -> None:
                                 'veto_timeout'
                             )),
             last_run_output TEXT,
-            enabled         INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-            structured_output INTEGER NOT NULL DEFAULT 0 CHECK (structured_output IN (0, 1)),
-            created_at      TEXT NOT NULL,
-            updated_at      TEXT NOT NULL,
+            enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+            structured_output BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at        TEXT NOT NULL,
+            updated_at        TEXT NOT NULL,
             CHECK (
                 (event_type = 'topic_scheduler'      AND cron_expr IS NOT NULL AND timing IS NULL)
                 OR
@@ -493,7 +491,6 @@ def _migrate_event_actions_v2(conn: sqlite3.Connection) -> None:
             ON event_actions (event_type, enabled) WHERE event_type = 'topic_scheduler';
     """)
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.commit()
     LOGGER.info("db.migration_done event_actions_v2")
 
 
@@ -544,9 +541,9 @@ def _migrate_event_actions_v3(conn: sqlite3.Connection) -> None:
                                 'veto_timeout'
                             )),
             last_run_output   TEXT,
-            enabled           INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-            structured_output INTEGER NOT NULL DEFAULT 0 CHECK (structured_output IN (0, 1)),
-            silent            INTEGER NOT NULL DEFAULT 1 CHECK (silent IN (0, 1)),
+            enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+            structured_output BOOLEAN NOT NULL DEFAULT FALSE,
+            silent            BOOLEAN NOT NULL DEFAULT TRUE,
             created_at        TEXT NOT NULL,
             updated_at        TEXT NOT NULL,
             CHECK (
@@ -576,7 +573,6 @@ def _migrate_event_actions_v3(conn: sqlite3.Connection) -> None:
             ON event_actions (event_type, enabled) WHERE event_type = 'topic_scheduler';
     """)
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.commit()
     LOGGER.info("db.migration_done event_actions_v3")
 
 
@@ -605,7 +601,7 @@ def _migrate_staffs_session_scope_none(conn: sqlite3.Connection) -> None:
             agent         TEXT,
             session_scope TEXT NOT NULL DEFAULT 'topic'
                           CHECK (session_scope IN ('topic', 'workspace', 'global', 'none')),
-            is_default    INTEGER NOT NULL DEFAULT 0,
+            is_default    BOOLEAN NOT NULL DEFAULT FALSE,
             extra_flags   TEXT,
             created_at    TEXT NOT NULL,
             updated_at    TEXT NOT NULL
@@ -617,7 +613,6 @@ def _migrate_staffs_session_scope_none(conn: sqlite3.Connection) -> None:
             ON staffs(scope_type, COALESCE(scope_id, ''), name);
     """)
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.commit()
     LOGGER.info("db.migration_done staffs_session_scope_none")
 
 

@@ -2,16 +2,14 @@
 
 Tests that:
   - engine() returns a SQLAlchemy Engine.
-  - With the M0 default (SQLite), the dialect is 'sqlite'.
+  - With the M1 default (Postgres), engine() uses the postgresql dialect when
+    POSTGRES_PASSWORD is set and DATABASE_URL is unset.
+  - When neither DATABASE_URL nor POSTGRES_PASSWORD is set, engine() raises
+    ValueError (resolve_db_url has no URL to return).
   - When DATABASE_URL is set, engine() reflects the override.
 
 All tests are skipped if the M0 db/ package (engine function) is not yet
 available.
-
-Note on the M0 default: the design doc (§12) states "SQLite is still the
-default DATABASE_URL" in Phase 0. Phase 1 switches the default to Postgres.
-These tests assume the M0 default is SQLite. When M1 lands the default-URL
-test must be updated to expect 'postgresql'.
 """
 from __future__ import annotations
 
@@ -26,28 +24,36 @@ sqlalchemy = pytest.importorskip("sqlalchemy", reason="sqlalchemy not installed"
 
 
 # ---------------------------------------------------------------------------
-# TC-05: default SQLite dialect in M0
+# TC-05: M1 Postgres default and "no config" error
 # ---------------------------------------------------------------------------
 
 class TestDefaultUrl:
-    def test_default_engine_is_sqlite(self, monkeypatch, tmp_path):
-        """With DATABASE_URL unset, the M0 default engine uses the sqlite dialect."""
-        # Ensure DATABASE_URL is not set.
+    def test_default_engine_is_postgres_when_password_set(self, monkeypatch, tmp_path):
+        """With DATABASE_URL unset and POSTGRES_PASSWORD set, the M1 default uses postgresql."""
         monkeypatch.delenv("DATABASE_URL", raising=False)
-        # The M0 default may use MASTER_DATA_DIR; point it at tmp_path.
-        monkeypatch.setenv("MASTER_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("POSTGRES_PASSWORD", "test-secret")
 
-        # Clear any cached engine — the package may cache the engine at module
-        # level. We reload the module to ensure a fresh engine is created.
         import importlib
         import src.master.db as db_mod
         importlib.reload(db_mod)
 
         eng = db_mod.engine()
-        assert eng.dialect.name == "sqlite", (
-            f"Expected dialect 'sqlite' for M0 default URL, got {eng.dialect.name!r}"
+        assert eng.dialect.name == "postgresql", (
+            f"Expected dialect 'postgresql' for M1 Postgres default, got {eng.dialect.name!r}"
         )
         eng.dispose()
+
+    def test_default_engine_raises_when_no_config(self, monkeypatch, tmp_path):
+        """When neither DATABASE_URL nor POSTGRES_PASSWORD is set, engine() raises ValueError."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+
+        import importlib
+        import src.master.db as db_mod
+        importlib.reload(db_mod)
+
+        with pytest.raises(ValueError, match="POSTGRES_PASSWORD"):
+            db_mod.engine()
 
 
 # ---------------------------------------------------------------------------

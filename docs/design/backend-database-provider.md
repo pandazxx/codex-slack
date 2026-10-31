@@ -7,6 +7,10 @@
 
 ## Revision history
 
+- **2026-10-31 (rev 4)** — Project owner disabled the MySQL CI leg
+  (`if: false` in `ci.yml`) until Phase 2 implements MySQL support. This
+  narrows §10 "every supported backend on every PR" to SQLite + Postgres for
+  now. Phase 2 re-enables the leg and adds it to the `Build and test` gate.
 - **2026-10-24 (rev 3)** — Design approved by project-owner and
   PR #269 merged. OQ10 resolved as replace-only (the recommendation).
   ADR-0019 accepted.

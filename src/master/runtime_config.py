@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from .db import get_connection
+from .db._dialect import upsert as _upsert
 
 _SYSTEM_TIMEZONE_KEY = "system.timezone"
 
@@ -113,13 +114,11 @@ def _apply_patch(conn, scope_type: str, scope_id: str, patch: ConfigPatch) -> No
         raise HTTPException(422, f"invalid env var key(s): {bad_set + bad_del}")
     now = _now()
     for key, value in patch.set.items():
-        conn.execute(
-            text(
-                "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
-                " VALUES (:scope_type, :scope_id, :key, :value, :updated_at)"
-                " ON CONFLICT(scope_type, scope_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at"
-            ),
+        _upsert(
+            conn, "config",
             {"scope_type": scope_type, "scope_id": scope_id, "key": key, "value": value, "updated_at": now},
+            conflict_cols=["scope_type", "scope_id", "key"],
+            update_cols=["value", "updated_at"],
         )
     for key in patch.delete:
         conn.execute(
@@ -167,13 +166,14 @@ def patch_system_settings(body: SystemSettings, request: Request) -> SystemSetti
         raise HTTPException(422, f"invalid timezone: {body.timezone!r}")
     conn = get_connection(request.app.state.db_path)
     try:
-        conn.execute(
-            text(
-                "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
-                " VALUES ('global', '', :key, :value, :updated_at)"
-                " ON CONFLICT(scope_type, scope_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at"
-            ),
-            {"key": _SYSTEM_TIMEZONE_KEY, "value": body.timezone, "updated_at": _now()},
+        _upsert(
+            conn, "config",
+            {
+                "scope_type": "global", "scope_id": "",
+                "key": _SYSTEM_TIMEZONE_KEY, "value": body.timezone, "updated_at": _now(),
+            },
+            conflict_cols=["scope_type", "scope_id", "key"],
+            update_cols=["value", "updated_at"],
         )
         conn.commit()
     finally:

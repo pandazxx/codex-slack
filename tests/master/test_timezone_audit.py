@@ -141,6 +141,7 @@ def test_topic_created_at_is_utc(client):
     assert _is_utc_iso(topic["created_at"]), f"created_at not UTC ISO-8601: {topic['created_at']!r}"
 
 
+@pytest.mark.sqlite_only
 def test_message_created_at_is_utc(tmp_path, monkeypatch):
     """Messages stored via SQLite must have UTC ISO-8601 created_at."""
     import sqlite3 as _sqlite3
@@ -288,8 +289,8 @@ def test_scheduler_tick_fires_in_configured_tz(tmp_path):
         """INSERT INTO event_actions
            (id, event_type, scope_type, scope_id, staff_name, prompt_template,
             timing, cron_expr, last_fired_at, enabled, created_at, updated_at)
-           VALUES (?, 'topic_scheduler', 'topic', ?, 'bot', 'Hello', NULL, ?, ?, 1, ?, ?)""",
-        (action_id, topic_id, "0 9 * * *", last_fired_at, now_utc, now_utc),
+           VALUES (?, 'topic_scheduler', 'topic', ?, 'bot', 'Hello', NULL, ?, ?, ?, ?, ?)""",
+        (action_id, topic_id, "0 9 * * *", last_fired_at, True, now_utc, now_utc),
     )
     conn.commit()
     conn.close()
@@ -364,8 +365,8 @@ def test_scheduler_does_not_fire_before_cron_time_in_tz(tmp_path):
         """INSERT INTO event_actions
            (id, event_type, scope_type, scope_id, staff_name, prompt_template,
             timing, cron_expr, last_fired_at, enabled, created_at, updated_at)
-           VALUES (?, 'topic_scheduler', 'topic', ?, 'bot', 'Hello', NULL, ?, ?, 1, ?, ?)""",
-        (action_id, topic_id, "0 9 * * *", last_fired_at, now_utc, now_utc),
+           VALUES (?, 'topic_scheduler', 'topic', ?, 'bot', 'Hello', NULL, ?, ?, ?, ?, ?)""",
+        (action_id, topic_id, "0 9 * * *", last_fired_at, True, now_utc, now_utc),
     )
     conn.commit()
     conn.close()

@@ -676,7 +676,7 @@ async def ask_sender(
                 "  silent, created_at,"
                 "  sender_kind, sender_name, receiver_kind, receiver_name,"
                 "  task_id, reply_to_message_id, dispatch_token)"
-                " VALUES (:id, :topic_id, :sender, :agent_name, :text, NULL, NULL, NULL, 0, :created_at,"
+                " VALUES (:id, :topic_id, :sender, :agent_name, :text, NULL, NULL, NULL, :silent, :created_at,"
                 "         'staff', :sender_name, :receiver_kind, :receiver_name,"
                 "  :task_id, :reply_to_message_id, :dispatch_token)"
             ),
@@ -686,6 +686,7 @@ async def ask_sender(
                 "sender": question_sender,
                 "agent_name": body.caller_staff,
                 "text": body.question,
+                "silent": False,
                 "created_at": _now(),
                 "sender_name": body.caller_staff,
                 "receiver_kind": receiver_kind,
@@ -1537,7 +1538,7 @@ def _mark_reply_silent(db_path: str, reply_message_id: str) -> None:
     conn = get_connection(db_path)
     try:
         conn.execute(
-            text("UPDATE messages SET silent = 1 WHERE id = :id"), {"id": reply_message_id}
+            text("UPDATE messages SET silent = TRUE WHERE id = :id"), {"id": reply_message_id}
         )
         conn.commit()
     finally:
