@@ -7,6 +7,57 @@
 
 ## Revision history
 
+- **2026-10-31 (rev 5.1)** — Correction to rev 5. Two factual errors
+  in the Phase 2 addendum were fixed and the surrounding snippets,
+  D-rows, OQs, risk note and implementation plan brought into
+  alignment.
+  - *§13 gap table row 13 (booleans):* rev 5 claimed `_BOOLEAN_COLS`
+    and `_fix_insert_bool_literals` "already handle call-site
+    literals". The runtime SQL rewriter `_fix_insert_bool_literals`
+    was **deleted** in M1 (commit `65b2a4a`; see
+    `docs/knowledge-base/lessons-learned.md` 2026-10-25); it no
+    longer exists in `src/`. Booleans are portable because every
+    call site now binds Python `bool` through `text()` named params
+    and the static guard
+    `tests/master/db/test_lint.py::test_no_bare_bool_literals_in_boolean_columns`
+    scans `src/` and `tests/` to enforce it. Bound Python `bool`
+    values map cleanly to `TINYINT(1)` under pymysql.
+  - *§13.4 D6 / §12 Phase 2 bullet / §13.8 compose / §13.9 CI
+    snippet / §13.11 risk note / OQ16 / §13.12 test strategy / ADR-0020:*
+    rev 5 recommended pinning `mysql:8.0` and avoiding 8.4 LTS on the
+    grounds that "pymysql still relies on `mysql_native_password` for
+    some configurations". Both halves are wrong. **MySQL 8.0 reached
+    end-of-life in April 2026**, so pinning `mysql:8.0` means shipping
+    an unsupported server. **8.4 disables `mysql_native_password` by
+    default** and uses `caching_sha2_password`; **pymysql has
+    supported `caching_sha2_password` since 0.9.3**. The subtlety is
+    only that the first full authentication for any user over a
+    non-TLS connection needs the RSA public-key exchange, which
+    requires the `cryptography` Python package. The image pin is now
+    **`mysql:8.4`** (LTS; `mysql:8.4` explicitly, not `mysql:8` or
+    `latest`). `cryptography` becomes a hard requirement in
+    `requirements.txt` (or an explicit pin if already transitive),
+    enforced by a CI test that creates a fresh MySQL user and
+    authenticates it over plain TCP. The 8.0.16+ floor remains for
+    managed/external MySQL as the documented *minimum supported*
+    server, but CI tests 8.4 only — 8.0.16–8.0.x is "best effort",
+    unverified post-EOL. `--default-authentication-plugin` is **not**
+    set in compose or CI (it was removed in 8.4 in favour of
+    `authentication_policy`; the image default is already
+    `caching_sha2_password`).
+- **2026-10-31 (rev 5)** — Phase 2 (M2) detailed design added as §13.
+  Enumerates every MySQL incompatibility against the Phase 1 baseline
+  with file:line references, picks VARCHAR widths for every PK/UK/index
+  TEXT column, maps the four partial indexes and the expression unique
+  index onto MySQL 8.0.13+ generated columns, selects large-text
+  column classes (TEXT / MEDIUMTEXT / LONGTEXT), decides collation
+  policy (`utf8mb4_0900_as_cs` server-wide, verified at startup),
+  pins the `sql_mode` requirement, and spells out the snapshot-import
+  transaction strategy under MySQL's DDL auto-commit. New
+  `OQ13`–`OQ17` are open for owner sign-off. §12 Phase 2 bullets and
+  the Implementation Plan M2 entry are updated to match. Architecturally
+  significant decisions (collation policy and baseline-change strategy)
+  are also recorded in [ADR-0020](../decisions/0020-mysql-support-details.md).
 - **2026-10-31 (rev 4)** — Project owner disabled the MySQL CI leg
   (`if: false` in `ci.yml`) until Phase 2 implements MySQL support. This
   narrows §10 "every supported backend on every PR" to SQLite + Postgres for
@@ -721,22 +772,448 @@ Postgres switch):*
 - Switch staging singleton to Postgres via `.env.staging` setting
   `COMPOSE_PROFILES=db-bundled`.
 
-**Phase 2 — MySQL support hardened**
+**Phase 2 — MySQL support hardened** (full detail in §13; architecturally
+significant decisions in [ADR-0020](../decisions/0020-mysql-support-details.md))
 
-- Finalise MySQL dialect: functional-index conversions over
-  generated columns for the four partial indexes, VARCHAR(36)
-  widths on all UUID PK/FK/indexed columns, CHECK enforcement
-  verified under MySQL 8.0.16.
-- Ship `docker-compose.mysql.yml` with the `db-bundled-mysql`
-  profile.
-- Document the MySQL version floor and known caveats; MySQL is
-  CI-only (no UAT leg).
+- New Alembic revision `000000000002_mysql_dialect_fixes.py` (the baseline
+  stays frozen — see ADR-0020 strategy S2):
+  - Widen every PK/UK/index TEXT column to a `String(n)` per the §13 widths
+    table (UUID keys 36, short-enum columns 16–32, free-form names 128,
+    refs 255).
+  - Drop the `server_default="master"` from `workspaces.repo_ref` (TEXT
+    columns can't carry defaults on MySQL); backfill in Python at insert.
+  - Replace the four partial indexes
+    (`idx_workspaces_active_name`, `idx_messages_envelope_backfill`,
+    `idx_event_actions_scheduler`, `idx_staged_dispatches_undispatched`)
+    with a STORED generated boolean column + a full index on
+    `(generated_col, …)` under MySQL; keep the native partial-index
+    form under SQLite/Postgres via `sqlite_where` / `postgresql_where`.
+  - Replace `idx_staffs_scope_name`'s `COALESCE(scope_id,'')` expression
+    with a NOT NULL `scope_id_key String(36)` STORED generated column
+    (`COALESCE(scope_id,'')`) and a plain unique index on
+    `(scope_type, scope_id_key, name)`.
+  - Reclassify large-text columns to `MEDIUMTEXT`/`LONGTEXT` via
+    `Text().with_variant(…)` so the Postgres/SQLite DDL is unchanged
+    (both treat the variants as plain TEXT) but MySQL gets a bigger
+    body — see §13 for per-column choices.
+  - Promote `chunks.created_at` from `sa.Float()` to
+    `sa.Float(precision=53)` so MySQL emits DOUBLE instead of
+    4-byte FLOAT.
+- `src/master/db/_dialect.py`:
+  - Add a `verify_mysql_server_setup(conn)` function called from
+    `startup_db` on the MySQL dialect; refuses to start if the server
+    is MySQL < 8.0.16, if `@@collation_server`/`@@collation_database`
+    is not `utf8mb4_0900_as_cs`, or if the required `sql_mode` flags
+    (`STRICT_TRANS_TABLES`, `ONLY_FULL_GROUP_BY`, `NO_ZERO_IN_DATE`,
+    `NO_ZERO_DATE`, `ERROR_FOR_DIVISION_BY_ZERO`) are missing.
+  - Extend `DBIntegrityError` in `src/master/db/__init__.py` to include
+    `pymysql.err.IntegrityError`.
+- `requirements.txt`: add **`cryptography`** (or verify it is already a
+  transitive dependency and pin it directly) — required for pymysql's
+  RSA public-key exchange on the first `caching_sha2_password`
+  authentication over a non-TLS connection, which is the default on
+  8.4 since `mysql_native_password` is disabled. A new CI job
+  authenticates a *fresh* MySQL user over plain TCP to prove the
+  path and to guard against the dependency disappearing silently.
+- `src/master/db/snapshot.py` and `tests/conftest.py` move the MySQL
+  reset path from `TRUNCATE` (DDL, auto-commits) to `DELETE` inside
+  the single `engine.begin()` transaction under
+  `SET FOREIGN_KEY_CHECKS=0`; sequence reset
+  (`ALTER TABLE … AUTO_INCREMENT = n`) stays post-commit (DDL, cannot
+  be inside the transaction).
+- Ship `docker-compose.mysql.yml` with the `db-bundled-mysql` profile.
+  Image pinned to **`mysql:8.4`** (LTS) — explicitly `mysql:8.4`, not
+  `mysql:8` or `latest`, so a tag change cannot silently swap majors.
+  MySQL 8.0 reached end-of-life in April 2026; the 8.0.16+ floor is
+  preserved for *managed/external* MySQL as the documented minimum,
+  but CI exercises 8.4 only — see §13 D6 for the pymysql /
+  `caching_sha2_password` / `cryptography` requirements. Server flags
+  `--character-set-server=utf8mb4`,
+  `--collation-server=utf8mb4_0900_as_cs`,
+  `--sql-mode=STRICT_TRANS_TABLES,ONLY_FULL_GROUP_BY,…`. Do **not**
+  set `--default-authentication-plugin` (removed in 8.4; replaced by
+  `authentication_policy`). Keep the CI compose service in
+  `docker-compose.ci.yml` in sync with the same flags. MySQL always
+  requires an explicit `DATABASE_URL`; `resolve_db_url()` does *not*
+  grow a bundled-MySQL default.
+- CI: re-enable `test-mysql` (`if: false` removed), remove
+  `continue-on-error`, add it to the `Build and test` gate's `needs`.
+  Add a new `baseline-ddl-stability` job that diffs the compiled
+  baseline DDL for SQLite + Postgres against a committed fixture to
+  prove the Phase 2 revision does not disturb the baseline. Add a
+  SQLite → MySQL snapshot round-trip CI job.
+- Document the MySQL version floor, collation requirement, and
+  managed-instance setup checklist in
+  `docs/references/config.md` and a new runbook
+  `docs/guides/runbooks/mysql-setup.md`. MySQL is CI-only (no UAT
+  leg).
 
 **Phase 3 — Cleanup (optional, not blocking)**
 
 - Delete `_prebaseline.py`.
 - Delete the `get_connection()` shim once all call sites are moved
   to Core expression API (long tail).
+
+### 13. Phase 2 (M2) detailed design — MySQL support
+
+Phase 1 shipped SQLAlchemy Core + Alembic with Postgres as the default
+and SQLite as the alternative. The baseline revision
+(`000000000001_baseline.py`) uses typed Core columns and already
+carries `sqlite_where` / `postgresql_where` placeholders in a handful
+of partial indexes, but it was never exercised end-to-end on MySQL —
+the first CI run against `mysql:8.0` fails on `CREATE TABLE workspaces`
+with `(1101, "BLOB, TEXT, GEOMETRY or JSON column 'repo_ref' can't
+have a default value")`, which blocks every subsequent test. Rev 4 of
+this doc disabled the leg; Phase 2 (M2) brings it back.
+
+The architectural decisions behind this section (collation policy and
+baseline-change strategy) are recorded in
+[ADR-0020](../decisions/0020-mysql-support-details.md); the mechanics
+and the gap list live here.
+
+#### 13.1 Gap list (baseline vs MySQL 8.0.16)
+
+Every incompatibility against the Phase 1 schema, with file and
+line references. Severity is **blocker** (schema cannot be
+created / tests can't run), **behaviour** (schema is created but
+query semantics diverge), or **operational** (not a code bug but a
+startup / verification gap).
+
+| # | Gap | Site | Severity | Fix |
+|---|-----|------|----------|-----|
+| 1 | `TEXT NOT NULL DEFAULT 'master'` on `workspaces.repo_ref` | `alembic/versions/000000000001_baseline.py:38` | **blocker** — error 1101 observed in CI | Drop the `server_default`; set the value in Python at every insert site (same approach the design took for `chunks.created_at`). Narrower `String(255)` makes this a true VARCHAR with a default, but we prefer the no-default form because `repo_ref` is always written explicitly today. |
+| 2 | `TEXT NOT NULL DEFAULT "'[]'"` on `notes.tags` | `baseline.py:260` | **blocker** — same 1101 class | Drop `server_default`; write `"[]"` from Python at insert (one call site, `src/master/notes.py`). |
+| 3 | PK on three TEXT columns `(scope_type, scope_id, staff_name)` | `baseline.py:95-101` (`staff_sessions`) | **blocker** — MySQL rejects TEXT in PK | `String(32)` / `String(36)` / `String(128)`. |
+| 4 | PK on three TEXT columns `(scope_type, scope_id, key)` plus reserved word `key` | `baseline.py:109-125` (`config`) | **blocker** — TEXT in PK; `key` reserved | `String(32)` / `String(36)` / `String(128)`. SQLAlchemy already quotes `key` as `` `key` `` on MySQL. |
+| 5 | UNIQUE constraint on three TEXT columns `(scope_type, scope_id, key)` | `baseline.py:271` (`notes`) | **blocker** — TEXT in UK | Same widths as #4. |
+| 6 | Expression UNIQUE index `COALESCE(scope_id,'')` + three TEXT cols | `baseline.py:76-83` (`idx_staffs_scope_name`) | **blocker** — TEXT in UK, and functional index needs 8.0.13+ generated column | Add `scope_id_key String(36) NOT NULL GENERATED ALWAYS AS (COALESCE(scope_id,'')) STORED`; unique index becomes `(scope_type, scope_id_key, name)` with `String` widths. |
+| 7 | Partial index `WHERE archived_at IS NULL` | `baseline.py:42-49` (`idx_workspaces_active_name`) | **blocker** — MySQL has no partial indexes | Generated `is_active TINYINT(1) NOT NULL GENERATED ALWAYS AS (archived_at IS NULL) STORED`; unique index `(is_active, name)` under MySQL only, keep `postgresql_where` / `sqlite_where` elsewhere. |
+| 8 | Partial index `WHERE sender_kind IS NULL` | `baseline.py:177-183` (`idx_messages_envelope_backfill`) | **blocker** — same | Same pattern: `needs_envelope_backfill` generated TINYINT. |
+| 9 | Partial index `WHERE event_type = 'topic_scheduler'` | `baseline.py:244-250` (`idx_event_actions_scheduler`) | **blocker** — same | Same pattern: `is_scheduler` generated TINYINT. |
+| 10 | Partial index `WHERE dispatched_at IS NULL` | `baseline.py:303-309` (`idx_staged_dispatches_undispatched`) | **blocker** — same | Same pattern: `is_undispatched` generated TINYINT. |
+| 11 | TEXT in non-PK indexes | multiple: `idx_messages_task` (`messages.task_id` Text), `idx_messages_reply_to` (`messages.reply_to_message_id` Text), `idx_sessions_topic_agent` (`sessions.agent_name` Text), `idx_chunks_message` (`chunks.message_id` Text), `idx_chunks_topic` (`chunks.topic_id` Text), `idx_event_actions_scope_event` (four TEXT cols), `idx_notes_scope` (two TEXT cols), `idx_tasks_root` (`tasks.root_task_id` Text), `idx_tasks_topic_state` (`tasks.state` Text), `idx_tasks_parent` (`tasks.parent_task_id` Text), `idx_staged_dispatches_prompt` (`prompt_message_id` Text) | **blocker** — MySQL rejects TEXT in index | `String(n)` per the widths table in §13.2. |
+| 12 | CHECK constraints on `scope_type`, `session_scope`, `event_type`, `direction`, `kind`, `state`, `dispatcher_kind`, `last_run_status`, `timing`, and the composite `ck_event_actions_schedule` | throughout baseline (every CheckConstraint call) | **blocker on <8.0.16, behaviour on 8.0.16+** — CHECK enforcement lands in 8.0.16 | No code change; startup guard (§13.4) refuses to run on <8.0.16. |
+| 13 | Boolean columns: `staffs.is_default`, `messages.silent`, `event_actions.enabled`/`structured_output`/`silent` | baseline Boolean() columns | **behaviour** — SA maps to `TINYINT(1)` by default; `sa.true()`/`sa.false()` compile to `1`/`0` under MySQL | No code change. Note: the runtime SQL rewriter `_fix_insert_bool_literals` was **deleted** in M1 (commit `65b2a4a`, see `docs/knowledge-base/lessons-learned.md` 2026-10-25) — it does not exist in `src/` anymore. Booleans are portable because every call site now binds Python `bool` through `text()` named params, and `tests/master/db/test_lint.py::test_no_bare_bool_literals_in_boolean_columns` scans both `src/` and `tests/` to enforce it (static lint, no runtime path). Bound Python `bool` values map cleanly to `TINYINT(1)` under pymysql, so baseline `Boolean()` columns need no MySQL-specific coercion. Add MySQL-leg coverage of the existing boolean round-trip tests. |
+| 14 | AUTOINCREMENT PK (`chunks.id`) sequence reset | `snapshot.py:_reset_sequence` | **operational** — already implemented via `ALTER TABLE … AUTO_INCREMENT = n` | None; add a round-trip test on MySQL. |
+| 15 | `INSERT OR IGNORE` / `ON CONFLICT DO UPDATE` → `INSERT IGNORE` / `ON DUPLICATE KEY UPDATE` | `src/master/db/_dialect.py:upsert` | **operational** — already dispatches on dialect | None; add MySQL coverage to upsert unit tests. |
+| 16 | `json_each(col)` → MySQL `JSON_CONTAINS(col, JSON_QUOTE(:param))` | `src/master/db/_dialect.py:json_array_contains_fragment` | **operational** — already dispatches | None; `src/master/notes.py` call site is already dialect-aware. |
+| 17 | `DBIntegrityError` tuple does not include `pymysql.err.IntegrityError` | `src/master/db/__init__.py:33-37` | **blocker** — MySQL unique-violation exceptions escape as uncaught `IntegrityError` from SQLAlchemy wrapping | Add a conditional `try: from pymysql.err import IntegrityError …` and extend the tuple. |
+| 18 | DDL auto-commit vs single-transaction snapshot import | `src/master/db/snapshot.py:_acquire_truncate_locks_in_txn` and the `engine.begin()` block; `tests/conftest.py:_non_sqlite_truncate` MySQL branch | **blocker** for snapshot atomicity — MySQL commits implicitly on `TRUNCATE`, `ALTER TABLE`, `CREATE INDEX`, so the "lock + truncate + load" transaction is torn in half on MySQL | (a) Replace `TRUNCATE TABLE` with `DELETE FROM` inside the transaction, protected by `SET FOREIGN_KEY_CHECKS=0` for the duration of the transaction. (b) Keep `ALTER TABLE … AUTO_INCREMENT = n` outside the transaction (it's DDL and already is, see `_reset_sequence`). (c) `SET SESSION innodb_lock_wait_timeout = <seconds>` (row-lock timeout) **and** `SET SESSION lock_wait_timeout = <seconds>` (metadata lock timeout) at transaction start so a running master process either releases its locks quickly or we fail fast. The test conftest adopts the same `DELETE` approach so test isolation stays atomic. |
+| 19 | `ONLY_FULL_GROUP_BY` under MySQL `sql_mode` | `src/master/topics.py:list_recent_topics`, `src/master/main.py:_close_stale_streams` | **behaviour** — both already fixed in M1 (see lessons-learned 2026-10-31); verify under MySQL CI | None in code; CI gates it. New grep-based lint flagging bare GROUP BY on joined queries. |
+| 20 | `\|\|` string concat | n/a — confirmed by grep: no `\|\|` in `src/master/*.py` SQL | **n/a** | None. If one is introduced later, require `CONCAT()` or set `PIPES_AS_CONCAT` in `sql_mode`. |
+| 21 | `LIMIT` in subqueries | n/a — confirmed by grep: every `LIMIT` is top-level in its statement | **n/a** | None. 8.0.16+ accepts `LIMIT` inside subqueries anyway. |
+| 22 | utf8mb4 and 4-byte emoji | server flag `character-set-server=utf8mb4` already set in CI compose | **operational** | Verified by startup guard; URL carries `?charset=utf8mb4`. |
+| 23 | TEXT 64 KB size limit for message bodies | `messages.text` (Text), `messages.transcript` (Text), `tasks.result_artifacts` (Text), `event_actions.prompt_template` (Text), `event_actions.last_run_output` (Text), `tasks.result_summary` (Text), `tasks.acceptance_criteria` (Text), `tasks.goal` (Text), `topics.worktree_path` (Text), `staffs.system_prompt` (Text), `staffs.extra_flags` (Text), `topics.veto_reason` (Text), `messages.usage_json` (Text), `messages.attachments_json` (Text), `config.value` (Text), `notes.value` (Text) | **behaviour** (hits silently as `Data too long` on insert of >64 KB) | Promote selected columns to `MEDIUMTEXT` (16 MB) or `LONGTEXT` (4 GB) via `Text().with_variant(mysql.LONGTEXT, 'mysql')`. Choices in §13.3. |
+| 24 | Float precision for `chunks.created_at` | `baseline.py:198` (`sa.Float()`) | **behaviour** — MySQL `FLOAT` is 4-byte, ~7 significant digits; Unix epoch with sub-second resolution needs ~14 | Change to `sa.Float(precision=53)` → MySQL `DOUBLE`, Postgres `DOUBLE PRECISION`, SQLite `REAL` (unchanged). |
+| 25 | Default collation `utf8mb4_0900_ai_ci` is case- and accent-insensitive | server-wide, affects every `=`/UNIQUE/`ORDER BY` on text columns | **behaviour** — differs from SQLite BINARY and Postgres default | Server-wide `utf8mb4_0900_as_cs`, verified at startup. See ADR-0020 (C2). |
+| 26 | Sorting under non-default collation | `ORDER BY` on `workspaces.name`, `staffs.name`, etc. | **behaviour** — follows #25 | Same fix as #25. |
+| 27 | `alembic_version` column width | Alembic default `VARCHAR(32)`; our revision ids are 12 chars | **n/a** | None. |
+| 28 | Driver: pymysql vs mysqlclient | `requirements.txt` already uses `pymysql` | **operational** | Keep `pymysql`: pure Python, no C build dep in the test image. The SQLAlchemy URL stays `mysql+pymysql://`. |
+| 29 | Startup version check (8.0.16 floor) | no code today | **operational** | `startup_db` calls `_dialect.verify_mysql_server_setup(conn)` which runs `SELECT VERSION()`, `SELECT @@collation_server`, `SELECT @@collation_database`, `SELECT @@sql_mode`, and prints a sharp refusal with the compose-flag fix if any check fails. |
+
+#### 13.2 VARCHAR widths for every PK/UK/index TEXT column
+
+The current baseline sets `String(36)` on the UUID identity columns
+and leaves everything else `Text()`. Phase 2 widens every column that
+participates in a PK/UK/index. Non-PK/UK free-form columns stay
+`Text()` — see §13.3 for the large-text classification.
+
+| Column(s) | New width | Reason |
+|---|---|---|
+| `workspaces.id`, `topics.id`, `sessions.id`, `messages.id`, `attachments.id`, `event_actions.id`, `notes.id`, `tasks.id`, `staged_dispatches.id`, `staffs.id` (already) | `String(36)` | UUID with dashes. |
+| `staff_sessions.scope_type`, `config.scope_type`, `notes.scope_type`, `staffs.scope_type`, `event_actions.scope_type`, `tasks.dispatcher_kind`, `attachments.direction`, `event_actions.timing`, `staged_dispatches.kind`, `tasks.state`, `event_actions.event_type`, `staffs.session_scope`, `event_actions.last_run_status`, `topics.veto_status` | `String(32)` | Short enum values; keeps room for future values. |
+| `staff_sessions.scope_id`, `config.scope_id`, `notes.scope_id`, `staffs.scope_id`, `event_actions.scope_id` | `String(36)` | UUID or empty string sentinel. |
+| `staff_sessions.staff_name`, `config.key`, `notes.key`, `staffs.name`, `topics.current_staff_name`, `event_actions.staff_name`, `tasks.assignee_name`, `tasks.dispatcher_name`, `sessions.agent_name`, `messages.agent_name`, `messages.sender_name`, `messages.receiver_name` | `String(128)` | Operator-facing name; practical cap. |
+| `messages.sender`, `messages.sender_kind`, `messages.receiver_kind` | `String(32)` | `user`/`agent`/etc. |
+| `topics.branch_name` | `String(255)` | Git refname bound. |
+| `topics.base_sha` | `String(64)` | SHA-256 upper bound. |
+| `workspaces.repo_ref` | `String(255)` | Branch/ref string, now with no server default. |
+| `messages.task_id`, `messages.reply_to_message_id`, `messages.event_action_id`, `tasks.root_task_id`, `tasks.parent_task_id`, `staged_dispatches.prompt_message_id`, `staged_dispatches.topic_id`, `chunks.message_id`, `chunks.topic_id` | `String(36)` | UUID keys. (Note: these are not FK-declared in the baseline, but they are indexed.) |
+| `messages.dispatch_token` | `String(64)` | Opaque token. |
+| `staffs.adapter`, `staffs.model` | `String(64)` / `String(128)` | Short identifier / model slug. |
+| `sessions.adapter` | `String(64)` | Short identifier. |
+| `attachments.filename` | `String(255)` | Posix filename cap. |
+| `attachments.mime_type` | `String(128)` | RFC 6838 bound. |
+| `event_actions.cron_expr` | `String(255)` | 5–7 fields; comfortable cap. |
+| `workspaces.container_name` | `String(255)` | Docker container name cap. |
+| `workspaces.last_agent_state` | `String(64)` | Short state tag. |
+
+ISO-8601 timestamp columns (`created_at`, `updated_at`, `archived_at`,
+`last_*_at`, `started_at`, `dispatched_at`, `closed_at`) are 20
+characters (`YYYY-MM-DDTHH:MM:SSZ`); they are not indexed in the
+baseline except via composite indexes that already name a String
+column first, so they can stay as `Text()` with a `String(32)`
+promotion where (and only where) they appear in a MySQL index on
+their own. In the current baseline none do.
+
+#### 13.3 Large-text column classification
+
+MySQL's TEXT type is 64 KB. For the long-form columns the master
+service writes (full agent transcripts, dispatch bodies, JSON blobs
+for usage/attachments), 64 KB is tight. Phase 2 uses
+`Text().with_variant(mysql.MEDIUMTEXT, 'mysql')` (16 MB) or
+`.with_variant(mysql.LONGTEXT, 'mysql')` (4 GB) so SQLite/Postgres
+DDL is unchanged.
+
+| Column | MySQL type | Rationale |
+|---|---|---|
+| `messages.transcript` | `LONGTEXT` | Full conversation serialization; can exceed 16 MB on long topics. |
+| `messages.text` | `MEDIUMTEXT` | Message body; large but bounded in practice. |
+| `messages.usage_json`, `messages.attachments_json` | `MEDIUMTEXT` | Tool-call usage records can be large. |
+| `tasks.result_artifacts` | `LONGTEXT` | May embed structured task output (code, logs). |
+| `tasks.result_summary`, `tasks.goal`, `tasks.acceptance_criteria` | `MEDIUMTEXT` | Free text, could be long but 16 MB is ample. |
+| `event_actions.prompt_template`, `event_actions.last_run_output` | `MEDIUMTEXT` | Rendered prompts and run output. |
+| `staffs.system_prompt` | `MEDIUMTEXT` | Prompt bodies. |
+| `staffs.extra_flags`, `staffs.agent` | `TEXT` (stays 64 KB) | Short strings or small JSON. |
+| `config.value`, `notes.value` | `MEDIUMTEXT` | Note bodies / arbitrary config values. |
+| `notes.tags` | `TEXT` | Small JSON array in practice (default `[]`). |
+| `topics.veto_reason`, `topics.worktree_path` | `TEXT` | Short strings. |
+| `messages.interrupt_reason` | `TEXT` | Short string. |
+
+#### 13.4 Behaviour decisions and owner sign-offs
+
+The table below enumerates every Phase 2 decision that changes
+observable behaviour or operator surface. Items marked **sign-off
+needed** must be signed off by the project owner before the Phase 2
+PR opens. Items marked **engineering** are mechanical.
+
+| # | Decision | Recommendation | Sign-off |
+|---|----------|----------------|----------|
+| D1 | Collation | Server-wide `utf8mb4_0900_as_cs`, verified at startup; `startup_db` refuses to start on a MySQL instance whose `@@collation_server` or `@@collation_database` is not that value. Rationale and alternatives: ADR-0020 §C1–C4. | **needed** |
+| D2 | Large-text column classes | `TEXT` / `MEDIUMTEXT` / `LONGTEXT` per the §13.3 table, via `Text().with_variant(mysql.…, 'mysql')`. SQLite/Postgres DDL unchanged. | **needed** (small chance owner wants LONGTEXT everywhere for simplicity) |
+| D3 | `sql_mode` verification at startup | `startup_db` runs `SELECT @@sql_mode` under the MySQL dialect; refuses to start unless the set includes `STRICT_TRANS_TABLES`, `ONLY_FULL_GROUP_BY`, `NO_ZERO_IN_DATE`, `NO_ZERO_DATE`, `ERROR_FOR_DIVISION_BY_ZERO`. `PIPES_AS_CONCAT` not required (we don't use `\|\|`); documented so a future caller can opt in. | **needed** |
+| D4 | Snapshot import transaction strategy | Replace `TRUNCATE` with `DELETE FROM` inside the single `engine.begin()` transaction under session-scoped `SET FOREIGN_KEY_CHECKS=0`. Row-lock timeout via `SET SESSION innodb_lock_wait_timeout`; metadata-lock timeout via `SET SESSION lock_wait_timeout`. Sequence reset (`ALTER TABLE … AUTO_INCREMENT = n`) stays outside the transaction — it is DDL and would auto-commit anyway. Same change applied to the `_non_sqlite_truncate` fixture in `tests/conftest.py`. | engineering (no behaviour change for operators) |
+| D5 | Baseline revision strategy | Baseline (`000000000001`) is frozen; all Phase 2 schema changes land in a new revision `000000000002_mysql_dialect_fixes.py`. Any MySQL-only kwargs that don't change SQLite/PG DDL also go into the new revision. See ADR-0020 strategy S2. Verification: a new `baseline-ddl-stability` CI job compiles the baseline against SQLite and PostgreSQL dialects and diffs the normalised DDL against a committed fixture (`tests/master/db/fixtures/baseline_ddl_{sqlite,postgresql}.sql`). | **needed** |
+| D6 | `docker-compose.mysql.yml` and image pin | Ship with `db-bundled-mysql` profile mirroring the Postgres overlay. Image pinned to **`mysql:8.4`** (LTS) — explicitly `mysql:8.4`, **not** `mysql:8` or `latest`, so a tag change does not quietly swap us to another major. MySQL **8.0 reached end-of-life in April 2026**; shipping on `mysql:8.0` would ship an unsupported server. 8.4 **disables `mysql_native_password` by default** and uses `caching_sha2_password`. PyMySQL has supported `caching_sha2_password` since 0.9.3; the subtlety is that the *first* full authentication for any user over a non-TLS connection needs the RSA public-key exchange, which requires the `cryptography` package. Fast-auth after the server caches the credentials does not. **Requirements:** (a) add `cryptography` to `requirements.txt`, or verify it is already a transitive dependency of our existing stack and pin it directly to prevent a silent drop; (b) a CI test that creates a fresh user on the 8.4 service and authenticates it over a plain TCP (non-TLS) connection, so the RSA key-exchange path is exercised and we don't regress by losing `cryptography`. The **8.0.16 floor remains for managed/external MySQL** — that is the documented minimum supported server — but CI tests 8.4 **only**, so 8.0.16–8.0.x is "best effort" and unverified post-EOL. Server flags: `--character-set-server=utf8mb4`, `--collation-server=utf8mb4_0900_as_cs`, `--sql-mode=STRICT_TRANS_TABLES,ONLY_FULL_GROUP_BY,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO`. Do **not** set `--default-authentication-plugin` — the flag was **removed in 8.4** in favour of `authentication_policy`; the image default (`caching_sha2_password`) is already what we want, so no auth-plugin flag is set in compose or CI. Volume `mysql_data:/var/lib/mysql`. Healthcheck `mysqladmin ping` (same as CI). Coexists with the Postgres overlay via Compose's `required: false` depends_on. CI compose service in `docker-compose.ci.yml` is updated to the same flags. | **needed** (image-pin choice) |
+| D7 | Bundled-MySQL default URL | `resolve_db_url()` does **not** gain a bundled-MySQL default. MySQL always requires an explicit `DATABASE_URL` of the form `mysql+pymysql://user:pw@host:3306/master?charset=utf8mb4`. Keeps the Postgres default unambiguous and keeps the SQLite-safety-net check (§11) a two-way choice. | engineering |
+| D8 | CI gating | Re-enable `test-mysql` (remove `if: false`, remove `continue-on-error`), add it to the `Build and test` gate's `needs: [test, test-mysql]`. New `baseline-ddl-stability` job runs on every PR. New `snapshot-roundtrip-mysql` CI job seeds a SQLite DB, exports, imports into a MySQL container, resets sequences, inserts a new `chunks` row, and runs a read-side smoke test. | engineering |
+| D9 | Startup version check | `startup_db` runs `SELECT VERSION()` on the MySQL dialect; parses `<major>.<minor>.<patch>` from the first segment (strip `-mysql`/`-ndb` suffixes); refuses to start on `(major, minor, patch) < (8, 0, 16)` with a clear message. The same function performs D1 and D3 checks (collation + sql_mode) in the same pass. | engineering |
+
+#### 13.5 Alembic revision shape
+
+`alembic/versions/000000000002_mysql_dialect_fixes.py` is a single
+revision that is safe to apply on all three dialects.
+
+- Column type changes are expressed via `op.alter_column(... type_=...)`
+  and are no-ops in practice on SQLite/Postgres (SQLite's affinity
+  system treats VARCHAR(n) and TEXT identically; Postgres treats
+  VARCHAR(n) as TEXT + CHECK(length <= n), which does take a brief
+  metadata lock but no table rewrite).
+- `op.alter_column("workspaces", "repo_ref", server_default=None)`
+  drops the server-side default; the application already supplies the
+  value on insert.
+- Generated columns use `sa.Computed("…", persisted=True)` on
+  SQLAlchemy, scoped to `mysql_` kwargs. Under SQLite/Postgres the
+  generated column is omitted and the partial / expression index
+  shape is retained via `sqlite_where` / `postgresql_where`. Under
+  MySQL the generated column is added and the index uses it.
+- Index replacement is sequenced: `op.drop_index(name, table_name=…)`
+  → `op.add_column(...)` (MySQL only) → `op.create_index(...)` with
+  dialect-specific column list.
+- Large-text promotions use
+  `op.alter_column(..., type_=sa.Text().with_variant(mysql.MEDIUMTEXT,
+  'mysql'))`.
+
+Downgrade() reverses each step. The revision passes `alembic
+upgrade head` → `alembic downgrade -1` round-tripping as part of CI.
+
+#### 13.6 Snapshot and test-isolation changes
+
+Both `src/master/db/snapshot.py` and `tests/conftest.py` currently use
+`TRUNCATE` under the MySQL branch, which is DDL on MySQL and auto-commits:
+
+- *snapshot.py.* The `engine.begin()` block that acquires locks and
+  reloads data assumes a single atomic transaction. Under MySQL the
+  TRUNCATE inside it would commit the "clean the table" phase before
+  the load started, exposing a half-empty database to any concurrent
+  reader. Replace with `DELETE FROM "…"` inside the transaction,
+  wrapped in `SET FOREIGN_KEY_CHECKS=0` / `=1` so parent rows can be
+  deleted first per `TRUNCATE_ORDER`. `_acquire_truncate_locks_in_txn`
+  grows a MySQL branch that sets both
+  `innodb_lock_wait_timeout` (row locks) and `lock_wait_timeout`
+  (metadata locks).
+- *conftest.py.* `_non_sqlite_truncate` MySQL branch moves to the
+  same pattern. Test isolation stays per-test and keeps the fast-path
+  no-commit behaviour.
+
+Sequence reset (`ALTER TABLE … AUTO_INCREMENT = n`) stays outside the
+load transaction — it is DDL and cannot be bundled with
+`engine.begin()` on MySQL. The current `_reset_sequence` already
+emits it in a separate `engine.begin()` block after the main one, so
+no code change is needed there.
+
+#### 13.7 Startup verification
+
+`src/master/db/_dialect.py` adds:
+
+```python
+def verify_mysql_server_setup(conn) -> None:
+    """Refuse to start on a non-conformant MySQL server.
+
+    Checks server version (>= 8.0.16), collation (server + database
+    both utf8mb4_0900_as_cs), and sql_mode (contains the required
+    strict flags).  Raises SystemExit(1) on failure with the fix.
+    """
+```
+
+Invoked from `startup_db` under `dialect == 'mysql'` after connection
+retry succeeds and before the Alembic version check. The function is
+pure read: no DDL.
+
+A matching unit test exercises each refusal path with a mocked
+connection returning deliberately-wrong `@@collation_server` /
+`@@sql_mode` / `VERSION()`.
+
+#### 13.8 Compose overlay
+
+`docker-compose.mysql.yml`:
+
+```yaml
+services:
+  mysql:
+    profiles: ["db-bundled-mysql"]
+    image: mysql:8.4        # 8.4 LTS; 8.0 is EOL (April 2026). Floor for managed MySQL is 8.0.16, enforced at startup.
+    command:
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_0900_as_cs"
+      - "--sql-mode=STRICT_TRANS_TABLES,ONLY_FULL_GROUP_BY,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO"
+    environment:
+      MYSQL_DATABASE: master
+      MYSQL_USER: master
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-${MYSQL_PASSWORD:-}}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - internal
+    restart: unless-stopped
+
+  master:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}   # same posture as Postgres: do not default here
+    depends_on:
+      mysql:
+        condition: service_healthy
+        required: false
+
+volumes:
+  mysql_data:
+```
+
+Operators who want bundled MySQL set `COMPOSE_PROFILES=db-bundled-mysql`
+and `DATABASE_URL=mysql+pymysql://master:${MYSQL_PASSWORD}@mysql:3306/master?charset=utf8mb4`.
+The empty `${DATABASE_URL:-}` keeps the SQLite-safety-net check live
+(same reason as the Postgres overlay — see the 2026-10-25 lesson).
+UAT does not run against this overlay.
+
+#### 13.9 CI changes
+
+- Remove `if: false` and `continue-on-error` from `test-mysql`. The
+  job already builds + runs `.sre/test-db.sh mysql`.
+- Add `test-mysql` to `test-gate.needs` so the stable `Build and test`
+  required check now requires all three legs.
+- Align `docker-compose.ci.yml`'s `mysql` service `command` to the
+  same flags as the overlay (`collation-server=utf8mb4_0900_as_cs`,
+  the strict `sql_mode` set) — the current CI compose uses
+  `utf8mb4_0900_ai_ci` and no `sql_mode` flag.
+- New job `baseline-ddl-stability`:
+
+```yaml
+baseline-ddl-stability:
+  name: Baseline DDL stability
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with: { python-version: "3.11" }
+    - run: pip install -r requirements.txt
+    - name: Compile baseline for sqlite + postgres
+      run: python scripts/dump_baseline_ddl.py \
+             --dialect sqlite     --out /tmp/baseline_sqlite.sql && \
+           python scripts/dump_baseline_ddl.py \
+             --dialect postgresql --out /tmp/baseline_postgres.sql
+    - name: Diff against committed fixtures
+      run: diff -u tests/master/db/fixtures/baseline_ddl_sqlite.sql     /tmp/baseline_sqlite.sql && \
+           diff -u tests/master/db/fixtures/baseline_ddl_postgresql.sql /tmp/baseline_postgres.sql
+```
+
+The `scripts/dump_baseline_ddl.py` helper (part of the Phase 2 PR)
+runs the `upgrade()` of the baseline revision against a mock
+engine and emits the compiled DDL as text. The fixture files are
+committed in the same PR that produces them, so the diff is zero on
+day one and any later schema change forces an intentional fixture
+update (which also must get reviewed).
+
+- New job `snapshot-roundtrip-mysql`:
+
+```yaml
+snapshot-roundtrip-mysql:
+  needs: [test-mysql]
+  runs-on: ubuntu-latest
+  steps:
+    # Seed a SQLite DB via tests/fixtures, export, spin up mysql:8.4,
+    # import, run `_reset_sequence`, insert a chunks row, read it back,
+    # assert row counts per table.
+```
+
+#### 13.10 Call-site review
+
+Beyond the schema fixes, Phase 2 must verify the handful of raw-text
+SQL call sites still parse and run under MySQL. The audit:
+
+- `src/master/topics.py:list_recent_topics` — M1 fix is already
+  compatible with `ONLY_FULL_GROUP_BY`. Add a MySQL CI test.
+- `src/master/main.py:_close_stale_streams` — same.
+- `src/master/notes.py` — uses `_dialect.json_array_contains_fragment`;
+  already dispatched. Add MySQL coverage.
+- `src/master/orchestrate_api.py` — 38 execute call sites, all
+  parameterized `text()`. Spot-checked: none use SQLite-only syntax
+  that is not already covered by `_dialect`. Add MySQL smoke tests
+  for the heaviest 5 handlers.
+- `src/master/dispatch.py`, `src/master/event_dispatcher.py`,
+  `src/master/mqtt_client.py` — raw text() SQL; grepped for
+  `||`, `unixepoch`, `PRAGMA`, `sqlite_master`, `INSERT OR` — all
+  clean post-M1.
+- `_prebaseline.py` — SQLite-only; guarded by dialect check. No
+  change.
+
+#### 13.11 Risks and non-goals
+
+- *Risk.* Managed-MySQL operators may run with `_ai_ci` collation. The
+  startup refusal is a hard barrier; the runbook spells out
+  `ALTER DATABASE master COLLATE utf8mb4_0900_as_cs;` as the fix. This
+  is intentional (see ADR-0020 drivers).
+- *Risk / version policy.* MySQL **8.0 reached end-of-life in April
+  2026**, so we ship on **`mysql:8.4`** (LTS). The pin is explicit
+  (`mysql:8.4`, not `mysql:8` or `latest`) so a tag change cannot
+  silently swap us to another major. CI exercises 8.4 **only**; the
+  8.0.16–8.0.x window is retained as the documented *floor* for
+  managed/external MySQL (the minimum supported server) but is
+  "best effort" and unverified post-EOL — if an operator is on 8.0
+  and hits a MySQL-8.4-only fix, the remedy is upgrade. 8.4 disables
+  `mysql_native_password` by default and uses `caching_sha2_password`;
+  pymysql has supported `caching_sha2_password` since 0.9.3, but the
+  first full authentication for a given user over a non-TLS
+  connection requires the RSA public-key exchange, which needs the
+  `cryptography` Python package. We enforce this by adding
+  `cryptography` to `requirements.txt` (or pinning it directly if
+  it is already a transitive dependency) **and** a CI test that
+  creates a fresh user and authenticates it over plain TCP. Do not
+  use the removed `--default-authentication-plugin` server flag —
+  8.4 replaced it with `authentication_policy`; the image default
+  (`caching_sha2_password`) is already correct, so no auth-plugin
+  flag appears in compose or CI.
+- *Non-goal.* UAT on MySQL. ADR-0019 is explicit; Phase 2 does not
+  change it.
+- *Non-goal.* Rewriting any call site onto Core expressions beyond
+  what the gap list requires. The two-idiom reality from Phase 1
+  continues.
 
 ## Alternatives Considered
 
@@ -820,10 +1297,40 @@ the reasoning that led to the current shape.
 
 ## Open Questions
 
-None. OQ10 resolved on design approval: snapshot import is
-**replace-only**. Import refuses a non-empty target by default; with `--yes` it
-truncates and reloads, so the result is an exact copy of the snapshot. Merge
-is out of scope for v1.
+OQ1–OQ12 all resolved; see the "Resolved questions" section above. OQ10
+remains documented there as the replace-only decision.
+
+Phase 2 (M2) items awaiting owner sign-off (introduced rev 5, 2026-10-31):
+
+- [ ] **OQ13 — Collation policy on MySQL.** Recommendation:
+  `utf8mb4_0900_as_cs` server-wide, verified at startup, hard refusal
+  on mismatch. See §13.4 D1 and ADR-0020. Alternative is accepting the
+  MySQL default (`_ai_ci`) and documenting the behaviour change
+  (ADR-0020 C4). Owner must sign off before Phase 2 PR opens — architect.
+- [ ] **OQ14 — Large-text column classification.** Recommendation: per
+  the §13.3 table (TEXT / MEDIUMTEXT / LONGTEXT via
+  `Text().with_variant(...)`). Alternative: LONGTEXT everywhere for
+  operational simplicity, at the cost of larger row-metadata overhead
+  — architect.
+- [ ] **OQ15 — Baseline revision strategy.** Recommendation: freeze
+  the baseline; land all Phase 2 schema changes in
+  `000000000002_mysql_dialect_fixes.py`. CI job
+  `baseline-ddl-stability` enforces byte-equal baseline DDL for
+  SQLite + Postgres. See §13.4 D5 and ADR-0020 strategy S2 — architect.
+- [ ] **OQ16 — `docker-compose.mysql.yml` image pin.** Recommendation:
+  **`mysql:8.4`** (LTS) with explicit server flags. MySQL 8.0 is EOL
+  (April 2026). pymysql + `caching_sha2_password` works provided
+  `cryptography` is in `requirements.txt` (for the first-auth RSA
+  key exchange over non-TLS); add a CI fresh-user plain-TCP
+  authentication test to gate it. Keep 8.0.16+ as the *documented
+  floor* for external/managed MySQL (best-effort; CI tests 8.4 only).
+  Do **not** use the removed `--default-authentication-plugin` server
+  flag — 8.4 uses `authentication_policy`. See §13.4 D6 — senior-sre.
+- [ ] **OQ17 — Required `sql_mode` flags.** Recommendation: refuse to
+  start unless `STRICT_TRANS_TABLES`, `ONLY_FULL_GROUP_BY`,
+  `NO_ZERO_IN_DATE`, `NO_ZERO_DATE`, `ERROR_FOR_DIVISION_BY_ZERO` are
+  set. `PIPES_AS_CONCAT` is not required (we don't use `||`). See
+  §13.4 D3 — architect.
 
 ## Implementation Plan
 
@@ -841,9 +1348,107 @@ Milestones map 1:1 to the phases above. Each phase is a separate PR
   the `db-bundled` profile, SQLite-upgrade safety-net, runbook, CI
   matrix expansion to all three dialects per PR. Release as the
   first version where Postgres is the default.
-- *M2 (Phase 2):* MySQL hardening — dialect-specific index
-  handling, VARCHAR(36) widths, MySQL compose overlay, CI leg
-  stable, docs. MySQL remains CI-only (no UAT).
+- *M2 (Phase 2):* MySQL hardening. Sequenced as small, independently
+  reviewable commits (full detail: §13; architectural decisions:
+  [ADR-0020](../decisions/0020-mysql-support-details.md)).
+  **Engineer owns 1–7, 9–11; senior-sre owns 8; tester owns 12.**
+
+  1. *Preflight.* Add `scripts/dump_baseline_ddl.py` and commit the
+     `tests/master/db/fixtures/baseline_ddl_{sqlite,postgresql}.sql`
+     fixtures. Add a passing `baseline-ddl-stability` test. Lands on
+     SQLite + Postgres CI without touching MySQL yet — proves the
+     verification mechanism works before we rely on it.
+  2. *Startup verification helper.* Add
+     `_dialect.verify_mysql_server_setup(conn)` with unit tests via
+     mocked connection. Wire it into `startup_db` behind the MySQL
+     dialect check. No DDL change.
+  3. *Driver integration.* Extend `DBIntegrityError` to include
+     `pymysql.err.IntegrityError`. Add a MySQL path to any error
+     tests that already cover sqlite3/psycopg equivalents. Also add
+     **`cryptography`** to `requirements.txt` (or pin it directly if
+     it is already a transitive dependency) — required by pymysql
+     for the first-auth RSA public-key exchange against
+     `caching_sha2_password` on 8.4 over a non-TLS connection. Add
+     a CI job that creates a fresh MySQL user and authenticates it
+     over plain TCP so the key-exchange path is covered and we
+     cannot silently lose the dependency.
+  4. *Alembic revision 000000000002.* Column type widenings per
+     §13.2, drop `server_default` on `workspaces.repo_ref` and
+     `notes.tags`, promote `chunks.created_at` to
+     `Float(precision=53)`, large-text promotions per §13.3. CI's
+     `baseline-ddl-stability` keeps SQLite + Postgres baseline byte-
+     identical; the SQLite + Postgres suites must pass before MySQL
+     gets wired on. Add `upgrade() → downgrade() → upgrade()`
+     round-trip test for the revision.
+  5. *Generated columns + index replacements* in the same revision
+     file (separate commit on the same branch for review ergonomics).
+     Four partial indexes → generated TINYINT columns on MySQL only;
+     `idx_staffs_scope_name` → generated `scope_id_key` column.
+     SQLite / Postgres index shape is preserved via
+     `sqlite_where` / `postgresql_where`.
+  6. *Call-site code backfill.* `src/master/workspaces.py` and
+     `src/master/notes.py` set `repo_ref` / `tags` from Python at
+     every insert (compensating for the dropped server defaults).
+     Covered by existing unit tests on SQLite + Postgres; MySQL leg
+     exercises them end-to-end when it switches on.
+  7. *Snapshot and conftest transaction fixes.*
+     `src/master/db/snapshot.py:_acquire_truncate_locks_in_txn` grows
+     a MySQL branch (`SET SESSION innodb_lock_wait_timeout` +
+     `SET SESSION lock_wait_timeout`); the import's truncate phase
+     switches from TRUNCATE to DELETE under `SET FOREIGN_KEY_CHECKS=0`.
+     `tests/conftest.py:_non_sqlite_truncate` makes the same change.
+  8. *Compose overlay.* `docker-compose.mysql.yml` with the
+     `db-bundled-mysql` profile; align `docker-compose.ci.yml`
+     mysql service flags to the overlay. New `docker-compose.yml`
+     entry if any — none expected. `.sre/test-db.sh` already handles
+     the mysql leg; verify end-to-end.
+  9. *CI enablement.* Remove `if: false` and `continue-on-error`
+     from `test-mysql`. Add it to `test-gate.needs`. Add the
+     `snapshot-roundtrip-mysql` job needed by §13.9.
+  10. *Runbook + config reference.*
+      `docs/guides/runbooks/mysql-setup.md` (version floor,
+      collation, sql_mode, bundled vs managed), updates to
+      `docs/references/config.md` (`DATABASE_URL` MySQL form,
+      MySQL-only env vars, `charset=utf8mb4`).
+  11. *Release notes.* Entry in `docs/releases/vX.Y.md` for the
+      Phase 2 release: MySQL is now CI-blocking, enumerate the
+      operator-visible requirements (collation, sql_mode, 8.0.16
+      floor), link the runbook.
+  12. *Test strategy (owned by tester).* MySQL remains CI-only (no
+      UAT). Parity is proved by:
+      - *Baseline DDL stability* on every PR (SQLite + Postgres).
+      - *The full pytest suite on MySQL* on every PR via
+        `.sre/test-db.sh mysql`, blocking via `test-gate`. Any test
+        that passes on Postgres but fails on MySQL is a gap and
+        gets a MySQL-targeted regression test added before the
+        underlying code change is accepted.
+      - *Alembic round-trip:* `alembic upgrade head → downgrade -1
+        → upgrade head` on all three dialects.
+      - *Snapshot round-trip on MySQL:* new CI job seeds a SQLite
+        DB, exports a snapshot, imports it into a mysql:8.4
+        container, resets `chunks.id`, inserts a new chunks row,
+        asserts no PK collision, then reads selected rows back and
+        compares byte-for-byte to the SQLite source for a known
+        subset (verifies emoji / 4-byte utf8mb4 round-trips).
+      - *Startup refusal paths:* unit tests for
+        `verify_mysql_server_setup` cover the version-too-low,
+        collation-wrong, and sql_mode-missing paths with mocked
+        connections. One integration test spins up `mysql:8.4`
+        with `--collation-server=utf8mb4_0900_ai_ci` and asserts
+        `startup_db` exits non-zero.
+      - *Fresh-user `caching_sha2_password` auth over plain TCP:*
+        new CI job creates a fresh MySQL user on the 8.4 service,
+        connects as that user over a non-TLS TCP connection, and
+        asserts success — exercises pymysql's RSA public-key
+        exchange path and guards against losing `cryptography`
+        from `requirements.txt`.
+      - *Generated-column semantics:* targeted test writes a row
+        to `workspaces`, archives it, and asserts the unique
+        constraint on `name` becomes "name is free" after
+        archive — same behaviour as the Postgres partial index.
+      - *Collation semantics:* test inserts `"Alice"` and `"alice"`
+        into `workspaces.name`; both must succeed on all three
+        dialects.
 - *M3 (Phase 3, optional):* Cleanup — remove `_prebaseline.py` and
   the `get_connection` shim once call sites are off raw `text()`
   SQL.
