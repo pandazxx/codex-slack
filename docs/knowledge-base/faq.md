@@ -72,7 +72,7 @@ You are seeing the SQLite-upgrade safety net. Master found a non-empty `master_d
 You have two options:
 
 - **Keep SQLite:** Add `DATABASE_URL=sqlite+pysqlite:////opt/codex-slack/data/master/master_data.db` to `.env` and restart. No data migration needed.
-- **Migrate to Postgres:** Follow [`docs/guides/runbooks/migrate-sqlite-to-postgres.md`](../guides/runbooks/migrate-sqlite-to-postgres.md). The short version: set `COMPOSE_PROFILES=db-bundled` and `POSTGRES_PASSWORD=<hex>`, start Postgres, run `scripts/db.sh snapshot-and-migrate`, then set `DATABASE_URL` to the Postgres URL.
+- **Migrate to Postgres:** Follow [`docs/guides/runbooks/migrate-sqlite-to-postgres.md`](../guides/runbooks/migrate-sqlite-to-postgres.md). The short version: set `COMPOSE_PROFILES=db-bundled` and `POSTGRES_PASSWORD=<hex>`, start Postgres, run `scripts/db.sh snapshot-and-migrate`, then set `DATABASE_URL` to the Postgres URL. For managed (external) Postgres or migrations from a separate machine, see the "Running the migration with plain `docker run`" and "Running the migration on a different machine" sections in that runbook.
 
 ---
 
