@@ -133,3 +133,64 @@ def test_delete_topic_removes_it(client, workspace_id):
 def test_delete_topic_not_found(client, workspace_id):
     r = client.delete(f"/api/workspaces/{workspace_id}/topics/no-such")
     assert r.status_code == 404
+
+
+# --- recent topics ---
+
+def test_recent_topics_empty(client):
+    r = client.get("/api/topics/recent?limit=20")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_recent_topics_returns_topic(client, workspace_id):
+    create_topic(client, workspace_id, subject="Test subject")
+    r = client.get("/api/topics/recent?limit=20")
+    assert r.status_code == 200
+    items = r.json()
+    assert len(items) == 1
+    item = items[0]
+    assert item["subject"] == "Test subject"
+    assert item["workspace_name"] == "repo"
+    assert item["workspace_id"] == workspace_id
+    assert "last_activity_at" in item
+    assert "topic_id" in item
+
+
+def test_recent_topics_excludes_archived_topic(client, workspace_id):
+    topic_id = create_topic(client, workspace_id).json()["id"]
+    client.delete(f"/api/workspaces/{workspace_id}/topics/{topic_id}")
+    r = client.get("/api/topics/recent?limit=20")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_recent_topics_excludes_archived_workspace(client, workspace_id):
+    create_topic(client, workspace_id)
+    client.delete(f"/api/workspaces/{workspace_id}")
+    r = client.get("/api/topics/recent?limit=20")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_recent_topics_workspace_name_populated(client):
+    r1 = client.post("/api/workspaces", json={"name": "ws_alpha", "repo_url": "https://github.com/x/a"})
+    r2 = client.post("/api/workspaces", json={"name": "ws_beta", "repo_url": "https://github.com/x/b"})
+    ws_alpha = r1.json()["id"]
+    ws_beta = r2.json()["id"]
+    create_topic(client, ws_alpha, subject="Alpha Topic")
+    create_topic(client, ws_beta, subject="Beta Topic")
+    r = client.get("/api/topics/recent?limit=20")
+    assert r.status_code == 200
+    items = r.json()
+    assert len(items) == 2
+    workspace_names = {item["workspace_name"] for item in items}
+    assert workspace_names == {"ws_alpha", "ws_beta"}
+
+
+def test_recent_topics_respects_limit(client, workspace_id):
+    for i in range(5):
+        create_topic(client, workspace_id, subject=f"Topic {i}")
+    r = client.get("/api/topics/recent?limit=3")
+    assert r.status_code == 200
+    assert len(r.json()) == 3
