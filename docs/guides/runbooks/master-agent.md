@@ -136,10 +136,11 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
   exec postgres psql -U master -d master -c '\dt'
 
 # SQLite (if opted in via DATABASE_URL)
+# The master_data volume is mounted at /data; master_data.db sits at the root.
 docker run --rm \
   -v codex-slack_master_data:/data:ro \
-  -it python:3.11-slim \
-  sqlite3 /data/master/master_data.db ".tables"
+  python:3.11-slim \
+  python -c "import sqlite3; print(sqlite3.connect('file:/data/master_data.db?mode=ro', uri=True).execute(\"select name from sqlite_master where type='table'\").fetchall())"
 ```
 
 If master exits at startup with `ERROR: DB schema is behind code`, run:

@@ -349,7 +349,7 @@ def list_recent_topics(request: Request, limit: int = 20) -> list[RecentTopicOut
             JOIN workspaces w ON t.workspace_id = w.id
             LEFT JOIN messages m ON m.topic_id = t.id
             WHERE t.archived_at IS NULL AND w.archived_at IS NULL
-            GROUP BY t.id
+            GROUP BY t.id, t.workspace_id, t.subject, t.created_at, w.name
             ORDER BY last_activity_at DESC
             LIMIT :limit
             """),

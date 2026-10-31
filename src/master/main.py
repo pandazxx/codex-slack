@@ -122,7 +122,7 @@ def _close_stale_streams(db_path: str, settings, app_state=None) -> None:
                     " FROM chunks c"
                     " LEFT JOIN messages m ON m.id = c.message_id"
                     " WHERE m.id IS NULL"
-                    " GROUP BY c.message_id"
+                    " GROUP BY c.message_id, c.topic_id, c.agent_name"
                 )
             ).fetchall()
         finally:

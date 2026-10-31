@@ -2,7 +2,35 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-10-29 -->
+<!-- last updated: 2026-10-31 -->
+
+---
+
+## 2026-10-31 — SQLite permissive GROUP BY hides Postgres failures; swallowed exceptions and hard-coded SQLite paths in tests compound the blind spot
+
+*Summary:* After migrating staging to Postgres, two SQL queries that worked fine on SQLite failed silently or visibly on Postgres. The "Recent Topics" sidebar was empty because `GET /api/topics/recent` returned 500. Stale-stream cleanup (`_close_stale_streams`) was permanently dead but logged no visible error because its exception handler swallowed the failure. Neither bug surfaced in CI because the tests for these paths either did not exist or were wired to hard-coded SQLite files, so the Postgres CI leg never exercised the broken queries.
+
+**Bug 1 — `list_recent_topics` GROUP BY (`src/master/topics.py`).** The query selected `w.name AS workspace_name` from a joined `workspaces` table while grouping only by `t.id`. SQLite accepts bare non-aggregated columns in a GROUP BY query; Postgres raises `column "w.name" must appear in the GROUP BY clause or be used in an aggregate function`. No test existed for `GET /api/topics/recent`, so the Postgres CI leg never caught it.
+
+*Root cause:* SQLite extends its GROUP BY permissiveness to all selected columns, not just those functionally dependent on the grouped key. Postgres enforces the SQL standard: only columns that are functionally dependent on the grouped key (via a primary-key relationship within the same table) may appear bare; columns from joined tables always require explicit inclusion in GROUP BY.
+
+*Fix applied:* Extended `GROUP BY t.id` to `GROUP BY t.id, t.workspace_id, t.subject, t.created_at, w.name`. All five columns are constant per grouped `t.id` row so the semantics are identical on both databases.
+
+**Bug 2 — `_close_stale_streams` GROUP BY (`src/master/main.py`).** The query grouped by `c.message_id` while selecting `c.topic_id` and `c.agent_name`. Because `message_id` is not the primary key of `chunks`, Postgres raised the same error class. The outer `except Exception: LOGGER.exception("master.stale_stream_query_failed"); return` block swallowed the error, so stale streams were never closed but no alarm fired. The existing tests for this function all passed a hard-coded SQLite file path directly to `_close_stale_streams`, bypassing `DATABASE_URL` entirely; the Postgres CI leg ran them on SQLite.
+
+*Root cause:* Same SQLite permissive GROUP BY. Additionally, `message_id` is not the primary key of `chunks`, so Postgres cannot infer functional dependency even within the same table.
+
+*Fix applied:* Extended `GROUP BY c.message_id` to `GROUP BY c.message_id, c.topic_id, c.agent_name`.
+
+**Coverage hole.** The `stale_db` fixture in `tests/master/test_main.py` creates a fresh SQLite DB at `tmp_path / "stale_test.db"` and calls `init_db(path)`, then passes that path directly to the function under test via `_close_stale_streams(stale_db, settings)`. Because `get_connection(explicit_sqlite_path)` resolves the path to a SQLite URL regardless of `DATABASE_URL`, all stale-stream tests ran on SQLite even on the Postgres CI leg. The new regression test `test_stale_stream_query_succeeds_on_configured_backend` uses `app.state.db_path` (set by the lifespan from `DATABASE_URL`) so it exercises the real configured backend.
+
+*Tests with hard-coded SQLite paths identified:* `tests/master/test_main.py` (the entire `stale_db` fixture group — 10 tests, acceptable because they test business logic that is dialect-independent once the GROUP BY is fixed); `tests/test_master_chunks.py` (4 occurrences); `tests/test_master_replay.py` (5 occurrences); `tests/master/test_event_actions.py` (~40 occurrences); `tests/master/test_orchestration.py` (~10 occurrences); plus smaller counts in `test_notify.py`, `test_mqtt_client.py`, `test_topic_export.py`, and the `tests/master/db/` suite. Most of these tests exercise business logic, not raw SQL, and their helper functions use `sqlite3.connect` only for seeding/reading — the application code paths they call go through `get_connection` and therefore exercise whatever `DATABASE_URL` resolves to.
+
+**Timestamp format.** No format mismatch found. All `created_at` columns in `topics` and `messages` are `sa.Text()` and are always written as `%Y-%m-%dT%H:%M:%SZ` by every code path in `_now()`. The `COALESCE(MAX(m.created_at), t.created_at)` in `list_recent_topics` mixes two TEXT columns in the same ISO 8601 / `Z`-suffix format, so lexicographic `ORDER BY` is correct. `chunks.created_at` is `sa.Float()` (Unix epoch); the comparison in `_close_stale_streams` is numeric, not textual — no issue.
+
+**Runbook fix.** `docs/guides/runbooks/master-agent.md` had two errors in the SQLite inspection snippet: the path `/data/master/master_data.db` is wrong (the `master_data` volume mounts to `/data` in the inspection container, so the file is at `/data/master_data.db`), and `python:3.11-slim` has no `sqlite3` CLI. Fixed to use `python -c "import sqlite3; ..."` with the correct path and the `mode=ro` URI flag.
+
+*Prevention:* (1) Every API endpoint must have at least one test that executes against the configured backend — use `TestClient(app)` with `_set_test_database_url` in effect, not a fixture that creates its own SQLite file. (2) Any fixture that seeds test data must use `get_connection(db_path)` (or the app's state), not `sqlite3.connect`, so it runs on the same backend as the code under test. (3) When a function wraps a DB query in a broad `except Exception: logger.exception(...)`, the exception label must appear in at least one test's `caplog` assertion so that a silent failure cannot slip through a CI run. (4) When adding a SQL query with `GROUP BY`, always check whether every selected non-aggregate column is either the grouped key, functionally dependent on it within the same table, or explicitly included in the `GROUP BY` list — SQLite's permissive mode will not catch violations.
 
 ---
 
