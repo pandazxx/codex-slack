@@ -7,6 +7,27 @@
 
 ## Revision history
 
+- **2026-11-01 (rev 6)** — Project owner **deferred MySQL support**
+  until there is a concrete operator need. Postgres remains the
+  production target; SQLite remains the opt-in fallback. §13 keeps
+  the Phase 2 analysis verbatim as the record for whoever picks
+  MySQL up later, but gains a Deferred banner at the top. OQ13–OQ17
+  move out of "Open Questions" into a new "Parked (deferred with
+  MySQL)" list so the document no longer has blocking open
+  questions. §12 Phase 2 and the Implementation Plan M2 entry are
+  flagged **deferred**. Goals/Non-goals and §10 CI matrix wording
+  updated: supported providers are Postgres (default) and SQLite
+  (opt-in); MySQL is deferred, the dialect helpers already in the
+  code are kept but untested, and a `mysql+pymysql://` `DATABASE_URL`
+  is refused at startup with a pointer to ADR-0020 (engineer landing
+  that check separately). [ADR-0020](../decisions/0020-mysql-support-details.md)
+  gains a Deferred banner at the top; status stays `proposed` because
+  the repo's MADR status flow has no `deferred` state (see
+  `docs/decisions/README.md`). Phase 3 / M3 cleanup
+  (`_prebaseline.py` removal per OQ11, `get_connection` shim
+  retirement — shim scope TBD by owner) is **scheduled for v5.1**
+  per the owner. Earlier history, resolved questions, and §13
+  analysis are left in place unchanged.
 - **2026-10-31 (rev 5.1)** — Correction to rev 5. Two factual errors
   in the Phase 2 addendum were fixed and the surrounding snippets,
   D-rows, OQs, risk note and implementation plan brought into
@@ -149,22 +170,27 @@ Today's reality (surveyed 2026-10-24, verified against
 
 ## Goals
 
+> **Note (rev 6, 2026-11-01).** MySQL is deferred (see revision
+> history). The goals below are updated to reflect the current
+> supported set — Postgres (default) and SQLite (opt-in). MySQL goals
+> are preserved under §13 as the record for when the deferral is
+> lifted.
+
 - One configuration surface for picking the DB backend:
   `DATABASE_URL` (SQLAlchemy URL format). **Postgres is the default**;
-  SQLite and MySQL are selected by setting `DATABASE_URL` explicitly.
+  SQLite is selected by setting `DATABASE_URL` to a `sqlite+pysqlite://`
+  URL. A `mysql+pymysql://` URL is **refused at startup** until MySQL
+  support is unparked (see §13 Deferred banner).
 - Postgres is a *first-class* production target: supported end-to-end
   (schema, migrations, deploy, backup, tests, docs, UAT).
-- SQLite and MySQL are *supported* alternative targets with full CI
-  coverage. MySQL has a documented minimum version floor (MySQL
-  8.0.16+) so partial-index / functional-index / enforced-CHECK
-  semantics are available.
+- SQLite is a *supported* opt-in fallback with full CI coverage,
+  intended for single-user installs and the fast unit-test loop.
 - Snapshot tooling exports a provider-neutral representation of the
   current DB and imports it into a fresh target DB of any supported
   provider. Import resets identity sequences so subsequent inserts
   do not collide with imported rows.
-- CI runs the master test suite against SQLite, Postgres, and MySQL
-  on every PR. Postgres is top priority (its failures gate merge
-  loudly).
+- CI runs the master test suite against SQLite and Postgres on every
+  PR. Postgres is top priority (its failures gate merge loudly).
 - Operators get a one-page runbook for migrating an existing SQLite
   install to Postgres with downtime bounded by snapshot size.
 
@@ -614,8 +640,13 @@ compose` invocation; staging and prod `.env` files declare it.
 ### 10. CI test matrix
 
 Resolved from OQ5: **every supported backend's CI runs on every PR.
-Postgres is top priority; SQLite and MySQL also gate merge; MySQL
-does not gate UAT.**
+Postgres is top priority; SQLite also gates merge.**
+
+> **Note (rev 6, 2026-11-01).** MySQL is deferred; the `test-mysql`
+> job stays disabled. The CI yaml snippet below is kept for reference
+> and will be re-enabled when the deferral is lifted. The current
+> supported matrix is **SQLite + Postgres only**, both per-PR, both
+> gating merge.
 
 ```yaml
 jobs:
@@ -772,8 +803,16 @@ Postgres switch):*
 - Switch staging singleton to Postgres via `.env.staging` setting
   `COMPOSE_PROFILES=db-bundled`.
 
-**Phase 2 — MySQL support hardened** (full detail in §13; architecturally
-significant decisions in [ADR-0020](../decisions/0020-mysql-support-details.md))
+**Phase 2 — MySQL support hardened — DEFERRED (2026-11-01)** (full detail
+in §13; architecturally significant decisions in
+[ADR-0020](../decisions/0020-mysql-support-details.md))
+
+> **Deferred.** The project owner has deferred Phase 2 until there is a
+> concrete operator need for MySQL. The bullet list below is preserved
+> as the plan to execute when the deferral is lifted; no Phase 2 work
+> is scheduled. Current state: dialect helpers that already shipped
+> remain in the tree but untested on MySQL; `mysql+pymysql://` URLs
+> are refused at startup with a pointer to ADR-0020.
 
 - New Alembic revision `000000000002_mysql_dialect_fixes.py` (the baseline
   stays frozen — see ADR-0020 strategy S2):
@@ -848,13 +887,30 @@ significant decisions in [ADR-0020](../decisions/0020-mysql-support-details.md))
   `docs/guides/runbooks/mysql-setup.md`. MySQL is CI-only (no UAT
   leg).
 
-**Phase 3 — Cleanup (optional, not blocking)**
+**Phase 3 — Cleanup — scheduled for v5.1 (owner decision, 2026-11-01)**
 
-- Delete `_prebaseline.py`.
-- Delete the `get_connection()` shim once all call sites are moved
-  to Core expression API (long tail).
+- Delete `_prebaseline.py` once prod is on Postgres (satisfies the
+  one-release-cycle rule from OQ11).
+- Retire the `get_connection()` shim. Scope **TBD by owner** — options
+  range from "delete the shim and leave the Core expression API as
+  the only idiom" to "keep the shim but ban new call sites via lint".
+  The owner will pick the scope before M3 opens.
 
 ### 13. Phase 2 (M2) detailed design — MySQL support
+
+> **Deferred (2026-11-01).** The project owner has deferred MySQL
+> support until there is a concrete operator need. The gap list,
+> VARCHAR widths, generated-column scheme, collation and
+> `sql_mode` policy, snapshot-import transaction fix,
+> `mysql:8.4` + `cryptography` recommendation, CI gating plan,
+> and risks are all preserved **unchanged** below as the record
+> for whoever picks MySQL up later. Nothing in §13 is being
+> implemented. Trigger for revisiting: an operator who has to
+> point `DATABASE_URL` at MySQL and cannot move to Postgres;
+> see [ADR-0020](../decisions/0020-mysql-support-details.md) for
+> the full prerequisites. OQ13–OQ17 are moved out of "Open
+> Questions" into "Parked (deferred with MySQL)" so this doc has
+> no blocking open questions.
 
 Phase 1 shipped SQLAlchemy Core + Alembic with Postgres as the default
 and SQLite as the alternative. The baseline revision
@@ -1300,13 +1356,24 @@ the reasoning that led to the current shape.
 OQ1–OQ12 all resolved; see the "Resolved questions" section above. OQ10
 remains documented there as the replace-only decision.
 
-Phase 2 (M2) items awaiting owner sign-off (introduced rev 5, 2026-10-31):
+No blocking open questions remain. Phase-2 items that previously lived
+here are now Parked below — the deferral removes them from the
+critical path.
+
+## Parked (deferred with MySQL)
+
+The following items were introduced in rev 5 (2026-10-31) as "awaiting
+owner sign-off before Phase 2 PR opens." Rev 6 (2026-11-01) defers
+Phase 2; they are parked here until the deferral is lifted. They are
+left verbatim so the record of the recommendation and the alternative
+survives for whoever picks MySQL up later.
 
 - [ ] **OQ13 — Collation policy on MySQL.** Recommendation:
   `utf8mb4_0900_as_cs` server-wide, verified at startup, hard refusal
   on mismatch. See §13.4 D1 and ADR-0020. Alternative is accepting the
   MySQL default (`_ai_ci`) and documenting the behaviour change
-  (ADR-0020 C4). Owner must sign off before Phase 2 PR opens — architect.
+  (ADR-0020 C4). Owner sign-off required before Phase 2 begins —
+  architect.
 - [ ] **OQ14 — Large-text column classification.** Recommendation: per
   the §13.3 table (TEXT / MEDIUMTEXT / LONGTEXT via
   `Text().with_variant(...)`). Alternative: LONGTEXT everywhere for
@@ -1348,7 +1415,13 @@ Milestones map 1:1 to the phases above. Each phase is a separate PR
   the `db-bundled` profile, SQLite-upgrade safety-net, runbook, CI
   matrix expansion to all three dialects per PR. Release as the
   first version where Postgres is the default.
-- *M2 (Phase 2):* MySQL hardening. Sequenced as small, independently
+- *M2 (Phase 2):* MySQL hardening — **deferred (2026-11-01).** The
+  plan below is kept as the sequenced record for when the deferral
+  is lifted. No M2 work is scheduled. Trigger: a concrete operator
+  need for MySQL (see §13 Deferred banner and
+  [ADR-0020](../decisions/0020-mysql-support-details.md)). Owner
+  sign-off on OQ13–OQ17 (parked list above) is a prerequisite before
+  any step below is picked up. Sequenced as small, independently
   reviewable commits (full detail: §13; architectural decisions:
   [ADR-0020](../decisions/0020-mysql-support-details.md)).
   **Engineer owns 1–7, 9–11; senior-sre owns 8; tester owns 12.**
@@ -1449,6 +1522,13 @@ Milestones map 1:1 to the phases above. Each phase is a separate PR
       - *Collation semantics:* test inserts `"Alice"` and `"alice"`
         into `workspaces.name`; both must succeed on all three
         dialects.
-- *M3 (Phase 3, optional):* Cleanup — remove `_prebaseline.py` and
-  the `get_connection` shim once call sites are off raw `text()`
-  SQL.
+- *M3 (Phase 3):* Cleanup — **scheduled for v5.1** per the project
+  owner (2026-11-01).
+  - Remove `_prebaseline.py` once prod is on Postgres, honouring the
+    one-release-cycle retention rule from OQ11.
+  - Retire the `get_connection()` shim. **Scope TBD by owner** — the
+    owner will pick between "delete the shim and leave the Core
+    expression API as the only idiom" and "keep the shim but ban
+    new call sites via lint" before M3 opens. Not decided here on
+    purpose: the long-tail call-site conversion cost is the main
+    factor and the owner is the person who prices it.

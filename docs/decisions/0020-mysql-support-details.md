@@ -7,6 +7,40 @@ consulted: [engineer, tester, senior-sre]
 informed: [doc-writer]
 ---
 
+> **Deferred (2026-11-01).** The project owner has deferred MySQL support
+> until there is a concrete operator need. The repo's MADR status flow
+> (`proposed → accepted → deprecated / superseded`, see
+> `docs/decisions/README.md`) has no `deferred` state, so the ADR
+> intentionally stays at `status: proposed`: nothing here has been
+> accepted, and the analysis below is preserved verbatim as the record
+> for whoever picks MySQL up later.
+>
+> *Reason.* Postgres is the production target and SQLite remains an
+> opt-in fallback. MySQL has no live operator need today; shipping and
+> maintaining a third CI leg, a server-version/collation/`sql_mode`
+> contract, a `cryptography`-gated auth path, and a parallel compose
+> overlay has a real cost that is not currently paid back by any user.
+>
+> *Trigger for revisiting.* A concrete need for MySQL (an operator who
+> has to point `DATABASE_URL` at MySQL and cannot move to Postgres).
+> At that point the deferral note is removed, this ADR is revisited,
+> and the sign-offs below are collected.
+>
+> *What has to happen first.* Owner sign-off on OQ13–OQ17 in the design
+> doc (parked list under `docs/design/backend-database-provider.md`):
+> collation (D1), large-text classification (D2), `sql_mode` set (D3),
+> baseline-change strategy (D5), and the `mysql:8.4` image pin plus
+> `cryptography` requirement (D6). The Phase 2 implementation does not
+> start until those are signed off.
+>
+> *Status of the dialect helpers that already shipped.* The
+> `_dialect.upsert`, `_dialect.json_array_contains_fragment`, and
+> related mechanical fixes landed in M1 and remain in the code; they
+> are kept but untested on MySQL and are not promised to work. A
+> `DATABASE_URL` with a `mysql+pymysql://` scheme is refused at
+> startup with a pointer to this ADR (an engineer is adding that
+> check in a separate PR).
+
 ## Context and Problem Statement
 
 ADR-0019 chose SQLAlchemy Core + Alembic and committed to supporting
