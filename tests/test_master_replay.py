@@ -152,8 +152,8 @@ def test_replay_events_are_in_seq_order(db_path):
     conn = get_connection(db_path)
     for seq in reversed(range(5)):
         conn.execute(
-            "INSERT INTO chunks (message_id, topic_id, seq, event) VALUES (?, ?, ?, ?)",
-            ("msg-order", "t1", seq, json.dumps({"type": "assistant", "idx": seq})),
+            "INSERT INTO chunks (message_id, topic_id, seq, event, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("msg-order", "t1", seq, json.dumps({"type": "assistant", "idx": seq}), time.time()),
         )
     conn.commit()
     conn.close()
