@@ -271,6 +271,113 @@ def test_no_sqlite3_imports_outside_db_package():
     )
 
 
+def _find_bare_sqlite3_connect_in_tests(tests_root: Path) -> list[str]:
+    """Return 'file:line' strings where sqlite3.connect() is called in test files
+    outside tests/master/db/, unless the test function/class is marked sqlite_only.
+
+    A file-level `import sqlite3` in a test file is acceptable (used for sqlite_only
+    tests). What we forbid is a *call* to sqlite3.connect() (or the alias
+    _sqlite3.connect()) in a test function that is not protected by the
+    @pytest.mark.sqlite_only marker.
+
+    Detection heuristic:
+    - Walk every .py file under tests/ except tests/master/db/.
+    - For each call to ``sqlite3.connect(...)`` or ``_sqlite3.connect(...)``,
+      check if the enclosing function/method has a ``pytest.mark.sqlite_only``
+      decorator (directly or via a class-level decorator).
+    - If not protected, report it as a violation.
+    """
+    allowed_prefix = str(tests_root / "master" / "db")
+
+    violations: list[str] = []
+    for py_file in sorted(tests_root.rglob("*.py")):
+        # Skip the db/ sub-package (SQLite-only tooling lives there).
+        if str(py_file).startswith(allowed_prefix):
+            continue
+        try:
+            source = py_file.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(py_file))
+        except SyntaxError:
+            continue
+
+        rel = str(py_file.relative_to(REPO_ROOT)).replace("\\", "/")
+
+        # Collect node ranges for functions/methods that have @pytest.mark.sqlite_only.
+        sqlite_only_ranges: set[tuple[int, int]] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for dec in node.decorator_list:
+                dec_src = ast.unparse(dec)
+                if "sqlite_only" in dec_src:
+                    sqlite_only_ranges.add((node.lineno, node.end_lineno))
+
+        # Also accept class-level decorators (class marked sqlite_only ⇒ all
+        # methods inside are covered).
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            class_has_marker = any(
+                "sqlite_only" in ast.unparse(d) for d in node.decorator_list
+            )
+            if class_has_marker:
+                sqlite_only_ranges.add((node.lineno, node.end_lineno))
+
+        # Find all calls to sqlite3.connect (or _sqlite3.connect).
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            is_connect_call = False
+            if isinstance(func, ast.Attribute):
+                if func.attr == "connect":
+                    obj = func.value
+                    if isinstance(obj, ast.Name) and obj.id in ("sqlite3", "_sqlite3"):
+                        is_connect_call = True
+            if not is_connect_call:
+                continue
+
+            # Check if this call is within a sqlite_only-protected scope.
+            call_line = node.lineno
+            protected = any(
+                start <= call_line <= end
+                for start, end in sqlite_only_ranges
+            )
+            if not protected:
+                violations.append(f"{rel}:{call_line}")
+
+    return violations
+
+
+def test_no_bare_sqlite3_connect_in_tests():
+    """No test file outside tests/master/db/ may call sqlite3.connect()
+    unless the enclosing function or class carries @pytest.mark.sqlite_only.
+
+    sqlite3.connect() bypasses DATABASE_URL and makes tests silently run on
+    SQLite even when the Postgres CI leg is active, hiding dialect portability
+    bugs.  The right fix is to use get_connection(db_url) (where db_url comes
+    from the db_url fixture in tests/master/conftest.py), which respects the
+    configured backend.
+
+    Exceptions:
+    - tests/master/db/  — SQLite-specific tooling, snapshot/migration code.
+    - Any test function/class decorated with @pytest.mark.sqlite_only — these
+      tests only run on SQLite and the bare connect() is intentional.
+    """
+    tests_root = REPO_ROOT / "tests"
+    violations = _find_bare_sqlite3_connect_in_tests(tests_root)
+    assert violations == [], (
+        f"Found {len(violations)} unguarded sqlite3.connect() call(s) in test files:\n  "
+        + "\n  ".join(violations)
+        + "\n\nEither:\n"
+        "  (a) Replace sqlite3.connect(path) with get_connection(db_url) where db_url\n"
+        "      is the db_url fixture from tests/master/conftest.py, OR\n"
+        "  (b) Mark the enclosing test function/class with @pytest.mark.sqlite_only\n"
+        "      (only if it specifically tests SQLite-only behaviour).\n"
+        "See docs/test-plans/postgres-coverage.md for guidance."
+    )
+
+
 def test_no_bare_bool_literals_in_boolean_columns():
     """No SQL string literal assigns bare 0 or 1 to a known BOOLEAN column.
 
