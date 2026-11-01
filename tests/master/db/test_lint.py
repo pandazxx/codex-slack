@@ -271,27 +271,37 @@ def test_no_sqlite3_imports_outside_db_package():
     )
 
 
-def _find_bare_sqlite3_connect_in_tests(tests_root: Path) -> list[str]:
-    """Return 'file:line' strings where sqlite3.connect() is called in test files
-    outside tests/master/db/, unless the test function/class is marked sqlite_only.
+def _find_bare_sqlite3_connect_in_tests(
+    tests_root: Path,
+    *,
+    repo_root: Path | None = None,
+) -> list[str]:
+    """Return 'file:line' strings for unguarded sqlite3.connect() calls in test files.
 
-    A file-level `import sqlite3` in a test file is acceptable (used for sqlite_only
-    tests). What we forbid is a *call* to sqlite3.connect() (or the alias
-    _sqlite3.connect()) in a test function that is not protected by the
-    @pytest.mark.sqlite_only marker.
+    Scans every .py file under tests_root except tests_root/master/db/.  For
+    each file that imports sqlite3 (in any of the four binding forms below),
+    the function checks two things:
 
-    Detection heuristic:
-    - Walk every .py file under tests/ except tests/master/db/.
-    - For each call to ``sqlite3.connect(...)`` or ``_sqlite3.connect(...)``,
-      check if the enclosing function/method has a ``pytest.mark.sqlite_only``
-      decorator (directly or via a class-level decorator).
-    - If not protected, report it as a violation.
+    1. Unguarded connect calls — any call to a name bound to sqlite3.connect
+       that is *not* inside a function or class decorated with
+       ``@pytest.mark.sqlite_only``.
+
+    2. Module-level sqlite3 import with no sqlite_only usage at all — a file
+       that imports sqlite3 but never uses the ``sqlite_only`` marker in any
+       form is almost certainly a dead import (m-4) or a missed conversion.
+
+    Detected import binding forms
+    ────────────────────────────
+    - ``import sqlite3``                       → name "sqlite3" bound to module
+    - ``import sqlite3 as sq``                 → name "sq" bound to module
+    - ``from sqlite3 import connect``          → name "connect" bound to function
+    - ``from sqlite3 import connect as c``     → name "c" bound to function
     """
+    _repo_root = repo_root if repo_root is not None else REPO_ROOT
     allowed_prefix = str(tests_root / "master" / "db")
 
     violations: list[str] = []
     for py_file in sorted(tests_root.rglob("*.py")):
-        # Skip the db/ sub-package (SQLite-only tooling lives there).
         if str(py_file).startswith(allowed_prefix):
             continue
         try:
@@ -300,49 +310,72 @@ def _find_bare_sqlite3_connect_in_tests(tests_root: Path) -> list[str]:
         except SyntaxError:
             continue
 
-        rel = str(py_file.relative_to(REPO_ROOT)).replace("\\", "/")
+        rel = str(py_file.relative_to(_repo_root)).replace("\\", "/")
 
-        # Collect node ranges for functions/methods that have @pytest.mark.sqlite_only.
+        # Collect names that refer to the sqlite3 module or its connect function.
+        module_aliases: set[str] = set()   # names bound to the sqlite3 module
+        connect_aliases: set[str] = set()  # names bound to sqlite3.connect
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "sqlite3":
+                        bound_name = alias.asname if alias.asname else alias.name
+                        module_aliases.add(bound_name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "sqlite3":
+                    for alias in node.names:
+                        if alias.name == "connect":
+                            bound_name = alias.asname if alias.asname else alias.name
+                            connect_aliases.add(bound_name)
+
+        if not module_aliases and not connect_aliases:
+            continue
+
+        # Collect sqlite_only-protected ranges (function/method and class).
         sqlite_only_ranges: set[tuple[int, int]] = set()
+        has_sqlite_only = False
+
         for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for dec in node.decorator_list:
-                dec_src = ast.unparse(dec)
-                if "sqlite_only" in dec_src:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for dec in node.decorator_list:
+                    if "sqlite_only" in ast.unparse(dec):
+                        sqlite_only_ranges.add((node.lineno, node.end_lineno))
+                        has_sqlite_only = True
+            elif isinstance(node, ast.ClassDef):
+                if any("sqlite_only" in ast.unparse(d) for d in node.decorator_list):
                     sqlite_only_ranges.add((node.lineno, node.end_lineno))
+                    has_sqlite_only = True
 
-        # Also accept class-level decorators (class marked sqlite_only ⇒ all
-        # methods inside are covered).
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef):
-                continue
-            class_has_marker = any(
-                "sqlite_only" in ast.unparse(d) for d in node.decorator_list
+        # Flag files that import sqlite3 at module level but never use sqlite_only.
+        if not has_sqlite_only:
+            violations.append(
+                f"{rel}:1: imports sqlite3 at module level with no sqlite_only usage"
             )
-            if class_has_marker:
-                sqlite_only_ranges.add((node.lineno, node.end_lineno))
+            # Still scan for connect calls — both diagnostics are useful.
 
-        # Find all calls to sqlite3.connect (or _sqlite3.connect).
+        # Find calls to sqlite3.connect(...) via any binding.
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
             is_connect_call = False
+
             if isinstance(func, ast.Attribute):
-                if func.attr == "connect":
-                    obj = func.value
-                    if isinstance(obj, ast.Name) and obj.id in ("sqlite3", "_sqlite3"):
+                # module_alias.connect(...)
+                if func.attr == "connect" and isinstance(func.value, ast.Name):
+                    if func.value.id in module_aliases:
                         is_connect_call = True
+            elif isinstance(func, ast.Name):
+                # connect_alias(...)  — from sqlite3 import connect [as ...]
+                if func.id in connect_aliases:
+                    is_connect_call = True
+
             if not is_connect_call:
                 continue
 
-            # Check if this call is within a sqlite_only-protected scope.
             call_line = node.lineno
-            protected = any(
-                start <= call_line <= end
-                for start, end in sqlite_only_ranges
-            )
+            protected = any(start <= call_line <= end for start, end in sqlite_only_ranges)
             if not protected:
                 violations.append(f"{rel}:{call_line}")
 
@@ -375,6 +408,90 @@ def test_no_bare_sqlite3_connect_in_tests():
         "  (b) Mark the enclosing test function/class with @pytest.mark.sqlite_only\n"
         "      (only if it specifically tests SQLite-only behaviour).\n"
         "See docs/test-plans/postgres-coverage.md for guidance."
+    )
+
+
+def test_sqlite3_connect_detector_catches_all_import_forms(tmp_path):
+    """Self-test: _find_bare_sqlite3_connect_in_tests detects every bypass form.
+
+    Each snippet exercises a different way of obtaining a connection to sqlite3.
+    All four forms must be flagged as violations when they appear outside a
+    sqlite_only-protected scope, and must be *allowed* when they appear inside one.
+    """
+    snippets = {
+        "plain_import.py": (
+            "import sqlite3\n"
+            "def test_it():\n"
+            "    conn = sqlite3.connect('/tmp/x.db')\n"
+        ),
+        "aliased_module.py": (
+            "import sqlite3 as sq\n"
+            "def test_it():\n"
+            "    conn = sq.connect('/tmp/x.db')\n"
+        ),
+        "from_import.py": (
+            "from sqlite3 import connect\n"
+            "def test_it():\n"
+            "    conn = connect('/tmp/x.db')\n"
+        ),
+        "from_import_aliased.py": (
+            "from sqlite3 import connect as c\n"
+            "def test_it():\n"
+            "    conn = c('/tmp/x.db')\n"
+        ),
+    }
+    for name, src in snippets.items():
+        (tmp_path / name).write_text(src)
+
+    violations = _find_bare_sqlite3_connect_in_tests(tmp_path, repo_root=tmp_path)
+    # Each snippet produces two violations: one for the dead import and one for the call.
+    call_violations = [v for v in violations if not v.endswith("no sqlite_only usage")]
+    assert len(call_violations) == 4, (
+        f"Expected 4 unguarded-call violations (one per snippet), got {len(call_violations)}:\n"
+        + "\n".join(call_violations)
+    )
+
+    # Each snippet also triggers the dead-import diagnostic.
+    import_violations = [v for v in violations if "no sqlite_only usage" in v]
+    assert len(import_violations) == 4, (
+        f"Expected 4 dead-import violations, got {len(import_violations)}:\n"
+        + "\n".join(import_violations)
+    )
+
+
+def test_sqlite3_connect_detector_allows_sqlite_only_guard(tmp_path):
+    """Self-test: connect calls inside sqlite_only-decorated functions are allowed."""
+    snippets = {
+        "guarded_function.py": (
+            "import pytest\n"
+            "import sqlite3\n"
+            "import sqlite3 as sq\n"
+            "from sqlite3 import connect\n"
+            "from sqlite3 import connect as c\n"
+            "@pytest.mark.sqlite_only\n"
+            "def test_it():\n"
+            "    sqlite3.connect('/tmp/x.db')\n"
+            "    sq.connect('/tmp/x.db')\n"
+            "    connect('/tmp/x.db')\n"
+            "    c('/tmp/x.db')\n"
+        ),
+        "guarded_class.py": (
+            "import pytest\n"
+            "import sqlite3\n"
+            "@pytest.mark.sqlite_only\n"
+            "class TestSqliteOnly:\n"
+            "    def test_it(self):\n"
+            "        sqlite3.connect('/tmp/x.db')\n"
+        ),
+    }
+    for name, src in snippets.items():
+        (tmp_path / name).write_text(src)
+
+    violations = _find_bare_sqlite3_connect_in_tests(tmp_path, repo_root=tmp_path)
+    call_violations = [v for v in violations if not v.endswith("no sqlite_only usage")]
+    assert call_violations == [], (
+        f"Expected no unguarded-call violations for sqlite_only-protected code, got:\n"
+        + "\n".join(call_violations)
     )
 
 
