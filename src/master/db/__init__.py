@@ -469,6 +469,51 @@ def sqlite_safety_check(data_dir: str) -> None:
     sys.exit(1)
 
 
+_MYSQL_DEFERRED_MSG = (
+    "ERROR: MySQL support is deferred; supported providers are Postgres (default) "
+    "and SQLite. See docs/decisions/0020-mysql-support-details.md"
+)
+
+
+def _refuse_mysql(url: str) -> None:
+    """Exit non-zero when url targets MySQL or MariaDB.
+
+    Covers all driver variants: mysql+pymysql, mysql+mysqldb, mariadb+...,
+    and plain mysql://.  Uses SQLAlchemy make_url so the backend name is
+    extracted reliably regardless of which driver suffix is present.
+
+    Returns immediately for empty or unparseable URLs — the downstream
+    caller will produce its own diagnostic in that case.
+
+    Set ALLOW_EXPERIMENTAL_MYSQL=1 to bypass (for development only).
+    """
+    import sys
+    from sqlalchemy.engine import make_url as _make_url
+
+    if not url:
+        return
+
+    if os.getenv("ALLOW_EXPERIMENTAL_MYSQL", "").strip() in ("1", "true", "yes"):
+        return
+
+    try:
+        parsed = _make_url(url)
+        backend = parsed.get_backend_name()
+    except Exception:
+        return  # unparseable URL; let the downstream caller fail with its own error
+
+    if backend in ("mysql", "mariadb"):
+        safe_url = parsed.render_as_string(hide_password=True)
+        print(
+            f"{_MYSQL_DEFERRED_MSG}\n"
+            f"  (detected: {safe_url})\n"
+            f"  Set ALLOW_EXPERIMENTAL_MYSQL=1 to bypass (for development only).",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(1)
+
+
 def _with_database_url(url: str, fn) -> None:
     """Run fn with DATABASE_URL temporarily set to url.
 
@@ -520,6 +565,8 @@ def startup_db(url: str) -> None:
     request handling begins.  It does not modify the DB on up-to-date
     or refusal paths.
     """
+    _refuse_mysql(url)
+
     import sys
     import time
     from pathlib import Path

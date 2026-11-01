@@ -56,7 +56,10 @@ case "$DB" in
         export COMPOSE_PROFILES="ci-mysql" MYSQL_PASSWORD="$PW"
         URL="mysql+pymysql://master:${PW}@mysql:3306/master"
         XURL="mysql+pymysql://master:${PW}@mysql:3306/master_xdialect"
-        RUN_ENV=(-e "DATABASE_URL=${URL}" -e "TEST_DATABASE_URL=${URL}" -e "TEST_MYSQL_URL=${XURL}")
+        # MySQL support is deferred (ADR-0020); master refuses mysql URLs unless
+        # the development escape hatch is set. This leg is experimental only.
+        RUN_ENV=(-e "DATABASE_URL=${URL}" -e "TEST_DATABASE_URL=${URL}" -e "TEST_MYSQL_URL=${XURL}" \
+                 -e "ALLOW_EXPERIMENTAL_MYSQL=1")
         ;;
     *)
         echo "ERROR: backend must be sqlite, postgres or mysql, got: ${DB}" >&2
