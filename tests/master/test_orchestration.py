@@ -130,28 +130,17 @@ class TestValidator:
 # ---------------------------------------------------------------------------
 
 def test_tasks_table_exists(db_url):
-    from src.master.db import init_db
-    db_path = db_url
-    conn = get_connection(db_path)
-    try:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'"
-        ).fetchone()
-        assert row is not None
-    finally:
-        conn.close()
+    from src.master.db import schema_info
+    info = schema_info(db_url)
+    assert "tasks" in info and info["tasks"], "tasks table missing or has no columns"
 
 
 def test_messages_envelope_columns_exist(db_url):
-    from src.master.db import init_db
-    db_path = db_url
-    conn = get_connection(db_path)
-    try:
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
-        for col in ("sender_kind", "sender_name", "receiver_kind", "receiver_name", "task_id", "reply_to_message_id"):
-            assert col in cols, f"Column {col!r} missing from messages"
-    finally:
-        conn.close()
+    from src.master.db import schema_info
+    info = schema_info(db_url)
+    cols = set(info.get("messages", []))
+    for col in ("sender_kind", "sender_name", "receiver_kind", "receiver_name", "task_id", "reply_to_message_id"):
+        assert col in cols, f"Column {col!r} missing from messages"
 
 
 # ---------------------------------------------------------------------------

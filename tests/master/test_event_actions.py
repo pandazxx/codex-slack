@@ -1209,7 +1209,7 @@ class TestEmitAndWorker:
             event_type="topic_message_sent",
             staff_name="reviewer",
             timing="before",
-            enabled=0,
+            enabled=False,
         )
 
         dispatched = []
@@ -2686,7 +2686,7 @@ class TestSessionSharing:
             " VALUES (?, ?, ?, ?, ?, ?)",
             (tp2_id, ws_id, "topic 2", "branch2", "/tmp/wt2", _NOW_UTC),
         )
-        conn.execute("UPDATE staffs SET adapter='codex' WHERE 1")
+        conn.execute("UPDATE staffs SET adapter='codex' WHERE TRUE")
         conn.commit()
         conn.close()
         _insert_staff(db_path, name="codex-ws", scope_type="global", session_scope="workspace")

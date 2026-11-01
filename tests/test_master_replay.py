@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -91,8 +92,8 @@ def _insert_chunks(db_path: str, topic_id: str, message_id: str, events: list[di
     conn = get_connection(db_path)
     for seq, event in enumerate(events):
         conn.execute(
-            "INSERT INTO chunks (message_id, topic_id, seq, event) VALUES (?, ?, ?, ?)",
-            (message_id, topic_id, seq, json.dumps(event)),
+            "INSERT INTO chunks (message_id, topic_id, seq, event, created_at) VALUES (?, ?, ?, ?, ?)",
+            (message_id, topic_id, seq, json.dumps(event), time.time()),
         )
     conn.commit()
     conn.close()
