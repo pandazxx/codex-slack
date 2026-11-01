@@ -21,7 +21,9 @@ def test_init_db_creates_file(tmp_path):
     assert os.path.exists(path)
 
 
+@pytest.mark.sqlite_only
 def test_init_db_creates_all_tables(db_path):
+    """sqlite_master is SQLite-specific; table existence is verified via schema_info on all backends."""
     conn = sqlite3.connect(db_path)
     rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     conn.close()
@@ -29,7 +31,9 @@ def test_init_db_creates_all_tables(db_path):
     assert set(TABLES) <= names
 
 
+@pytest.mark.sqlite_only
 def test_init_db_is_idempotent(db_path):
+    """sqlite_master is SQLite-specific; idempotency is verified via schema_info on all backends."""
     init_db(db_path)
     init_db(db_path)
     conn = sqlite3.connect(db_path)
