@@ -2,7 +2,39 @@
 
 Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
-<!-- last updated: 2026-10-31 -->
+<!-- last updated: 2026-11-01 -->
+
+---
+
+## 2026-11-01 — Postgres CI failures: int-to-boolean mismatch, SQLite WHERE 1, sqlite_master/PRAGMA, and missing created_at on chunks inserts
+
+*Summary:* After the tester converted bypass tests to use `get_connection`, four distinct classes of Postgres incompatibility surfaced in CI that were invisible on SQLite.
+
+**Bug 1 — Python int 0/1 bound to BOOLEAN column (`tests/master/test_event_actions.py`).** `test_disabled_action_not_dispatched` called `_insert_event_action(enabled=0)`. Even though `_insert_event_action`'s signature declares `enabled: bool`, Python does not enforce type annotations at runtime, so the integer 0 passed straight through to the qmark shim and was bound as `smallint`. Postgres rejects `smallint` at a `BOOLEAN` column without an implicit cast. SQLite accepts 0/1 natively. The `_BOOLEAN_COLS` rewriter described in the 2026-10-25 entry was removed in M1; the current contract is that callers must pass `True`/`False`, enforced by the sqlite3 lint guard — which only catches literal `0`/`1` in SQL text, not bound integer *variables*.
+
+*Root cause:* Caller passed an integer literal `0` at a boolean keyword argument. The lint guard catches literals in SQL strings, not Python values in function calls.
+
+*Fix applied:* Changed `enabled=0` to `enabled=False` at the call site (test-only fix).
+
+**Bug 2 — `WHERE 1` is invalid in Postgres (`tests/master/test_event_actions.py`).** `test_llm_session_id_shared_across_topics_workspace_scope` used `UPDATE staffs SET adapter='codex' WHERE 1`. Postgres requires a boolean expression in WHERE; the integer 1 is not implicitly boolean. SQLite treats any non-zero integer as true.
+
+*Root cause:* SQLite-style `WHERE 1` used as a "match all rows" shorthand that Postgres rejects.
+
+*Fix applied:* Changed to `WHERE TRUE` (test-only fix).
+
+**Bug 3 — `sqlite_master` / `PRAGMA table_info` in schema tests (`tests/master/test_orchestration.py`).** `test_tasks_table_exists` queried `SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'` and `test_messages_envelope_columns_exist` used `PRAGMA table_info(messages)`. Both are SQLite-only introspection mechanisms.
+
+*Root cause:* Tests written against SQLite's system catalog rather than the portable `sqlalchemy.inspect()` API. Unlike the `sqlite_only`-marked backfill tests, these tests have no dialect-specific *reason* to use SQLite introspection — they are checking schema existence which is a generic concern.
+
+*Fix applied:* Replaced both tests with calls to `schema_info(db_url)` from `src/master/db/__init__.py`, which uses `sqlalchemy.inspect()` and works on all backends. The tests now also verify Postgres schema correctness, not just SQLite (test-only fix).
+
+**Bug 4 — `INSERT INTO chunks` omits `created_at` (tests/test_master_replay.py).** The baseline migration (`alembic/versions/000000000001_baseline.py`) dropped the SQLite-only `server_default` for `chunks.created_at` (previously `unixepoch('now','subsec')`). The column is `NOT NULL`. The design requires every INSERT site to supply `created_at` explicitly via `time.time()`. The test helper `_insert_chunks` and one inline INSERT loop in `test_replay_events_are_in_seq_order` both omitted it. SQLite silently stored NULL (column had no server_default but SQLite's NULL affinity coercion meant the NOT NULL constraint was not enforced on the insert); Postgres raised `NotNullViolation`.
+
+*Root cause:* Test helpers not updated after the `server_default` was removed from the baseline; SQLite's looser constraint enforcement hid the gap.
+
+*Fix applied:* Added `created_at=time.time()` to both INSERT sites in `tests/test_master_replay.py`. Also added `import time` to the module. The single production INSERT INTO chunks in `src/master/mqtt_client.py` already supplies `created_at`; no production fix was needed.
+
+*Prevention:* (1) When a column's `server_default` is removed in a migration, grep every INSERT site (both src/ and tests/) for that table and confirm each one supplies the value. The lint guard for bare `sqlite3.connect` catches *connection* bypasses but not *value* bypasses. (2) Boolean column callers must pass `True`/`False`, never integer `0`/`1`. The existing lint guard (`test_no_bare_bool_literals_in_boolean_columns`) catches literal integers in SQL text — extend it or document that it does not catch Python-level int variables. (3) `WHERE 1` is a SQLite-ism; always use `WHERE TRUE` when no filter condition is needed on Postgres-targeted code.
 
 ---
 
