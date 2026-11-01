@@ -18,7 +18,7 @@
    just test "<pattern>"           # sqlite, filtered
    just test "" postgres           # postgres, whole suite
    just test "<pattern>" postgres  # postgres, filtered
-   just test "" mysql              # mysql (expected to fail until Phase 2; report, do not escalate as a regression)
+   just test "" mysql              # mysql (experimental — MySQL support is deferred; CI job is disabled; failures are expected and non-blocking)
    ```
    The recipe builds the test stage on `DEV_DOCKER_HOST` in an ephemeral compose project, starts `postgres:17-alpine` or `mysql:8.0` for non-sqlite runs (two databases: `master` for the whole suite via `TEST_DATABASE_URL`, `master_xdialect` for cross-dialect tests via `TEST_POSTGRES_URL`/`TEST_MYSQL_URL`), runs `pytest`, and tears everything down on exit. It never touches a branch dev env or its data.
 

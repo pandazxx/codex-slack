@@ -74,7 +74,7 @@ pytest -q
 # Postgres (requires DEV_DOCKER_HOST)
 just test "" postgres
 
-# MySQL
+# MySQL (experimental — MySQL support is deferred; CI job is disabled; failures are expected)
 just test "" mysql
 ```
 

@@ -1,6 +1,6 @@
 # Test Plan: Backend Database Provider
 
-**Feature:** Backend database provider — Postgres default, SQLite and MySQL supported
+**Feature:** Backend database provider — Postgres default, SQLite opt-in (MySQL deferred)
 **Design doc:** [docs/design/backend-database-provider.md](../design/backend-database-provider.md)
 **ADR:** [ADR-0019](../decisions/0019-backend-database-provider.md)
 **Issue:** [#268](https://github.com/pandazxx/codex-slack/issues/268)
@@ -14,9 +14,9 @@ This test plan covers all phases (M0–M3) of the backend database provider
 feature. M0 is covered in full detail below. Later phases are covered at
 high level; their test plans will be refined as implementation progresses.
 
-**Out of scope for UAT (all phases):** SQLite and MySQL. Per the project
-owner, UAT targets Postgres from M1 on. SQLite and MySQL are verified by
-unit/CI tests only.
+**Out of scope for UAT (all phases):** SQLite. Per the project
+owner, UAT targets Postgres from M1 on. SQLite is verified by unit/CI tests only.
+MySQL support is deferred; MySQL is neither CI-tested nor UAT'd.
 
 ---
 
@@ -235,8 +235,8 @@ inspect all tables and assert they match the expected baseline schema.
 
 ### TC-12 (optional): MySQL baseline — skip unless `TEST_MYSQL_URL` set
 
-**Phase:** M0 (scaffolding for M1/M2 CI matrix)
-**Automated:** automated (skipped in CI until M2)
+**Phase:** M0 (scaffolding for M2 — deferred)
+**Automated:** automated (skipped in CI; MySQL CI job is disabled; MySQL support is deferred)
 
 Run `alembic upgrade head` against `TEST_MYSQL_URL` (if set), then
 inspect all tables and assert they match the expected baseline schema
@@ -254,7 +254,7 @@ inspect all tables and assert they match the expected baseline schema
 **Design doc refs:** §5 (migration triggering), §8 (snapshot), §9 (compose), §10 (CI), §11 (SQLite safety), §12 (Phase 1 carried items)
 
 UAT runs on the staging singleton with bundled Postgres (`COMPOSE_PROFILES=db-bundled`).
-SQLite and MySQL are verified by unit/CI tests only.
+SQLite is verified by unit/CI tests only. MySQL support is deferred.
 
 ---
 
@@ -358,10 +358,10 @@ Cross-dialect: also runs against `TEST_POSTGRES_URL` (skip if unset).
 ### TC-18: Cross-dialect startup state machine
 
 **Phase:** M1 (CI matrix — parametrized in TC-13 through TC-17)
-**Automated:** automated (skipped when `TEST_POSTGRES_URL` / `TEST_MYSQL_URL` unset)
+**Automated:** automated (skipped when `TEST_POSTGRES_URL` unset; MySQL variant deferred)
 
 Same state-machine tests run against each database dialect. Postgres is
-the primary gate; MySQL is gated by `TEST_MYSQL_URL`.
+the primary gate. The MySQL variant is deferred; `TEST_MYSQL_URL` is not set in CI.
 
 **Pass criteria:** all state-machine outcomes correct on each dialect.
 
@@ -516,10 +516,12 @@ a SQLite URL (M1 Postgres default not yet switched).
 **Automated:** automated
 **File:** `tests/master/db/test_m1_safety_net.py::TestSafetyNetExplicitUrlWins`
 
-When `DATABASE_URL` is set (Postgres, SQLite, or MySQL URL), `sqlite_safety_check`
-does not raise even when `master_data.db` is present.
+When `DATABASE_URL` is set (Postgres or SQLite URL), `sqlite_safety_check`
+does not raise even when `master_data.db` is present. Note: a `mysql+pymysql` URL
+passes `sqlite_safety_check` (DATABASE_URL is set) but `startup_db()` refuses it
+separately with "MySQL support is deferred".
 
-**Pass criteria:** no exception for Postgres, SQLite, and MySQL explicit URLs.
+**Pass criteria:** no exception for Postgres and SQLite explicit URLs.
 
 **Skip condition:** `src.master.db.sqlite_safety_check` not available.
 
@@ -713,7 +715,9 @@ Cover all 8 areas:
 
 ---
 
-## M2 — MySQL Hardened (future)
+## M2 — MySQL Hardened (deferred)
+
+MySQL support is deferred until there is an actual need (see [ADR-0020](../decisions/0020-mysql-support-details.md)). The test cases below are placeholders for when M2 is picked up.
 
 High-level test areas:
 
@@ -721,7 +725,7 @@ High-level test areas:
   CI MySQL run confirms the baseline applies without error on MySQL 8.0.16+.
 - VARCHAR(36) widths on UUID PK/FK/indexed columns: inspect confirms width
   on MySQL.
-- MySQL version floor: master refuses to start on MySQL < 8.0.16.
+- MySQL version floor: startup check refuses to start on MySQL < 8.0.16.
 
 UAT: MySQL is CI-only, no UAT leg.
 

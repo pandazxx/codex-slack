@@ -72,7 +72,7 @@ For rootless Podman, set `CONTAINER_SOCKET_PATH=/run/user/$(id -u)/podman/podman
 
 ### Supported providers
 
-Postgres (PostgreSQL 17) is the default provider since v5.0 and is the production-supported target. SQLite and MySQL (8.0.16+) are also supported with full CI coverage. MySQL dialect hardening (functional indexes, VARCHAR widths) is Phase 2 work; MySQL is CI-only and not UAT'd.
+Postgres (PostgreSQL 17) is the default provider since v5.0 and is the production-supported target. SQLite is also supported as an opt-in alternative (set `DATABASE_URL` to a `sqlite+pysqlite://` URL). MySQL support is deferred; master refuses to start if `DATABASE_URL` uses a `mysql` scheme. See [ADR-0020](../decisions/0020-mysql-support-details.md).
 
 ### Configuration
 

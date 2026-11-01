@@ -77,7 +77,7 @@ The database provider and connection are configured through the following env va
 
 | Key | Required | Default | Purpose |
 |-----|----------|---------|---------|
-| `DATABASE_URL` | No¹ | (built from `POSTGRES_PASSWORD`) | SQLAlchemy URL. Supported schemes: `postgresql+psycopg` (default), `sqlite+pysqlite`, `mysql+pymysql`. When set, it is used as-is and overrides all other DB config. Setting this to a SQLite path opts out of Postgres entirely. |
+| `DATABASE_URL` | No¹ | (built from `POSTGRES_PASSWORD`) | SQLAlchemy URL. Supported schemes: `postgresql+psycopg` (default), `sqlite+pysqlite`. Setting this to a SQLite path opts out of Postgres entirely. A `mysql+pymysql` URL causes master to exit 1 (MySQL support is deferred). When set, it is used as-is and overrides all other DB config. |
 | `POSTGRES_PASSWORD` | Yes¹ | — | Password for the bundled Postgres service. When `DATABASE_URL` is unset, master builds the connection URL as `postgresql+psycopg://master:<pw>@postgres:5432/master`. Master refuses to start if neither `DATABASE_URL` nor `POSTGRES_PASSWORD` is set. Use a hex value (e.g. `openssl rand -hex 24`): it is spliced into the URL unescaped. |
 | `POSTGRES_HOST` | No | `postgres` | Hostname used when building the bundled Postgres URL. |
 | `POSTGRES_PORT` | No | `5432` | Port used when building the bundled Postgres URL. |
@@ -96,6 +96,7 @@ The database provider and connection are configured through the following env va
 3. `alembic_ini_fallback` — Alembic offline mode only; never used at runtime.
 
 **Startup behaviour** (in `startup_db()`):
+- `mysql` scheme in `DATABASE_URL` → exits 1 with: `ERROR: MySQL support is deferred; see docs/decisions/0020-mysql-support-details.md`
 - Empty DB → auto-runs `alembic upgrade head`.
 - Up-to-date DB → proceeds.
 - DB behind code → exits 1 with: `ERROR: DB schema is behind code (DB=<rev>, code=<head>). Run \`scripts/db.sh migrate\` before restarting master, or use \`scripts/db.sh snapshot-and-migrate\` to snapshot first.`
@@ -112,9 +113,9 @@ These are set by the test runner (`.sre/test-db.sh` / `just test`) and are not r
 
 | Key | Purpose |
 |-----|---------|
-| `TEST_DATABASE_URL` | Primary database URL for the full test suite when running against Postgres or MySQL. |
+| `TEST_DATABASE_URL` | Primary database URL for the full test suite when running against Postgres. |
 | `TEST_POSTGRES_URL` | Secondary Postgres URL used by cross-dialect tests that drop and recreate tables. Points at `master_xdialect` DB. |
-| `TEST_MYSQL_URL` | Secondary MySQL URL used by cross-dialect tests. Points at `master_xdialect` DB. |
+| `TEST_MYSQL_URL` | Secondary MySQL URL. Experimental; the MySQL CI job is disabled (`if: false`). Set this only when running the MySQL leg manually (`just test "" mysql`). Not used in CI. |
 
 ## Agent Worker
 

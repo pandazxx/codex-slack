@@ -132,6 +132,12 @@ Master will detect the missing container and respawn it. If the workspace is arc
 
 ---
 
+**Q: Can I use MySQL?**
+
+Not yet. MySQL support is deferred until there is an actual need. The MySQL CI job is disabled (`if: false` in `ci.yml`), and master refuses to start if `DATABASE_URL` uses the `mysql` scheme (error: `MySQL support is deferred; see docs/decisions/0020-mysql-support-details.md`). The MySQL dialect code paths remain in the codebase for future use. The supported providers are Postgres (default) and SQLite (opt-in via `DATABASE_URL`). See [ADR-0020](../decisions/0020-mysql-support-details.md).
+
+---
+
 **Q: How do I deploy a new image to staging or production?**
 
 Use `just deploy <env> <tag>`. The recipe resolves the tag to a digest, pulls the image to the target host, and replaces the running singleton stack in place. Rollback = `just deploy <env> <previous-tag>`. See `docs/sre.md` for the full recipe reference and `.sre/operations/deploy.md` for the operator runbook. The CD daemon was retired in ADR-0016; `just deploy` is the only staging/prod path.
