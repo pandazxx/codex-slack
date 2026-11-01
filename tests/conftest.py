@@ -50,6 +50,43 @@ _ROUTE_COVERAGE_ENABLED: bool = (
 _routes_hit: set[tuple[str, str]] = set()
 
 
+def _collect_routes(router, prefix: str = "") -> list[tuple[set[str] | None, str]]:
+    """Walk a FastAPI/Starlette router recursively and return (methods, full_path) pairs.
+
+    FastAPI stores routes included via include_router() as _IncludedRouter objects
+    that contain the original sub-router and the context prefix from the include call.
+    The sub-router's route paths already carry the router's own prefix; the context
+    prefix is the additional prefix supplied to include_router().
+
+    Mounted sub-apps, WebSocket routes, and static-file routes are included with
+    their path but with methods=None so the caller can handle them separately.
+    """
+    results: list[tuple[set[str] | None, str]] = []
+    for route in router.routes:
+        typ = type(route).__name__
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+
+        if typ in ("APIRoute", "Route") and path is not None:
+            results.append((methods, prefix + path))
+        elif typ in ("APIWebSocketRoute", "WebSocketRoute") and path is not None:
+            results.append((None, prefix + path))
+        elif typ == "_IncludedRouter":
+            # FastAPI's lazy-included router: the context holds the include prefix,
+            # and the original router's routes already have the router-level prefix.
+            ctx = getattr(route, "include_context", None)
+            ctx_prefix = getattr(ctx, "prefix", "") or ""
+            orig = getattr(route, "original_router", None)
+            if orig is not None:
+                results.extend(_collect_routes(orig, prefix + ctx_prefix))
+        elif hasattr(route, "routes"):
+            # Generic sub-router (Mount, etc.)
+            sub_prefix = prefix + (path or "")
+            results.extend(_collect_routes(route, sub_prefix))
+
+    return results
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _install_route_tracker():
     """Install an ASGI middleware that records which route templates are hit.
@@ -65,6 +102,7 @@ def _install_route_tracker():
         yield
         return
 
+    print("\n[route-coverage] guard active — tracking route hits for this session")
     from starlette.routing import Match
     from src.master.main import app
 
@@ -82,12 +120,10 @@ def _install_route_tracker():
     yield
 
     # Session teardown: check coverage.
+    all_app_routes = _collect_routes(app.router)
+    total = len(all_app_routes)
     missing: list[str] = []
-    for route in app.routes:
-        path = getattr(route, "path", None)
-        if path is None:
-            continue
-        methods = getattr(route, "methods", None)
+    for methods, path in all_app_routes:
         if methods:
             for m in sorted(methods):
                 key = (m, path)
@@ -99,6 +135,10 @@ def _install_route_tracker():
             if key not in _ROUTE_COVERAGE_ALLOWLIST:
                 missing.append(f"WS {path}")
 
+    print(
+        f"\n[route-coverage] checked {len(_routes_hit)} route(s) hit out of "
+        f"{total} registered"
+    )
     if missing:
         lines = "\n  ".join(sorted(missing))
         raise AssertionError(

@@ -145,8 +145,9 @@ Enabled when `ENFORCE_ROUTE_COVERAGE=1` is set. An ASGI middleware records every
 route template hit during the test session. At session end, fails if any
 non-allowlisted route was never exercised.
 
-**Activation:** Set `ENFORCE_ROUTE_COVERAGE=1` in `.sre/test-db.sh` for the
-non-SQLite CI leg (SRE task; outside this branch's scope).
+**Activation:** Enabled in `.sre/test-db.sh` for all backends (sqlite, postgres)
+when no `-k` pattern is given (full-suite runs). Disabled automatically for
+single-test local runs that bypass test-db.sh.
 
 ## New fixtures
 
@@ -197,7 +198,7 @@ Yields a `get_connection(db_url)` connection and closes it after the test.
 | # | Case | Status |
 |---|------|--------|
 | 21 | All non-sqlite_only tests must pass on Postgres CI leg | needs-human — verify CI Postgres job after PR merge |
-| 22 | Route coverage check fires on Postgres leg when ENFORCE_ROUTE_COVERAGE=1 | needs-human — requires SRE to set env var in test-db.sh |
+| 22 | Route coverage guard runs on both sqlite and postgres CI legs | automated — enabled in .sre/test-db.sh |
 
 ## Postgres failures to record
 
@@ -210,4 +211,3 @@ whether the test is expected to pass or to be marked sqlite_only.
 
 - Modifying production code (src/) to fix Postgres incompatibilities — that is
   an engineer task.
-- Adding ENFORCE_ROUTE_COVERAGE=1 to .sre/test-db.sh — that is an SRE task.

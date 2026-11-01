@@ -85,6 +85,12 @@ case "$DB" in
         ;;
 esac
 
+# Enable route-coverage guard for full-suite runs.  A pattern flag means the
+# caller is running a subset of tests; enforce only when the whole suite runs.
+if [[ -z "${PATTERN}" ]]; then
+    RUN_ENV+=(-e "ENFORCE_ROUTE_COVERAGE=1")
+fi
+
 echo "==> [${DB}] Running tests${PATTERN:+ (pattern: $PATTERN)}..."
 compose run --rm "${RUN_ENV[@]}" master \
     python -m pytest ${PATTERN:+-k "$PATTERN"} -v --tb=short
