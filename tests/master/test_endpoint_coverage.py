@@ -16,6 +16,11 @@ Routes covered here:
   DELETE /api/workspaces/{workspace_id}/topics/{topic_id}/staffs/{name}
   GET  /api/config/system-variables
   PATCH /api/config/system-settings
+  GET  /api/workspaces/{workspace_id}/event-actions
+  POST /api/workspaces/{workspace_id}/event-actions
+  GET  /api/workspaces/{workspace_id}/event-actions/{action_id}
+  PATCH /api/workspaces/{workspace_id}/event-actions/{action_id}
+  DELETE /api/workspaces/{workspace_id}/event-actions/{action_id}
 """
 from __future__ import annotations
 
@@ -275,3 +280,89 @@ class TestSystemSettings:
         assert r.status_code == 200
         assert r.json()["timezone"] == "America/New_York"
         assert r.json()["timezone_configured"] is True
+
+
+# ---------------------------------------------------------------------------
+# Workspace-scoped event-actions
+# GET/POST /api/workspaces/{workspace_id}/event-actions
+# GET/PATCH/DELETE /api/workspaces/{workspace_id}/event-actions/{action_id}
+# ---------------------------------------------------------------------------
+
+_WS_ACTION_BODY = {
+    "event_type": "topic_message_received",
+    "staff_name": "reviewer",
+    "prompt_template": "Summarise recent messages in {workspace_name}",
+    "timing": None,
+    "enabled": True,
+}
+
+
+class TestWorkspaceEventActions:
+    def test_list_workspace_event_actions_empty(self, client, workspace):
+        r = client.get(f"/api/workspaces/{workspace['id']}/event-actions")
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_create_workspace_event_action_returns_201(self, client, workspace):
+        r = client.post(
+            f"/api/workspaces/{workspace['id']}/event-actions",
+            json=_WS_ACTION_BODY,
+        )
+        assert r.status_code == 201
+        body = r.json()
+        assert body["event_type"] == "topic_message_received"
+        assert body["scope_type"] == "workspace"
+        assert body["scope_id"] == workspace["id"]
+        assert body["staff_name"] == "reviewer"
+
+    def test_get_workspace_event_action_returns_200(self, client, workspace):
+        create = client.post(
+            f"/api/workspaces/{workspace['id']}/event-actions",
+            json=_WS_ACTION_BODY,
+        )
+        assert create.status_code == 201
+        action_id = create.json()["id"]
+
+        r = client.get(
+            f"/api/workspaces/{workspace['id']}/event-actions/{action_id}"
+        )
+        assert r.status_code == 200
+        assert r.json()["id"] == action_id
+
+    def test_get_unknown_workspace_event_action_returns_404(self, client, workspace):
+        r = client.get(
+            f"/api/workspaces/{workspace['id']}/event-actions/no-such-id"
+        )
+        assert r.status_code == 404
+
+    def test_patch_workspace_event_action_toggles_enabled(self, client, workspace):
+        create = client.post(
+            f"/api/workspaces/{workspace['id']}/event-actions",
+            json=_WS_ACTION_BODY,
+        )
+        assert create.status_code == 201
+        action_id = create.json()["id"]
+
+        r = client.patch(
+            f"/api/workspaces/{workspace['id']}/event-actions/{action_id}",
+            json={"enabled": False},
+        )
+        assert r.status_code == 200
+        assert r.json()["enabled"] is False
+
+    def test_delete_workspace_event_action_returns_204(self, client, workspace):
+        create = client.post(
+            f"/api/workspaces/{workspace['id']}/event-actions",
+            json=_WS_ACTION_BODY,
+        )
+        assert create.status_code == 201
+        action_id = create.json()["id"]
+
+        r = client.delete(
+            f"/api/workspaces/{workspace['id']}/event-actions/{action_id}"
+        )
+        assert r.status_code == 204
+
+        assert client.get(
+            f"/api/workspaces/{workspace['id']}/event-actions/{action_id}"
+        ).status_code == 404

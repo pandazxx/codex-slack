@@ -51,15 +51,22 @@ _routes_hit: set[tuple[str, str]] = set()
 
 
 def _collect_routes(router, prefix: str = "") -> list[tuple[set[str] | None, str]]:
-    """Walk a FastAPI/Starlette router recursively and return (methods, full_path) pairs.
+    """Walk a FastAPI/Starlette router recursively and return (methods, path) pairs.
 
-    FastAPI stores routes included via include_router() as _IncludedRouter objects
-    that contain the original sub-router and the context prefix from the include call.
-    The sub-router's route paths already carry the router's own prefix; the context
-    prefix is the additional prefix supplied to include_router().
+    In FastAPI 0.160+, routes added via include_router() are stored as
+    _IncludedRouter objects.  The include_context holds the prefix passed to
+    include_router() (e.g. "/api"), while the original_router's routes already
+    carry any prefix the sub-router declared on its own routes (e.g. the config
+    router already has "/config/system-variables" baked into its APIRoute.path).
 
-    Mounted sub-apps, WebSocket routes, and static-file routes are included with
-    their path but with methods=None so the caller can handle them separately.
+    Crucially, scope["route"].path in an HTTP middleware is set to
+    original_route.path — the path stored on the matched APIRoute object from
+    the original sub-router — which does NOT include the include_context prefix.
+    _collect_routes must therefore return those same paths so that the route
+    tracker can compare them correctly.
+
+    Mounted sub-apps and WebSocket routes are returned with methods=None so the
+    caller can handle them separately.
     """
     results: list[tuple[set[str] | None, str]] = []
     for route in router.routes:
@@ -72,19 +79,22 @@ def _collect_routes(router, prefix: str = "") -> list[tuple[set[str] | None, str
         elif typ in ("APIWebSocketRoute", "WebSocketRoute") and path is not None:
             results.append((None, prefix + path))
         elif typ == "_IncludedRouter":
-            # FastAPI's lazy-included router: the context holds the include prefix,
-            # and the original router's routes already have the router-level prefix.
-            ctx = getattr(route, "include_context", None)
-            ctx_prefix = getattr(ctx, "prefix", "") or ""
+            # Do NOT add include_context.prefix here: scope["route"].path is
+            # set to original_route.path, which already excludes that prefix.
             orig = getattr(route, "original_router", None)
             if orig is not None:
-                results.extend(_collect_routes(orig, prefix + ctx_prefix))
+                results.extend(_collect_routes(orig, prefix))
         elif hasattr(route, "routes"):
             # Generic sub-router (Mount, etc.)
             sub_prefix = prefix + (path or "")
             results.extend(_collect_routes(route, sub_prefix))
 
     return results
+
+
+# Module-level storage for routes missed this session.  Populated by
+# _install_route_tracker teardown; consumed by pytest_sessionfinish.
+_missing_routes: list[str] = []
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -95,15 +105,16 @@ def _install_route_tracker():
     FastAPI app singleton before any TestClient is created, so every request
     during the session passes through it.
 
-    At session teardown the fixture compares the hit set against app.routes and
-    fails if any non-allowlisted route was never exercised.
+    At session teardown the fixture tallies uncovered routes and stores them in
+    _missing_routes; pytest_sessionfinish then sets the exit code and prints a
+    clear failure banner.  Failures from this guard never appear as an error on
+    an unrelated test.
     """
     if not _ROUTE_COVERAGE_ENABLED:
         yield
         return
 
     print("\n[route-coverage] guard active — tracking route hits for this session")
-    from starlette.routing import Match
     from src.master.main import app
 
     @app.middleware("http")
@@ -119,34 +130,51 @@ def _install_route_tracker():
 
     yield
 
-    # Session teardown: check coverage.
+    # Session teardown: tally coverage; do NOT raise here — raising attributes
+    # the error to the last test that used this session fixture, which is always
+    # an unrelated test.  pytest_sessionfinish handles the failure instead.
     all_app_routes = _collect_routes(app.router)
-    total = len(all_app_routes)
-    missing: list[str] = []
+    required_pairs: list[tuple[str, str]] = []
     for methods, path in all_app_routes:
         if methods:
             for m in sorted(methods):
-                key = (m, path)
-                if key not in _ROUTE_COVERAGE_ALLOWLIST and key not in _routes_hit:
-                    missing.append(f"{m} {path}")
+                required_pairs.append((m, path))
         else:
-            # WebSocket or other non-HTTP route.
-            key = ("WS", path)
-            if key not in _ROUTE_COVERAGE_ALLOWLIST:
-                missing.append(f"WS {path}")
+            required_pairs.append(("WS", path))
 
-    print(
-        f"\n[route-coverage] checked {len(_routes_hit)} route(s) hit out of "
-        f"{total} registered"
+    for key in required_pairs:
+        if key not in _ROUTE_COVERAGE_ALLOWLIST and key not in _routes_hit:
+            _missing_routes.append(f"{key[0]} {key[1]}")
+
+    _missing_routes.sort()
+    non_allowlisted = sum(
+        1 for k in required_pairs if k not in _ROUTE_COVERAGE_ALLOWLIST
     )
-    if missing:
-        lines = "\n  ".join(sorted(missing))
-        raise AssertionError(
-            f"Route coverage check failed: {len(missing)} route(s) were never hit"
-            f" during the test session:\n  {lines}\n\n"
-            "Add a test that exercises each missing route, or add it to the\n"
-            "_ROUTE_COVERAGE_ALLOWLIST in tests/conftest.py with a reason."
-        )
+    print(
+        f"\n[route-coverage] {len(_routes_hit)} request(s) recorded;"
+        f" {non_allowlisted - len(_missing_routes)}/{non_allowlisted}"
+        f" non-allowlisted routes hit"
+    )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """After all tests, fail the session if any routes were never hit.
+
+    This hook fires after _install_route_tracker teardown has populated
+    _missing_routes.  By setting the exit status here we get a clear, named
+    failure line instead of an error attributed to the last test in the run.
+    """
+    if not _ROUTE_COVERAGE_ENABLED or not _missing_routes:
+        return
+    lines = "\n  ".join(_missing_routes)
+    msg = (
+        f"\n[route-coverage] FAILED — {len(_missing_routes)} route(s) never hit"
+        f" during the test session:\n  {lines}\n\n"
+        "Add a test that exercises each missing route, or add it to\n"
+        "_ROUTE_COVERAGE_ALLOWLIST in tests/conftest.py with a reason.\n"
+    )
+    print(msg, file=sys.stderr)
+    session.exitstatus = 1
 
 
 def pytest_configure(config):

@@ -59,11 +59,11 @@ a response shape.
 | GET  /api/workspaces/{workspace_id}/topics/{topic_id}/export | covered — test_topic_export.py |
 | GET  /api/workspaces/{workspace_id}/topics/{topic_id}/attachments | covered — test_main.py |
 | GET  /api/attachments/{attachment_id}/download | covered — test_main.py |
-| GET  /api/workspaces/{workspace_id}/event-actions | covered — test_event_actions.py |
-| POST /api/workspaces/{workspace_id}/event-actions | covered — test_event_actions.py |
-| GET  /api/workspaces/{workspace_id}/event-actions/{action_id} | covered — test_event_actions.py |
-| PATCH /api/workspaces/{workspace_id}/event-actions/{action_id} | covered — test_event_actions.py |
-| DELETE /api/workspaces/{workspace_id}/event-actions/{action_id} | covered — test_event_actions.py |
+| GET  /api/workspaces/{workspace_id}/event-actions | covered — test_endpoint_coverage.py (added) |
+| POST /api/workspaces/{workspace_id}/event-actions | covered — test_endpoint_coverage.py (added) |
+| GET  /api/workspaces/{workspace_id}/event-actions/{action_id} | covered — test_endpoint_coverage.py (added) |
+| PATCH /api/workspaces/{workspace_id}/event-actions/{action_id} | covered — test_endpoint_coverage.py (added) |
+| DELETE /api/workspaces/{workspace_id}/event-actions/{action_id} | covered — test_endpoint_coverage.py (added) |
 | GET  /api/workspaces/{workspace_id}/topics/{topic_id}/event-actions | covered — test_event_actions.py |
 | POST /api/workspaces/{workspace_id}/topics/{topic_id}/event-actions | covered — test_event_actions.py |
 | GET  /api/workspaces/{workspace_id}/topics/{topic_id}/event-actions/{action_id} | covered — test_event_actions.py |
@@ -139,15 +139,23 @@ the enclosing function or class being marked `@pytest.mark.sqlite_only`.
 
 ### Guard 4b: Route coverage check
 
-**Location:** `tests/conftest.py::_install_route_tracker`
+**Location:** `tests/conftest.py::_install_route_tracker` + `pytest_sessionfinish`
 
 Enabled when `ENFORCE_ROUTE_COVERAGE=1` is set. An ASGI middleware records every
-route template hit during the test session. At session end, fails if any
-non-allowlisted route was never exercised.
+route template hit during the test session. At session end, `pytest_sessionfinish`
+sets a non-zero exit status and prints a clear `[route-coverage] FAILED` banner if
+any non-allowlisted route was never exercised. Failures are reported as a named
+session-level failure, never attributed to an unrelated test.
 
-**Activation:** Enabled in `.sre/test-db.sh` for all backends (sqlite, postgres)
-when no `-k` pattern is given (full-suite runs). Disabled automatically for
+The route collector matches `scope["route"].path` exactly: it walks `_IncludedRouter`
+objects without adding the `include_context.prefix`, which is not present in
+`scope["route"].path` for FastAPI 0.160+ routes.
+
+**Activation:** Enforced in CI on both the SQLite and Postgres legs via
+`ENFORCE_ROUTE_COVERAGE=1` in `.sre/test-db.sh`. Disabled automatically for
 single-test local runs that bypass test-db.sh.
+
+**Status:** All 67 non-allowlisted routes are covered.
 
 ## New fixtures
 
