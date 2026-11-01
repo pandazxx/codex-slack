@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 import time
 import os
 from pathlib import Path
@@ -99,32 +98,36 @@ def test_spa_serves_index_when_built(tmp_path, monkeypatch):
 # _close_stale_streams tests
 # ---------------------------------------------------------------------------
 
-_SEED_SQL = """
-INSERT OR IGNORE INTO workspaces
-    (id, name, repo_url, container_name, created_at)
-VALUES ('ws1', 'WS', 'https://github.com/x/y', 'agent-ws1', '2026-01-01T00:00:00Z');
-
-INSERT OR IGNORE INTO topics
-    (id, workspace_id, subject, branch_name, worktree_path, created_at)
-VALUES ('t1', 'ws1', 'Topic', 'feat/t1', '/tmp/wt1', '2026-01-01T00:00:00Z');
-"""
-
-
 @pytest.fixture()
-def stale_db(tmp_path):
-    path = str(tmp_path / "stale_test.db")
-    init_db(path)
-    conn = sqlite3.connect(path)
-    conn.executescript(_SEED_SQL)
+def stale_db(db_url):
+    """Return a db_url with workspaces/topics seeded for stale-stream tests.
+
+    Uses the configured backend (Postgres in CI, per-test SQLite locally) so
+    that _close_stale_streams executes against the real DATABASE_URL rather
+    than a hard-coded SQLite file.
+    """
+    from src.master.db import get_connection
+    conn = get_connection(db_url)
+    conn.execute(
+        "INSERT INTO workspaces (id, name, repo_url, container_name, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        ("ws1", "WS", "https://github.com/x/y", "agent-ws1", "2026-01-01T00:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        ("t1", "ws1", "Topic", "feat/t1", "/tmp/wt1", "2026-01-01T00:00:00Z"),
+    )
     conn.commit()
     conn.close()
-    return path
+    return db_url
 
 
 def _seed_chunks(db_path, message_id, topic_id="t1", agent_name="claude", age_seconds=0):
     """Insert two chunks for message_id with created_at set to now - age_seconds."""
+    from src.master.db import get_connection
     created_at = time.time() - age_seconds
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     for seq in range(2):
         conn.execute(
             "INSERT INTO chunks (message_id, topic_id, seq, event, agent_name, created_at)"
@@ -136,15 +139,16 @@ def _seed_chunks(db_path, message_id, topic_id="t1", agent_name="claude", age_se
 
 
 def _count_chunks(db_path, message_id):
-    conn = sqlite3.connect(db_path)
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
     n = conn.execute("SELECT COUNT(*) FROM chunks WHERE message_id=?", (message_id,)).fetchone()[0]
     conn.close()
     return n
 
 
 def _get_message(db_path, message_id):
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
     row = conn.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
@@ -154,15 +158,20 @@ def _make_settings(dry_run=True):
     return SimpleNamespace(dry_run=dry_run)
 
 
+def _count_messages(db_path: str) -> int:
+    from src.master.db import get_connection
+    conn = get_connection(db_path)
+    n = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    conn.close()
+    return n
+
+
 def test_close_stale_streams_no_orphans(stale_db):
     """No chunks in DB → function exits cleanly with no DB changes."""
     settings = _make_settings()
     _close_stale_streams(stale_db, settings)
     # No messages should have been inserted
-    conn = sqlite3.connect(stale_db)
-    count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-    conn.close()
-    assert count == 0
+    assert _count_messages(stale_db) == 0
 
 
 def test_close_stale_streams_container_stopped_marks_interrupted(stale_db):
@@ -229,12 +238,14 @@ def test_close_stale_streams_broadcasts_ws_message(stale_db):
 
 def test_close_stale_streams_already_finalized_not_duplicated(stale_db):
     """If a message row already exists, INSERT OR IGNORE prevents a duplicate."""
+    from src.master.db import get_connection
     _seed_chunks(stale_db, "msg-dup")
     # Pre-insert a final message to simulate a race where the agent responded
-    conn = sqlite3.connect(stale_db)
+    conn = get_connection(stale_db)
     conn.execute(
         "INSERT INTO messages (id, topic_id, sender, agent_name, text, created_at)"
-        " VALUES ('msg-dup', 't1', 'agent', 'claude', 'The real answer', '2026-01-01T00:00:00Z')"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        ("msg-dup", "t1", "agent", "claude", "The real answer", "2026-01-01T00:00:00Z"),
     )
     conn.commit()
     conn.close()

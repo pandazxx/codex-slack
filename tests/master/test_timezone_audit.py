@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -254,57 +253,73 @@ def test_get_system_settings_returns_configured_tz(client):
 # ---------------------------------------------------------------------------
 
 
-def test_scheduler_tick_fires_in_configured_tz(tmp_path):
+def _seed_scheduler_db(
+    db_url: str,
+    ws_id: str,
+    topic_id: str,
+    action_id: str,
+    *,
+    last_fired_at: str,
+    now_utc: str,
+    timezone_value: str = "Asia/Shanghai",
+) -> None:
+    """Seed a minimal workspace/topic/event_action/config for scheduler tests."""
+    from src.master.db import get_connection
+    conn = get_connection(db_url)
+    conn.execute(
+        "INSERT INTO workspaces (id, name, repo_url, created_at) VALUES (?, ?, ?, ?)",
+        (ws_id, "ws", "https://github.com/x/y", now_utc),
+    )
+    conn.execute(
+        "INSERT INTO topics (id, workspace_id, subject, repo_ref, branch_name, worktree_path, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (topic_id, ws_id, "topic", "main", "main", "/tmp/wt", now_utc),
+    )
+    conn.execute(
+        "INSERT INTO event_actions"
+        " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+        "  timing, cron_expr, last_fired_at, enabled, created_at, updated_at)"
+        " VALUES (?, 'topic_scheduler', 'topic', ?, 'bot', 'Hello', NULL, ?, ?, ?, ?, ?)",
+        (action_id, topic_id, "0 9 * * *", last_fired_at, True, now_utc, now_utc),
+    )
+    conn.execute(
+        "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
+        " VALUES ('global', '', 'system.timezone', ?, ?)",
+        (timezone_value, now_utc),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _read_last_fired_at(db_url: str, action_id: str) -> str | None:
+    from src.master.db import get_connection
+    conn = get_connection(db_url)
+    row = conn.execute(
+        "SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)
+    ).fetchone()
+    conn.close()
+    return row["last_fired_at"] if row else None
+
+
+def test_scheduler_tick_fires_in_configured_tz(db_url):
     """Cron '0 9 * * *' in Asia/Shanghai (UTC+8) fires at 01:00 UTC, not 09:00 UTC.
 
     Arrange: last_fired_at = 2026-05-09T00:58:00Z (08:58 Shanghai — before 09:00).
     Clock:   now           = 2026-05-09T01:02:00Z (09:02 Shanghai — after  09:00).
     Expect:  scheduler fires, last_fired_at advances to 2026-05-09T01:00:00Z.
     """
-    from src.master.db import init_db
     from src.master.main import _scheduler_tick
-
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
-
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
 
     ws_id = str(uuid.uuid4())
     topic_id = str(uuid.uuid4())
     action_id = str(uuid.uuid4())
 
-    # last_fired_at is 00:58 UTC = 08:58 Shanghai — before today's 09:00 firing
     last_fired_at = "2026-05-09T00:58:00Z"
     now_utc = "2026-05-09T01:02:00Z"
-    conn.execute(
-        "INSERT INTO workspaces (id, name, repo_url, created_at) VALUES (?, ?, ?, ?)",
-        (ws_id, "ws", "https://github.com/x/y", now_utc),
-    )
-    conn.execute(
-        "INSERT INTO topics (id, workspace_id, subject, repo_ref, branch_name, worktree_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (topic_id, ws_id, "topic", "main", "main", "/tmp/wt", now_utc),
-    )
-    conn.execute(
-        """INSERT INTO event_actions
-           (id, event_type, scope_type, scope_id, staff_name, prompt_template,
-            timing, cron_expr, last_fired_at, enabled, created_at, updated_at)
-           VALUES (?, 'topic_scheduler', 'topic', ?, 'bot', 'Hello', NULL, ?, ?, ?, ?, ?)""",
-        (action_id, topic_id, "0 9 * * *", last_fired_at, True, now_utc, now_utc),
-    )
-    conn.commit()
-    conn.close()
+    _seed_scheduler_db(db_url, ws_id, topic_id, action_id,
+                       last_fired_at=last_fired_at, now_utc=now_utc)
 
-    # Pre-configure Asia/Shanghai so get_configured_timezone reads it from DB.
-    conn2 = sqlite3.connect(db_path)
-    conn2.execute(
-        "INSERT INTO config (scope_type, scope_id, key, value, updated_at) VALUES ('global', '', 'system.timezone', 'Asia/Shanghai', ?)",
-        (now_utc,),
-    )
-    conn2.commit()
-    conn2.close()
-
-    app_state = _make_app_state(db_path)
+    app_state = _make_app_state(db_url)
     emitted: list[dict] = []
 
     async def run():
@@ -318,68 +333,32 @@ def test_scheduler_tick_fires_in_configured_tz(tmp_path):
         app_state.event_queue.put_nowait = capturing
 
         now_dt = datetime(2026, 5, 9, 1, 2, 0, tzinfo=timezone.utc)
-        _scheduler_tick(db_path, app_state, now_dt)
+        _scheduler_tick(db_url, app_state, now_dt)
 
     asyncio.run(run())
 
-    # The action should have fired once.
     assert len(emitted) == 1, f"expected 1 fire, got {len(emitted)}"
 
-    # last_fired_at should have advanced to exactly 01:00 UTC (09:00 Shanghai).
-    conn3 = sqlite3.connect(db_path)
-    conn3.row_factory = sqlite3.Row
-    row = conn3.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
-    conn3.close()
-    assert row["last_fired_at"] == "2026-05-09T01:00:00Z", (
-        f"expected last_fired_at=2026-05-09T01:00:00Z, got {row['last_fired_at']!r}"
+    fired = _read_last_fired_at(db_url, action_id)
+    assert fired == "2026-05-09T01:00:00Z", (
+        f"expected last_fired_at=2026-05-09T01:00:00Z, got {fired!r}"
     )
 
 
-def test_scheduler_does_not_fire_before_cron_time_in_tz(tmp_path):
+def test_scheduler_does_not_fire_before_cron_time_in_tz(db_url):
     """Cron '0 9 * * *' in Asia/Shanghai must NOT fire at 00:58 UTC (08:58 Shanghai)."""
-    from src.master.db import init_db
     from src.master.main import _scheduler_tick
-
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
-
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
 
     ws_id = str(uuid.uuid4())
     topic_id = str(uuid.uuid4())
     action_id = str(uuid.uuid4())
 
-    last_fired_at = "2026-05-08T01:00:00Z"  # yesterday's 09:00 Shanghai
-    now_utc = "2026-05-09T00:58:00Z"         # 08:58 Shanghai — before today's 09:00
+    last_fired_at = "2026-05-08T01:00:00Z"
+    now_utc = "2026-05-09T00:58:00Z"
+    _seed_scheduler_db(db_url, ws_id, topic_id, action_id,
+                       last_fired_at=last_fired_at, now_utc=now_utc)
 
-    conn.execute(
-        "INSERT INTO workspaces (id, name, repo_url, created_at) VALUES (?, ?, ?, ?)",
-        (ws_id, "ws", "https://github.com/x/y", now_utc),
-    )
-    conn.execute(
-        "INSERT INTO topics (id, workspace_id, subject, repo_ref, branch_name, worktree_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (topic_id, ws_id, "topic", "main", "main", "/tmp/wt", now_utc),
-    )
-    conn.execute(
-        """INSERT INTO event_actions
-           (id, event_type, scope_type, scope_id, staff_name, prompt_template,
-            timing, cron_expr, last_fired_at, enabled, created_at, updated_at)
-           VALUES (?, 'topic_scheduler', 'topic', ?, 'bot', 'Hello', NULL, ?, ?, ?, ?, ?)""",
-        (action_id, topic_id, "0 9 * * *", last_fired_at, True, now_utc, now_utc),
-    )
-    conn.commit()
-    conn.close()
-
-    conn2 = sqlite3.connect(db_path)
-    conn2.execute(
-        "INSERT INTO config (scope_type, scope_id, key, value, updated_at) VALUES ('global', '', 'system.timezone', 'Asia/Shanghai', ?)",
-        (now_utc,),
-    )
-    conn2.commit()
-    conn2.close()
-
-    app_state = _make_app_state(db_path)
+    app_state = _make_app_state(db_url)
     emitted: list[dict] = []
 
     async def run():
@@ -393,7 +372,7 @@ def test_scheduler_does_not_fire_before_cron_time_in_tz(tmp_path):
         app_state.event_queue.put_nowait = capturing
 
         now_dt = datetime(2026, 5, 9, 0, 58, 0, tzinfo=timezone.utc)
-        _scheduler_tick(db_path, app_state, now_dt)
+        _scheduler_tick(db_url, app_state, now_dt)
 
     asyncio.run(run())
 
