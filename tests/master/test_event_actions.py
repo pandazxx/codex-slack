@@ -7,7 +7,6 @@ ADR: docs/decisions/0013-event-based-staff-action.md
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -254,17 +253,16 @@ def _insert_event_action(
     """Insert an event_action row via get_connection (respects DATABASE_URL)."""
     action_id = str(uuid.uuid4())
     now = _NOW_UTC
-    conn = get_connection(db_path)
-    conn.execute(
-        "INSERT INTO event_actions"
-        " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-        "  timing, cron_expr, last_fired_at, enabled, created_at, updated_at)"
-        " VALUES (?, ?, 'topic', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (action_id, event_type, topic_id, staff_name, prompt_template,
-         timing, cron_expr, last_fired_at, enabled, now, now),
-    )
-    conn.commit()
-    conn.close()
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT INTO event_actions"
+            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+            "  timing, cron_expr, last_fired_at, enabled, created_at, updated_at)"
+            " VALUES (?, ?, 'topic', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (action_id, event_type, topic_id, staff_name, prompt_template,
+             timing, cron_expr, last_fired_at, enabled, now, now),
+        )
+        conn.commit()
     return action_id
 
 
@@ -280,33 +278,31 @@ def _insert_workspace_and_topic(
     topic_id = str(uuid.uuid4())
     now = _NOW_UTC
     archived_at = now if archived else None
-    conn = get_connection(db_path)
-    conn.execute(
-        "INSERT INTO workspaces (id, name, repo_url, created_at) VALUES (?, ?, ?, ?)",
-        (ws_id, workspace_name, "https://github.com/x/y", now),
-    )
-    conn.execute(
-        "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at, archived_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (topic_id, ws_id, topic_subject, "branch", "/tmp/wt", now, archived_at),
-    )
-    conn.commit()
-    conn.close()
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT INTO workspaces (id, name, repo_url, created_at) VALUES (?, ?, ?, ?)",
+            (ws_id, workspace_name, "https://github.com/x/y", now),
+        )
+        conn.execute(
+            "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at, archived_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (topic_id, ws_id, topic_subject, "branch", "/tmp/wt", now, archived_at),
+        )
+        conn.commit()
     return ws_id, topic_id
 
 
 def _insert_staff(db_path: str, *, name: str, scope_type: str = "global",
                   scope_id: str | None = None, session_scope: str = "topic") -> None:
     """Insert a staff row via get_connection (respects DATABASE_URL)."""
-    conn = get_connection(db_path)
-    now = _NOW_UTC
-    conn.execute(
-        "INSERT INTO staffs (id, scope_type, scope_id, name, adapter, session_scope, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, 'claude-code', ?, ?, ?)",
-        (str(uuid.uuid4()), scope_type, scope_id, name, session_scope, now, now),
-    )
-    conn.commit()
-    conn.close()
+    with get_connection(db_path) as conn:
+        now = _NOW_UTC
+        conn.execute(
+            "INSERT INTO staffs (id, scope_type, scope_id, name, adapter, session_scope, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, 'claude-code', ?, ?, ?)",
+            (str(uuid.uuid4()), scope_type, scope_id, name, session_scope, now, now),
+        )
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -664,20 +660,19 @@ class TestValidation:
         # VAL-18 — bypass the API; verify DB-level check constraint rejects
         # topic_scheduler with timing='before'.
         from src.master.db import DBIntegrityError
-        conn = get_connection(db_url)
-        now = _NOW_UTC
-        action_id = str(uuid.uuid4())
-        with pytest.raises(DBIntegrityError):
-            conn.execute(
-                "INSERT INTO event_actions"
-                " (id, event_type, scope_type, scope_id, staff_name,"
-                "  prompt_template, timing, cron_expr, enabled, created_at, updated_at)"
-                " VALUES (?, 'topic_scheduler', 'topic', 'fake-topic', 'staff',"
-                "         'hi', 'before', NULL, ?, ?, ?)",
-                (action_id, True, now, now),
-            )
-            conn.commit()
-        conn.close()
+        with get_connection(db_url) as conn:
+            now = _NOW_UTC
+            action_id = str(uuid.uuid4())
+            with pytest.raises(DBIntegrityError):
+                conn.execute(
+                    "INSERT INTO event_actions"
+                    " (id, event_type, scope_type, scope_id, staff_name,"
+                    "  prompt_template, timing, cron_expr, enabled, created_at, updated_at)"
+                    " VALUES (?, 'topic_scheduler', 'topic', 'fake-topic', 'staff',"
+                    "         'hi', 'before', NULL, ?, ?, ?)",
+                    (action_id, True, now, now),
+                )
+                conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -854,9 +849,8 @@ class TestDispatchCore:
 
         from src.master.staffs import resolve_staff
 
-        conn = get_connection(db_path)
-        staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
-        conn.close()
+        with get_connection(db_path) as conn:
+            staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
 
         async def run():
             from src.master.dispatch import dispatch_to_staff
@@ -874,9 +868,8 @@ class TestDispatchCore:
         loop.close()
 
         assert msg_id and len(msg_id) > 0
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT sender FROM messages WHERE id = ?", (msg_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT sender FROM messages WHERE id = ?", (msg_id,)).fetchone()
         assert row["sender"] == "event"
 
     def test_dispatch_recovers_not_found_agent(self, db_url):
@@ -896,9 +889,8 @@ class TestDispatchCore:
 
         from src.master.staffs import resolve_staff
 
-        conn = get_connection(db_path)
-        staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
-        conn.close()
+        with get_connection(db_path) as conn:
+            staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
 
         sentinel_kwargs = {"workspace_id": ws_id, "repo_url": "https://github.com/x/y"}
 
@@ -940,9 +932,8 @@ class TestDispatchCore:
         from src.master.staffs import resolve_staff
         from src.master.dispatch import _make_session_uuid
 
-        conn = get_connection(db_path)
-        staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
-        conn.close()
+        with get_connection(db_path) as conn:
+            staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
 
         expected_session_uuid = _make_session_uuid("topic", tp_id, "reviewer")
 
@@ -960,12 +951,11 @@ class TestDispatchCore:
         loop.run_until_complete(run())
         loop.close()
 
-        conn = get_connection(db_path)
-        row = conn.execute(
-            "SELECT session_id FROM staff_sessions WHERE scope_type='topic' AND scope_id=? AND staff_name='reviewer'",
-            (tp_id,),
-        ).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                "SELECT session_id FROM staff_sessions WHERE scope_type='topic' AND scope_id=? AND staff_name='reviewer'",
+                (tp_id,),
+            ).fetchone()
         assert row["session_id"] == expected_session_uuid
 
 
@@ -1078,13 +1068,12 @@ class TestEmitAndWorker:
                     pass
 
         def _record_run_direct(db_path, action_id, status, output):
-            conn = get_connection(db_path)
-            conn.execute(
-                "UPDATE event_actions SET last_run_at=?, last_run_status=?, last_run_output=? WHERE id=?",
-                (_NOW_UTC, status, output, action_id),
-            )
-            conn.commit()
-            conn.close()
+            with get_connection(db_path) as conn:
+                conn.execute(
+                    "UPDATE event_actions SET last_run_at=?, last_run_status=?, last_run_output=? WHERE id=?",
+                    (_NOW_UTC, status, output, action_id),
+                )
+                conn.commit()
 
         asyncio.run(run())
         assert len(dispatched) == 1
@@ -1511,10 +1500,9 @@ class TestFanout:
 
         asyncio.run(run())
 
-        conn = get_connection(db_path)
-        slow_row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (id_slow,)).fetchone()
-        fast_row = conn.execute("SELECT last_run_status FROM event_actions WHERE id=?", (id_fast,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            slow_row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (id_slow,)).fetchone()
+            fast_row = conn.execute("SELECT last_run_status FROM event_actions WHERE id=?", (id_fast,)).fetchone()
 
         assert slow_row[0] == "dispatch_error"
         assert "timeout" in (slow_row[1] or "").lower()
@@ -1630,9 +1618,8 @@ class TestLoopPrevention:
             # dispatch_to_staff itself does not call emit_event regardless of sender.
             from src.master.dispatch import dispatch_to_staff
             from src.master.staffs import resolve_staff
-            conn = get_connection(db_path)
-            staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
-            conn.close()
+            with get_connection(db_path) as conn:
+                staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
 
             await dispatch_to_staff(
                 app_state=app_state,
@@ -1733,9 +1720,8 @@ class TestObservability:
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
-            conn = get_connection(db_path)
-            row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
-            conn.close()
+            with get_connection(db_path) as conn:
+                row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
 
             event = {
                 "event_type": row["event_type"],
@@ -1775,9 +1761,8 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=fake_dispatch)
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         assert row[0] == "ok"
         assert "message_id=" in row[1]
 
@@ -1792,9 +1777,8 @@ class TestObservability:
 
         self._run_dispatch_one(db_path, ws_id, tp_id, action_id, "ghost")
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         assert row[0] == "staff_missing"
         assert "ghost" in row[1]
 
@@ -1814,9 +1798,8 @@ class TestObservability:
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
-            conn = get_connection(db_path)
-            row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
-            conn.close()
+            with get_connection(db_path) as conn:
+                row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
 
             event = {
                 "event_type": "topic_message_sent",
@@ -1834,9 +1817,8 @@ class TestObservability:
 
         asyncio.run(run())
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         assert row[0] == "render_error"
         assert row[1] and len(row[1]) > 0
 
@@ -1858,9 +1840,8 @@ class TestObservability:
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
-            conn = get_connection(db_path)
-            row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
-            conn.close()
+            with get_connection(db_path) as conn:
+                row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
 
             event = {
                 "event_type": "topic_message_sent",
@@ -1876,9 +1857,8 @@ class TestObservability:
 
         asyncio.run(run())
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         assert row[0] == "dispatch_error"
         assert "timeout" in row[1].lower()
 
@@ -1898,9 +1878,8 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=exploding_dispatch)
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         assert row[0] == "dispatch_error"
         assert "MQTT" in row[1] or "unreachable" in row[1]
 
@@ -1929,9 +1908,8 @@ class TestObservability:
                                        target="src.master.dispatch.dispatch_to_staff",
                                        side_effect=dispatch_mock)
 
-            conn = get_connection(db_path)
-            row = conn.execute("SELECT last_run_at, last_run_status FROM event_actions WHERE id=?", (action_id,)).fetchone()
-            conn.close()
+            with get_connection(db_path) as conn:
+                row = conn.execute("SELECT last_run_at, last_run_status FROM event_actions WHERE id=?", (action_id,)).fetchone()
             assert row[0] is not None, f"last_run_at not set for {expected_status}"
             # Validate ISO-8601 format (attach UTC so ruff DTZ007 is satisfied)
             dt = datetime.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
@@ -1954,9 +1932,8 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=fake_dispatch)
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_fired_at, last_run_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_fired_at, last_run_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         assert row[0] is None   # last_fired_at stays NULL for non-scheduler
         assert row[1] is not None  # last_run_at was set
 
@@ -1972,10 +1949,9 @@ class TestObservability:
 
         # Simulate the scheduler tick advancing last_fired_at
         tick_time = "2026-05-08T09:01:00Z"
-        conn = get_connection(db_path)
-        conn.execute("UPDATE event_actions SET last_fired_at=? WHERE id=?", (tick_time, action_id))
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute("UPDATE event_actions SET last_fired_at=? WHERE id=?", (tick_time, action_id))
+            conn.commit()
 
         async def fake_dispatch(*, app_state, workspace_id, topic_id, staff, prompt_text, sender, **kw):
             return str(uuid.uuid4())
@@ -1984,9 +1960,8 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=fake_dispatch)
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_fired_at, last_run_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_fired_at, last_run_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         # last_fired_at was set by the tick (before the worker ran)
         assert row[0] == tick_time
         # last_run_at was set by the worker (after dispatch)
@@ -2011,9 +1986,8 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=fake_dispatch)
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         assert len(row[0]) <= 4096
 
 
@@ -2040,14 +2014,13 @@ class TestScheduler:
         )
 
         # Configure Asia/Shanghai timezone
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
-            " VALUES ('global', '', 'system.timezone', 'Asia/Shanghai', ?)",
-            (_NOW_UTC,),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
+                " VALUES ('global', '', 'system.timezone', 'Asia/Shanghai', ?)",
+                (_NOW_UTC,),
+            )
+            conn.commit()
 
         app_state = _make_app_state(db_path=db_path)
 
@@ -2061,9 +2034,8 @@ class TestScheduler:
         asyncio.run(run())
 
         # last_fired_at should be updated to 01:00 UTC (= 09:00 Shanghai)
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         assert row[0] == "2026-05-08T01:00:00Z"
 
     def test_action_due_65s_ago(self, db_url, frozen_utc_65s_ago):
@@ -2184,9 +2156,8 @@ class TestScheduler:
 
         asyncio.run(run())
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         # Should be the next_fire slot (08:59:00 = the minute slot just passed), not now (09:00:00)
         # The watermark is set to next_fire_utc, not to now_utc_aware
         assert row[0] is not None
@@ -2244,9 +2215,8 @@ class TestScheduler:
 
         asyncio.run(run())
 
-        conn = get_connection(db_path)
-        row = conn.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         # Should parse as UTC ISO-8601 with Z suffix
         ts = row[0]
         assert ts.endswith("Z")
@@ -2315,14 +2285,13 @@ class TestScheduler:
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         # Set timezone to UTC+8 (Asia/Shanghai)
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
-            " VALUES ('global', '', 'system.timezone', 'Asia/Shanghai', ?)",
-            (_NOW_UTC,),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
+                " VALUES ('global', '', 'system.timezone', 'Asia/Shanghai', ?)",
+                (_NOW_UTC,),
+            )
+            conn.commit()
 
         # cron "0 9 * * *" in Shanghai fires at 01:00 UTC
         last_fired = "2026-05-07T17:00:00Z"  # yesterday 17:00 UTC = yesterday 01:00 UTC+8
@@ -2467,9 +2436,8 @@ class TestSessionSharing:
 
         async def run():
             app_state.event_loop = asyncio.get_running_loop()
-            conn = get_connection(db_path)
-            staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
-            conn.close()
+            with get_connection(db_path) as conn:
+                staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
 
             # First dispatch (user)
             await dispatch_to_staff(
@@ -2493,12 +2461,11 @@ class TestSessionSharing:
         asyncio.run(run())
 
         # Both dispatches should share the same staff_sessions row
-        conn = get_connection(db_path)
-        rows = conn.execute(
-            "SELECT * FROM staff_sessions WHERE scope_type='topic' AND scope_id=? AND staff_name='reviewer'",
-            (tp_id,),
-        ).fetchall()
-        conn.close()
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM staff_sessions WHERE scope_type='topic' AND scope_id=? AND staff_name='reviewer'",
+                (tp_id,),
+            ).fetchall()
         assert len(rows) == 1
         expected = _make_session_uuid("topic", tp_id, "reviewer")
         assert rows[0]["session_id"] == expected
@@ -2517,10 +2484,9 @@ class TestSessionSharing:
 
         async def run():
             app_state.event_loop = asyncio.get_running_loop()
-            conn = get_connection(db_path)
-            staff_r = resolve_staff(conn, "reviewer", ws_id, tp_id)
-            staff_t = resolve_staff(conn, "tester", ws_id, tp_id)
-            conn.close()
+            with get_connection(db_path) as conn:
+                staff_r = resolve_staff(conn, "reviewer", ws_id, tp_id)
+                staff_t = resolve_staff(conn, "tester", ws_id, tp_id)
 
             await dispatch_to_staff(
                 app_state=app_state,
@@ -2541,12 +2507,11 @@ class TestSessionSharing:
 
         asyncio.run(run())
 
-        conn = get_connection(db_path)
-        rows = conn.execute(
-            "SELECT staff_name, session_id FROM staff_sessions WHERE scope_type='topic' AND scope_id=?",
-            (tp_id,),
-        ).fetchall()
-        conn.close()
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT staff_name, session_id FROM staff_sessions WHERE scope_type='topic' AND scope_id=?",
+                (tp_id,),
+            ).fetchall()
         assert len(rows) == 2
         session_ids = {r["session_id"] for r in rows}
         assert len(session_ids) == 2  # different sessions
@@ -2557,14 +2522,13 @@ class TestSessionSharing:
         ws_id, tp1_id = _insert_workspace_and_topic(db_path, topic_subject="topic 1")
         # Second topic in same workspace
         tp2_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (tp2_id, ws_id, "topic 2", "branch2", "/tmp/wt2", _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (tp2_id, ws_id, "topic 2", "branch2", "/tmp/wt2", _NOW_UTC),
+            )
+            conn.commit()
         _insert_staff(db_path, name="ws-reviewer", scope_type="global", session_scope="workspace")
 
         from src.master.staffs import resolve_staff
@@ -2574,9 +2538,8 @@ class TestSessionSharing:
 
         async def run():
             app_state.event_loop = asyncio.get_running_loop()
-            conn = get_connection(db_path)
-            staff = resolve_staff(conn, "ws-reviewer", ws_id, tp1_id)
-            conn.close()
+            with get_connection(db_path) as conn:
+                staff = resolve_staff(conn, "ws-reviewer", ws_id, tp1_id)
 
             await dispatch_to_staff(
                 app_state=app_state,
@@ -2586,9 +2549,8 @@ class TestSessionSharing:
                 prompt_text="from topic 1",
                 sender="event",
             )
-            conn = get_connection(db_path)
-            staff2 = resolve_staff(conn, "ws-reviewer", ws_id, tp2_id)
-            conn.close()
+            with get_connection(db_path) as conn:
+                staff2 = resolve_staff(conn, "ws-reviewer", ws_id, tp2_id)
             await dispatch_to_staff(
                 app_state=app_state,
                 workspace_id=ws_id,
@@ -2600,12 +2562,11 @@ class TestSessionSharing:
 
         asyncio.run(run())
 
-        conn = get_connection(db_path)
-        rows = conn.execute(
-            "SELECT * FROM staff_sessions WHERE scope_type='workspace' AND scope_id=? AND staff_name='ws-reviewer'",
-            (ws_id,),
-        ).fetchall()
-        conn.close()
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM staff_sessions WHERE scope_type='workspace' AND scope_id=? AND staff_name='ws-reviewer'",
+                (ws_id,),
+            ).fetchall()
         # One shared session row for the workspace scope
         assert len(rows) == 1
         expected = _make_session_uuid("workspace", ws_id, "ws-reviewer")
@@ -2614,7 +2575,7 @@ class TestSessionSharing:
     def test_llm_session_id_stored_and_reused_topic_scope(self, db_url):
         """SESS-04: llm_session_id written by _save_agent_response is passed back
         on the next dispatch for topic-scoped sessions."""
-        import asyncio, sqlite3
+        import asyncio
         from src.master.staffs import resolve_staff
         from src.master.dispatch import dispatch_to_staff
         from src.master.mqtt_client import _save_agent_response
@@ -2624,19 +2585,17 @@ class TestSessionSharing:
         _insert_staff(db_path, name="codex", scope_type="global", session_scope="topic")
 
         # Patch adapter to 'codex' so sessions row is created with the right adapter.
-        conn = get_connection(db_path)
-        conn.execute("UPDATE staffs SET adapter='codex' WHERE name='codex'")
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute("UPDATE staffs SET adapter='codex' WHERE name='codex'")
+            conn.commit()
 
         app_state = _make_app_state(db_path=db_path)
         payloads = []
 
         async def run():
             app_state.event_loop = asyncio.get_running_loop()
-            conn = get_connection(db_path)
-            staff = resolve_staff(conn, "codex", ws_id, tp_id)
-            conn.close()
+            with get_connection(db_path) as conn:
+                staff = resolve_staff(conn, "codex", ws_id, tp_id)
 
             # First dispatch — captures the payload sent to the agent.
             msg_id = await dispatch_to_staff(
@@ -2670,7 +2629,7 @@ class TestSessionSharing:
 
     def test_llm_session_id_shared_across_topics_workspace_scope(self, db_url):
         """SESS-05: workspace-scoped codex session_id from topic A is reused in topic B."""
-        import asyncio, sqlite3
+        import asyncio
         from src.master.staffs import resolve_staff
         from src.master.dispatch import dispatch_to_staff
         from src.master.mqtt_client import _save_agent_response
@@ -2680,30 +2639,27 @@ class TestSessionSharing:
 
         # Insert a second topic in the same workspace.
         tp2_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (tp2_id, ws_id, "topic 2", "branch2", "/tmp/wt2", _NOW_UTC),
-        )
-        conn.execute("UPDATE staffs SET adapter='codex' WHERE TRUE")
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (tp2_id, ws_id, "topic 2", "branch2", "/tmp/wt2", _NOW_UTC),
+            )
+            conn.execute("UPDATE staffs SET adapter='codex' WHERE TRUE")
+            conn.commit()
         _insert_staff(db_path, name="codex-ws", scope_type="global", session_scope="workspace")
-        conn = get_connection(db_path)
-        conn.execute("UPDATE staffs SET adapter='codex' WHERE name='codex-ws'")
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute("UPDATE staffs SET adapter='codex' WHERE name='codex-ws'")
+            conn.commit()
 
         app_state = _make_app_state(db_path=db_path)
         payloads = []
 
         async def run():
             app_state.event_loop = asyncio.get_running_loop()
-            conn = get_connection(db_path)
-            staff1 = resolve_staff(conn, "codex-ws", ws_id, tp1_id)
-            staff2 = resolve_staff(conn, "codex-ws", ws_id, tp2_id)
-            conn.close()
+            with get_connection(db_path) as conn:
+                staff1 = resolve_staff(conn, "codex-ws", ws_id, tp1_id)
+                staff2 = resolve_staff(conn, "codex-ws", ws_id, tp2_id)
 
             # Dispatch to topic 1.
             msg_id = await dispatch_to_staff(
@@ -2753,9 +2709,8 @@ class TestStructuralInput:
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
-            conn = get_connection(db_path)
-            row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
-            conn.close()
+            with get_connection(db_path) as conn:
+                row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
 
             event = {
                 "event_type": row["event_type"],
@@ -2880,13 +2835,12 @@ class TestStructuralInput:
 
         # Simulate an agent response MQTT message
         message_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO messages (id, topic_id, sender, text, created_at) VALUES (?, ?, 'event', 'prompt', ?)",
-            (message_id, tp_id, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO messages (id, topic_id, sender, text, created_at) VALUES (?, ?, 'event', 'prompt', ?)",
+                (message_id, tp_id, _NOW_UTC),
+            )
+            conn.commit()
 
         payload = json.dumps({
             "message_id": message_id,
@@ -2974,16 +2928,15 @@ class TestStructuredOutput:
 
         # Insert action with structured_output=1 directly in DB
         action_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
-            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+                " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+                (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
+            )
+            conn.commit()
 
         captured = {}
 
@@ -2997,9 +2950,8 @@ class TestStructuredOutput:
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
-            conn = get_connection(db_path)
-            row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
-            conn.close()
+            with get_connection(db_path) as conn:
+                row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
 
             event = {
                 "event_type": "topic_message_sent",
@@ -3035,9 +2987,8 @@ class TestStructuredOutput:
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
-            conn = get_connection(db_path)
-            row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
-            conn.close()
+            with get_connection(db_path) as conn:
+                row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
 
             event = {
                 "event_type": "topic_message_sent",
@@ -3060,24 +3011,23 @@ class TestStructuredOutput:
 
         # Create action with structured_output=1
         action_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
-            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
-        )
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+                " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+                (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
+            )
 
-        # Insert the prompt message with event_action_id set
-        prompt_msg_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
-            " VALUES (?, ?, 'event', 'hi', ?, ?)",
-            (prompt_msg_id, tp_id, action_id, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+            # Insert the prompt message with event_action_id set
+            prompt_msg_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
+                " VALUES (?, ?, 'event', 'hi', ?, ?)",
+                (prompt_msg_id, tp_id, action_id, _NOW_UTC),
+            )
+            conn.commit()
 
         import json
         app_state = _make_app_state(db_path=db_path)
@@ -3130,22 +3080,21 @@ class TestStructuredOutput:
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         action_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
-            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
-        )
-        prompt_msg_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
-            " VALUES (?, ?, 'event', 'hi', ?, ?)",
-            (prompt_msg_id, tp_id, action_id, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+                " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+                (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
+            )
+            prompt_msg_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
+                " VALUES (?, ?, 'event', 'hi', ?, ?)",
+                (prompt_msg_id, tp_id, action_id, _NOW_UTC),
+            )
+            conn.commit()
 
         import json
         app_state = _make_app_state(db_path=db_path)
@@ -3178,12 +3127,11 @@ class TestStructuredOutput:
         app_state.hub.broadcast.assert_not_called()
 
         # Action's last_run_status should be recorded as ok
-        conn = get_connection(db_path)
-        row = conn.execute(
-            "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
-            (action_id,),
-        ).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
+                (action_id,),
+            ).fetchone()
         assert row[0] == "ok"
         assert "silent" in row[1]
 
@@ -3193,22 +3141,21 @@ class TestStructuredOutput:
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         action_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_archived', 'topic', ?, 'reviewer', 'hi', NULL, NULL, ?, ?, ?, ?)",
-            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
-        )
-        prompt_msg_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
-            " VALUES (?, ?, 'event', 'hi', ?, ?)",
-            (prompt_msg_id, tp_id, action_id, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+                " VALUES (?, 'topic_archived', 'topic', ?, 'reviewer', 'hi', NULL, NULL, ?, ?, ?, ?)",
+                (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
+            )
+            prompt_msg_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
+                " VALUES (?, ?, 'event', 'hi', ?, ?)",
+                (prompt_msg_id, tp_id, action_id, _NOW_UTC),
+            )
+            conn.commit()
 
         import json
         app_state = _make_app_state(db_path=db_path)
@@ -3236,12 +3183,11 @@ class TestStructuredOutput:
         on_msg(None, userdata, msg)
         loop.close()
 
-        conn = get_connection(db_path)
-        row = conn.execute(
-            "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
-            (action_id,),
-        ).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
+                (action_id,),
+            ).fetchone()
         assert row[0] == "ok"
         assert "break" in row[1]
 
@@ -3251,22 +3197,21 @@ class TestStructuredOutput:
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         action_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
-            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
-        )
-        prompt_msg_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
-            " VALUES (?, ?, 'event', 'hi', ?, ?)",
-            (prompt_msg_id, tp_id, action_id, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+                " VALUES (?, 'topic_message_sent', 'topic', ?, 'reviewer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+                (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
+            )
+            prompt_msg_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO messages (id, topic_id, sender, text, event_action_id, created_at)"
+                " VALUES (?, ?, 'event', 'hi', ?, ?)",
+                (prompt_msg_id, tp_id, action_id, _NOW_UTC),
+            )
+            conn.commit()
 
         import json
         app_state = _make_app_state(db_path=db_path)
@@ -3294,12 +3239,11 @@ class TestStructuredOutput:
         on_msg(None, userdata, msg)
         loop.close()
 
-        conn = get_connection(db_path)
-        row = conn.execute(
-            "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
-            (action_id,),
-        ).fetchone()
-        conn.close()
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
+                (action_id,),
+            ).fetchone()
         assert row[0] == "ok"
         assert "invalid_json" in row[1]
 
@@ -3310,14 +3254,13 @@ class TestStructuredOutput:
 
         # Message with no event_action_id (normal user message that gets a reply)
         prompt_msg_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO messages (id, topic_id, sender, text, created_at)"
-            " VALUES (?, ?, 'user', 'hello', ?)",
-            (prompt_msg_id, tp_id, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO messages (id, topic_id, sender, text, created_at)"
+                " VALUES (?, ?, 'user', 'hello', ?)",
+                (prompt_msg_id, tp_id, _NOW_UTC),
+            )
+            conn.commit()
 
         import json
         app_state = _make_app_state(db_path=db_path)
@@ -3401,16 +3344,15 @@ class TestGateActions:
         _insert_staff(db_path, name="gatekeeper", scope_type="global")
 
         action_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'Check: {msgbody}', 'before', NULL, ?, ?, ?, ?)",
-            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+                " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'Check: {msgbody}', 'before', NULL, ?, ?, ?, ?)",
+                (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
+            )
+            conn.commit()
 
         async def run():
             from src.master.event_dispatcher import run_gate_actions
@@ -3450,16 +3392,15 @@ class TestGateActions:
         _insert_staff(db_path, name="gatekeeper", scope_type="global")
 
         action_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, ?, ?, ?, ?)",
-            (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+                " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, ?, ?, ?, ?)",
+                (action_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
+            )
+            conn.commit()
 
         async def run():
             from src.master.event_dispatcher import run_gate_actions
@@ -3501,23 +3442,22 @@ class TestGateActions:
 
         gate_id = str(uuid.uuid4())
         obs_id = str(uuid.uuid4())
-        conn = get_connection(db_path)
-        conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, ?, ?, ?, ?)",
-            (gate_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
-        )
-        conn.execute(
-            "INSERT INTO event_actions"
-            " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
-            "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
-            " VALUES (?, 'topic_message_sent', 'topic', ?, 'observer', 'hi', 'before', NULL, ?, ?, ?, ?)",
-            (obs_id, tp_id, True, False, _NOW_UTC, _NOW_UTC),
-        )
-        conn.commit()
-        conn.close()
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+                " VALUES (?, 'topic_message_sent', 'topic', ?, 'gatekeeper', 'hi', 'before', NULL, ?, ?, ?, ?)",
+                (gate_id, tp_id, True, True, _NOW_UTC, _NOW_UTC),
+            )
+            conn.execute(
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+                "  timing, cron_expr, enabled, structured_output, created_at, updated_at)"
+                " VALUES (?, 'topic_message_sent', 'topic', ?, 'observer', 'hi', 'before', NULL, ?, ?, ?, ?)",
+                (obs_id, tp_id, True, False, _NOW_UTC, _NOW_UTC),
+            )
+            conn.commit()
 
         dispatched_action_ids = []
 
