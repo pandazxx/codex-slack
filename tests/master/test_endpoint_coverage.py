@@ -251,9 +251,8 @@ class TestSystemVariables:
         assert r.status_code == 200
         data = r.json()
         assert isinstance(data, list)
-        # Each entry should have at least a "name" or "key" field
-        if data:
-            assert any(k in data[0] for k in ("name", "key", "variable"))
+        assert len(data) > 0, "Expected at least one system variable to be defined"
+        assert any(k in data[0] for k in ("name", "key", "variable"))
 
 
 # ---------------------------------------------------------------------------

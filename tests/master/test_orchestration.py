@@ -150,7 +150,7 @@ def test_messages_envelope_columns_exist(db_url):
 @pytest.mark.sqlite_only
 def test_backfill_user_message(db_url):
     """Legacy sender='user' rows get sender_kind='user', receiver_kind='staff'.
-    sqlite_only: _migrate_envelope_backfill takes a native sqlite3.Connection."""
+    sqlite_only: _migrate_envelope_backfill is a SQLite-only pre-baseline migration path."""
     from src.master.db import init_db, _migrate_envelope_backfill
     db_path = db_url
 
@@ -184,7 +184,7 @@ def test_backfill_user_message(db_url):
 @pytest.mark.sqlite_only
 def test_backfill_agent_message(db_url):
     """Legacy sender='agent' rows get sender_kind='staff', receiver_kind='user'.
-    sqlite_only: _migrate_envelope_backfill takes a native sqlite3.Connection."""
+    sqlite_only: _migrate_envelope_backfill is a SQLite-only pre-baseline migration path."""
     from src.master.db import init_db, _migrate_envelope_backfill
     db_path = db_url
 
@@ -217,7 +217,7 @@ def test_backfill_agent_message(db_url):
 @pytest.mark.sqlite_only
 def test_backfill_is_idempotent(db_url):
     """Running backfill twice does not change already-populated rows.
-    sqlite_only: _migrate_envelope_backfill takes a native sqlite3.Connection."""
+    sqlite_only: _migrate_envelope_backfill is a SQLite-only pre-baseline migration path."""
     from src.master.db import init_db, _migrate_envelope_backfill
     db_path = db_url
 

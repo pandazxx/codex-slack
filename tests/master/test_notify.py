@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 import urllib.error
 from dataclasses import dataclass
@@ -78,14 +77,16 @@ def _make_db(db_url: str, *, workspace_name: str = "My Workspace", topic_subject
 
 def _set_config(db: str, scope_type: str, scope_id: str, key: str, value: str) -> None:
     from src.master.db import get_connection
+    from src.master.db._dialect import upsert as _upsert
     now = "2026-01-01T00:00:00Z"
-    conn = get_connection(db)
-    conn.execute(
-        "INSERT INTO config (scope_type, scope_id, key, value, updated_at) VALUES (?, ?, ?, ?, ?)",
-        (scope_type, scope_id, key, value, now),
-    )
-    conn.commit()
-    conn.close()
+    with get_connection(db) as conn:
+        _upsert(
+            conn,
+            "config",
+            {"scope_type": scope_type, "scope_id": scope_id, "key": key, "value": value, "updated_at": now},
+            conflict_cols=["scope_type", "scope_id", "key"],
+            update_cols=["value", "updated_at"],
+        )
 
 
 # ---------------------------------------------------------------------------
