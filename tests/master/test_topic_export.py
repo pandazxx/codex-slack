@@ -41,15 +41,16 @@ def workspace_topic(client):
 
 def _insert_message(sender, text, topic_id, agent_name=None, transcript=None):
     """Insert a message row directly into the test DB, bypassing the dispatch queue."""
-    data_dir = os.environ.get("MASTER_DATA_DIR", "/tmp")
-    db_path = str(Path(data_dir) / "master_data.db")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    from src.master.db import get_connection
+    from datetime import datetime, timezone
+    db_url = os.environ.get("DATABASE_URL", "")
+    conn = get_connection(db_url)
     mid = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn.execute(
         "INSERT INTO messages (id, topic_id, sender, agent_name, text, transcript, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
-        (mid, topic_id, sender, agent_name, text, transcript),
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (mid, topic_id, sender, agent_name, text, transcript, created_at),
     )
     conn.commit()
     conn.close()
