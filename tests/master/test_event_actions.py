@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from src.master.db import get_connection
 from src.master.main import app
 
 # ---------------------------------------------------------------------------
@@ -232,6 +233,8 @@ def _make_app_state(*, db_path: str) -> MagicMock:
 
 
 def _init_minimal_db(db_path: str) -> None:
+    """Initialise a SQLite DB at db_path.  Only valid for SQLite paths.
+    Use the db_url fixture + db_conn fixture for configured-backend tests."""
     from src.master.db import init_db
     init_db(db_path)
 
@@ -246,18 +249,17 @@ def _insert_event_action(
     timing: str | None = "before",
     cron_expr: str | None = None,
     last_fired_at: str | None = None,
-    enabled: int = 1,
+    enabled: bool = True,
 ) -> str:
+    """Insert an event_action row via get_connection (respects DATABASE_URL)."""
     action_id = str(uuid.uuid4())
     now = _NOW_UTC
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     conn.execute(
-        """
-        INSERT INTO event_actions
-            (id, event_type, scope_type, scope_id, staff_name, prompt_template,
-             timing, cron_expr, last_fired_at, enabled, created_at, updated_at)
-        VALUES (?, ?, 'topic', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
+        "INSERT INTO event_actions"
+        " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
+        "  timing, cron_expr, last_fired_at, enabled, created_at, updated_at)"
+        " VALUES (?, ?, 'topic', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (action_id, event_type, topic_id, staff_name, prompt_template,
          timing, cron_expr, last_fired_at, enabled, now, now),
     )
@@ -273,11 +275,12 @@ def _insert_workspace_and_topic(
     topic_subject: str = "test topic",
     archived: bool = False,
 ) -> tuple[str, str]:
+    """Insert workspace + topic via get_connection (respects DATABASE_URL)."""
     ws_id = str(uuid.uuid4())
     topic_id = str(uuid.uuid4())
     now = _NOW_UTC
     archived_at = now if archived else None
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     conn.execute(
         "INSERT INTO workspaces (id, name, repo_url, created_at) VALUES (?, ?, ?, ?)",
         (ws_id, workspace_name, "https://github.com/x/y", now),
@@ -294,7 +297,8 @@ def _insert_workspace_and_topic(
 
 def _insert_staff(db_path: str, *, name: str, scope_type: str = "global",
                   scope_id: str | None = None, session_scope: str = "topic") -> None:
-    conn = sqlite3.connect(db_path)
+    """Insert a staff row via get_connection (respects DATABASE_URL)."""
+    conn = get_connection(db_path)
     now = _NOW_UTC
     conn.execute(
         "INSERT INTO staffs (id, scope_type, scope_id, name, adapter, session_scope, created_at, updated_at)"
@@ -656,22 +660,20 @@ class TestValidation:
         r = client.post(ea_base_url, json=body)
         assert r.status_code == 422
 
-    def test_db_check_constraint_direct_insert(self, tmp_path):
-        # VAL-18 — bypass the API
-        db_path = str(tmp_path / "check.db")
-        _init_minimal_db(db_path)
-        conn = sqlite3.connect(db_path)
+    def test_db_check_constraint_direct_insert(self, db_url):
+        # VAL-18 — bypass the API; verify DB-level check constraint rejects
+        # topic_scheduler with timing='before'.
+        from src.master.db import DBIntegrityError
+        conn = get_connection(db_url)
         now = _NOW_UTC
         action_id = str(uuid.uuid4())
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(DBIntegrityError):
             conn.execute(
-                """
-                INSERT INTO event_actions
-                    (id, event_type, scope_type, scope_id, staff_name,
-                     prompt_template, timing, cron_expr, enabled, created_at, updated_at)
-                VALUES (?, 'topic_scheduler', 'topic', 'fake-topic', 'staff',
-                        'hi', 'before', NULL, ?, ?, ?)
-                """,
+                "INSERT INTO event_actions"
+                " (id, event_type, scope_type, scope_id, staff_name,"
+                "  prompt_template, timing, cron_expr, enabled, created_at, updated_at)"
+                " VALUES (?, 'topic_scheduler', 'topic', 'fake-topic', 'staff',"
+                "         'hi', 'before', NULL, ?, ?, ?)",
                 (action_id, True, now, now),
             )
             conn.commit()
@@ -801,7 +803,6 @@ class TestDispatchCore:
         msg_id = r.json()["message_id"]
 
         # Verify message inserted with sender='user'
-        from src.master.db import get_connection
         import os
         # DB path is in tmp_path set by the fixture; retrieve via the app state
         # We verify via the list messages endpoint instead
@@ -841,10 +842,9 @@ class TestDispatchCore:
         topics_called = [args[0][0] for args in call_args]
         assert any("prompt" in t for t in topics_called)
 
-    def test_event_sender_inserts_event_message(self, tmp_path):
+    def test_event_sender_inserts_event_message(self, db_url):
         # DISP-04 — call dispatch_to_staff directly with sender='event'
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
 
@@ -852,7 +852,6 @@ class TestDispatchCore:
         loop = asyncio.new_event_loop()
         app_state.event_loop = loop
 
-        from src.master.db import get_connection
         from src.master.staffs import resolve_staff
 
         conn = get_connection(db_path)
@@ -880,14 +879,13 @@ class TestDispatchCore:
         conn.close()
         assert row["sender"] == "event"
 
-    def test_dispatch_recovers_not_found_agent(self, tmp_path):
+    def test_dispatch_recovers_not_found_agent(self, db_url):
         # DISP-251 — regression for issue #251: dispatch must recover a missing
         # (not_found) agent by respawning it, not merely try to start it. Verify
         # dispatch routes through ensure_agent_running with the workspace's
         # spawn config, so a removed container is recreated before the prompt is
         # published (instead of being silently dropped).
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
 
@@ -896,7 +894,6 @@ class TestDispatchCore:
         loop = asyncio.new_event_loop()
         app_state.event_loop = loop
 
-        from src.master.db import get_connection
         from src.master.staffs import resolve_staff
 
         conn = get_connection(db_path)
@@ -930,10 +927,9 @@ class TestDispatchCore:
         assert mock_ensure.call_args.kwargs["name"] == f"codex-agent-{ws_id}"
         assert mock_ensure.call_args.kwargs["spawn_kwargs"] is sentinel_kwargs
 
-    def test_session_uuid_matches_scope(self, tmp_path):
+    def test_session_uuid_matches_scope(self, db_url):
         # DISP-05 — session uuid is deterministic from _make_session_uuid
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global", session_scope="topic")
 
@@ -941,7 +937,6 @@ class TestDispatchCore:
         loop = asyncio.new_event_loop()
         app_state.event_loop = loop
 
-        from src.master.db import get_connection
         from src.master.staffs import resolve_staff
         from src.master.dispatch import _make_session_uuid
 
@@ -980,10 +975,9 @@ class TestDispatchCore:
 
 
 class TestEmitAndWorker:
-    def test_emit_from_loop_thread_enqueues(self, tmp_path):
+    def test_emit_from_loop_thread_enqueues(self, db_url):
         # EMIT-01
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
 
         async def run():
             from src.master.event_dispatcher import emit_event
@@ -1002,10 +996,9 @@ class TestEmitAndWorker:
 
         asyncio.run(run())
 
-    def test_emit_from_non_loop_thread_enqueues(self, tmp_path):
+    def test_emit_from_non_loop_thread_enqueues(self, db_url):
         # EMIT-02
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
 
         results = []
 
@@ -1036,10 +1029,9 @@ class TestEmitAndWorker:
         asyncio.run(run())
         assert results[0] == 1
 
-    def test_worker_dispatches_matching_actions(self, tmp_path):
+    def test_worker_dispatches_matching_actions(self, db_url):
         # EMIT-03
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         _insert_event_action(
@@ -1086,7 +1078,7 @@ class TestEmitAndWorker:
                     pass
 
         def _record_run_direct(db_path, action_id, status, output):
-            conn = sqlite3.connect(db_path)
+            conn = get_connection(db_path)
             conn.execute(
                 "UPDATE event_actions SET last_run_at=?, last_run_status=?, last_run_output=? WHERE id=?",
                 (_NOW_UTC, status, output, action_id),
@@ -1098,10 +1090,9 @@ class TestEmitAndWorker:
         assert len(dispatched) == 1
         assert dispatched[0] == "reviewer"
 
-    def test_worker_fifo_order(self, tmp_path):
+    def test_worker_fifo_order(self, db_url):
         # EMIT-04
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
 
         order = []
 
@@ -1134,10 +1125,9 @@ class TestEmitAndWorker:
         asyncio.run(run())
         assert order == ["A", "B"]
 
-    def test_worker_processes_one_event_at_a_time(self, tmp_path):
+    def test_worker_processes_one_event_at_a_time(self, db_url):
         # EMIT-05 — no concurrent _handle_event calls
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
 
         concurrent_count = []
         active = [0]
@@ -1173,10 +1163,9 @@ class TestEmitAndWorker:
         # At no point should more than 1 event be handled concurrently
         assert max(concurrent_count) == 1
 
-    def test_worker_updates_last_progress(self, tmp_path):
+    def test_worker_updates_last_progress(self, db_url):
         # EMIT-06
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
 
         results = []
 
@@ -1209,10 +1198,9 @@ class TestEmitAndWorker:
         assert results[0] is not None
         assert isinstance(results[0], datetime)
 
-    def test_disabled_action_not_dispatched(self, tmp_path, mqtt_recorder):
+    def test_disabled_action_not_dispatched(self, db_url, mqtt_recorder):
         # EMIT-07
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         _insert_event_action(
@@ -1255,10 +1243,9 @@ class TestEmitAndWorker:
         asyncio.run(run())
         assert len(dispatched) == 0
 
-    def test_different_topic_action_not_fired(self, tmp_path, mqtt_recorder):
+    def test_different_topic_action_not_fired(self, db_url, mqtt_recorder):
         # EMIT-08
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _, other_tp_id = _insert_workspace_and_topic(db_path, workspace_name="other-ws")
         _insert_staff(db_path, name="reviewer", scope_type="global")
@@ -1303,11 +1290,10 @@ class TestEmitAndWorker:
         asyncio.run(run())
         assert len(dispatched) == 0
 
-    def test_worker_error_isolation(self, tmp_path, caplog):
+    def test_worker_error_isolation(self, db_url, caplog):
         # EMIT-09
         import logging
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
 
         handled = []
 
@@ -1350,10 +1336,9 @@ class TestEmitAndWorker:
         # Error was logged with the expected logger name
         assert any("event_worker.handle_failed" in r.message for r in caplog.records)
 
-    def test_worker_shutdown_drops_queue_cleanly(self, tmp_path):
+    def test_worker_shutdown_drops_queue_cleanly(self, db_url):
         # EMIT-10 — cancellation does not raise unhandled exceptions
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
 
         async def run():
             from src.master.event_dispatcher import event_worker
@@ -1391,10 +1376,9 @@ class TestEmitAndWorker:
 
 
 class TestFanout:
-    def test_two_actions_both_fire(self, tmp_path, mqtt_recorder):
+    def test_two_actions_both_fire(self, db_url, mqtt_recorder):
         # FANOUT-01
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         _insert_event_action(
@@ -1436,10 +1420,9 @@ class TestFanout:
         asyncio.run(run())
         assert len(dispatched) == 2
 
-    def test_one_failure_does_not_block_sibling(self, tmp_path, mqtt_recorder):
+    def test_one_failure_does_not_block_sibling(self, db_url, mqtt_recorder):
         # FANOUT-02
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         id_a = _insert_event_action(
@@ -1488,10 +1471,9 @@ class TestFanout:
         # FANOUT-03
         pass
 
-    def test_dispatch_timeout_records_error_sibling_unaffected(self, tmp_path, mqtt_recorder):
+    def test_dispatch_timeout_records_error_sibling_unaffected(self, db_url, mqtt_recorder):
         # FANOUT-04
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         id_slow = _insert_event_action(
@@ -1529,7 +1511,7 @@ class TestFanout:
 
         asyncio.run(run())
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         slow_row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (id_slow,)).fetchone()
         fast_row = conn.execute("SELECT last_run_status FROM event_actions WHERE id=?", (id_fast,)).fetchone()
         conn.close()
@@ -1538,10 +1520,9 @@ class TestFanout:
         assert "timeout" in (slow_row[1] or "").lower()
         assert fast_row[0] == "ok"
 
-    def test_worker_advances_after_timeout(self, tmp_path):
+    def test_worker_advances_after_timeout(self, db_url):
         # FANOUT-05 — after a timeout, worker picks up next event
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
 
         handled = []
 
@@ -1581,11 +1562,10 @@ class TestFanout:
         assert "t0" in handled
         assert "t1" in handled
 
-    def test_gather_return_exceptions_catches_escape(self, tmp_path):
+    def test_gather_return_exceptions_catches_escape(self, db_url):
         # FANOUT-06 — exceptions from _dispatch_one are caught by gather, not the worker outer loop
         # Call _handle_event directly with a raising _dispatch_one and assert it completes
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         _insert_event_action(
@@ -1623,10 +1603,9 @@ class TestFanout:
 
 
 class TestLoopPrevention:
-    def test_event_sender_does_not_retrigger_message_sent(self, tmp_path):
+    def test_event_sender_does_not_retrigger_message_sent(self, db_url):
         # LOOP-01 — messages with sender='event' do not emit topic_message_sent
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
 
@@ -1650,7 +1629,6 @@ class TestLoopPrevention:
             # on the user path, not when sender='event'. Verify via the messages.py code path:
             # dispatch_to_staff itself does not call emit_event regardless of sender.
             from src.master.dispatch import dispatch_to_staff
-            from src.master.db import get_connection
             from src.master.staffs import resolve_staff
             conn = get_connection(db_path)
             staff = resolve_staff(conn, "reviewer", ws_id, tp_id)
@@ -1688,13 +1666,12 @@ class TestLoopPrevention:
         src = inspect.getsource(topics_mod)
         assert "topic_archived" in src
 
-    def test_archived_action_with_timing_after_actually_dispatches(self, tmp_path):
+    def test_archived_action_with_timing_after_actually_dispatches(self, db_url):
         # Regression: topics.py emits topic_archived with timing='after'; an action
         # row with timing='after' must be selected by _handle_event. Earlier code
         # emitted timing=None, which silently failed to match timing='after' rows
         # because SQL `timing = NULL` is never true.
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="summariser", scope_type="global")
         action_id = _insert_event_action(
@@ -1750,7 +1727,6 @@ class TestLoopPrevention:
 class TestObservability:
     def _run_dispatch_one(self, db_path, ws_id, tp_id, action_id, staff_name, **patch_kwargs):
         """Run _dispatch_one against a real DB row, optionally patching dispatch_to_staff."""
-        from src.master.db import get_connection
 
         async def run():
             from src.master.event_dispatcher import _dispatch_one
@@ -1781,10 +1757,9 @@ class TestObservability:
 
         asyncio.run(run())
 
-    def test_ok_status_and_message_id_in_output(self, tmp_path):
+    def test_ok_status_and_message_id_in_output(self, db_url):
         # OBS-01
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         action_id = _insert_event_action(
@@ -1800,16 +1775,15 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=fake_dispatch)
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         assert row[0] == "ok"
         assert "message_id=" in row[1]
 
-    def test_staff_missing_status(self, tmp_path):
+    def test_staff_missing_status(self, db_url):
         # OBS-02
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         # No staff inserted — staff_name='ghost' will not resolve
         action_id = _insert_event_action(
@@ -1818,16 +1792,15 @@ class TestObservability:
 
         self._run_dispatch_one(db_path, ws_id, tp_id, action_id, "ghost")
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         assert row[0] == "staff_missing"
         assert "ghost" in row[1]
 
-    def test_render_error_status(self, tmp_path):
+    def test_render_error_status(self, db_url):
         # OBS-03 — template that raises on render
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         action_id = _insert_event_action(
@@ -1841,7 +1814,6 @@ class TestObservability:
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
-            from src.master.db import get_connection
             conn = get_connection(db_path)
             row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
             conn.close()
@@ -1862,16 +1834,15 @@ class TestObservability:
 
         asyncio.run(run())
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         assert row[0] == "render_error"
         assert row[1] and len(row[1]) > 0
 
-    def test_dispatch_timeout_status(self, tmp_path):
+    def test_dispatch_timeout_status(self, db_url):
         # OBS-04
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         action_id = _insert_event_action(
@@ -1887,7 +1858,6 @@ class TestObservability:
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
-            from src.master.db import get_connection
             conn = get_connection(db_path)
             row = conn.execute("SELECT * FROM event_actions WHERE id=?", (action_id,)).fetchone()
             conn.close()
@@ -1906,16 +1876,15 @@ class TestObservability:
 
         asyncio.run(run())
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         assert row[0] == "dispatch_error"
         assert "timeout" in row[1].lower()
 
-    def test_dispatch_exception_status(self, tmp_path):
+    def test_dispatch_exception_status(self, db_url):
         # OBS-05
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         action_id = _insert_event_action(
@@ -1929,16 +1898,15 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=exploding_dispatch)
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_run_status, last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         assert row[0] == "dispatch_error"
         assert "MQTT" in row[1] or "unreachable" in row[1]
 
-    def test_last_run_at_updated_all_outcomes(self, tmp_path):
+    def test_last_run_at_updated_all_outcomes(self, db_url):
         # OBS-06 — last_run_at is set for all outcome types
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
 
@@ -1961,7 +1929,7 @@ class TestObservability:
                                        target="src.master.dispatch.dispatch_to_staff",
                                        side_effect=dispatch_mock)
 
-            conn = sqlite3.connect(db_path)
+            conn = get_connection(db_path)
             row = conn.execute("SELECT last_run_at, last_run_status FROM event_actions WHERE id=?", (action_id,)).fetchone()
             conn.close()
             assert row[0] is not None, f"last_run_at not set for {expected_status}"
@@ -1969,10 +1937,9 @@ class TestObservability:
             dt = datetime.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
             assert dt.year >= 2026
 
-    def test_last_fired_at_unchanged_for_non_scheduler(self, tmp_path):
+    def test_last_fired_at_unchanged_for_non_scheduler(self, db_url):
         # OBS-07
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         action_id = _insert_event_action(
@@ -1987,16 +1954,15 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=fake_dispatch)
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_fired_at, last_run_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         assert row[0] is None   # last_fired_at stays NULL for non-scheduler
         assert row[1] is not None  # last_run_at was set
 
-    def test_last_fired_at_vs_last_run_at_scheduler(self, tmp_path):
+    def test_last_fired_at_vs_last_run_at_scheduler(self, db_url):
         # OBS-08
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         action_id = _insert_event_action(
@@ -2006,7 +1972,7 @@ class TestObservability:
 
         # Simulate the scheduler tick advancing last_fired_at
         tick_time = "2026-05-08T09:01:00Z"
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute("UPDATE event_actions SET last_fired_at=? WHERE id=?", (tick_time, action_id))
         conn.commit()
         conn.close()
@@ -2018,7 +1984,7 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=fake_dispatch)
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_fired_at, last_run_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         # last_fired_at was set by the tick (before the worker ran)
@@ -2027,10 +1993,9 @@ class TestObservability:
         assert row[1] is not None
         assert row[1] != tick_time
 
-    def test_last_run_output_truncated_at_4096(self, tmp_path):
+    def test_last_run_output_truncated_at_4096(self, db_url):
         # OBS-09
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         action_id = _insert_event_action(
@@ -2046,7 +2011,7 @@ class TestObservability:
                                target="src.master.dispatch.dispatch_to_staff",
                                side_effect=fake_dispatch)
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_run_output FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         assert len(row[0]) <= 4096
@@ -2062,10 +2027,9 @@ class TestScheduler:
         from src.master.main import _scheduler_tick
         _scheduler_tick(db_path, app_state, now_utc)
 
-    def test_cron_tz_evaluation_shanghai(self, tmp_path, frozen_utc):
+    def test_cron_tz_evaluation_shanghai(self, db_url, frozen_utc):
         # SCHED-01: 0 9 * * * in Asia/Shanghai fires at 01:00 UTC
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         # Set last_fired_at to 00:50 UTC (= 08:50 Shanghai)
@@ -2076,7 +2040,7 @@ class TestScheduler:
         )
 
         # Configure Asia/Shanghai timezone
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
             " VALUES ('global', '', 'system.timezone', 'Asia/Shanghai', ?)",
@@ -2097,15 +2061,14 @@ class TestScheduler:
         asyncio.run(run())
 
         # last_fired_at should be updated to 01:00 UTC (= 09:00 Shanghai)
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         assert row[0] == "2026-05-08T01:00:00Z"
 
-    def test_action_due_65s_ago(self, tmp_path, frozen_utc_65s_ago):
+    def test_action_due_65s_ago(self, db_url, frozen_utc_65s_ago):
         # SCHED-02
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         # last_fired_at 65s before frozen_utc (09:00 UTC)
         last_fired = frozen_utc_65s_ago.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2135,11 +2098,10 @@ class TestScheduler:
         assert len(emitted) == 1
         assert emitted[0]["event_type"] == "topic_scheduler"
 
-    def test_action_not_due_5s_ago(self, tmp_path):
+    def test_action_not_due_5s_ago(self, db_url):
         # SCHED-03: last_fired at 09:00:00 UTC (the current minute slot), next fire
         # is 09:01:00 which is in the future — action must NOT fire.
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         # last_fired_at = the current minute slot (09:00:00), so next = 09:01:00
         last_fired = "2026-05-08T09:00:00Z"
@@ -2168,10 +2130,9 @@ class TestScheduler:
         asyncio.run(run())
         assert len(emitted) == 0
 
-    def test_archived_topic_not_fired(self, tmp_path, frozen_utc):
+    def test_archived_topic_not_fired(self, db_url, frozen_utc):
         # SCHED-04
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, topic_id = _insert_workspace_and_topic(db_path, archived=True)
         _insert_event_action(
             db_path,
@@ -2203,10 +2164,9 @@ class TestScheduler:
         asyncio.run(run())
         assert len(emitted) == 0
 
-    def test_watermark_advances_to_next_fire_not_now(self, tmp_path, frozen_utc):
+    def test_watermark_advances_to_next_fire_not_now(self, db_url, frozen_utc):
         # SCHED-05
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         # last_fired_at 65s ago so action is due; now = 09:00:00 UTC
         last_fired = (frozen_utc - timedelta(seconds=65)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2224,7 +2184,7 @@ class TestScheduler:
 
         asyncio.run(run())
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         # Should be the next_fire slot (08:59:00 = the minute slot just passed), not now (09:00:00)
@@ -2232,11 +2192,10 @@ class TestScheduler:
         assert row[0] is not None
         assert row[0] != frozen_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    def test_slow_worker_no_duplicate_fire(self, tmp_path):
+    def test_slow_worker_no_duplicate_fire(self, db_url):
         # SCHED-06: after first tick fires and advances watermark to 09:00:00,
         # a second tick at 09:00:30 should NOT fire again (next slot is 09:01:00 > 09:00:30).
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         # last_fired 65s before 09:00:00 → 08:58:55
         last_fired = "2026-05-08T08:58:55Z"
@@ -2267,10 +2226,9 @@ class TestScheduler:
         asyncio.run(run())
         assert len(emitted) == 1
 
-    def test_last_fired_at_stored_as_utc_iso8601(self, tmp_path, frozen_utc):
+    def test_last_fired_at_stored_as_utc_iso8601(self, db_url, frozen_utc):
         # SCHED-07
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         last_fired = (frozen_utc - timedelta(seconds=65)).strftime("%Y-%m-%dT%H:%M:%SZ")
         action_id = _insert_event_action(
@@ -2286,7 +2244,7 @@ class TestScheduler:
 
         asyncio.run(run())
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute("SELECT last_fired_at FROM event_actions WHERE id=?", (action_id,)).fetchone()
         conn.close()
         # Should parse as UTC ISO-8601 with Z suffix
@@ -2295,10 +2253,9 @@ class TestScheduler:
         dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         assert dt.year == 2026
 
-    def test_null_last_fired_at_uses_created_at(self, tmp_path, frozen_utc):
+    def test_null_last_fired_at_uses_created_at(self, db_url, frozen_utc):
         # SCHED-08 — new action with last_fired_at IS NULL uses created_at as anchor
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         # created_at is _NOW_UTC = 09:00:00 UTC which is frozen_utc
         # last_fired_at is None → uses created_at as anchor
@@ -2325,10 +2282,9 @@ class TestScheduler:
         # Should not fire: next slot after created_at=09:00:00 is 09:01:00, which > now
         assert len(emitted) == 0
 
-    def test_catchup_fires_once_per_tick(self, tmp_path, frozen_utc):
+    def test_catchup_fires_once_per_tick(self, db_url, frozen_utc):
         # SCHED-09 — after a 5-minute pause, fires only ONCE per tick
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         # last_fired_at was 5 minutes ago
         last_fired = (frozen_utc - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2353,14 +2309,13 @@ class TestScheduler:
         # Even though 5 minutes elapsed and 5 slots are overdue, fires exactly once
         assert len(emitted) == 1
 
-    def test_configured_tz_changes_next_fire(self, tmp_path, frozen_utc):
+    def test_configured_tz_changes_next_fire(self, db_url, frozen_utc):
         # SCHED-10
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         # Set timezone to UTC+8 (Asia/Shanghai)
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO config (scope_type, scope_id, key, value, updated_at)"
             " VALUES ('global', '', 'system.timezone', 'Asia/Shanghai', ?)",
@@ -2393,10 +2348,9 @@ class TestScheduler:
         asyncio.run(run())
         assert len(emitted) == 1
 
-    def test_scheduler_slot_and_action_id_in_event(self, tmp_path, frozen_utc):
+    def test_scheduler_slot_and_action_id_in_event(self, db_url, frozen_utc):
         # SCHED-11
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         last_fired = (frozen_utc - timedelta(seconds=65)).strftime("%Y-%m-%dT%H:%M:%SZ")
         action_id = _insert_event_action(
@@ -2500,14 +2454,12 @@ class TestStallWatchdog:
 
 
 class TestSessionSharing:
-    def test_event_dispatch_shares_session_with_user_dispatch(self, tmp_path):
+    def test_event_dispatch_shares_session_with_user_dispatch(self, db_url):
         # SESS-01
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global", session_scope="topic")
 
-        from src.master.db import get_connection
         from src.master.staffs import resolve_staff
         from src.master.dispatch import dispatch_to_staff, _make_session_uuid
 
@@ -2551,15 +2503,13 @@ class TestSessionSharing:
         expected = _make_session_uuid("topic", tp_id, "reviewer")
         assert rows[0]["session_id"] == expected
 
-    def test_two_staffs_use_different_sessions(self, tmp_path):
+    def test_two_staffs_use_different_sessions(self, db_url):
         # SESS-02
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global", session_scope="topic")
         _insert_staff(db_path, name="tester", scope_type="global", session_scope="topic")
 
-        from src.master.db import get_connection
         from src.master.staffs import resolve_staff
         from src.master.dispatch import dispatch_to_staff
 
@@ -2601,14 +2551,13 @@ class TestSessionSharing:
         session_ids = {r["session_id"] for r in rows}
         assert len(session_ids) == 2  # different sessions
 
-    def test_workspace_scope_shares_across_topics(self, tmp_path):
+    def test_workspace_scope_shares_across_topics(self, db_url):
         # SESS-03 — staff with session_scope='workspace' shares session across two topics
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp1_id = _insert_workspace_and_topic(db_path, topic_subject="topic 1")
         # Second topic in same workspace
         tp2_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
@@ -2618,7 +2567,6 @@ class TestSessionSharing:
         conn.close()
         _insert_staff(db_path, name="ws-reviewer", scope_type="global", session_scope="workspace")
 
-        from src.master.db import get_connection
         from src.master.staffs import resolve_staff
         from src.master.dispatch import dispatch_to_staff, _make_session_uuid
 
@@ -2663,22 +2611,20 @@ class TestSessionSharing:
         expected = _make_session_uuid("workspace", ws_id, "ws-reviewer")
         assert rows[0]["session_id"] == expected
 
-    def test_llm_session_id_stored_and_reused_topic_scope(self, tmp_path):
+    def test_llm_session_id_stored_and_reused_topic_scope(self, db_url):
         """SESS-04: llm_session_id written by _save_agent_response is passed back
         on the next dispatch for topic-scoped sessions."""
         import asyncio, sqlite3
-        from src.master.db import get_connection
         from src.master.staffs import resolve_staff
         from src.master.dispatch import dispatch_to_staff
         from src.master.mqtt_client import _save_agent_response
 
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="codex", scope_type="global", session_scope="topic")
 
         # Patch adapter to 'codex' so sessions row is created with the right adapter.
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute("UPDATE staffs SET adapter='codex' WHERE name='codex'")
         conn.commit()
         conn.close()
@@ -2722,21 +2668,19 @@ class TestSessionSharing:
         assert second_payload.get("session_id") == "codex-thread-abc"  # must use the stored id
         assert second_payload.get("is_new_session") is False
 
-    def test_llm_session_id_shared_across_topics_workspace_scope(self, tmp_path):
+    def test_llm_session_id_shared_across_topics_workspace_scope(self, db_url):
         """SESS-05: workspace-scoped codex session_id from topic A is reused in topic B."""
         import asyncio, sqlite3
-        from src.master.db import get_connection
         from src.master.staffs import resolve_staff
         from src.master.dispatch import dispatch_to_staff
         from src.master.mqtt_client import _save_agent_response
 
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp1_id = _insert_workspace_and_topic(db_path, topic_subject="topic 1")
 
         # Insert a second topic in the same workspace.
         tp2_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
@@ -2746,7 +2690,7 @@ class TestSessionSharing:
         conn.commit()
         conn.close()
         _insert_staff(db_path, name="codex-ws", scope_type="global", session_scope="workspace")
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute("UPDATE staffs SET adapter='codex' WHERE name='codex-ws'")
         conn.commit()
         conn.close()
@@ -2796,7 +2740,6 @@ class TestStructuralInput:
 
     def _run_dispatch_one_capture_prompt(self, db_path, ws_id, tp_id, action_id, variables):
         """Run _dispatch_one and return the prompt text passed to dispatch_to_staff."""
-        from src.master.db import get_connection
 
         captured = {}
 
@@ -2830,10 +2773,9 @@ class TestStructuralInput:
         asyncio.run(run())
         return captured.get("prompt", "")
 
-    def test_topic_json_injected_automatically(self, tmp_path):
+    def test_topic_json_injected_automatically(self, db_url):
         # SI-01 — {topic_json} is added by _dispatch_one from the DB
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(
             db_path, workspace_name="ws-alpha", topic_subject="My Topic"
         )
@@ -2859,10 +2801,9 @@ class TestStructuralInput:
         assert parsed["id"] == tp_id
         assert parsed["workspace_id"] == ws_id
 
-    def test_topic_json_caller_supplied_takes_precedence(self, tmp_path):
+    def test_topic_json_caller_supplied_takes_precedence(self, db_url):
         # SI-02 — if caller already sets topic_json in variables, _dispatch_one does not override it
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path, topic_subject="Real Topic")
         _insert_staff(db_path, name="reviewer", scope_type="global")
         action_id = _insert_event_action(
@@ -2920,10 +2861,9 @@ class TestStructuralInput:
         assert parsed["text"] == "hello world"
         assert parsed["sender"] == "user"
 
-    def test_response_json_in_topic_message_received(self, tmp_path):
+    def test_response_json_in_topic_message_received(self, db_url):
         # SI-04 — {response_json} is passed in variables for topic_message_received events
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
 
@@ -2940,7 +2880,7 @@ class TestStructuralInput:
 
         # Simulate an agent response MQTT message
         message_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, text, created_at) VALUES (?, ?, 'event', 'prompt', ?)",
             (message_id, tp_id, _NOW_UTC),
@@ -3026,16 +2966,15 @@ class TestStructuredOutput:
         assert patch_r2.status_code == 200
         assert patch_r2.json()["structured_output"] is False
 
-    def test_dispatch_stores_event_action_id_on_message(self, tmp_path):
+    def test_dispatch_stores_event_action_id_on_message(self, db_url):
         # SOUT-04 — when structured_output=True, dispatch_to_staff is called with event_action_id
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
 
         # Insert action with structured_output=1 directly in DB
         action_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
@@ -3055,7 +2994,6 @@ class TestStructuredOutput:
 
         async def run():
             from src.master.event_dispatcher import _dispatch_one
-            from src.master.db import get_connection
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
@@ -3076,10 +3014,9 @@ class TestStructuredOutput:
         asyncio.run(run())
         assert captured["event_action_id"] == action_id
 
-    def test_dispatch_no_event_action_id_when_not_structured(self, tmp_path):
+    def test_dispatch_no_event_action_id_when_not_structured(self, db_url):
         # SOUT-05 — when structured_output=False, event_action_id is None
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
         action_id = _insert_event_action(
@@ -3095,7 +3032,6 @@ class TestStructuredOutput:
 
         async def run():
             from src.master.event_dispatcher import _dispatch_one
-            from src.master.db import get_connection
             app_state = _make_app_state(db_path=db_path)
             app_state.event_loop = asyncio.get_running_loop()
 
@@ -3116,16 +3052,15 @@ class TestStructuredOutput:
         asyncio.run(run())
         assert captured["event_action_id"] is None
 
-    def test_structured_response_message_posts_to_topic(self, tmp_path):
+    def test_structured_response_message_posts_to_topic(self, db_url):
         # SOUT-06 — MQTT response {"message": "..."} posts a new message to the topic
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="reviewer", scope_type="global")
 
         # Create action with structured_output=1
         action_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
@@ -3189,14 +3124,13 @@ class TestStructuredOutput:
         assert posted.get("text") == "Structured reply!"
         assert posted.get("agent_name") == "reviewer"
 
-    def test_structured_response_silent_suppresses_message(self, tmp_path):
+    def test_structured_response_silent_suppresses_message(self, db_url):
         # SOUT-07 — MQTT response {"silent": true} suppresses message, records ok status
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         action_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
@@ -3244,7 +3178,7 @@ class TestStructuredOutput:
         app_state.hub.broadcast.assert_not_called()
 
         # Action's last_run_status should be recorded as ok
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute(
             "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
             (action_id,),
@@ -3253,14 +3187,13 @@ class TestStructuredOutput:
         assert row[0] == "ok"
         assert "silent" in row[1]
 
-    def test_structured_response_break_is_logged(self, tmp_path):
+    def test_structured_response_break_is_logged(self, db_url):
         # SOUT-08 — MQTT response {"break": true} logs intent, records ok status
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         action_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
@@ -3303,7 +3236,7 @@ class TestStructuredOutput:
         on_msg(None, userdata, msg)
         loop.close()
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute(
             "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
             (action_id,),
@@ -3312,14 +3245,13 @@ class TestStructuredOutput:
         assert row[0] == "ok"
         assert "break" in row[1]
 
-    def test_structured_response_invalid_json_records_ok(self, tmp_path):
+    def test_structured_response_invalid_json_records_ok(self, db_url):
         # SOUT-09 — non-JSON response is handled gracefully, records ok with invalid_json note
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         action_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
@@ -3362,7 +3294,7 @@ class TestStructuredOutput:
         on_msg(None, userdata, msg)
         loop.close()
 
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         row = conn.execute(
             "SELECT last_run_status, last_run_output FROM event_actions WHERE id=?",
             (action_id,),
@@ -3371,15 +3303,14 @@ class TestStructuredOutput:
         assert row[0] == "ok"
         assert "invalid_json" in row[1]
 
-    def test_non_structured_response_follows_normal_flow(self, tmp_path):
+    def test_non_structured_response_follows_normal_flow(self, db_url):
         # SOUT-10 — message without event_action_id goes through normal _save_agent_response path
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         # Message with no event_action_id (normal user message that gets a reply)
         prompt_msg_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO messages (id, topic_id, sender, text, created_at)"
             " VALUES (?, ?, 'user', 'hello', ?)",
@@ -3445,10 +3376,9 @@ class TestStructuredOutput:
 class TestGateActions:
     """Tests for the break-gating mechanism (before+structured_output=1 actions)."""
 
-    def test_no_gate_actions_returns_true(self, tmp_path):
+    def test_no_gate_actions_returns_true(self, db_url):
         # GATE-01: No gate actions → run_gate_actions returns True immediately
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
 
         async def run():
@@ -3464,15 +3394,14 @@ class TestGateActions:
 
         assert asyncio.run(run()) is True
 
-    def test_break_response_returns_false(self, tmp_path):
+    def test_break_response_returns_false(self, db_url):
         # GATE-02: Gate action resolving with "break" → run_gate_actions returns False
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="gatekeeper", scope_type="global")
 
         action_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
@@ -3514,15 +3443,14 @@ class TestGateActions:
 
         assert asyncio.run(run()) is False
 
-    def test_proceed_response_returns_true(self, tmp_path):
+    def test_proceed_response_returns_true(self, db_url):
         # GATE-03: Gate action resolving with "proceed" → run_gate_actions returns True
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="gatekeeper", scope_type="global")
 
         action_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
@@ -3564,17 +3492,16 @@ class TestGateActions:
 
         assert asyncio.run(run()) is True
 
-    def test_handle_event_excludes_gate_actions(self, tmp_path):
+    def test_handle_event_excludes_gate_actions(self, db_url):
         # GATE-04: _handle_event skips before+structured_output=1 actions for topic_message_sent
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
         ws_id, tp_id = _insert_workspace_and_topic(db_path)
         _insert_staff(db_path, name="gatekeeper", scope_type="global")
         _insert_staff(db_path, name="observer", scope_type="global")
 
         gate_id = str(uuid.uuid4())
         obs_id = str(uuid.uuid4())
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
         conn.execute(
             "INSERT INTO event_actions"
             " (id, event_type, scope_type, scope_id, staff_name, prompt_template,"
@@ -3618,10 +3545,9 @@ class TestGateActions:
         assert None in dispatched_action_ids   # observer passes event_action_id=None
         assert gate_id not in dispatched_action_ids
 
-    def test_resolve_gate_future_sets_result(self, tmp_path):
+    def test_resolve_gate_future_sets_result(self, db_url):
         # GATE-05: _resolve_gate_future resolves the correct Future from the MQTT thread
-        db_path = str(tmp_path / "db.db")
-        _init_minimal_db(db_path)
+        db_path = db_url
 
         async def run():
             from src.master.mqtt_client import _resolve_gate_future
