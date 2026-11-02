@@ -149,13 +149,17 @@ def _default_snapshot_dir() -> Path:
 
 
 def _cmd_snapshot_export(args: argparse.Namespace) -> None:
+    from src.master.db import _refuse_mysql
     from src.master.db.snapshot import export_snapshot
+    _refuse_mysql(args.source_url)
     out_dir = Path(args.out)
     export_snapshot(args.source_url, out_dir, REPO_ROOT)
 
 
 def _cmd_snapshot_import(args: argparse.Namespace) -> None:
+    from src.master.db import _refuse_mysql
     from src.master.db.snapshot import import_snapshot
+    _refuse_mysql(args.target_url)
     in_dir = Path(args.in_dir)
     import_snapshot(
         in_dir, args.target_url, REPO_ROOT,
@@ -165,9 +169,13 @@ def _cmd_snapshot_import(args: argparse.Namespace) -> None:
 
 
 def _cmd_snapshot_and_migrate(args: argparse.Namespace) -> None:
+    from src.master.db import _refuse_mysql
     from src.master.db.snapshot import snapshot_and_migrate
     source_url = _source_url_from_env(args.source_url)
     target_url = args.target_url.strip() or None
+    _refuse_mysql(source_url)
+    if target_url:
+        _refuse_mysql(target_url)
     out_dir = Path(args.out) if args.out.strip() else _default_snapshot_dir()
     snapshot_and_migrate(source_url, target_url, out_dir, REPO_ROOT)
 
@@ -220,6 +228,7 @@ def _stamp_prebaseline_sqlite_if_needed(url: str, cfg: Any) -> None:
 
 
 def _cmd_migrate() -> None:
+    from src.master.db import _refuse_mysql
     from alembic.config import Config
     from alembic import command as alembic_command
 
@@ -229,6 +238,7 @@ def _cmd_migrate() -> None:
     # points at a SQLite file that pre-dates Alembic, stamp it at the baseline
     # first so that 'alembic upgrade head' can then walk forward from there.
     url = os.environ.get("DATABASE_URL", "").strip()
+    _refuse_mysql(url)
     _stamp_prebaseline_sqlite_if_needed(url, cfg)
 
     print("db_cli: running alembic upgrade head")
@@ -237,9 +247,12 @@ def _cmd_migrate() -> None:
 
 
 def _cmd_verify_schema() -> None:
+    from src.master.db import _refuse_mysql
     from alembic.config import Config
     from alembic import command as alembic_command
 
+    url = os.environ.get("DATABASE_URL", "").strip()
+    _refuse_mysql(url)
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
     print("db_cli: verifying schema against Alembic head")
     try:

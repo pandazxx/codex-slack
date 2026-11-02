@@ -2,7 +2,7 @@
 
 ## Master Database Schema
 
-The master service uses PostgreSQL by default (since v5.0). SQLite and MySQL are also supported. The schema is managed by Alembic; the canonical definition is in `alembic/versions/`. This file documents the table structure for reference.
+The master service uses PostgreSQL by default (since v5.0). SQLite is also supported (opt-in via `DATABASE_URL`). MySQL support is deferred. The schema is managed by Alembic; the canonical definition is in `alembic/versions/`. This file documents the table structure for reference.
 
 For SQLite installs (opt-in via `DATABASE_URL=sqlite+pysqlite:///...`), the database file is at `/opt/codex-slack/data/master/master_data.db`.
 

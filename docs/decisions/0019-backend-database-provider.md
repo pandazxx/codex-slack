@@ -7,6 +7,39 @@ consulted: [engineer, tester, sre]
 informed: [doc-writer, users]
 ---
 
+## Amendment (2026-11-01) — MySQL support deferred
+
+The project owner has deferred MySQL support until there is a concrete
+operator need. This narrows the "supported providers" claim and the
+"CI runs all three dialects on every PR" claim below, both of which
+are superseded by this amendment:
+
+- **Supported providers.** Postgres (default, production target) and
+  SQLite (opt-in fallback). MySQL is **deferred, not supported**.
+- **CI matrix.** Every PR runs SQLite + Postgres only. The MySQL leg
+  is not re-enabled. The "all three dialects … block merge" wording
+  in the Decision Outcome and Confirmation sections is superseded by
+  this amendment.
+- **MySQL dialect code.** The dialect helpers that already shipped in
+  M1 (`_dialect.upsert`, `_dialect.json_array_contains_fragment`,
+  `DBIntegrityError` conditional, etc.) are **kept in the tree but
+  untested** on MySQL and are not promised to work.
+- **Startup refusal.** A `DATABASE_URL` with the `mysql+pymysql://`
+  scheme is **refused at startup** with a pointer to
+  [ADR-0020](0020-mysql-support-details.md) explaining the deferral.
+  An engineer is landing that check in a separate PR.
+- **Trigger for revisiting.** A concrete need for MySQL from an
+  operator who cannot move to Postgres. At that point ADR-0020 is
+  revisited, the OQ13–OQ17 sign-offs are collected (see the parked
+  list in `docs/design/backend-database-provider.md`), and Phase 2
+  work begins. Nothing in this ADR is withdrawn; the record of what
+  "all three dialects" would have required is preserved verbatim as
+  the plan to execute when the trigger fires.
+
+The rest of this ADR is left as-written to preserve the decision
+record. Statements about MySQL being "supported" or "CI-tested" should
+be read through this amendment until it is lifted.
+
 ## Context and Problem Statement
 
 The master service persists all durable state in a single SQLite file
