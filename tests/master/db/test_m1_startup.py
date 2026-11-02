@@ -248,7 +248,8 @@ class TestPreBaselineSqlite:
         )
 
     def test_prebaseline_stamped_at_baseline_rev(self, tmp_path):
-        """startup_db stamps a pre-baseline DB at the baseline revision."""
+        """startup_db stamps a pre-baseline DB at the baseline revision, then
+        applies any later revisions so the DB ends at the code head."""
         from src.master.db import startup_db
 
         db_path = str(tmp_path / "prebaseline.db")
@@ -258,9 +259,8 @@ class TestPreBaselineSqlite:
 
         version = _get_alembic_version_sqlite(db_path)
         assert version is not None, "startup_db must create alembic_version on pre-baseline DB"
-        assert version.startswith(BASELINE_REV), (
-            f"Expected version to start with {BASELINE_REV!r}, got {version!r}"
-        )
+        head = _alembic_head_revision()
+        assert version == head, f"Expected version {head!r} (code head), got {version!r}"
 
     def test_prebaseline_existing_rows_preserved(self, tmp_path):
         """startup_db on a pre-baseline DB must not delete existing data rows."""
