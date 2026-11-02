@@ -15,13 +15,13 @@ produce it.
 from __future__ import annotations
 
 import json
-import sqlite3
+import os
 from unittest.mock import MagicMock, patch
 import logging
 
 import pytest
 
-from src.master.db import init_db
+from src.master.db import get_connection, init_db
 
 # ---------------------------------------------------------------------------
 # Import guard — skip the whole module if _save_chunk is not yet implemented.
@@ -64,20 +64,31 @@ VALUES ('t1', 'ws1', 'Test topic', 'feat/t1', '/tmp/wt1', '2026-01-01T00:00:00Z'
 
 
 @pytest.fixture()
-def db_path(tmp_path):
-    path = str(tmp_path / "test.db")
-    init_db(path)
-    # Ensure the chunks table exists (may not be in base schema yet)
-    conn = sqlite3.connect(path)
-    conn.executescript(_CHUNKS_DDL)
-    conn.executescript(_TOPICS_SEED)
+def db_path(tmp_path, monkeypatch):
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if url and not url.startswith("sqlite"):
+        db_url = url
+    else:
+        path = str(tmp_path / "test.db")
+        init_db(path)
+        db_url = f"sqlite+pysqlite:///{path}"
+        monkeypatch.setenv("DATABASE_URL", db_url)
+    conn = get_connection(db_url)
+    conn.execute(
+        "INSERT INTO workspaces (id, name, repo_url, created_at)"
+        " VALUES ('ws1', 'Test WS', 'https://github.com/x/y', '2026-01-01T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+        " VALUES ('t1', 'ws1', 'Test topic', 'feat/t1', '/tmp/wt1', '2026-01-01T00:00:00Z')"
+    )
     conn.commit()
     conn.close()
-    return path
+    return db_url
 
 
 def _count_chunks(db_path: str, message_id: str) -> int:
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     count = conn.execute(
         "SELECT COUNT(*) FROM chunks WHERE message_id = ?", (message_id,)
     ).fetchone()[0]
@@ -86,17 +97,16 @@ def _count_chunks(db_path: str, message_id: str) -> int:
 
 
 def _fetch_chunks(db_path: str, message_id: str) -> list[dict]:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     rows = conn.execute(
         "SELECT * FROM chunks WHERE message_id = ? ORDER BY seq", (message_id,)
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return [dict(r._mapping) for r in rows]
 
 
 def _count_messages(db_path: str, message_id: str) -> int:
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     count = conn.execute(
         "SELECT COUNT(*) FROM messages WHERE id = ?", (message_id,)
     ).fetchone()[0]

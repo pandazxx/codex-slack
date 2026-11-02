@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
+import os
+import time
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from src.master.db import init_db
+from src.master.db import get_connection, init_db
 
 # ---------------------------------------------------------------------------
 # Import guard
@@ -58,29 +59,41 @@ _SEED_SQL = """
 INSERT OR IGNORE INTO workspaces (id, name, repo_url, container_name, created_at, archived_at)
 VALUES ('ws1', 'WS', 'https://github.com/x/y', NULL, '2026-01-01T00:00:00Z', NULL);
 
-INSERT OR IGNORE INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)
+INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)
 VALUES ('t1', 'ws1', 'Topic 1', 'feat/t1', '/tmp/wt1', '2026-01-01T00:00:00Z');
 """
 
 
 @pytest.fixture()
-def db_path(tmp_path):
-    path = str(tmp_path / "test.db")
-    init_db(path)
-    conn = sqlite3.connect(path)
-    conn.executescript(_CHUNKS_DDL)
-    conn.executescript(_SEED_SQL)
+def db_path(tmp_path, monkeypatch):
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if url and not url.startswith("sqlite"):
+        db_url = url
+    else:
+        path = str(tmp_path / "test.db")
+        init_db(path)
+        db_url = f"sqlite+pysqlite:///{path}"
+        monkeypatch.setenv("DATABASE_URL", db_url)
+    conn = get_connection(db_url)
+    conn.execute(
+        "INSERT INTO workspaces (id, name, repo_url, created_at)"
+        " VALUES ('ws1', 'WS', 'https://github.com/x/y', '2026-01-01T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+        " VALUES ('t1', 'ws1', 'Topic 1', 'feat/t1', '/tmp/wt1', '2026-01-01T00:00:00Z')"
+    )
     conn.commit()
     conn.close()
-    return path
+    return db_url
 
 
 def _insert_chunks(db_path: str, topic_id: str, message_id: str, events: list[dict]) -> None:
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     for seq, event in enumerate(events):
         conn.execute(
-            "INSERT INTO chunks (message_id, topic_id, seq, event) VALUES (?, ?, ?, ?)",
-            (message_id, topic_id, seq, json.dumps(event)),
+            "INSERT INTO chunks (message_id, topic_id, seq, event, created_at) VALUES (?, ?, ?, ?, ?)",
+            (message_id, topic_id, seq, json.dumps(event), time.time()),
         )
     conn.commit()
     conn.close()
@@ -88,9 +101,9 @@ def _insert_chunks(db_path: str, topic_id: str, message_id: str, events: list[di
 
 def _insert_message(db_path: str, topic_id: str, message_id: str) -> None:
     """Insert a completed messages row for message_id."""
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     conn.execute(
-        "INSERT OR IGNORE INTO messages"
+        "INSERT INTO messages"
         " (id, topic_id, sender, agent_name, text, transcript, usage_json, attachments_json, created_at)"
         " VALUES (?, ?, 'agent', 'claude', 'done', NULL, NULL, NULL, '2026-01-01T00:00:00Z')",
         (message_id, topic_id),
@@ -136,11 +149,11 @@ def test_replay_sends_chunk_replay_frame_for_in_progress_message(db_path):
 def test_replay_events_are_in_seq_order(db_path):
     """Events in the chunk_replay frame are ordered by seq ascending."""
     # Insert in reverse order to verify ordering is not insertion-order
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     for seq in reversed(range(5)):
         conn.execute(
-            "INSERT INTO chunks (message_id, topic_id, seq, event) VALUES (?, ?, ?, ?)",
-            ("msg-order", "t1", seq, json.dumps({"type": "assistant", "idx": seq})),
+            "INSERT INTO chunks (message_id, topic_id, seq, event, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("msg-order", "t1", seq, json.dumps({"type": "assistant", "idx": seq}), time.time()),
         )
     conn.commit()
     conn.close()
@@ -203,9 +216,9 @@ def test_replay_mixed_completed_and_in_progress(db_path):
 def test_replay_includes_topic_id_per_frame(db_path):
     """The global WS replays every in-progress message across all topics; each
     frame must carry its own topic_id so the frontend can route it."""
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     conn.execute(
-        "INSERT OR IGNORE INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+        "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
         " VALUES ('t2', 'ws1', 'Topic 2', 'feat/t2', '/tmp/wt2', '2026-01-01T00:00:00Z')"
     )
     conn.commit()

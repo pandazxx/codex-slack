@@ -111,25 +111,25 @@ def _make_msg(topic: str, payload: dict) -> MagicMock:
     return msg
 
 
-def _make_db(tmp_path) -> str:
-    import sqlite3
-    db = str(tmp_path / "test.db")
-    conn = sqlite3.connect(db)
-    conn.executescript("""
-        CREATE TABLE workspaces (
-            id TEXT PRIMARY KEY, container_name TEXT,
-            last_message_at TEXT, last_dispatched_at TEXT, last_responded_at TEXT
-        );
-        CREATE TABLE topics (id TEXT PRIMARY KEY, workspace_id TEXT);
-        INSERT INTO workspaces VALUES ('ws1', 'c1', '2000-01-01T00:00:00Z', NULL, NULL);
-        INSERT INTO topics VALUES ('t1', 'ws1');
-    """)
+def _make_db(db_url: str) -> str:
+    """Seed the test database with a minimal workspace and topic."""
+    from src.master.db import get_connection
+    conn = get_connection(db_url)
+    conn.execute(
+        "INSERT INTO workspaces (id, name, repo_url, created_at)"
+        " VALUES ('ws1', 'Test WS', 'https://github.com/x/y', '2000-01-01T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+        " VALUES ('t1', 'ws1', 'test topic', 'main', '/tmp/wt', '2000-01-01T00:00:00Z')"
+    )
+    conn.commit()
     conn.close()
-    return db
+    return db_url
 
 
-def test_on_message_status_does_not_record_response(tmp_path):
-    db = _make_db(tmp_path)
+def test_on_message_status_does_not_record_response(db_url):
+    db = _make_db(db_url)
     msg = _make_msg("codex-slack/workspace/ws1/topic/t1/status", {"state": "thinking"})
     settings = _make_settings()
     with patch("src.master.mqtt_client._record_agent_response") as mock_rec:
@@ -137,8 +137,8 @@ def test_on_message_status_does_not_record_response(tmp_path):
         mock_rec.assert_not_called()
 
 
-def test_on_message_response_records_response(tmp_path):
-    db = _make_db(tmp_path)
+def test_on_message_response_records_response(db_url):
+    db = _make_db(db_url)
     msg = _make_msg("codex-slack/workspace/ws1/topic/t1/response", {"last_response": "done"})
     settings = _make_settings()
     with patch("src.master.mqtt_client._record_agent_response") as mock_rec, \
@@ -148,25 +148,24 @@ def test_on_message_response_records_response(tmp_path):
         mock_rec.assert_called_once_with(db, "t1")
 
 
-def test_record_agent_response_sets_last_responded_at(tmp_path):
-    import sqlite3
-    db = _make_db(tmp_path)
+def test_record_agent_response_sets_last_responded_at(db_url):
+    from src.master.db import get_connection
+    db = _make_db(db_url)
     _record_agent_response(db, "t1")
-    conn = sqlite3.connect(db)
+    conn = get_connection(db)
     row = conn.execute("SELECT last_responded_at FROM workspaces WHERE id = 'ws1'").fetchone()
     conn.close()
     assert row[0] is not None
-    assert row[0] != "2000-01-01T00:00:00Z"
 
 
 # --- pong handling ---
 
-def test_pong_resolves_pending_ping(tmp_path):
+def test_pong_resolves_pending_ping(db_url):
     """A pong message sets the pending_ping event and records the alive value."""
     import threading
     from types import SimpleNamespace
 
-    db = _make_db(tmp_path)
+    db = _make_db(db_url)
     message_id = "msg-ping-1"
 
     event = threading.Event()
@@ -184,12 +183,12 @@ def test_pong_resolves_pending_ping(tmp_path):
     assert pending["alive"] is True
 
 
-def test_pong_not_broadcast_to_websocket(tmp_path):
+def test_pong_not_broadcast_to_websocket(db_url):
     """Pong messages must not be forwarded to the WebSocket hub."""
     import threading
     from types import SimpleNamespace
 
-    db = _make_db(tmp_path)
+    db = _make_db(db_url)
     message_id = "msg-ping-2"
 
     event = threading.Event()

@@ -300,6 +300,7 @@ def test_tc06_create_archiving_appears_in_list(client, ea_url):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.sqlite_only
 def test_tc07_migration_old_schema_upgraded(tmp_path):
     """init_db on a pre-migration DB (no topic_archiving in CHECK) upgrades schema
     so that INSERT of a topic_archiving row succeeds."""
@@ -409,6 +410,7 @@ def test_tc07_migration_old_schema_upgraded(tmp_path):
     assert row["event_type"] == "topic_archiving"
 
 
+@pytest.mark.sqlite_only
 def test_tc07_migration_idempotent(tmp_path):
     """Running init_db twice on a fresh DB does not raise."""
     db_path = str(tmp_path / "idempotent.db")
@@ -416,6 +418,7 @@ def test_tc07_migration_idempotent(tmp_path):
     init_db(db_path)  # should not raise
 
 
+@pytest.mark.sqlite_only
 def test_tc07_migration_preserves_structured_output_values(tmp_path):
     """Regression for prod 500: `_migrate_event_actions_v2` previously
     recreated the table without `structured_output`, dropping the column and
@@ -510,6 +513,7 @@ def test_tc07_migration_preserves_structured_output_values(tmp_path):
         conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_tc07_migration_recovers_lost_structured_output(tmp_path):
     """Regression for prod 500: a DB that already ran the *broken* v2
     (event_actions has `topic_archiving` but no `structured_output`) must

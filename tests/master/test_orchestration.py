@@ -25,6 +25,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from src.master.db import get_connection
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -127,45 +129,32 @@ class TestValidator:
 # 2. DB — tasks table present after init
 # ---------------------------------------------------------------------------
 
-def test_tasks_table_exists(tmp_path):
-    from src.master.db import init_db, get_connection
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
-    conn = get_connection(db_path)
-    try:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'"
-        ).fetchone()
-        assert row is not None
-    finally:
-        conn.close()
+def test_tasks_table_exists(db_url):
+    from src.master.db import schema_info
+    info = schema_info(db_url)
+    assert "tasks" in info and info["tasks"], "tasks table missing or has no columns"
 
 
-def test_messages_envelope_columns_exist(tmp_path):
-    from src.master.db import init_db, get_connection
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
-    conn = get_connection(db_path)
-    try:
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
-        for col in ("sender_kind", "sender_name", "receiver_kind", "receiver_name", "task_id", "reply_to_message_id"):
-            assert col in cols, f"Column {col!r} missing from messages"
-    finally:
-        conn.close()
+def test_messages_envelope_columns_exist(db_url):
+    from src.master.db import schema_info
+    info = schema_info(db_url)
+    cols = set(info.get("messages", []))
+    for col in ("sender_kind", "sender_name", "receiver_kind", "receiver_name", "task_id", "reply_to_message_id"):
+        assert col in cols, f"Column {col!r} missing from messages"
 
 
 # ---------------------------------------------------------------------------
 # 3. DB — backfill migration
 # ---------------------------------------------------------------------------
 
-def test_backfill_user_message(tmp_path):
-    """Legacy sender='user' rows get sender_kind='user', receiver_kind='staff'."""
-    from src.master.db import init_db, get_connection, _migrate_envelope_backfill
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
+@pytest.mark.sqlite_only
+def test_backfill_user_message(db_url):
+    """Legacy sender='user' rows get sender_kind='user', receiver_kind='staff'.
+    sqlite_only: _migrate_envelope_backfill is a SQLite-only pre-baseline migration path."""
+    from src.master.db import init_db, _migrate_envelope_backfill
+    db_path = db_url
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     try:
         # Insert a workspace + topic + legacy message (sender_kind NULL)
         conn.execute(
@@ -192,14 +181,14 @@ def test_backfill_user_message(tmp_path):
         conn.close()
 
 
-def test_backfill_agent_message(tmp_path):
-    """Legacy sender='agent' rows get sender_kind='staff', receiver_kind='user'."""
-    from src.master.db import init_db, get_connection, _migrate_envelope_backfill
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
+@pytest.mark.sqlite_only
+def test_backfill_agent_message(db_url):
+    """Legacy sender='agent' rows get sender_kind='staff', receiver_kind='user'.
+    sqlite_only: _migrate_envelope_backfill is a SQLite-only pre-baseline migration path."""
+    from src.master.db import init_db, _migrate_envelope_backfill
+    db_path = db_url
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     try:
         conn.execute(
             "INSERT INTO workspaces (id, name, repo_url, repo_ref, created_at)"
@@ -225,14 +214,14 @@ def test_backfill_agent_message(tmp_path):
         conn.close()
 
 
-def test_backfill_is_idempotent(tmp_path):
-    """Running backfill twice does not change already-populated rows."""
+@pytest.mark.sqlite_only
+def test_backfill_is_idempotent(db_url):
+    """Running backfill twice does not change already-populated rows.
+    sqlite_only: _migrate_envelope_backfill is a SQLite-only pre-baseline migration path."""
     from src.master.db import init_db, _migrate_envelope_backfill
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
+    db_path = db_url
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     try:
         conn.execute(
             "INSERT INTO workspaces (id, name, repo_url, repo_ref, created_at)"
@@ -318,7 +307,6 @@ def _get_dispatch_token(client, message_id: str) -> str:
     """Fetch the dispatch_token stored on a message row."""
     c, _ = client
     db_path = c.app.state.db_path
-    from src.master.db import get_connection
     conn = get_connection(db_path)
     try:
         row = conn.execute(
@@ -360,7 +348,6 @@ def test_delegate_creates_task_and_dispatches(
     assert body["state"] == "working"
 
     # Task row exists in DB
-    from src.master.db import get_connection
     import os
     db_path = c.app.state.db_path
     conn = get_connection(db_path)
@@ -495,7 +482,6 @@ def test_delegate_rejects_fan_out_exceeded(client, workspace_topic, architect_st
     ws_id, topic_id = workspace_topic
 
     # Directly insert a depth-0 root task and MAX_TASKS_PER_ROOT children
-    from src.master.db import get_connection
     db_path = c.app.state.db_path
     conn = get_connection(db_path)
     try:
@@ -603,7 +589,6 @@ def test_ask_inside_task_sets_input_required(client, workspace_topic, architect_
     assert "message_id" in body
 
     # Task state updated in DB
-    from src.master.db import get_connection
     conn = get_connection(c.app.state.db_path)
     try:
         task = conn.execute("SELECT state FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -653,16 +638,14 @@ def test_ask_outside_task_routes_to_user(client, workspace_topic, architect_staf
 # 7. Agent reply envelope (mqtt_client._save_agent_response)
 # ---------------------------------------------------------------------------
 
-def test_agent_reply_gets_staff_sender_kind(tmp_path):
+def test_agent_reply_gets_staff_sender_kind(db_url):
     """_save_agent_response sets sender_kind='staff' on the reply row."""
-    from src.master.db import init_db, get_connection
+    from src.master.db import init_db
     from src.master.mqtt_client import _save_agent_response
 
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
+    db_path = db_url
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     try:
         conn.execute(
             "INSERT INTO workspaces (id, name, repo_url, repo_ref, created_at)"
@@ -692,8 +675,7 @@ def test_agent_reply_gets_staff_sender_kind(tmp_path):
         "session_id": None,
     })
 
-    conn2 = sqlite3.connect(db_path)
-    conn2.row_factory = sqlite3.Row
+    conn2 = get_connection(db_path)
     try:
         row = conn2.execute("SELECT * FROM messages WHERE id='reply-1'").fetchone()
         assert row["sender_kind"] == "staff"
@@ -704,16 +686,14 @@ def test_agent_reply_gets_staff_sender_kind(tmp_path):
         conn2.close()
 
 
-def test_agent_reply_to_staff_prompt_routes_back(tmp_path):
+def test_agent_reply_to_staff_prompt_routes_back(db_url):
     """Reply to a staff-sent prompt routes receiver back to that staff."""
     from src.master.db import init_db
     from src.master.mqtt_client import _save_agent_response
 
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
+    db_path = db_url
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     try:
         conn.execute(
             "INSERT INTO workspaces (id, name, repo_url, repo_ref, created_at)"
@@ -743,8 +723,7 @@ def test_agent_reply_to_staff_prompt_routes_back(tmp_path):
         "session_id": None,
     })
 
-    conn2 = sqlite3.connect(db_path)
-    conn2.row_factory = sqlite3.Row
+    conn2 = get_connection(db_path)
     try:
         row = conn2.execute("SELECT * FROM messages WHERE id='reply-eng'").fetchone()
         assert row["sender_kind"] == "staff"
@@ -857,7 +836,7 @@ def test_back05_user_message_stores_sender_kind_user(client, workspace_topic, ar
     )
 
 
-def test_back05_event_dispatch_stores_sender_kind_staff(tmp_path):
+def test_back05_event_dispatch_stores_sender_kind_staff(db_url):
     """BACK-05 (negative): dispatch_to_staff with sender='event' stores sender_kind='staff'.
 
     A staff-originated re-entry prompt must NOT have sender_kind='user'. The
@@ -869,13 +848,11 @@ def test_back05_event_dispatch_stores_sender_kind_staff(tmp_path):
     import asyncio
     import sqlite3
 
-    from src.master.db import init_db, get_connection
+    from src.master.db import init_db
 
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
+    db_path = db_url
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     try:
         conn.execute(
             "INSERT INTO workspaces (id, name, repo_url, repo_ref, created_at)"
@@ -1081,7 +1058,6 @@ def test_delt10_server_side_depth_guard_independent_of_tool_hiding(
     )
 
     # Step 3: also confirm no task row was created for the rejected call.
-    from src.master.db import get_connection
     conn = get_connection(c.app.state.db_path)
     try:
         count = conn.execute(
@@ -1161,7 +1137,6 @@ def test_delt11_cycle_detected_synthetic_depth2(client, workspace_topic, archite
     c, _ = client
     ws_id, topic_id = workspace_topic
 
-    from src.master.db import get_connection
     db_path = c.app.state.db_path
     conn = get_connection(db_path)
     try:
@@ -1236,76 +1211,68 @@ def test_delt11_cycle_detected_synthetic_depth2(client, workspace_topic, archite
     )
 
 
-def test_delt11_cycle_detection_walk_logic():
+def test_delt11_cycle_detection_walk_logic(db_url):
     """DELT-11 (unit): detect_cycle rejects when proposed assignee appears in ancestor chain.
 
     Calls the real detect_cycle helper from orchestration.py so this test
     exercises the production code path rather than reproducing the logic inline.
     """
-    import sqlite3
-    import tempfile
-    import os
-    from src.master.db import init_db
     from src.master.orchestration import detect_cycle
 
-    with tempfile.TemporaryDirectory() as tmp:
-        db_path = os.path.join(tmp, "cycle.db")
-        init_db(db_path)
+    db_path = db_url
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO workspaces (id, name, repo_url, repo_ref, created_at)"
+            " VALUES ('ws1', 'r', 'u', 'main', '2024-01-01T00:00:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+            " VALUES ('t1', 'ws1', 'S', 'b', '/w', '2024-01-01T00:00:00Z')"
+        )
+        # depth-0: user→agent_a
+        conn.execute(
+            "INSERT INTO tasks (id, topic_id, root_task_id, parent_task_id, depth,"
+            " dispatcher_kind, dispatcher_name, assignee_name,"
+            " goal, acceptance_criteria, state, failure_score, created_at, updated_at)"
+            " VALUES ('t0','t1','t0',NULL,0,'user',NULL,'agent_a','g','c','working',0.0,"
+            " '2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')"
+        )
+        # depth-1: agent_a→agent_b  (parent=t0)
+        conn.execute(
+            "INSERT INTO tasks (id, topic_id, root_task_id, parent_task_id, depth,"
+            " dispatcher_kind, dispatcher_name, assignee_name,"
+            " goal, acceptance_criteria, state, failure_score, created_at, updated_at)"
+            " VALUES ('t1c','t1','t0','t0',1,'staff','agent_a','agent_b','g','c','working',0.0,"
+            " '2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')"
+        )
+        conn.commit()
 
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            conn.execute(
-                "INSERT INTO workspaces (id, name, repo_url, repo_ref, created_at)"
-                " VALUES ('ws1', 'r', 'u', 'main', '2024-01-01T00:00:00Z')"
-            )
-            conn.execute(
-                "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
-                " VALUES ('t1', 'ws1', 'S', 'b', '/w', '2024-01-01T00:00:00Z')"
-            )
-            # depth-0: user→agent_a
-            conn.execute(
-                "INSERT INTO tasks (id, topic_id, root_task_id, parent_task_id, depth,"
-                " dispatcher_kind, dispatcher_name, assignee_name,"
-                " goal, acceptance_criteria, state, failure_score, created_at, updated_at)"
-                " VALUES ('t0','t1','t0',NULL,0,'user',NULL,'agent_a','g','c','working',0.0,"
-                " '2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')"
-            )
-            # depth-1: agent_a→agent_b  (parent=t0)
-            conn.execute(
-                "INSERT INTO tasks (id, topic_id, root_task_id, parent_task_id, depth,"
-                " dispatcher_kind, dispatcher_name, assignee_name,"
-                " goal, acceptance_criteria, state, failure_score, created_at, updated_at)"
-                " VALUES ('t1c','t1','t0','t0',1,'staff','agent_a','agent_b','g','c','working',0.0,"
-                " '2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')"
-            )
-            conn.commit()
+        # Collect ancestor rows for agent_b's task (t1c), walking parent chain.
+        caller_task_row = conn.execute("SELECT * FROM tasks WHERE id='t1c'").fetchone()
+        ancestors = []
+        ancestor_id = caller_task_row["parent_task_id"]
+        while ancestor_id:
+            row = conn.execute(
+                "SELECT assignee_name, dispatcher_name, parent_task_id FROM tasks WHERE id=?",
+                (ancestor_id,),
+            ).fetchone()
+            if row is None:
+                break
+            ancestors.append(row)
+            ancestor_id = row["parent_task_id"]
 
-            # Collect ancestor rows for agent_b's task (t1c), walking parent chain.
-            caller_task_row = conn.execute("SELECT * FROM tasks WHERE id='t1c'").fetchone()
-            ancestors = []
-            ancestor_id = caller_task_row["parent_task_id"]
-            while ancestor_id:
-                row = conn.execute(
-                    "SELECT assignee_name, dispatcher_name, parent_task_id FROM tasks WHERE id=?",
-                    (ancestor_id,),
-                ).fetchone()
-                if row is None:
-                    break
-                ancestors.append(row)
-                ancestor_id = row["parent_task_id"]
-
-            # agent_a appears as assignee_name of the depth-0 ancestor → cycle detected.
-            assert detect_cycle(ancestors, "agent_a"), (
-                "detect_cycle must find agent_a in ancestor chain when "
-                "agent_b tries to delegate back to agent_a"
-            )
-            # agent_c is not in the chain → no cycle.
-            assert not detect_cycle(ancestors, "agent_c"), (
-                "detect_cycle must not flag agent_c which is not in the ancestor chain"
-            )
-        finally:
-            conn.close()
+        # agent_a appears as assignee_name of the depth-0 ancestor → cycle detected.
+        assert detect_cycle(ancestors, "agent_a"), (
+            "detect_cycle must find agent_a in ancestor chain when "
+            "agent_b tries to delegate back to agent_a"
+        )
+        # agent_c is not in the chain → no cycle.
+        assert not detect_cycle(ancestors, "agent_c"), (
+            "detect_cycle must not flag agent_c which is not in the ancestor chain"
+        )
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

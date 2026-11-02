@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 import urllib.error
 from dataclasses import dataclass
@@ -57,60 +56,37 @@ def _make_settings(
     )
 
 
-def _make_db(tmp_path, *, workspace_name: str = "My Workspace", topic_subject: str = "Fix bug #42") -> str:
-    """Create a minimal SQLite database pre-seeded with one workspace and one topic."""
-    db = str(tmp_path / "test.db")
-    conn = sqlite3.connect(db)
+def _make_db(db_url: str, *, workspace_name: str = "My Workspace", topic_subject: str = "Fix bug #42") -> str:
+    """Seed the test database with one workspace and one topic."""
+    from src.master.db import get_connection
     now = "2026-01-01T00:00:00Z"
-    conn.executescript(f"""
-        CREATE TABLE workspaces (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            repo_url TEXT NOT NULL,
-            container_name TEXT,
-            created_at TEXT NOT NULL,
-            archived_at TEXT,
-            last_refreshed_at TEXT,
-            last_message_at TEXT,
-            last_dispatched_at TEXT,
-            last_responded_at TEXT
-        );
-        CREATE TABLE topics (
-            id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL,
-            subject TEXT NOT NULL,
-            branch_name TEXT NOT NULL,
-            worktree_path TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            archived_at TEXT
-        );
-        CREATE TABLE config (
-            scope_type TEXT NOT NULL,
-            scope_id   TEXT NOT NULL DEFAULT '',
-            key        TEXT NOT NULL,
-            value      TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (scope_type, scope_id, key)
-        );
-        INSERT INTO workspaces (id, name, repo_url, created_at)
-            VALUES ('ws1', '{workspace_name}', 'https://github.com/x/y', '{now}');
-        INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)
-            VALUES ('t1', 'ws1', '{topic_subject}', 'fix-bug-42', '/tmp/wt', '{now}');
-    """)
-    conn.commit()
-    conn.close()
-    return db
-
-
-def _set_config(db: str, scope_type: str, scope_id: str, key: str, value: str) -> None:
-    conn = sqlite3.connect(db)
-    now = "2026-01-01T00:00:00Z"
+    conn = get_connection(db_url)
     conn.execute(
-        "INSERT OR REPLACE INTO config (scope_type, scope_id, key, value, updated_at) VALUES (?, ?, ?, ?, ?)",
-        (scope_type, scope_id, key, value, now),
+        "INSERT INTO workspaces (id, name, repo_url, created_at) VALUES (?, ?, ?, ?)",
+        ("ws1", workspace_name, "https://github.com/x/y", now),
+    )
+    conn.execute(
+        "INSERT INTO topics (id, workspace_id, subject, branch_name, worktree_path, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        ("t1", "ws1", topic_subject, "fix-bug-42", "/tmp/wt", now),
     )
     conn.commit()
     conn.close()
+    return db_url
+
+
+def _set_config(db: str, scope_type: str, scope_id: str, key: str, value: str) -> None:
+    from src.master.db import get_connection
+    from src.master.db._dialect import upsert as _upsert
+    now = "2026-01-01T00:00:00Z"
+    with get_connection(db) as conn:
+        _upsert(
+            conn,
+            "config",
+            {"scope_type": scope_type, "scope_id": scope_id, "key": key, "value": value, "updated_at": now},
+            conflict_cols=["scope_type", "scope_id", "key"],
+            update_cols=["value", "updated_at"],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +291,7 @@ class TestPostWebhook:
 class TestNotifyReply:
     """Tests for notify_reply using a real in-memory-style SQLite db on disk."""
 
-    def _run_notify_and_join(self, tmp_path, settings, payload=None, topic_id="t1"):
+    def _run_notify_and_join(self, db_url, settings, payload=None, topic_id="t1"):
         """Call notify_reply and wait for background threads to complete.
 
         Threads started by notify_reply are daemons and unjoinable externally,
@@ -323,13 +299,13 @@ class TestNotifyReply:
         """
         if payload is None:
             payload = {"last_response": "The agent replied."}
-        db = _make_db(tmp_path)
+        db = _make_db(db_url)
         return db
 
     # ── TC-01: no channels configured — no-op ─────────────────────────────
 
-    def test_no_channels_configured_no_post(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_no_channels_configured_no_post(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings()  # all notify fields empty
         threads_started: list[threading.Thread] = []
         original_thread = threading.Thread
@@ -353,8 +329,8 @@ class TestNotifyReply:
 
     # ── TC-02: Discord-only configured — one POST with correct payload ─────
 
-    def test_discord_only_one_post_correct_payload(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_discord_only_one_post_correct_payload(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
         )
@@ -381,8 +357,8 @@ class TestNotifyReply:
 
     # ── TC-03: Telegram-only configured — one POST to correct URL ──────────
 
-    def test_telegram_only_one_post_correct_url_and_body(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_telegram_only_one_post_correct_url_and_body(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_telegram_bot_token="bot123:TOKEN",
             notify_telegram_chat_id="@testchannel",
@@ -410,8 +386,8 @@ class TestNotifyReply:
 
     # ── TC-04: Both configured — two POSTs ────────────────────────────────
 
-    def test_both_configured_two_posts(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_both_configured_two_posts(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/999/xyz",
             notify_telegram_bot_token="bot456:TOKEN",
@@ -439,8 +415,8 @@ class TestNotifyReply:
 
     # ── TC-05: Workspace config overrides global Discord webhook ──────────
 
-    def test_workspace_discord_webhook_overrides_global(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_workspace_discord_webhook_overrides_global(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/GLOBAL/hook",
         )
@@ -468,8 +444,8 @@ class TestNotifyReply:
 
     # ── TC-06: NOTIFY_DISABLED=true skips all channels ────────────────────
 
-    def test_notify_disabled_skips_all_channels(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_notify_disabled_skips_all_channels(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
             notify_telegram_bot_token="bot123:TOKEN",
@@ -487,9 +463,9 @@ class TestNotifyReply:
 
         mock_post.assert_not_called()
 
-    def test_notify_disabled_uppercase_true_skips(self, tmp_path):
+    def test_notify_disabled_uppercase_true_skips(self, db_url):
         """NOTIFY_DISABLED=TRUE (all-caps) should also be treated as truthy."""
-        db = _make_db(tmp_path)
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
         )
@@ -507,8 +483,8 @@ class TestNotifyReply:
 
     # ── TC-07: MASTER_PUBLIC_URL unset — no URL in notification body ───────
 
-    def test_no_public_url_omits_url_from_body(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_no_public_url_omits_url_from_body(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             master_public_url="",  # unset
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
@@ -533,8 +509,8 @@ class TestNotifyReply:
 
     # ── TC-08: NOTIFY_PREVIEW_CHARS=0 — no preview in body ───────────────
 
-    def test_preview_chars_zero_omits_preview(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_preview_chars_zero_omits_preview(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
             notify_preview_chars=0,
@@ -559,8 +535,8 @@ class TestNotifyReply:
 
     # ── TC-09: Long reply truncated to NOTIFY_PREVIEW_CHARS with ellipsis ─
 
-    def test_long_reply_truncated_with_ellipsis(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_long_reply_truncated_with_ellipsis(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
             notify_preview_chars=10,
@@ -587,8 +563,8 @@ class TestNotifyReply:
         # An ellipsis must be appended to signal truncation
         assert "…" in body_text or "..." in body_text
 
-    def test_reply_at_exact_limit_not_truncated(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_reply_at_exact_limit_not_truncated(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
             notify_preview_chars=5,
@@ -616,14 +592,14 @@ class TestNotifyReply:
 
     # ── TC-10: Provider returns 500 — logged, does not raise, sibling delivered
 
-    def test_discord_500_sibling_telegram_still_delivered(self, tmp_path):
+    def test_discord_500_sibling_telegram_still_delivered(self, db_url):
         """When Discord urlopen returns 500, post_webhook swallows it and Telegram is still POSTed.
 
         Both channels are dispatched on separate daemon threads.  We patch
         request.urlopen so the real post_webhook runs (and logs) the error, then
         we also track every urlopen call to confirm the Telegram URL is reached.
         """
-        db = _make_db(tmp_path)
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/FAIL/hook",
             notify_telegram_bot_token="bot123:TOKEN",
@@ -674,10 +650,10 @@ class TestNotifyReply:
 
     # ── TC-11: dry_run=True — no HTTP call, log line emitted ──────────────
 
-    def test_dry_run_no_http_call(self, tmp_path, caplog):
+    def test_dry_run_no_http_call(self, db_url, caplog):
         import logging  # noqa: PLC0415
 
-        db = _make_db(tmp_path)
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
             dry_run=True,
@@ -707,10 +683,10 @@ class TestNotifyReply:
 
     # ── TC-12: Unknown / deleted topic — log and return, no crash ─────────
 
-    def test_deleted_topic_logs_and_returns(self, tmp_path, caplog):
+    def test_deleted_topic_logs_and_returns(self, db_url, caplog):
         import logging
 
-        db = _make_db(tmp_path)
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
         )
@@ -727,8 +703,8 @@ class TestNotifyReply:
 
     # ── TC-13: Telegram missing chat_id — Telegram skipped, no crash ──────
 
-    def test_telegram_token_without_chat_id_skips_telegram(self, tmp_path):
-        db = _make_db(tmp_path)
+    def test_telegram_token_without_chat_id_skips_telegram(self, db_url):
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
             notify_telegram_bot_token="bot123:TOKEN",
@@ -753,9 +729,9 @@ class TestNotifyReply:
 
     # ── Workspace config overrides: NOTIFY_PREVIEW_CHARS ──────────────────
 
-    def test_workspace_preview_chars_override(self, tmp_path):
+    def test_workspace_preview_chars_override(self, db_url):
         """Workspace NOTIFY_PREVIEW_CHARS=5 overrides the global default of 200."""
-        db = _make_db(tmp_path)
+        db = _make_db(db_url)
         settings = _make_settings(
             notify_discord_webhook_url="https://discord.com/api/webhooks/123/abc",
             notify_preview_chars=200,  # global default
@@ -785,9 +761,9 @@ class TestNotifyReply:
 
     # ── Workspace Telegram override ────────────────────────────────────────
 
-    def test_workspace_telegram_config_used_when_global_absent(self, tmp_path):
+    def test_workspace_telegram_config_used_when_global_absent(self, db_url):
         """Workspace-only Telegram config triggers Telegram delivery."""
-        db = _make_db(tmp_path)
+        db = _make_db(db_url)
         settings = _make_settings()  # no global telegram config
         _set_config(db, "workspace", "ws1", "NOTIFY_TELEGRAM_BOT_TOKEN", "wsbot:TOKEN")
         _set_config(db, "workspace", "ws1", "NOTIFY_TELEGRAM_CHAT_ID", "@wschan")

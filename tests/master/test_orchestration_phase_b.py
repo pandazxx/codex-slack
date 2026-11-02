@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1408,20 +1407,17 @@ def test_ask_sender_wrong_state_409(client, workspace_topic, architect_staff, en
 # 15. Event-action loop safety: delegation chain fires no topic_message_received
 # ---------------------------------------------------------------------------
 
-def test_delegation_chain_no_event_loop(tmp_path):
+def test_delegation_chain_no_event_loop(db_url):
     """A re-entry prompt (sender_kind='staff') must NOT trigger topic_message_received.
 
     Verified by checking that _prompt_was_orchestration_reentry returns True for
     staff-originated prompts and False for user-originated ones.
     """
-    from src.master.db import init_db, get_connection
+    from src.master.db import get_connection
     from src.master.mqtt_client import _prompt_was_orchestration_reentry
 
-    db_path = str(tmp_path / "test.db")
-    init_db(db_path)
-
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    db_path = db_url
+    conn = get_connection(db_path)
     try:
         conn.execute(
             "INSERT INTO workspaces (id, name, repo_url, repo_ref, created_at)"
