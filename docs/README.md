@@ -85,6 +85,8 @@ This directory is the canonical home for repository documentation.
 
 ## Releases
 
+- [`docs/releases/v5.1.md`](releases/v5.1.md) — mr-deed agent adapter (unreleased)
+- [`docs/releases/v5.0.md`](releases/v5.0.md) — Postgres default, Alembic
 - [`docs/releases/v4.6.md`](releases/v4.6.md) — event-based staff actions
 - [`docs/releases/v3.9.md`](releases/v3.9.md)
 - [`docs/releases/v3.3.md`](releases/v3.3.md)
