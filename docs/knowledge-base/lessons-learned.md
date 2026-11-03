@@ -805,3 +805,15 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 
 *Prevention:* Anything an adapter must keep across turns or restarts needs an explicit named volume in `spawn_agent`, plus a mount point pre-created as `appuser` in every agent image. Never assume a path under `/workspace` persists.
 
+
+---
+
+## 2026-11-03 — Every mr-deed model call failed: litellm 1.103+ needs mcp 2.x, we pin mcp<2
+
+*Summary:* Dev-env UAT for the mr-deed adapter found that every real model turn failed with `ImportError: cannot import name 'CacheableResult' from 'mcp.types'`. The failure only came after about 128s of retries, and the reply was `(mr-deed crashed: ImportError)`. All unit tests were green.
+
+*Root cause:* mr-deed depends on litellm without an upper bound, and pip resolved litellm 1.106.6. Since 1.103.0, litellm's tool-call path imports its MCP client, which needs `mcp>=2.2` (declared only under litellm's optional `mcp`/`proxy` extras). codex-slack installs `mcp<2` for `notes_mcp` (`mcp.server.fastmcp` was removed in 2.0), so litellm found an `mcp` that was too old. mr-deed sends the `bash` tool on every call, so every call broke. Unit tests use mr-deed's deterministic model and never reached litellm. mr-deed's retry loop doesn't treat `ImportError` as fatal, hence the long delay.
+
+*Fix applied:* Pinned `litellm>=1.75.5,<1.103` in `requirements.txt`, with a comment. 1.102.4 declares `mcp<2` for its extras and completes tool calls with mcp 1.30. Added `test_litellm_tool_calls_work_with_installed_mcp`, which makes a tool call through litellm offline (`mock_response`) and fails on 1.103+ in this environment.
+
+*Prevention:* A library that only runs behind a real provider call needs at least one offline test that drives its real call path (`mock_response` for litellm), not just deterministic test doubles. When two pins can meet in a transitive dependency's optional extras, check that dependency's `requires_dist` across versions before leaving it unbounded. Lift the litellm pin together with the `notes_mcp` migration to mcp 2.x.

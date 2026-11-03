@@ -84,6 +84,19 @@ def test_requirements_pin_mr_deed_v0_1_0():
     assert deed == ["mr-deed @ git+https://github.com/pandazxx/mr-deed@v0.1.0"]
 
 
+def test_litellm_tool_calls_work_with_installed_mcp():
+    """Every mr-deed model call sends tools. litellm >= 1.103 imports mcp 2.x symbols on that
+    path and fails with ImportError against our mcp<2 pin (found in dev-env UAT)."""
+    import litellm
+    from mr_deed.models.utils.actions_toolcall import BASH_TOOL
+
+    response = litellm.completion(
+        model="openai/gpt-4o-mini", messages=[{"role": "user", "content": "hi"}],
+        tools=[BASH_TOOL], mock_response="ok",
+    )
+    assert response.choices[0].message.content == "ok"
+
+
 def test_runner_import_has_no_env_side_effects_and_skips_cli(tmp_path):
     (tmp_path / ".env").write_text("PROBE_FROM_DOTENV=leaked\n")
     script = (
