@@ -817,3 +817,15 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* Pinned `litellm>=1.75.5,<1.103` in `requirements.txt`, with a comment. 1.102.4 declares `mcp<2` for its extras and completes tool calls with mcp 1.30. Added `test_litellm_tool_calls_work_with_installed_mcp`, which makes a tool call through litellm offline (`mock_response`) and fails on 1.103+ in this environment.
 
 *Prevention:* A library that only runs behind a real provider call needs at least one offline test that drives its real call path (`mock_response` for litellm), not just deterministic test doubles. When two pins can meet in a transitive dependency's optional extras, check that dependency's `requires_dist` across versions before leaving it unbounded. Lift the litellm pin together with the `notes_mcp` migration to mcp 2.x.
+
+---
+
+## 2026-11-03 — Recipe tests passed locally, failed in CI: no `.git` or `docs/` in the test image
+
+*Summary:* The new `just migrate` behaviour tests (running the real recipe against a stub `docker`) passed in a git checkout but failed in CI with `fatal: not a git repository` (exit 128), and a doc assertion failed with `FileNotFoundError: docs/releases/v5.1.md`.
+
+*Root cause:* CI runs the suite inside the `Dockerfile.test` image at `/opt/codex-slack`, which copies only selected paths (src, tests, config, alembic, scripts, `.sre`, justfile, compose files) and has no `.git`. The recipe derived `PROJECT_ROOT` from `git rev-parse --show-toplevel`, and the test read files under `docs/`.
+
+*Fix applied:* `migrate` uses `{{ justfile_directory() }}` for `PROJECT_ROOT`. The doc assertions check `.sre` runbooks unconditionally and `docs/` files only when present. Verified by running `tests/deploy_contract` in a temp tree with exactly the image's copied paths.
+
+*Prevention:* Tests that execute repo tooling must not assume a git checkout or paths outside `Dockerfile.test`'s `COPY` list. Before pushing, run new tooling tests in a copy of the image's file set (or `just test`), not only in the worktree.

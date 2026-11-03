@@ -355,7 +355,8 @@ migrate env tag confirm="":
         echo "==> DOCKER_GID=${DOCKER_GID} (detected from ${HOST_ADDR})"
     fi
 
-    PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+    # justfile_directory() works without a git checkout (e.g. inside the test image).
+    PROJECT_ROOT="{{ justfile_directory() }}"
 
     # shellcheck source=.sre/db-env.sh
     source "${PROJECT_ROOT}/.sre/db-env.sh"
