@@ -100,7 +100,7 @@ On every start, `startup_db()` checks the Alembic revision:
   bash scripts/db.sh snapshot-and-migrate
   ```
 
-  For a running stack, use the SRE runbook: `.sre/operations/db-snapshot-migrate.md`.
+  For staging and prod, use `just migrate <env> <tag>` (prod: add `confirm=yes`) and then `just deploy <env> <tag>`: it runs the snapshot-and-migrate from the target tag's image with master stopped, is idempotent, and refuses a database that is ahead of the image. `just deploy` prints this hint itself when master reports `schema is behind`. The manual runbook `.sre/operations/db-snapshot-migrate.md` remains as a fallback.
 
 - **Ahead** (newer revision than this code knows): master exits 1 pointing at a possible accidental downgrade. Do not modify the database; restore the correct version of the code.
 
