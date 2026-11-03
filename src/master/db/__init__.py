@@ -536,6 +536,19 @@ def _with_database_url(url: str, fn) -> None:
             os.environ["DATABASE_URL"] = old
 
 
+class SchemaMismatchExit(SystemExit):
+    """Exit code 1, but str() is the reason. Uvicorn prints the startup traceback
+    after our stderr message, so the traceback's last line carries the reason
+    into the tail that deploy tooling shows."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(1)
+        self.message = message
+
+    def __str__(self) -> str:
+        return self.message
+
+
 def startup_db(url: str) -> None:
     """Alembic-based startup state machine.
 
@@ -683,7 +696,7 @@ def startup_db(url: str) -> None:
             f"`scripts/db.sh snapshot-and-migrate` to snapshot first."
         )
         print(msg, file=sys.stderr, flush=True)
-        sys.exit(1)
+        raise SchemaMismatchExit(msg)
     else:
         msg = (
             f"ERROR: DB schema is ahead of code — unknown revision "
@@ -692,7 +705,7 @@ def startup_db(url: str) -> None:
             f"Refusing to start."
         )
         print(msg, file=sys.stderr, flush=True)
-        sys.exit(1)
+        raise SchemaMismatchExit(msg)
 
 
 def schema_info(db_path_or_url: str) -> dict[str, list[str]]:
