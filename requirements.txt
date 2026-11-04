@@ -19,3 +19,9 @@ alembic>=1.13
 # pymysql is the pure-Python MySQL driver; no system packages needed.
 psycopg[binary]>=3.1
 pymysql>=1.1
+PyYAML>=6.0,<7  # used by master for agent_config validation; also a transitive dep via mr-deed
+mr-deed @ git+https://github.com/pandazxx/mr-deed@v0.1.0
+# litellm is mr-deed's model layer. 1.103+ needs mcp>=2.2 for any tool call (its MCP client
+# imports mcp.types.CacheableResult) and we pin mcp<2 above, so stay below 1.103 until notes_mcp
+# moves to mcp 2.x.
+litellm>=1.75.5,<1.103

@@ -89,6 +89,18 @@ AUTOINCREMENT_TABLES: dict[str, str] = {
 _BATCH_SIZE = 500
 
 
+def _stream_table(conn, table: str):
+    """SELECT * with a server-side cursor, so fetchmany() holds one batch at a time.
+
+    A plain execute() on psycopg uses a client-side cursor and loads the whole
+    result set into memory first; large `messages`/`chunks` tables then exceed
+    the master container's memory limit and the snapshot is OOM-killed.
+    """
+    return conn.execution_options(stream_results=True, max_row_buffer=_BATCH_SIZE).execute(
+        sa_text(f'SELECT * FROM "{table}"')  # noqa: S608
+    )
+
+
 def _make_engine(url: str) -> Engine:
     from . import _make_engine as _db_make_engine
     return _db_make_engine(url)
@@ -313,7 +325,7 @@ def export_snapshot(
 
             row_count = 0
             with engine.connect() as conn:
-                result = conn.execute(sa_text(f'SELECT * FROM "{table}"'))  # noqa: S608
+                result = _stream_table(conn, table)
                 col_names = list(result.keys())
 
                 with jsonl_path.open("w", encoding="utf-8") as fh:

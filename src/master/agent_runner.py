@@ -151,13 +151,15 @@ def spawn_agent(
         if val:
             env[key] = val
 
-    # Persist claude-code and codex state across container restarts.
+    # Persist claude-code, codex and mr-deed state across container restarts.
     # Named volumes are created automatically by the Docker daemon on first run.
     claude_volume = f"codex-claude-{workspace_id}"
     codex_volume = f"codex-codex-{workspace_id}"
+    mr_deed_volume = f"codex-mrdeed-{workspace_id}"
     volumes: dict[str, dict] = {
         claude_volume: {"bind": "/home/appuser/.claude", "mode": "rw"},
         codex_volume: {"bind": "/home/appuser/.codex", "mode": "rw"},
+        mr_deed_volume: {"bind": "/home/appuser/.mr-deed", "mode": "rw"},
     }
     if ssh_auth_sock_path:
         env["SSH_AUTH_SOCK"] = "/run/ssh-agent.sock"

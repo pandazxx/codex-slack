@@ -77,6 +77,82 @@ In the workspace detail view, the **Agents** section shows active agent configur
 - Add a new agent (name, adapter, optional subagent flag)
 - Remove an agent (soft-delete — historical sessions are preserved)
 
+### Manage staffs
+
+Staffs are a more capable replacement for workspace agents. They support three adapters and can be scoped globally, per-workspace, or per-topic. Access them via **Settings** (global staffs) or the workspace / topic **Staffs** tab.
+
+**Adapter options:**
+
+| Adapter | What it runs | When to use |
+|---|---|---|
+| `claude-code` | Claude Code CLI in the worktree | Interactive coding, multi-file edits |
+| `codex` | Codex CLI in the worktree | Codex-style coding tasks |
+| `mr-deed` | In-process mr-deed agent with bash tool | Scripted workflows, bash-heavy tasks, side-kick assistant |
+
+### mr-deed staff
+
+The `mr-deed` adapter runs an in-process agent that iterates bash commands in the topic's worktree until it submits a final answer or hits a limit. It does not require a subprocess and uses litellm to call the provider API directly.
+
+**Creating a mr-deed staff in the web UI:**
+
+1. Open **Settings** (global) or the **Staffs** tab in a workspace or topic.
+2. Click **New Staff** and fill in:
+   - **Name** — the `@mention` name (e.g. `assistant`)
+   - **Adapter** — select `mr-deed`
+   - **Sub-agent** — mr-deed config name to use; leave blank for the shipped `default` config
+   - **Model** — litellm model ID (e.g. `anthropic/claude-sonnet-4-5` or `openai/gpt-4o`). Required if the config does not set one.
+   - **System Prompt** — additional instructions appended to the config's system template for new sessions
+   - **mr-deed Config** (optional YAML textarea, shown when adapter = `mr-deed`) — inline YAML that fully replaces the named config; must be a YAML mapping
+
+3. Save. If `agent_config` is not a valid YAML mapping, the form returns a validation error.
+
+**What you see in the chat:**
+
+While a mr-deed turn is running, the message thread shows streaming events:
+- Text / reasoning blocks (assistant thinking)
+- Tool-use blocks (bash commands being run)
+- Folded observation blocks (command output)
+- A parse-warning indicator on format errors
+
+When the agent finishes, the reply contains the submitted text. Error conditions produce parenthesised error messages such as `(mr-deed timed out after 300s)` or `(mr-deed hit a limit: ...)`.
+
+**Session behaviour:**
+
+Each topic (or workspace/global, depending on `session_scope`) maintains a trajectory file stored inside the agent container. Resumed turns extend the prior conversation. The system message is fixed when a session starts — editing the system prompt or config affects new sessions only. Cancelling a turn mid-flight sends `(cancelled by user)`; the session can be resumed normally on the next turn. Session files live on the per-workspace `codex-mrdeed-<workspace_id>` volume, so they survive agent container restarts and re-creation.
+
+**Credentials:**
+
+mr-deed staffs require a provider API key set in the workspace Env Vars panel:
+- `ANTHROPIC_API_KEY` for Anthropic/Claude models
+- `OPENAI_API_KEY` for OpenAI models
+- `OPENROUTER_API_KEY` for OpenRouter
+
+Without the matching key, the turn returns `(mr-deed model call failed: ...)`. Codex `auth.json` and Claude subscription logins do not work with mr-deed.
+
+**Limits:**
+
+Limits apply per turn. The shipped `default` config stops a turn after 100 steps or $3.00 of model cost, whichever comes first. A run that hits either returns `(mr-deed hit a limit: ...)`.
+
+#### Local models (Ollama)
+
+mr-deed can run against a model served by [Ollama](https://ollama.com) on your network:
+
+1. **Point the agent at Ollama.** Add the config variable `OLLAMA_API_BASE` = `http://<ollama-host>:11434` (Settings for all workspaces, or the workspace's Env Vars). Use an address the agent container can reach, such as the LAN IP or hostname of the Ollama machine. `localhost` (litellm's default) is the agent container itself, and `host.docker.internal` does not exist on Linux by default.
+2. **Restart the workspace's agent container.** Config variables apply when the agent starts.
+3. **Create the staff** with:
+   - **Adapter**: `mr-deed`
+   - **Sub-agent**: `ollama` (the shipped `config/mr-deed/ollama.yaml`)
+   - **Model**: `ollama_chat/<model>`, e.g. `ollama_chat/qwen2.5:7b`
+
+| Pitfall | Symptom | Fix |
+|---|---|---|
+| Model prefix `ollama/` instead of `ollama_chat/` | Every turn ends in format errors: litellm silently drops the bash tool for `ollama/` | Use `ollama_chat/<model>` |
+| Model without tool calling | The model answers in prose and never runs a command | Pick a tool-calling model (e.g. qwen2.5, llama3.1+, mistral-nemo) |
+| Using the `default` config with a local model | `(mr-deed crashed: RuntimeError)`: mr-deed treats a $0 model call as a cost error | Use Sub-agent `ollama`, or set the config variable `MRDEED_COST_TRACKING=ignore_errors` |
+| Ollama unreachable | The turn hangs for several minutes, then `(mr-deed model call failed: APIConnectionError: ...)`. mr-deed retries connection errors up to 10 times with 4–60 s waits | Check `OLLAMA_API_BASE` and that the agent's host can reach it. To fail faster, set the config variable `MRDEED_MODEL_RETRY_STOP_AFTER_ATTEMPT` (e.g. `2`) |
+
+The `ollama` config has no cost limit, because local models cost $0. Instead it stops a turn after 50 steps. For a different host or limits on a single staff, paste the full contents of `config/mr-deed/ollama.yaml` into the staff's **mr-deed Config** and edit it. For example, set `model.model_kwargs.api_base` or `agent.step_limit`. The field replaces the whole config, so a partial YAML fails.
+
 ### Configure event actions
 
 Event actions automatically invoke a staff when something happens in a topic — a user message arrives, an agent replies, a cron schedule fires, or the topic is archived. Use them for recurring tasks like daily summaries, automatic translation of replies, or archival wrap-ups.

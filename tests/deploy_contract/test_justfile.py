@@ -32,6 +32,7 @@ EXPECTED_RECIPES = [
     "shell",
     "test",
     "post-merge-cleanup",
+    "migrate",
 ]
 
 

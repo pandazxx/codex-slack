@@ -248,7 +248,8 @@ class TestPreBaselineSqlite:
         )
 
     def test_prebaseline_stamped_at_baseline_rev(self, tmp_path):
-        """startup_db stamps a pre-baseline DB at the baseline revision."""
+        """startup_db stamps a pre-baseline DB at the baseline revision, then
+        applies any later revisions so the DB ends at the code head."""
         from src.master.db import startup_db
 
         db_path = str(tmp_path / "prebaseline.db")
@@ -258,9 +259,8 @@ class TestPreBaselineSqlite:
 
         version = _get_alembic_version_sqlite(db_path)
         assert version is not None, "startup_db must create alembic_version on pre-baseline DB"
-        assert version.startswith(BASELINE_REV), (
-            f"Expected version to start with {BASELINE_REV!r}, got {version!r}"
-        )
+        head = _alembic_head_revision()
+        assert version == head, f"Expected version {head!r} (code head), got {version!r}"
 
     def test_prebaseline_existing_rows_preserved(self, tmp_path):
         """startup_db on a pre-baseline DB must not delete existing data rows."""
@@ -613,3 +613,30 @@ class TestLifespanResolution:
         assert "master_data.db" in combined, (
             f"Expected 'master_data.db' in exit message, got:\n{combined}"
         )
+
+
+class TestRefusalMessageInTraceback:
+    """The refusal reason must survive into the last traceback line, which is what
+    the deploy recipe's log tail shows (v5.1-rc1 staging deploy only showed
+    `SystemExit: 1`)."""
+
+    def test_behind_exit_carries_reason_and_code_1(self, tmp_path):
+        from src.master.db import SchemaMismatchExit, startup_db
+
+        db_path = str(tmp_path / "behind.db")
+        startup_db(f"sqlite+pysqlite:///{db_path}")
+        _force_alembic_version_sqlite(db_path, BASELINE_REV)
+        if _alembic_head_revision() == BASELINE_REV:
+            pytest.skip("needs a revision after the baseline")
+
+        with pytest.raises(SchemaMismatchExit) as exc_info:
+            startup_db(f"sqlite+pysqlite:///{db_path}")
+
+        assert exc_info.value.code == 1
+        assert isinstance(exc_info.value, SystemExit)
+        assert "DB schema is behind code" in str(exc_info.value)
+        assert "scripts/db.sh" in str(exc_info.value)
+        import traceback
+        last_line = traceback.format_exception_only(exc_info.value)[-1]
+        assert "DB schema is behind code" in last_line
+

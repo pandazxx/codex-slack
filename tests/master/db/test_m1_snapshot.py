@@ -1273,3 +1273,26 @@ class TestMigratePrebaseline:
         assert preserved is not None, (
             "Pre-existing workspace row must be preserved after migrate"
         )
+
+
+class TestExportStreamsRows:
+    """Export must not load a whole table into memory: v5.1-rc2's staging snapshot
+    was OOM-killed under the master container's 1g limit because psycopg's default
+    client-side cursor buffers the full result set on execute()."""
+
+    def test_stream_table_uses_server_side_cursor(self, db_url):
+        from sqlalchemy import create_engine
+        from src.master.db.snapshot import _stream_table
+
+        eng = create_engine(db_url)
+        try:
+            with eng.connect() as conn:
+                result = _stream_table(conn, "workspaces")
+                cursor = result.cursor  # cleared once the result is exhausted
+                assert list(result.keys())[0] == "id"
+                result.fetchall()
+                if eng.dialect.name == "postgresql":
+                    # psycopg 3 server-side (named) cursor
+                    assert type(cursor).__name__ == "ServerCursor"
+        finally:
+            eng.dispose()

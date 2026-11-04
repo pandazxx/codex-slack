@@ -26,6 +26,7 @@
 
 ## On failure
 - Deploy refuses with `no database configured`, `POSTGRES_PASSWORD is empty`, or `legacy SQLite database`: staging has not been cut over to Postgres yet. Stop and escalate; do NOT run the cut-over in `deploy.md` unless the user explicitly asks. The dev env is left running.
+- Deploy healthcheck failure with `→ run: just migrate staging <tag>` in the output (schema is behind): the merged release adds Alembic revisions. Tell the user; run `just migrate staging <tag>` (`.sre/operations/migrate.md`) then rerun the cleanup only if the user asks. The dev env is left running.
 - Deploy step failure: stop and escalate. The staging singleton may be in a degraded state — investigate before retrying.
 - Dev teardown failure: escalate; staging is already refreshed so this is non-critical.
 
