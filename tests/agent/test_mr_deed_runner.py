@@ -149,6 +149,39 @@ def test_shipped_default_is_tool_call_config():
     assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in config["agent"]["system_template"]
 
 
+def test_shipped_default_caps_steps_per_turn():
+    config, _ = runner.resolve_config(None, "default")
+    assert config["agent"]["step_limit"] > 0
+
+
+def test_shipped_ollama_config_suits_local_models():
+    """`ollama` keeps the default prompts and tool-call setup, but local models cost
+    $0: mr-deed must not treat that as an error, and the step cap is the budget."""
+    import litellm
+    from mr_deed.models.litellm_model import LitellmModel
+
+    ollama, source = runner.resolve_config(None, "ollama")
+    default, _ = runner.resolve_config(None, "default")
+    assert source == str(runner.CONFIG_DIR / "ollama.yaml")
+    assert ollama["agent"]["system_template"] == default["agent"]["system_template"]
+    assert "model_class" not in ollama["model"]
+    assert ollama["model"]["cost_tracking"] == "ignore_errors"
+    assert ollama["agent"]["step_limit"] > 0
+
+    config = runner.apply_overrides(ollama, "ollama_chat/qwen2.5:7b", None)
+    model = LitellmModel(**config["model"])
+    response = litellm.completion(model="ollama_chat/qwen2.5:7b", messages=[{"role": "user", "content": "hi"}],
+                                  mock_response="ok")
+    assert model._calculate_cost(response) == {"cost": 0.0}
+
+
+def test_ollama_chat_provider_forwards_tools():
+    """`ollama/` drops the bash tool (silently, with drop_params); docs say `ollama_chat/`."""
+    import litellm
+
+    assert "tools" in litellm.get_supported_openai_params(model="qwen2.5:7b", custom_llm_provider="ollama_chat")
+
+
 @pytest.mark.parametrize("name", ["nonexistent", "../secrets", ".hidden"])
 def test_unknown_or_unsafe_config_name_is_error_reply(tmp_path, name):
     reply, session_id, transcript = _turn(tmp_path, agent_config=None, config_name=name, config_dir=tmp_path)

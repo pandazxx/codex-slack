@@ -29,7 +29,9 @@ agent:
     </system_information>
   continue_template: |
     {{task}}
-  step_limit: 0
+  # Both limits apply per turn. The step cap still bounds a turn when the cost
+  # limit can't, e.g. with MRDEED_COST_TRACKING=ignore_errors and $0 calls.
+  step_limit: 100
   cost_limit: 3.0
 environment:
   timeout: 300
