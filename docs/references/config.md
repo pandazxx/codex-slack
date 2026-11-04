@@ -154,6 +154,15 @@ Each agent container mounts two named Docker/Podman volumes:
 
 All volumes are created automatically on first `docker run` / `podman run`.
 
+**mr-deed environment variables:** set these as custom config variables (global or workspace). Like every config variable, they reach the agent container's environment on its next start.
+
+| Variable | Read by | Effect |
+|---|---|---|
+| `OLLAMA_API_BASE` | litellm | Ollama endpoint for `ollama_chat/<model>` staffs, e.g. `http://192.168.1.20:11434`. Default `http://localhost:11434` (the agent container itself). |
+| `MRDEED_COST_TRACKING` | mr-deed | `ignore_errors` lets models without a litellm price (cost $0) run; the default treats a $0 call as an error. The shipped `ollama` config already sets this. |
+| `MRDEED_MODEL_RETRY_STOP_AFTER_ATTEMPT` | mr-deed | Max attempts for retryable model errors (default `10`, 4–60 s waits). |
+| `MRDEED_MODEL_NAME` | mr-deed | Fallback model id when neither the staff Model nor the config sets one. |
+
 **mr-deed session storage:** trajectory files are written to `/home/appuser/.mr-deed/sessions/` on the `codex-mrdeed-{workspace_id}` volume, so they survive container restarts and re-creation like claude/codex state.
 
 ### LLM CLI invocations

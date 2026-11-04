@@ -398,7 +398,7 @@ The `mr-deed` adapter runs an in-process [mr-deed v0.1.0](https://github.com/pan
 | Tier | Source | Note |
 |---|---|---|
 | 0 | Staff `agent_config` field (inline YAML on this staff record) | Used as-is when non-empty |
-| 1 | Shipped config `config/mr-deed/<name>.yaml` | `name` = `staff.agent`; blank/null resolves to `"default"` |
+| 1 | Shipped config `config/mr-deed/<name>.yaml` | `name` = `staff.agent`; blank/null resolves to `"default"`. Shipped: `default`, and `ollama` for local Ollama models (see the user manual, "Local models (Ollama)") |
 | 2 | mr-deed built-in configs (e.g. `mini`) | |
 
 Project configs under `.prj_assistant/mr-deed/` are not supported yet (planned for a later phase).
@@ -414,7 +414,7 @@ Once resolved, the runner applies:
 | `environment.env` | Config's `env` dict merged with per-turn dispatch variables |
 | `environment.timeout` | Honoured from the config (default 300 s in the shipped `default` config) |
 
-The shipped `default` config sets `cost_limit: 3.0` per turn (`step_limit: 0` = unlimited steps). Limits are per turn; cumulative session cost and call counts are tracked across turns in the trajectory file.
+Shipped limits, per turn: `default` uses `step_limit: 100` and `cost_limit: 3.0`; `ollama` uses `step_limit: 50` and no cost limit (local models cost $0), with `model.cost_tracking: ignore_errors`. Cumulative session cost and call counts are tracked across turns in the trajectory file.
 
 **Credentials:**
 
