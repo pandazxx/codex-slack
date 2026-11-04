@@ -829,3 +829,15 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 *Fix applied:* `migrate` uses `{{ justfile_directory() }}` for `PROJECT_ROOT`. The doc assertions check `.sre` runbooks unconditionally and `docs/` files only when present. Verified by running `tests/deploy_contract` in a temp tree with exactly the image's copied paths.
 
 *Prevention:* Tests that execute repo tooling must not assume a git checkout or paths outside `Dockerfile.test`'s `COPY` list. Before pushing, run new tooling tests in a copy of the image's file set (or `just test`), not only in the worktree.
+
+---
+
+## 2026-11-04 — Snapshot export OOM-killed on staging: psycopg buffers the whole result set
+
+*Summary:* `just migrate staging v5.1-rc2` died with exit 137 during `scripts/db.sh snapshot-and-migrate`, before any migration ran. Master was left stopped, and the database was unchanged (still at `000000000001`).
+
+*Root cause:* `export_snapshot` read each table with `conn.execute(text('SELECT * FROM t'))` and then `fetchmany(500)`. With psycopg 3 that's a client-side cursor, so `execute()` pulls the entire result set into the process; `fetchmany` only slices it. The one-off migrate container inherits the master service's `memory: 1g` limit, and the large `messages`/`chunks` tables (transcripts) exceeded it. The JSONL writing streamed; the DB read didn't. Tests never noticed because fixture tables are tiny.
+
+*Fix applied:* Export reads through `_stream_table()`, which uses `execution_options(stream_results=True, max_row_buffer=500)` and so a psycopg server-side cursor. A regression test asserts a `ServerCursor` on the Postgres CI leg.
+
+*Prevention:* For anything that reads whole tables on Postgres (exports, backfills, reports), use `stream_results=True` or `yield_per`. A batched `fetchmany` loop alone does not bound memory. Size checks for tooling should assume production-sized tables, not fixtures.
