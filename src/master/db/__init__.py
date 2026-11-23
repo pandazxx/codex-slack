@@ -21,6 +21,7 @@ import logging
 import os
 import sqlite3
 import threading
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, event, text as sa_text
@@ -404,12 +405,15 @@ def get_connection(db_path_or_url: str) -> _ConnectionShim:
 
 
 def init_db(db_path: str) -> None:
-    """Initialise the database.
+    """Initialise a SQLite database file at the code's head revision.
 
-    M0: delegates to the legacy SQLite path in _prebaseline.  In M1 this
-    will be replaced by Alembic's upgrade-on-empty-DB logic.
+    Runs the same Alembic state machine as master startup: a new file gets
+    `alembic upgrade head`, a legacy pre-baseline file is fixed up, stamped and
+    upgraded, an up-to-date file is left alone.  Used by tests and tooling so
+    their schema always matches what master runs on.
     """
-    init_db_sqlite(db_path)
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    startup_db(_db_url_from_path(db_path))
 
 
 def sqlite_safety_check(data_dir: str) -> None:
@@ -532,6 +536,19 @@ def _with_database_url(url: str, fn) -> None:
             os.environ["DATABASE_URL"] = old
 
 
+class SchemaMismatchExit(SystemExit):
+    """Exit code 1, but str() is the reason. Uvicorn prints the startup traceback
+    after our stderr message, so the traceback's last line carries the reason
+    into the tail that deploy tooling shows."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(1)
+        self.message = message
+
+    def __str__(self) -> str:
+        return self.message
+
+
 def startup_db(url: str) -> None:
     """Alembic-based startup state machine.
 
@@ -542,7 +559,8 @@ def startup_db(url: str) -> None:
 
       Pre-baseline SQLite (workspaces table exists, no alembic_version)
                                 → apply pre-baseline fixups (idempotent),
-                                  then `alembic stamp 000000000001`.
+                                  `alembic stamp 000000000001`, then
+                                  `alembic upgrade head`.
 
       Up-to-date (alembic_version == code head)
                                 → proceed — nothing to do.
@@ -642,6 +660,12 @@ def startup_db(url: str) -> None:
         db_file_path = str(_make_url(url).database)
         init_db_sqlite(db_file_path)
         _with_database_url(url, lambda: alembic_command.stamp(cfg, "000000000001"))
+        # The fixups produce the baseline schema only. This path already
+        # rewrites the DB in place, so finish the job: apply the revisions
+        # after the baseline too, leaving the DB at head.
+        if head != "000000000001":
+            LOGGER.info("startup_db: pre-baseline SQLite stamped — upgrading to head (%s)", head)
+            _with_database_url(url, lambda: alembic_command.upgrade(cfg, "head"))
         return
 
     # ── (3) Up-to-date ────────────────────────────────────────────────────────
@@ -672,7 +696,7 @@ def startup_db(url: str) -> None:
             f"`scripts/db.sh snapshot-and-migrate` to snapshot first."
         )
         print(msg, file=sys.stderr, flush=True)
-        sys.exit(1)
+        raise SchemaMismatchExit(msg)
     else:
         msg = (
             f"ERROR: DB schema is ahead of code — unknown revision "
@@ -681,7 +705,7 @@ def startup_db(url: str) -> None:
             f"Refusing to start."
         )
         print(msg, file=sys.stderr, flush=True)
-        sys.exit(1)
+        raise SchemaMismatchExit(msg)
 
 
 def schema_info(db_path_or_url: str) -> dict[str, list[str]]:

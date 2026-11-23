@@ -22,7 +22,8 @@ User asks to deploy a tagged image to staging or prod, e.g. "deploy v4.19-rc1 to
 
 ## Steps
 
-1. Run:
+1. If the release adds Alembic revisions (release notes say so), the user will ask for `just migrate <env> <tag>` first (`.sre/operations/migrate.md`); deploy never migrates.
+   Run:
    ```
    just deploy <env> <tag>
    ```
@@ -38,7 +39,7 @@ User asks to deploy a tagged image to staging or prod, e.g. "deploy v4.19-rc1 to
 - `no database configured` / `POSTGRES_PASSWORD is empty`: the host is not configured for this release. Stop and escalate to the user; point to "Staging cut-over" below. Do not edit `.env` yourself.
 - `legacy SQLite database`: same. Stop and escalate. Do NOT run the cut-over unless the user explicitly asks for it.
 - Digest resolution failure ("no manifest"): the tag does not exist yet. Confirm the CI build completed, then retry.
-- Healthcheck timeout: the recipe prints the last 50 lines of master logs. Pass them through and escalate; do not retry without investigation. Master log lines `refusing to start` or `schema is behind` mean a database state problem, not a transient one.
+- Healthcheck timeout: the recipe prints the last 50 lines of master logs. Pass them through and escalate; do not retry without investigation. Master log lines `refusing to start` or `schema is behind` mean a database state problem, not a transient one. On `schema is behind` the recipe itself prints `→ run: just migrate <env> <tag>`: tell the user, and run `just migrate <env> <tag>` (prod: `confirm=yes` only if the user explicitly confirms) per `.sre/operations/migrate.md`, then `just deploy <env> <tag>` again. On `schema is ahead` the recipe says it looks like a downgrade: do not migrate; escalate.
 
 ## Rollback
 `just deploy <env> <previous-tag>`. This does not roll back database contents. Never delete `postgres_data` to roll back.

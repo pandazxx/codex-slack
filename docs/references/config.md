@@ -42,6 +42,7 @@ System variables are stored in the `config` table with `scope_type='global'` and
 | `CLAUDE_CODE_OAUTH_TOKEN` | Yes | Claude Code OAuth token for Claude authentication |
 | `OPENAI_API_KEY` | Yes | OpenAI API key forwarded to agent containers |
 | `CODEX_AUTH_JSON` | Yes | JSON content written to `~/.codex/auth.json` (mode 600) by the agent worker on startup. Use this to configure Codex authentication without mounting a host file. |
+| `OPENROUTER_API_KEY` | Yes | OpenRouter API key forwarded to agent containers; read by litellm for mr-deed staffs that target OpenRouter models. |
 | `MASTER_PUBLIC_URL` | No | Externally reachable base URL; used to build deep links in notifications |
 | `NOTIFY_DISCORD_WEBHOOK_URL` | Yes | Discord incoming-webhook URL for agent-reply notifications |
 | `NOTIFY_TELEGRAM_BOT_TOKEN` | Yes | Telegram bot token |
@@ -149,12 +150,24 @@ Each agent container mounts two named Docker/Podman volumes:
 |-------------|-------------|---------|
 | `codex-claude-{workspace_id}` | `/home/appuser/.claude` | Claude session state; ensures `claude` session IDs persist across container restarts |
 | `codex-codex-{workspace_id}` | `/home/appuser/.codex` | Codex config and auth; `CODEX_AUTH_JSON` is written here as `auth.json` on startup |
+| `codex-mrdeed-{workspace_id}` | `/home/appuser/.mr-deed` | mr-deed session trajectories (`sessions/<session_id>.traj.json`) |
 
-Both volumes are created automatically on first `docker run` / `podman run`.
+All volumes are created automatically on first `docker run` / `podman run`.
+
+**mr-deed environment variables:** set these as custom config variables (global or workspace). Like every config variable, they reach the agent container's environment on its next start.
+
+| Variable | Read by | Effect |
+|---|---|---|
+| `OLLAMA_API_BASE` | litellm | Ollama endpoint for `ollama_chat/<model>` staffs, e.g. `http://192.168.1.20:11434`. Default `http://localhost:11434` (the agent container itself). |
+| `MRDEED_COST_TRACKING` | mr-deed | `ignore_errors` lets models without a litellm price (cost $0) run; the default treats a $0 call as an error. The shipped `ollama` config already sets this. |
+| `MRDEED_MODEL_RETRY_STOP_AFTER_ATTEMPT` | mr-deed | Max attempts for retryable model errors (default `10`, 4–60 s waits). |
+| `MRDEED_MODEL_NAME` | mr-deed | Fallback model id when neither the staff Model nor the config sets one. |
+
+**mr-deed session storage:** trajectory files are written to `/home/appuser/.mr-deed/sessions/` on the `codex-mrdeed-{workspace_id}` volume, so they survive container restarts and re-creation like claude/codex state.
 
 ### LLM CLI invocations
 
-The agent selects the CLI based on the `adapter` field in the MQTT prompt payload:
+The agent selects the runner based on the `adapter` field in the MQTT prompt payload:
 
 **claude-code adapter:**
 ```
@@ -169,6 +182,12 @@ Session expiry: if `--resume` fails with `No conversation found with session ID`
 codex exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access --ephemeral -o <tempfile> [-m <model>] <prompt>
 ```
 The final agent response is read from `<tempfile>` after the process exits. Codex sessions are not explicitly resumed via flag; the `CODEX_HOME` directory preserves state.
+
+**mr-deed adapter:**
+
+Runs in-process on the agent-llm thread pool (no subprocess). `mr_deed.agents.default.DefaultAgent` is constructed with a `LocalEnvironment(cwd=<worktree>)` and called via `.run(prompt)` (new session) or `DefaultAgent.from_trajectory(<path>, ...).continue_run(prompt)` (resume). Config is resolved from the dispatch payload's `agent_config` field, then from `/opt/codex-slack/config/mr-deed/<name>.yaml`, then from mr-deed built-ins. `environment.type=local` is forced regardless of what the config specifies.
+
+`LITELLM_MODE=PRODUCTION` is set via `os.environ.setdefault` before mr-deed is imported to prevent litellm from loading `.env` files into `os.environ` at import time.
 
 ## CD Daemon
 

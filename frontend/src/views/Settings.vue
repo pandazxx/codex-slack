@@ -49,6 +49,7 @@
           <select v-model="staffForm.adapter">
             <option value="claude-code">claude-code</option>
             <option value="codex">codex</option>
+            <option value="mr-deed">mr-deed</option>
           </select>
 
           <label>Model</label>
@@ -58,7 +59,21 @@
           <textarea v-model="staffForm.system_prompt" placeholder="--append-system-prompt value" rows="3" />
 
           <label>Sub-agent</label>
-          <input v-model="staffForm.agent" placeholder="--agent flag value (optional)" />
+          <input
+            v-model="staffForm.agent"
+            :placeholder="staffForm.adapter === 'mr-deed' ? 'mr-deed config name (blank = default)' : '--agent flag value (optional)'"
+          />
+
+          <template v-if="staffForm.adapter === 'mr-deed'">
+            <label>mr-deed Config</label>
+            <textarea
+              v-model="staffForm.agent_config"
+              class="mono-textarea"
+              placeholder="Optional mr-deed YAML (agent / model / environment). Overrides the named config."
+              rows="8"
+              spellcheck="false"
+            />
+          </template>
 
           <label>Session Scope</label>
           <select v-model="staffForm.session_scope">
@@ -203,7 +218,7 @@ const showStaffForm = ref(false)
 const editingStaff = ref(null)
 const savingStaff = ref(false)
 const staffError = ref('')
-const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false })
+const staffForm = ref({ name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', agent_config: '', session_scope: 'topic', is_default: false })
 
 const config = ref({})
 const systemVars = ref([])
@@ -295,7 +310,7 @@ async function loadSystemVars() {
 
 function startCreateStaff() {
   editingStaff.value = null
-  staffForm.value = { name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', session_scope: 'topic', is_default: false }
+  staffForm.value = { name: '', adapter: 'claude-code', model: '', system_prompt: '', agent: '', agent_config: '', session_scope: 'topic', is_default: false }
   showStaffForm.value = true
   staffError.value = ''
 }
@@ -308,6 +323,7 @@ function startEditStaff(s) {
     model: s.model || '',
     system_prompt: s.system_prompt || '',
     agent: s.agent || '',
+    agent_config: s.agent_config || '',
     session_scope: s.session_scope,
     is_default: s.is_default,
   }
@@ -331,6 +347,10 @@ async function saveStaff() {
       model: staffForm.value.model.trim() || null,
       system_prompt: staffForm.value.system_prompt.trim() || null,
       agent: staffForm.value.agent.trim() || null,
+      // YAML is indentation-sensitive: send it as typed, only dropping blank input.
+      agent_config: staffForm.value.adapter === 'mr-deed' && staffForm.value.agent_config.trim()
+        ? staffForm.value.agent_config
+        : null,
       session_scope: staffForm.value.session_scope,
       is_default: staffForm.value.is_default,
     }
@@ -459,4 +479,5 @@ section { margin-bottom: 3rem; border-top: 1px solid #e2e8f0; padding-top: 1.5re
   .config-add-form .btn-primary { width: 100%; }
   .config-val { max-width: none; white-space: normal; word-break: break-word; }
 }
+.mono-textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
 </style>

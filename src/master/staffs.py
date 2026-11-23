@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import yaml
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -12,12 +13,12 @@ from sqlalchemy import text
 from .db import DBIntegrityError, get_connection
 from .db._dialect import scope_id_match
 
-_VALID_ADAPTERS = {"claude-code", "codex"}
+_VALID_ADAPTERS = {"claude-code", "codex", "mr-deed"}
 _VALID_SESSION_SCOPES = {"topic", "workspace", "global", "none"}
 
 _SELECT_COLS = (
     "id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
-    " session_scope, is_default, extra_flags"
+    " session_scope, is_default, extra_flags, agent_config"
 )
 
 global_router = APIRouter(prefix="/staffs", tags=["staffs"])
@@ -38,6 +39,7 @@ class StaffIn(BaseModel):
     session_scope: str = "topic"
     is_default: bool = False
     extra_flags: str | None = None
+    agent_config: str | None = None
 
 
 class StaffOut(BaseModel):
@@ -52,6 +54,7 @@ class StaffOut(BaseModel):
     session_scope: str
     is_default: bool
     extra_flags: str | None
+    agent_config: str | None = None
     inherited_from: str | None = None
 
 
@@ -68,6 +71,7 @@ def _row_to_out(row: Any, inherited_from: str | None = None) -> StaffOut:
         session_scope=row["session_scope"],
         is_default=bool(row["is_default"]),
         extra_flags=row["extra_flags"],
+        agent_config=row["agent_config"],
         inherited_from=inherited_from,
     )
 
@@ -80,6 +84,13 @@ def _validate_staff_in(body: StaffIn) -> None:
         raise HTTPException(422, f"adapter must be one of {sorted(_VALID_ADAPTERS)}")
     if body.session_scope not in _VALID_SESSION_SCOPES:
         raise HTTPException(422, f"session_scope must be one of {sorted(_VALID_SESSION_SCOPES)}")
+    if body.agent_config and body.agent_config.strip():
+        try:
+            parsed = yaml.safe_load(body.agent_config)
+        except yaml.YAMLError as exc:
+            raise HTTPException(422, f"agent_config is not valid YAML: {exc}")
+        if not isinstance(parsed, dict):
+            raise HTTPException(422, "agent_config must be a YAML mapping (got a scalar or list)")
 
 
 def resolve_staff(
@@ -159,9 +170,9 @@ def _insert_staff(
             text(
                 "INSERT INTO staffs"
                 " (id, scope_type, scope_id, name, adapter, model, system_prompt, agent,"
-                "  session_scope, is_default, extra_flags, created_at, updated_at)"
+                "  session_scope, is_default, extra_flags, agent_config, created_at, updated_at)"
                 " VALUES (:id, :scope_type, :scope_id, :name, :adapter, :model, :system_prompt, :agent,"
-                "  :session_scope, :is_default, :extra_flags, :created_at, :updated_at)"
+                "  :session_scope, :is_default, :extra_flags, :agent_config, :created_at, :updated_at)"
             ),
             {
                 "id": staff_id,
@@ -175,6 +186,7 @@ def _insert_staff(
                 "session_scope": body.session_scope,
                 "is_default": bool(body.is_default),
                 "extra_flags": body.extra_flags,
+                "agent_config": body.agent_config or None,
                 "created_at": now,
                 "updated_at": now,
             },
@@ -210,13 +222,14 @@ def _update_staff(
         text(
             "UPDATE staffs SET adapter=:adapter, model=:model, system_prompt=:system_prompt,"
             " agent=:agent, session_scope=:session_scope, is_default=:is_default,"
-            " extra_flags=:extra_flags, updated_at=:updated_at WHERE id=:id"
+            " extra_flags=:extra_flags, agent_config=:agent_config, updated_at=:updated_at WHERE id=:id"
         ),
         {
             "adapter": body.adapter, "model": body.model, "system_prompt": body.system_prompt,
             "agent": body.agent, "session_scope": body.session_scope,
             "is_default": bool(body.is_default),
-            "extra_flags": body.extra_flags, "updated_at": now, "id": row["id"],
+            "extra_flags": body.extra_flags, "agent_config": body.agent_config or None,
+            "updated_at": now, "id": row["id"],
         },
     )
     conn.commit()

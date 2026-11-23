@@ -84,6 +84,20 @@ Append-only log. Each entry: date, summary, root cause, fix applied, prevention.
 
 *Prevention:* (1) Always open SQLite sources with the URI `mode=ro` flag in any tool that must never modify the source. (2) In runbooks that use `docker compose run` against a named volume, always specify `-p <project>` and include a pre-flight step that verifies the expected files are visible inside the container before running the actual operation.
 
+<!-- last updated: 2026-10-24 -->
+
+---
+
+## 2026-10-24 — litellm loads .env into os.environ at import time unless LITELLM_MODE=PRODUCTION is set first
+
+*Summary:* Importing any `mr_deed.models` class triggers a litellm import, which calls `dotenv.load_dotenv()` at module load time unless `LITELLM_MODE` is already set to `PRODUCTION` in the environment. In the agent container, this silently overwrites values in `os.environ` with whatever is in a `.env` file if one happens to exist — including per-turn secrets that were intentionally kept out of the process environment (they live in `LocalEnvironment.env` dicts instead). For a long-lived in-process runner this is not an immediate exploit, but it breaks the env-hygiene contract established for mr-deed turns (ADR-0018 §9) and could poison future turns.
+
+*Root cause:* litellm's `utils.py` calls `load_dotenv()` unconditionally at import time unless `LITELLM_MODE == "PRODUCTION"`. This is a litellm-level design choice; the flag gates other litellm features too, but `PRODUCTION` is the right value for server contexts.
+
+*Fix applied:* `mr_deed_runner._import_mr_deed()` calls `os.environ.setdefault("LITELLM_MODE", "PRODUCTION")` before any `import mr_deed.*` statement. `setdefault` avoids overriding an operator-set value. The unit test MD-U-02 excludes this one key when asserting `os.environ` is unchanged by the import.
+
+*Prevention:* Any library that calls dotenv at import time will silently load `.env` files in every process that imports it. When embedding such a library in a long-lived in-process runner, gate its import behind an env-flag check and document the flag in the config reference. Never rely on "the container has no `.env` file" as a safety net — the flag is the only reliable guard.
+
 ---
 
 ## 2026-10-04 — Switched claude-code off npm entirely, onto Anthropic's native installer
@@ -780,3 +794,50 @@ Output events are JSONL on stdout. The canonical final-output field is `turn.com
 **Fix applied:** Converted all 12 test-fixture INSERT sites across `tests/master/test_event_actions.py`, `tests/master/test_timezone_audit.py`, and `tests/master/test_db.py` to bind `True`/`False` as `?` parameters. Deleted `_BOOLEAN_COLS`, `_fix_insert_bool_literals`, and the dialect-conditional call site in `_ConnectionProxy.execute`. Updated `_find_bare_bool_literals_in_sql` in the guard test to accept a list of roots, removed `tests/` from the allowlist, and added `_check_insert_values_positions` to catch positional literal violations in INSERT VALUES clauses.
 
 **Prevention:** SQL boolean columns must always receive Python `bool` values through bound parameters — never embedded integer literals in SQL text. The guard test now enforces this across the entire codebase (src and tests) with no escape hatches except the SQLite-only migration file `_prebaseline.py`.
+
+## 2026-10-24 — Agent-container state under `/workspace` is not persistent
+
+*Summary:* The mr-deed design put session trajectories at `/workspace/sessions/mr-deed/`, assuming `/workspace/sessions/` was a volume. Writing the docs exposed that it isn't: sessions would have been lost on every agent re-spawn.
+
+*Root cause:* `agent_runner.spawn_agent` force-removes and recreates the agent container on every spawn, and only `~/.claude` and `~/.codex` are named volumes. `/workspace` (repo clone, worktrees, `/workspace/sessions/`) lives in the container's writable layer. Claude's workspace/global session cwd under `/workspace/sessions/` only works because Claude stores the actual session data in `~/.claude`.
+
+*Fix applied:* A per-workspace named volume `codex-mrdeed-{workspace_id}` is mounted at `/home/appuser/.mr-deed`, and sessions are stored at `/home/appuser/.mr-deed/sessions/`. Both agent images pre-create the directory as `appuser`, because Docker initialises a new named volume from the image path's ownership; without it the volume would be root-owned. An unwritable session directory produces a named error reply.
+
+*Prevention:* Anything an adapter must keep across turns or restarts needs an explicit named volume in `spawn_agent`, plus a mount point pre-created as `appuser` in every agent image. Never assume a path under `/workspace` persists.
+
+
+---
+
+## 2026-11-03 — Every mr-deed model call failed: litellm 1.103+ needs mcp 2.x, we pin mcp<2
+
+*Summary:* Dev-env UAT for the mr-deed adapter found that every real model turn failed with `ImportError: cannot import name 'CacheableResult' from 'mcp.types'`. The failure only came after about 128s of retries, and the reply was `(mr-deed crashed: ImportError)`. All unit tests were green.
+
+*Root cause:* mr-deed depends on litellm without an upper bound, and pip resolved litellm 1.106.6. Since 1.103.0, litellm's tool-call path imports its MCP client, which needs `mcp>=2.2` (declared only under litellm's optional `mcp`/`proxy` extras). codex-slack installs `mcp<2` for `notes_mcp` (`mcp.server.fastmcp` was removed in 2.0), so litellm found an `mcp` that was too old. mr-deed sends the `bash` tool on every call, so every call broke. Unit tests use mr-deed's deterministic model and never reached litellm. mr-deed's retry loop doesn't treat `ImportError` as fatal, hence the long delay.
+
+*Fix applied:* Pinned `litellm>=1.75.5,<1.103` in `requirements.txt`, with a comment. 1.102.4 declares `mcp<2` for its extras and completes tool calls with mcp 1.30. Added `test_litellm_tool_calls_work_with_installed_mcp`, which makes a tool call through litellm offline (`mock_response`) and fails on 1.103+ in this environment.
+
+*Prevention:* A library that only runs behind a real provider call needs at least one offline test that drives its real call path (`mock_response` for litellm), not just deterministic test doubles. When two pins can meet in a transitive dependency's optional extras, check that dependency's `requires_dist` across versions before leaving it unbounded. Lift the litellm pin together with the `notes_mcp` migration to mcp 2.x.
+
+---
+
+## 2026-11-03 — Recipe tests passed locally, failed in CI: no `.git` or `docs/` in the test image
+
+*Summary:* The new `just migrate` behaviour tests (running the real recipe against a stub `docker`) passed in a git checkout but failed in CI with `fatal: not a git repository` (exit 128), and a doc assertion failed with `FileNotFoundError: docs/releases/v5.1.md`.
+
+*Root cause:* CI runs the suite inside the `Dockerfile.test` image at `/opt/codex-slack`, which copies only selected paths (src, tests, config, alembic, scripts, `.sre`, justfile, compose files) and has no `.git`. The recipe derived `PROJECT_ROOT` from `git rev-parse --show-toplevel`, and the test read files under `docs/`.
+
+*Fix applied:* `migrate` uses `{{ justfile_directory() }}` for `PROJECT_ROOT`. The doc assertions check `.sre` runbooks unconditionally and `docs/` files only when present. Verified by running `tests/deploy_contract` in a temp tree with exactly the image's copied paths.
+
+*Prevention:* Tests that execute repo tooling must not assume a git checkout or paths outside `Dockerfile.test`'s `COPY` list. Before pushing, run new tooling tests in a copy of the image's file set (or `just test`), not only in the worktree.
+
+---
+
+## 2026-11-04 — Snapshot export OOM-killed on staging: psycopg buffers the whole result set
+
+*Summary:* `just migrate staging v5.1-rc2` died with exit 137 during `scripts/db.sh snapshot-and-migrate`, before any migration ran. Master was left stopped, and the database was unchanged (still at `000000000001`).
+
+*Root cause:* `export_snapshot` read each table with `conn.execute(text('SELECT * FROM t'))` and then `fetchmany(500)`. With psycopg 3 that's a client-side cursor, so `execute()` pulls the entire result set into the process; `fetchmany` only slices it. The one-off migrate container inherits the master service's `memory: 1g` limit, and the large `messages`/`chunks` tables (transcripts) exceeded it. The JSONL writing streamed; the DB read didn't. Tests never noticed because fixture tables are tiny.
+
+*Fix applied:* Export reads through `_stream_table()`, which uses `execution_options(stream_results=True, max_row_buffer=500)` and so a psycopg server-side cursor. A regression test asserts a `ServerCursor` on the Postgres CI leg.
+
+*Prevention:* For anything that reads whole tables on Postgres (exports, backfills, reports), use `stream_results=True` or `yield_per`. A batched `fetchmany` loop alone does not bound memory. Size checks for tooling should assume production-sized tables, not fixtures.

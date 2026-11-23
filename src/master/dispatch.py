@@ -293,6 +293,8 @@ async def dispatch_to_staff(
         "session_scope": staff["session_scope"] or "topic",
         "model": staff["model"],
         "system_prompt": raw_system_prompt or None,
+        # mr-deed YAML from the resolved staff; always present, null when unset.
+        "agent_config": staff["agent_config"],
         "text": prompt_text,
         "attachments": attachments,
         "task_id": task_id,
@@ -307,7 +309,12 @@ async def dispatch_to_staff(
     # Build a token-scrubbed transcript for DB storage and WS broadcast.
     # dispatch_token is a per-turn auth secret delivered exclusively via MQTT;
     # it must never appear in GET /messages responses or WS frames.
+    # agent_config may contain model_kwargs.api_key; replace with a size marker.
     scrubbed_payload_dict = {k: v for k, v in payload_dict.items() if k != "dispatch_token"}
+    if scrubbed_payload_dict.get("agent_config"):
+        scrubbed_payload_dict["agent_config"] = (
+            f"<agent_config: {len(scrubbed_payload_dict['agent_config'])} bytes>"
+        )
     scrubbed_payload = json.dumps(scrubbed_payload_dict)
 
     disp_conn = get_connection(app_state.db_path)

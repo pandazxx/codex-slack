@@ -18,7 +18,7 @@ Three in the default configuration: `master` (FastAPI app on port 8080), `mosqui
 
 **Q: Where is my data stored?**
 
-Since v5.0, all workspace, topic, message, session, and agent configuration data is in Postgres by default. The bundled `postgres:17-alpine` service stores its data in the `postgres_data` Docker volume. Attachments are in the `master_data` volume under `attachments/`. Each agent container has two persistent named volumes: `codex-claude-{workspace_id}` mounted at `/home/appuser/.claude` (Claude session state) and `codex-codex-{workspace_id}` mounted at `/home/appuser/.codex` (Codex config and auth).
+Since v5.0, all workspace, topic, message, session, and agent configuration data is in Postgres by default. The bundled `postgres:17-alpine` service stores its data in the `postgres_data` Docker volume. Attachments are in the `master_data` volume under `attachments/`. Each agent container has three persistent named volumes: `codex-claude-{workspace_id}` mounted at `/home/appuser/.claude` (Claude session state) `codex-codex-{workspace_id}` mounted at `/home/appuser/.codex` (Codex config and auth), and `codex-mrdeed-{workspace_id}` mounted at `/home/appuser/.mr-deed` (mr-deed session trajectories).
 
 For SQLite installs (opt-in via `DATABASE_URL=sqlite+pysqlite:///...`), the database file is at `/opt/codex-slack/data/master/master_data.db` inside the `master_data` volume.
 

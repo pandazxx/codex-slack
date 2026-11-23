@@ -1,7 +1,9 @@
-"""TC-01: Baseline parity — init_db() vs alembic upgrade head.
+"""TC-01: Baseline parity — legacy init_db_sqlite() vs alembic baseline.
 
-Creates a fresh SQLite DB via legacy init_db() and a second via
-`alembic upgrade head`, then compares both schemas with SQLAlchemy
+Creates a fresh SQLite DB via the legacy init_db_sqlite() path and a second
+via `alembic upgrade 000000000001` (the frozen baseline — later revisions are
+deliberately excluded, since the legacy path only ever reaches the baseline),
+then compares both schemas with SQLAlchemy
 inspect():
   - Same table names
   - Same columns per table (name, affinity-normalised type, nullable, PK)
@@ -101,19 +103,22 @@ def _normalise_sql(sql: str) -> str:
     return s
 
 
+BASELINE_REV = "000000000001"
+
+
 def _run_alembic_upgrade(database_url: str) -> None:
-    """Run `alembic upgrade head` against the given DATABASE_URL."""
+    """Run `alembic upgrade <baseline>` against the given DATABASE_URL."""
     env = os.environ.copy()
     env["DATABASE_URL"] = database_url
     result = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "upgrade", BASELINE_REV],
         cwd=str(REPO_ROOT),
         env=env,
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, (
-        f"alembic upgrade head failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        f"alembic upgrade {BASELINE_REV} failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
@@ -194,17 +199,17 @@ def _sqlite_master_indexes(db_path: str) -> dict[str, str]:
 
 @pytest.fixture(scope="module")
 def legacy_db_path(tmp_path_factory):
-    """Path to a fresh SQLite DB initialised via legacy init_db()."""
-    from src.master.db import init_db
+    """Path to a fresh SQLite DB initialised via legacy init_db_sqlite()."""
+    from src.master.db._prebaseline import init_db_sqlite
     tmp = tmp_path_factory.mktemp("baseline_parity_legacy")
     db_path = str(tmp / "legacy.db")
-    init_db(db_path)
+    init_db_sqlite(db_path)
     return db_path
 
 
 @pytest.fixture(scope="module")
 def alembic_db_path(tmp_path_factory):
-    """Path to a fresh SQLite DB initialised via alembic upgrade head."""
+    """Path to a fresh SQLite DB initialised via alembic upgrade to the baseline."""
     tmp = tmp_path_factory.mktemp("baseline_parity_alembic")
     db_path = str(tmp / "alembic.db")
     _run_alembic_upgrade(f"sqlite+pysqlite:///{db_path}")
@@ -213,13 +218,13 @@ def alembic_db_path(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def legacy_schema(legacy_db_path):
-    """Schema of a DB initialised via legacy init_db()."""
+    """Schema of a DB initialised via legacy init_db_sqlite()."""
     return _inspect_schema(f"sqlite+pysqlite:///{legacy_db_path}")
 
 
 @pytest.fixture(scope="module")
 def alembic_schema(alembic_db_path):
-    """Schema of a DB initialised via alembic upgrade head."""
+    """Schema of a DB initialised via alembic upgrade to the baseline."""
     return _inspect_schema(f"sqlite+pysqlite:///{alembic_db_path}")
 
 

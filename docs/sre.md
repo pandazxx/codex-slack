@@ -112,6 +112,7 @@ All operations go through `just`. Shell variables already exported override `.en
 | `just dev-up [branch]` | Build and start dev env for a branch | `branch` (defaults to current git branch) |
 | `just dev-down [branch]` | Tear down dev env for a branch | `branch` |
 | `just deploy <env> <tag>` | Resolve tag to digest and deploy singleton stack | `env`: `staging` or `prod`; `tag`: CI image tag |
+| `just migrate <env> <tag> [confirm=yes]` | Snapshot and migrate the singleton DB from `<tag>`'s image; stops master, never starts it. Run before `just deploy` when a release adds Alembic revisions | `env`: `staging` or `prod`; prod requires `confirm=yes`, else it refuses and changes nothing |
 | `just undeploy <env>` | Tear down singleton stack | `env`: `staging` or `prod` |
 | `just status` | List active compose projects on all configured hosts | — |
 | `just logs <env> <service> [key]` | Stream logs | `key` = branch slug for dev; omit for singleton envs |
@@ -134,6 +135,7 @@ All runbooks are in `.sre/operations/`. Operators read the runbook for the reque
 | `status.md` | List active envs |
 | `test.md` | Run tests (sqlite, postgres, mysql experimental) |
 | `db-snapshot-migrate.md` | Snapshot and migrate the database of a running master |
+| `migrate.md` | Migrate the staging/prod database to the schema head of a tag, before deploying it (`just migrate`) |
 | `post-merge-cleanup.md` | Refresh staging singleton + tear down merged-branch dev env |
 
 ## CI/CD

@@ -25,7 +25,6 @@ REPO_ROOT = Path(__file__).parents[3]
 DB_SH = str(REPO_ROOT / "scripts" / "db.sh")
 
 # Baseline revision prefix — the script must create alembic_version with this.
-BASELINE_REV_PREFIX = "000000000001"
 
 
 def _run_db_sh(*args, extra_env: dict | None = None, **kwargs):
@@ -102,7 +101,7 @@ class TestUnknownSubcommand:
 )
 class TestMigrateSubcommand:
     def test_migrate_creates_alembic_version(self, tmp_path):
-        """scripts/db.sh migrate creates the alembic_version table at the baseline head."""
+        """scripts/db.sh migrate creates the alembic_version table at the code head."""
         import sqlite3 as _sqlite3
 
         db_path = tmp_path / "migrate_test.db"
@@ -129,7 +128,12 @@ class TestMigrateSubcommand:
             f"Expected exactly one row in alembic_version, got {rows!r}"
         )
         version_num = rows[0][0]
-        assert version_num.startswith(BASELINE_REV_PREFIX), (
-            f"Expected version_num starting with {BASELINE_REV_PREFIX!r}, "
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        cfg = Config(str(REPO_ROOT / "alembic.ini"))
+        cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        assert version_num == head, (
+            f"Expected version_num {head!r} (code head), "
             f"got {version_num!r}"
         )

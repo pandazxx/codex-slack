@@ -1,6 +1,6 @@
 ---
 title: "ADR-0018: Mr-deed agent adapter"
-status: proposed
+status: accepted
 date: 2026-10-09
 decision-makers: [architect, project-owner]
 consulted: [engineer, tester]
@@ -190,7 +190,9 @@ III. **In-memory session map keyed by `staff_sessions`**, lost on restart.
    them.
 
 5. **Sessions.** Persist the trajectory per `session_id` on a volume at
-   `/workspace/sessions/mr-deed/<session_id>.traj.json`. On
+   `/home/appuser/.mr-deed/sessions/<session_id>.traj.json` (per-workspace volume
+   `codex-mrdeed-<workspace_id>`; corrected 2026-10-24 — `/workspace` is not
+   persistent). On
    `is_new_session=false` the runner loads prior messages, renders the
    new prompt through a `continue_template` (config key; defaults to the
    raw prompt), appends it as a user message,

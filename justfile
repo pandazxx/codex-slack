@@ -259,11 +259,25 @@ deploy env tag:
         RETRIES=$((RETRIES - 1))
         if [ "$RETRIES" -eq 0 ]; then
             echo "ERROR: master failed healthcheck after 90s" >&2
-            docker compose -p codex-slack \
+            MASTER_LOGS="$(docker compose -p codex-slack \
                 -f "${PROJECT_ROOT}/docker-compose.yml" \
                 -f "${PROJECT_ROOT}/docker-compose.deploy.yml" \
                 -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
-                logs --tail=50 master >&2
+                logs --tail=50 master 2>&1 || true)"
+            printf '%s\n' "$MASTER_LOGS" >&2
+            # Schema mismatch is a database state problem, not a transient one.
+            if printf '%s\n' "$MASTER_LOGS" | grep -q 'schema is behind'; then
+                echo "" >&2
+                echo "!! master refused to start: the database schema is behind this image:" >&2
+                printf '%s\n' "$MASTER_LOGS" | grep 'schema is behind' | sort -u | tail -n 2 >&2
+                echo "→ run: just migrate ${ENV} ${TAG}$([ "$ENV" = prod ] && echo ' confirm=yes')" >&2
+                echo "  then: just deploy ${ENV} ${TAG}" >&2
+            elif printf '%s\n' "$MASTER_LOGS" | grep -q 'schema is ahead'; then
+                echo "" >&2
+                echo "!! master refused to start: the database schema is AHEAD of this image:" >&2
+                printf '%s\n' "$MASTER_LOGS" | grep 'schema is ahead' | sort -u | tail -n 2 >&2
+                echo "   This looks like a downgrade. Do not migrate; deploy the newer tag, or restore a snapshot." >&2
+            fi
             exit 1
         fi
         sleep 5
@@ -279,6 +293,243 @@ deploy env tag:
     else
         echo "  db:     bundled Postgres (profiles=${COMPOSE_PROFILES})"
     fi
+
+# Bring the singleton stack's database to the schema head of <tag>'s image,
+# WITHOUT starting master. Run before `just deploy <env> <tag>` when the
+# release adds Alembic revisions (master refuses to start on a DB that is
+# behind). Runs the migration from the target tag's image, because only it
+# contains the new revisions. Never starts master; stops it if running.
+#   just migrate staging v5.1-rc1
+#   just migrate prod v5.1 confirm=yes     # prod requires confirm=yes
+# Idempotent: already at head -> exit 0, master untouched. DB ahead of the
+# image or at an unknown revision -> refuse, nothing changed.
+# Same compose project and file set as `deploy` (kept in sync by
+# tests/deploy_contract/test_justfile.py). The preamble is duplicated rather
+# than shared so `deploy` is not modified beyond the failure hint.
+# env: staging | prod
+migrate env tag confirm="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ENV="{{ env }}"
+    TAG="{{ tag }}"
+    CONFIRM="{{ confirm }}"
+
+    case "$ENV" in
+        staging)
+            : "${STAGING_DOCKER_HOST:?STAGING_DOCKER_HOST must be set for migrate staging}"
+            TARGET_HOST="$STAGING_DOCKER_HOST"
+            ;;
+        prod)
+            : "${PROD_DOCKER_HOST:?PROD_DOCKER_HOST must be set for migrate prod}"
+            TARGET_HOST="$PROD_DOCKER_HOST"
+            # Prod needs an explicit flag. Refuse before touching anything.
+            if [ "$CONFIRM" != "confirm=yes" ] && [ "$CONFIRM" != "yes" ]; then
+                echo "ERROR: refusing to migrate prod without confirmation. Nothing was changed." >&2
+                echo "       This stops master on prod and migrates the production database in place." >&2
+                echo "       Re-run with: just migrate prod ${TAG} confirm=yes" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo "ERROR: env must be 'staging' or 'prod', got: ${ENV}" >&2
+            exit 1
+            ;;
+    esac
+
+    : "${REGISTRY:?REGISTRY must be set}"
+
+    IMAGE_REF="${REGISTRY}/codex-slack-master:${TAG}"
+    MASTER_RUNTIME_IMAGE="${REGISTRY}/codex-slack-master:${TAG}"
+
+    echo "==> Resolving digest for ${IMAGE_REF}..."
+    IMAGE_DIGEST="$(docker buildx imagetools inspect \
+        --format '{{"{{"}}json .Manifest.Digest{{"}}"}}' "${IMAGE_REF}" | tr -d '"')"
+    echo "==> IMAGE_DIGEST=${IMAGE_DIGEST}"
+
+    HOST_ADDR="${TARGET_HOST#ssh://}"
+
+    if [ -z "${DOCKER_GID:-}" ]; then
+        DOCKER_GID="$(DOCKER_HOST="$TARGET_HOST" docker run --rm \
+            -v /var/run/docker.sock:/sock alpine stat -c '%g' /sock 2>/dev/null)"
+        echo "==> DOCKER_GID=${DOCKER_GID} (detected from ${HOST_ADDR})"
+    fi
+
+    # justfile_directory() works without a git checkout (e.g. inside the test image).
+    PROJECT_ROOT="{{ justfile_directory() }}"
+
+    # shellcheck source=.sre/db-env.sh
+    source "${PROJECT_ROOT}/.sre/db-env.sh"
+    sre_db_env_singleton
+    sre_db_require_config
+    sre_db_legacy_sqlite_guard "$TARGET_HOST"
+
+    export DOCKER_HOST="$TARGET_HOST"
+    export MASTER_RUNTIME_IMAGE
+    export IMAGE_DIGEST
+    export DOCKER_GID
+
+    dc() {
+        docker compose \
+            -p codex-slack \
+            -f "${PROJECT_ROOT}/docker-compose.yml" \
+            -f "${PROJECT_ROOT}/docker-compose.deploy.yml" \
+            -f "${PROJECT_ROOT}/docker-compose.postgres.yml" \
+            "$@"
+    }
+    # Hide credentials embedded in database URLs (user:pass@host) in anything we print.
+    mask() { sed -E 's#(://[^:/@ ]+):[^ ]*@#\1:***@#g'; }
+
+    # Read alembic_version straight from the database (not `db.sh verify-schema`,
+    # which always fails: pandazxx/codex-slack#283). One small Python call in the
+    # target image; works for bundled Postgres, external Postgres and SQLite
+    # because it resolves the URL exactly as master does. Prints one line:
+    #   SRE_DB_STATE state=<empty|prebaseline|current|behind|ahead|unknown> current=<rev|-> head=<rev>
+    PYREV='
+    import os
+    from pathlib import Path
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import inspect
+    import src.master.db as d
+    url = os.getenv("DATABASE_URL", "").strip() or d.resolve_db_url()
+    cfg = Config(str(Path(d.__file__).parents[3] / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    script = ScriptDirectory.from_config(cfg)
+    head = script.get_current_head()
+    eng = d._make_engine(url)
+    tables = set(inspect(eng).get_table_names())
+    cur = None
+    if "alembic_version" in tables:
+        with eng.connect() as conn:
+            cur = MigrationContext.configure(conn).get_current_revision()
+    eng.dispose()
+    known = set(s.revision for s in script.walk_revisions())
+    if cur is None:
+        state = "prebaseline" if "workspaces" in tables else "empty"
+    elif cur == head:
+        state = "current"
+    elif cur in known:
+        state = "behind"
+    elif cur > head:
+        state = "ahead"
+    else:
+        state = "unknown"
+    print("SRE_DB_STATE state=%s current=%s head=%s" % (state, cur or "-", head))
+    '
+    db_state() {
+        local out
+        if ! out="$(dc run --rm --no-deps -T master python -c "$PYREV" 2>&1 </dev/null)"; then
+            printf '%s\n' "$out" | mask >&2
+            echo "ERROR: could not read the database revision (output above)." >&2
+            return 1
+        fi
+        printf '%s\n' "$out" | grep '^SRE_DB_STATE ' | tail -n 1
+    }
+    field() { printf '%s\n' "$1" | sed -E "s/.* $2=([^ ]+).*/\1/"; }
+
+    MASTER_STOPPED=0
+    LOG=""
+    on_exit() {
+        local rc=$?
+        [ -n "$LOG" ] && rm -f "$LOG"
+        [ "$rc" -eq 0 ] && return 0
+        if [ "$MASTER_STOPPED" -eq 1 ]; then
+            {
+                echo ""
+                echo "!! migrate FAILED and master is STOPPED on ${ENV} (${TARGET_HOST}); it will not restart by itself."
+                echo "   Recover (never delete postgres_data or master_data):"
+                echo "   1. Re-run (safe: re-reads the revision, takes a fresh snapshot):"
+                echo "        just migrate ${ENV} ${TAG}$([ "$ENV" = prod ] && echo ' confirm=yes')"
+                echo "   2. Restore the pre-migration snapshot (in the master_data volume under"
+                echo "      /opt/codex-slack/data/master/snapshots/<UTC timestamp>/): human decision, see"
+                echo "      .sre/operations/db-snapshot-migrate.md (fallback section)."
+                echo "   3. Redeploy the previous tag: just deploy ${ENV} <previous-tag>"
+                echo "      Only works if the database is still at its old revision; an older image"
+                echo "      refuses a database that is ahead of it."
+            } >&2
+        else
+            echo "!! migrate FAILED before master was stopped; master is untouched on ${ENV}." >&2
+        fi
+    }
+    trap on_exit EXIT
+
+    echo "==> migrate: env=${ENV} tag=${TAG} host=${TARGET_HOST}"
+    echo "==> Pulling image by digest..."
+    dc pull master
+
+    case ",${COMPOSE_PROFILES// /}," in
+        *,db-bundled,*)
+            echo "==> Ensuring bundled Postgres is up and healthy..."
+            dc up -d --wait postgres
+            ;;
+    esac
+
+    echo "==> Reading current database revision..."
+    STATE_LINE="$(db_state)"
+    STATE="$(field "$STATE_LINE" state)"
+    CURRENT="$(field "$STATE_LINE" current)"
+    HEAD_REV="$(field "$STATE_LINE" head)"
+    echo "==> revision before: ${CURRENT}  (image head: ${HEAD_REV}, state: ${STATE})"
+
+    case "$STATE" in
+        current)
+            echo "==> Database is already at the image head (${HEAD_REV}). Nothing to migrate; master untouched."
+            echo "Next: just deploy ${ENV} ${TAG}"
+            exit 0
+            ;;
+        empty|prebaseline)
+            echo "==> Database is ${STATE} (no alembic revision): master initializes or upgrades it itself on start."
+            echo "    Nothing to migrate here; master untouched."
+            echo "Next: just deploy ${ENV} ${TAG}"
+            exit 0
+            ;;
+        ahead|unknown)
+            echo "ERROR: database revision ${CURRENT} is ${STATE} relative to ${TAG} (head ${HEAD_REV})." >&2
+            echo "       This looks like a downgrade or the wrong image. Refusing; nothing was changed." >&2
+            echo "       Deploy the newer tag that contains ${CURRENT}, or restore a snapshot first." >&2
+            exit 1
+            ;;
+        behind) ;;
+        *)
+            echo "ERROR: unexpected database state '${STATE}'. Nothing was changed." >&2
+            exit 1
+            ;;
+    esac
+
+    echo "==> Stopping master (it may be crash-looping on 'schema is behind')..."
+    MASTER_STOPPED=1
+    dc stop master
+
+    echo "==> Snapshot and migrate (from ${MASTER_RUNTIME_IMAGE}@${IMAGE_DIGEST})..."
+    LOG="$(mktemp)"
+    dc run --rm --no-deps -T master bash -c 'bash scripts/db.sh snapshot-and-migrate --source-url "${DATABASE_URL:-postgresql+psycopg://master:${POSTGRES_PASSWORD}@postgres:5432/master}"' \
+        </dev/null 2>&1 | mask | tee "$LOG"
+    # pipefail makes a non-zero exit from the container fail the recipe here (set -e).
+    if ! grep -q '^Migration complete\.' "$LOG"; then
+        echo "ERROR: snapshot-and-migrate did not report 'Migration complete.'" >&2
+        exit 1
+    fi
+    SNAPSHOT_DIR="$(sed -n -E 's/^Snapshotting .* → (.*)$/\1/p' "$LOG" | tail -n 1)"
+
+    echo "==> Reading database revision after migration..."
+    AFTER_LINE="$(db_state)"
+    AFTER="$(field "$AFTER_LINE" current)"
+    echo "==> revision after:  ${AFTER}  (image head: ${HEAD_REV})"
+    if [ "$(field "$AFTER_LINE" state)" != "current" ]; then
+        echo "ERROR: database is not at the image head after migration." >&2
+        exit 1
+    fi
+
+    MASTER_STOPPED=0
+    echo ""
+    echo "Migrated (master is stopped, not started):"
+    echo "  env:       ${ENV}"
+    echo "  image:     ${MASTER_RUNTIME_IMAGE}@${IMAGE_DIGEST}"
+    echo "  revision:  ${CURRENT} -> ${AFTER}"
+    echo "  snapshot:  ${SNAPSHOT_DIR:-<not reported>} (inside the master_data volume)"
+    echo "Next: just deploy ${ENV} ${TAG}"
 
 # Bring down the singleton codex-slack stack on <env>_DOCKER_HOST.
 # Preserves named volumes (master_data, postgres_data) — use `just destroy <env>`
