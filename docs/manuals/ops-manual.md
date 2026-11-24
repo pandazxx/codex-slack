@@ -208,6 +208,8 @@ See the Database section above for backup procedures. The complete summary:
 - **Attachments:** tar the `attachments/` subdirectory of the `master_data` volume
 - **Claude session state:** tar each `codex-claude-{workspace_id}` volume
 
+To move a whole instance, volumes included, to a new Docker host, see [`docs/guides/runbooks/migrate-docker-host.md`](../guides/runbooks/migrate-docker-host.md).
+
 ## Related References
 
 - [`docs/references/config.md`](../references/config.md) — full configuration key reference
