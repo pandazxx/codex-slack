@@ -1,180 +1,126 @@
-# Runbook: Migrate an instance (and its volumes) to another Docker host
+# Runbook: Migrate named volumes to another Docker host (offline export/import)
 
-**Trigger:** you are moving a running codex-slack singleton (staging or prod, compose project `codex-slack`) from one Docker host to another, e.g. hardware replacement, new VM, or a new cloud region.
+**Trigger:** you are moving an instance to a new Docker host and need its named volumes on the new host. The two hosts do **not** have to be reachable at the same time: you export each volume to a tarball on the source, copy the files over by any means (scp, rsync, USB disk, object storage), and import them on the target.
 
-**Impact:** downtime from the moment master stops on the source until the target passes its healthcheck. Plan on roughly the time it takes to copy every volume over the network. Agents stop replying during the window. Messages sent during the window are lost, so freeze usage first.
+**Scope:** named volumes only. The **database is out of scope**. Migrate it with its own runbook first ([`migrate-sqlite-to-postgres.md`](migrate-sqlite-to-postgres.md), or `pg_dump`/restore as in the ops manual). This runbook skips `*_postgres_data` by default.
 
-**Who runs it:** a human operator or `senior-sre`. The `sre` operator has no runbook in `.sre/operations/` for this.
+**Impact:** writes to the exported volumes are lost after the export (step 2). Stop master and the agents before exporting, and keep them stopped until the target is up.
 
-> **Never** run `docker compose down -v`, `docker volume rm`, or `docker volume prune` on the source host until the rollback window (step 9) has ended. The source volumes are your rollback.
+> Never run `docker compose down -v`, `docker volume rm`, or `docker volume prune` on the source until the target has been verified and has run for a while. The source volumes are your rollback.
 
 ---
 
-## 0. What has to move
+## 0. Which volumes
 
-All state lives in Docker named volumes. Containers are disposable: master re-creates every agent container on startup (`_respawn_agents` in `src/master/main.py`) and re-attaches it to the existing volumes by name.
-
-| Volume | Mounted at | Contents |
+| Volume | Contents | Migrate? |
 |---|---|---|
-| `codex-slack_postgres_data` | `/var/lib/postgresql/data` (postgres) | All DB data: workspaces, topics, messages, sessions, agent configs |
-| `codex-slack_master_data` | `/opt/codex-slack/data/master` (master) | Attachments, DB snapshots, `master_data.db` for SQLite installs |
-| `codex-claude-<workspace_id>` | `/home/appuser/.claude` (agent) | Claude Code session state, one per workspace |
-| `codex-codex-<workspace_id>` | `/home/appuser/.codex` (agent) | Codex CLI state, one per workspace |
-| `agent-workspace-<workspace_name>` | `/workspace` (agent) | Cloned repo, including any **uncommitted agent work** |
+| `<project>_master_data` | Attachments, DB snapshots, and `master_data.db` (SQLite installs) | yes |
+| `codex-claude-<workspace_id>` | Claude Code session state, one per workspace | yes |
+| `codex-codex-<workspace_id>` | Codex CLI state, one per workspace | yes |
+| `agent-workspace-<workspace_name>` | Cloned repo, including **uncommitted agent work** | yes |
+| `<project>_postgres_data` | Bundled Postgres data dir | **no**: handled by the DB migration |
 
-For a dev stack, the compose volumes are prefixed with the branch slug (`<slug>_master_data`) instead of `codex-slack_`. Set `PROJECT=<slug>` below.
+`<project>` is `codex-slack` for staging/prod singletons, or the branch slug for a dev stack. Agent containers do not need to move. When master starts on the target, it recreates one container per active workspace (`_respawn_agents` in `src/master/main.py`) and attaches it to these volumes **by name**. That is why the volume names must stay exactly the same.
 
-Host-side files are **not** in volumes. Copy or recreate them on the target separately:
+---
 
-- `.env` on the operator machine (`POSTGRES_PASSWORD`, `COMPOSE_PROFILES`, tokens). **`POSTGRES_PASSWORD` must stay the same**, because the password lives inside the copied data directory.
-- Whatever `MASTER_CODEX_AUTH_JSON_PATH`, `MASTER_SSH_KNOWN_HOSTS_PATH`, and `MASTER_SSH_AUTH_SOCK_PATH` point to on the host.
-
-## 1. Pre-flight checks
-
-Run these from the operator machine (the one with the repo checkout and `.env`). Set:
+## 1. On the source host: list the volumes
 
 ```bash
-export SRC=ssh://ubuntu@<old-host>      # current host
-export DST=ssh://ubuntu@<new-host>      # new host
-export PROJECT=codex-slack              # or the dev branch slug
+PROJECT=codex-slack
+docker volume ls -q \
+  | grep -E "^(${PROJECT}_master_data|codex-claude-|codex-codex-|agent-workspace-)" \
+  > volumes.txt
+cat volumes.txt
 ```
 
-1. The target has Docker and Compose >= 2.20:
-   `DOCKER_HOST=$DST docker version && DOCKER_HOST=$DST docker compose version`
-2. **Both hosts use the same CPU architecture**, because the Postgres data directory is binary and tied to the architecture:
-   `DOCKER_HOST=$SRC docker info -f '{{.Architecture}}'` and the same command for `$DST`. If the values differ (for example x86_64 vs aarch64), do **not** copy `postgres_data`. Use the logical path in step 3b instead.
-3. The target can pull the master image from `$REGISTRY` (`docker login` on the target if the registry is private).
-4. The target has enough free disk space. Get the size of each volume on the source:
-   ```bash
-   for v in $(DOCKER_HOST=$SRC docker volume ls -q | grep -E "^(${PROJECT}_|codex-claude-|codex-codex-|agent-workspace-)"); do
-     printf '%s\t' "$v"; DOCKER_HOST=$SRC docker run --rm -v "$v":/d:ro alpine du -sh /d | cut -f1
-   done
-   ```
-5. Note the image tag currently deployed. The target must run the **same** tag, so the schema revision matches the data:
-   `DOCKER_HOST=$SRC docker inspect ${PROJECT}-master-1 -f '{{.Config.Image}}'`
+Edit `volumes.txt` if you want to leave something out, for example workspaces you have archived.
 
-## 2. Freeze and take a logical backup (safety net)
-
-Tell users the instance is going down. Then take a `pg_dump`. It is independent of the volume copy and works across architectures and Postgres versions:
+## 2. On the source host: stop writers
 
 ```bash
-DOCKER_HOST=$SRC docker exec ${PROJECT}-postgres-1 \
-  pg_dump -U master -d master --no-owner > "master-pg-$(date +%Y%m%d%H%M).sql"
+docker stop ${PROJECT}-master-1
+docker ps -q --filter name=codex-agent- | xargs -r docker stop
 ```
 
-## 3. Stop the source stack (keep the volumes)
+Use `stop`, not `down`/`rm`. That way `docker start` gives you a fast rollback.
 
-Stop master first so nothing writes to the DB, then the agents, then everything else:
+## 3. On the source host: export each volume to a tarball
+
+GNU tar with `--numeric-owner` keeps UIDs and permissions intact. The agents run as `appuser`, so ownership matters.
 
 ```bash
-DOCKER_HOST=$SRC docker stop ${PROJECT}-master-1
-DOCKER_HOST=$SRC docker ps -q --filter name=codex-agent- | xargs -r env DOCKER_HOST=$SRC docker stop
-DOCKER_HOST=$SRC docker stop ${PROJECT}-postgres-1 ${PROJECT}-mosquitto-1
+mkdir -p volume-export && cd volume-export
+cp ../volumes.txt .
+while read -r v; do
+  echo "==> exporting $v"
+  docker run --rm -v "$v":/from:ro -v "$PWD":/out debian:bookworm-slim \
+    tar -C /from --numeric-owner -czpf "/out/$v.tar.gz" .
+  # record the file count so the import can be checked
+  docker run --rm -v "$v":/from:ro alpine sh -c 'find /from | wc -l' > "$v.count"
+done < volumes.txt
+sha256sum *.tar.gz > SHA256SUMS
+ls -lh
 ```
 
-Use `docker stop`, not `docker compose down -v`. Stopping without removing gives the fastest rollback: `docker start` brings the stack back.
+You now have `volume-export/` containing one `<volume>.tar.gz` and one `<volume>.count` per volume, plus `volumes.txt` and `SHA256SUMS`.
 
-## 3a. Copy the volumes (same architecture)
+Each tarball holds the volume's root (`.`), not a `from/` prefix, so you can also inspect it by hand with `tar tzf <file> | head`.
 
-This streams each volume as a tar archive from the source daemon to the target daemon through the operator machine. No temp files are written. GNU tar with `--numeric-owner` keeps UIDs intact (postgres runs as UID 70, agents as `appuser`).
+## 4. Move the files
 
-Compose-managed volumes are created on the target with compose labels, so `docker compose up` adopts them without warnings:
+Copy the whole `volume-export/` directory to the target host however you like:
 
 ```bash
-copy_volume() {  # copy_volume <name> [compose-volume-key]
-  local v="$1" key="${2:-}"
-  if [ -n "$key" ]; then
-    DOCKER_HOST=$DST docker volume create \
-      --label com.docker.compose.project="$PROJECT" \
-      --label com.docker.compose.volume="$key" "$v" >/dev/null
-  else
-    DOCKER_HOST=$DST docker volume create "$v" >/dev/null
+scp -r volume-export/ ubuntu@<new-host>:~/          # or rsync, USB disk, S3, ...
+```
+
+These archives contain session state and repo clones that may include tokens. Treat them as secrets in transit and at rest, and delete the copies once you are done (step 7).
+
+## 5. On the target host: verify and import
+
+```bash
+PROJECT=codex-slack
+cd ~/volume-export
+sha256sum -c SHA256SUMS            # must print OK for every file
+
+while read -r v; do
+  if docker volume inspect "$v" >/dev/null 2>&1; then
+    echo "!! $v already exists on this host, skipping (inspect it before overwriting)"; continue
   fi
-  echo "==> $v"
-  DOCKER_HOST=$SRC docker run --rm -v "$v":/from:ro debian:bookworm-slim \
-      tar -C /from --numeric-owner -cpf - . \
-    | DOCKER_HOST=$DST docker run --rm -i -v "$v":/to debian:bookworm-slim \
-      tar -C /to --numeric-owner -xpf -
-}
-
-copy_volume "${PROJECT}_master_data"   master_data
-copy_volume "${PROJECT}_postgres_data" postgres_data   # skip if architectures differ
-
-for v in $(DOCKER_HOST=$SRC docker volume ls -q | grep -E '^(codex-claude-|codex-codex-|agent-workspace-)'); do
-  copy_volume "$v"
-done
+  # Compose-owned volumes get compose labels so `docker compose up` adopts them cleanly
+  case "$v" in
+    "${PROJECT}"_*) docker volume create \
+        --label com.docker.compose.project="$PROJECT" \
+        --label com.docker.compose.volume="${v#${PROJECT}_}" "$v" >/dev/null ;;
+    *) docker volume create "$v" >/dev/null ;;
+  esac
+  echo "==> importing $v"
+  docker run --rm -v "$v":/to -v "$PWD":/in:ro debian:bookworm-slim \
+    tar -C /to --numeric-owner -xzpf "/in/$v.tar.gz"
+  got=$(docker run --rm -v "$v":/to:ro alpine sh -c 'find /to | wc -l')
+  [ "$got" = "$(cat "$v.count")" ] && echo "OK   $v ($got entries)" || echo "DIFF $v: expected $(cat "$v.count"), got $got"
+done < volumes.txt
 ```
 
-For a slow link, add compression: pipe through `gzip -1` on the source side (`... -cpf - . | gzip -1`) and extract with `-xzpf -` on the target side.
+Every volume must report `OK`. If one shows `DIFF`, `docker volume rm` that volume on the **target** only, then re-run the loop. The loop skips volumes that already exist.
 
-**Without `DOCKER_HOST` over SSH:** run the same pair on the hosts themselves, joined by `ssh`:
-`docker run --rm -v V:/from:ro debian:bookworm-slim tar -C /from --numeric-owner -cpf - . | ssh new-host "docker volume create V && docker run --rm -i -v V:/to debian:bookworm-slim tar -C /to --numeric-owner -xpf -"`
+**Different project name on the target?** The compose volume must be called `<new-project>_master_data`. Set `PROJECT` to the new name and rename the tarball before importing, for example `mv codex-slack_master_data.tar.gz newproj_master_data.tar.gz`. Do the same for the `.count` file and the entry in `volumes.txt`. Then re-run `sha256sum` or skip the check for that file. Never rename the per-workspace volumes: master looks them up by fixed names.
 
-## 3b. Different architecture or Postgres major: logical restore
+## 6. Bring up the target and check
 
-Skip `postgres_data` in step 3a, and copy all the other volumes as shown there. Bring up only Postgres on the target (empty volume, same `POSTGRES_PASSWORD`), then restore the dump from step 2:
+1. Deploy as usual on the new host. For staging/prod, point `STAGING_DOCKER_HOST`/`PROD_DOCKER_HOST` at it and run `just deploy <env> <tag>`. Keep the same project name.
+2. `docker volume ls` shows no new, empty `*_master_data` volume next to the imported one. A second one means the project name did not match.
+3. `docker logs ${PROJECT}-master-1 | grep master.respawned` shows one line per active workspace, and `docker ps --filter name=codex-agent-` lists them.
+4. In the UI: attachments open, and an agent in an existing topic replies while keeping its earlier session context.
+5. Spot-check a workspace clone for uncommitted work:
+   `docker run --rm -v agent-workspace-<name>:/w:ro alpine ls -la /w`
 
-```bash
-DOCKER_HOST=$DST COMPOSE_PROFILES=db-bundled \
-  MASTER_RUNTIME_IMAGE=placeholder IMAGE_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
-  docker compose -p $PROJECT -f docker-compose.yml -f docker-compose.deploy.yml -f docker-compose.postgres.yml \
-  up -d postgres
-DOCKER_HOST=$DST docker exec -i ${PROJECT}-postgres-1 psql -U master -d master -v ON_ERROR_STOP=1 < master-pg-<timestamp>.sql
-```
+## 7. Clean up
 
-## 4. Verify the copy
+- Delete `volume-export/` on both hosts and on any intermediate storage.
+- After the target has run cleanly for an agreed period, remove the old stack and then, one by one, the source volumes from `volumes.txt`.
 
-Compare file counts and byte totals for every copied volume:
+## Rollback
 
-```bash
-for v in $(DOCKER_HOST=$SRC docker volume ls -q | grep -E "^(${PROJECT}_|codex-claude-|codex-codex-|agent-workspace-)"); do
-  a=$(DOCKER_HOST=$SRC docker run --rm -v "$v":/d:ro alpine sh -c 'find /d | wc -l; du -s /d | cut -f1' | tr '\n' ' ')
-  b=$(DOCKER_HOST=$DST docker run --rm -v "$v":/d:ro alpine sh -c 'find /d | wc -l; du -s /d | cut -f1' | tr '\n' ' ')
-  [ "$a" = "$b" ] && echo "OK   $v" || echo "DIFF $v  src=[$a] dst=[$b]"
-done
-```
-
-Small `du` differences can come from filesystem block sizes. A different **file count** is a real problem: re-copy that volume.
-
-## 5. Recreate host-side files on the target
-
-- Copy the files behind `MASTER_CODEX_AUTH_JSON_PATH` / `MASTER_SSH_KNOWN_HOSTS_PATH` to the same paths on the new host, or change the paths in `.env`.
-- Make sure the SSH agent socket at `MASTER_SSH_AUTH_SOCK_PATH` exists on the new host (or unset it).
-- Leave `DOCKER_GID` unset so `just deploy` detects it on the new host. The docker group GID often differs between hosts.
-
-## 6. Deploy on the target
-
-Point the deploy target at the new host and deploy the **same tag** you noted in step 1.5:
-
-```bash
-# in .env (or the shell): STAGING_DOCKER_HOST=$DST   (or PROD_DOCKER_HOST for prod)
-just deploy staging <same-tag>
-```
-
-The fixed project name `-p codex-slack` makes Compose attach to the copied `codex-slack_*` volumes. If master logs `DB schema is behind code`, you deployed a newer tag. Either redeploy the old tag, or follow `.sre/operations/db-snapshot-migrate.md`.
-
-## 7. Verify the new instance
-
-1. `curl -sf http://<new-host>:8080/health` returns `{"status":"ok",...}`, with the expected version.
-2. `curl -s http://<new-host>:8080/schema` shows the schema is current.
-3. `DOCKER_HOST=$DST docker logs ${PROJECT}-master-1 | grep master.respawned` lists one line per active workspace, and `DOCKER_HOST=$DST docker ps --filter name=codex-agent-` shows them running.
-4. In the UI, the workspaces, topic history, and attachments are present. Send a message in one topic and confirm the agent replies and keeps its earlier session context.
-
-## 8. Cut over clients
-
-Update DNS, reverse proxy, bookmarks, and anything else that points at the old host. Update `STAGING_DOCKER_HOST` / `PROD_DOCKER_HOST` everywhere it is set (CI secrets, `.env`, `docs/sre.md` if it names the host).
-
-## 9. Rollback, and cleaning up the source
-
-**Rollback** (any time before the source is cleaned up): stop the target stack with `DOCKER_HOST=$DST docker compose -p $PROJECT ... stop`. Then on the source, run `docker start ${PROJECT}-postgres-1 ${PROJECT}-mosquitto-1 ${PROJECT}-master-1`. Master respawns the agents. Point clients back. Anything written on the target after the cut-over is **not** carried back.
-
-**Cleanup:** only after the new host has run cleanly for an agreed period (at least a few days), and with a fresh `pg_dump` from the **target** in hand, remove the old stack and its volumes:
-
-```bash
-DOCKER_HOST=$SRC docker compose -p $PROJECT -f docker-compose.yml -f docker-compose.deploy.yml -f docker-compose.postgres.yml down
-# then, deliberately and one by one, `docker volume rm` the volumes listed in step 0
-```
-
-## Escalation
-
-If the file counts disagree after a re-copy, Postgres refuses to start on the target ("database files are incompatible"), or master exits on schema checks you cannot explain: roll back (step 9), keep both hosts' volumes untouched, and escalate to `senior-sre` with the logs from `DOCKER_HOST=$DST docker logs ${PROJECT}-postgres-1` and `${PROJECT}-master-1`.
+On the source host, run `docker start ${PROJECT}-master-1`. Master respawns the agents against the untouched source volumes. Point clients back. Anything written on the target in the meantime does not carry back, unless you repeat this runbook in the other direction.

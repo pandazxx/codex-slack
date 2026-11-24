@@ -208,7 +208,7 @@ See the Database section above for backup procedures. The complete summary:
 - **Attachments:** tar the `attachments/` subdirectory of the `master_data` volume
 - **Claude session state:** tar each `codex-claude-{workspace_id}` volume
 
-To move a whole instance, volumes included, to a new Docker host, see [`docs/guides/runbooks/migrate-docker-host.md`](../guides/runbooks/migrate-docker-host.md).
+To move the named volumes (attachments, agent session state, workspace clones) to a new Docker host via offline tar export/import, see [`docs/guides/runbooks/migrate-docker-host.md`](../guides/runbooks/migrate-docker-host.md).
 
 ## Related References
 
