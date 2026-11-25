@@ -77,6 +77,38 @@ scp -r volume-export/ ubuntu@<new-host>:~/          # or rsync, USB disk, S3, ..
 
 These archives contain session state and repo clones that may include tokens. Treat them as secrets in transit and at rest, and delete the copies once you are done (step 7).
 
+## 4a. (Optional) On the target host: wipe a previous copy of the project
+
+Use this when the target already has an old or partial copy of the project and you want to start the import from a clean slate. **This cannot be undone.** If the database was already migrated onto this host's bundled Postgres, keep `KEEP_DB=1`, or you will delete it.
+
+`docker compose down -v` is not enough here. Agent containers and per-workspace volumes are created by master, not by Compose, so Compose does not know about them. Instead, select everything by label and by name prefix:
+
+```bash
+PROJECT=codex-slack
+KEEP_DB=1                      # set to 0 only if you also want the bundled Postgres data gone
+
+# 1. Dry run: review this list carefully
+containers=$( { docker ps -aq --filter label=com.docker.compose.project=$PROJECT
+                docker ps -aq --filter name=^codex-agent- ; } | sort -u )
+volumes=$( { docker volume ls -q --filter label=com.docker.compose.project=$PROJECT
+             docker volume ls -q | grep -E '^(codex-claude-|codex-codex-|agent-workspace-)' ; } | sort -u )
+[ "$KEEP_DB" = 1 ] && volumes=$(echo "$volumes" | grep -v "^${PROJECT}_postgres_data$")
+networks=$(docker network ls -q --filter label=com.docker.compose.project=$PROJECT)
+echo "== containers"; [ -n "$containers" ] && docker inspect -f '{{.Name}}' $containers
+echo "== volumes";    echo "$volumes"
+echo "== networks";   [ -n "$networks" ] && docker network inspect -f '{{.Name}}' $networks
+
+# 2. Nuke (only after reviewing the list above)
+[ -n "$containers" ] && docker rm -f $containers
+[ -n "$volumes" ]    && docker volume rm $volumes
+[ -n "$networks" ]   && docker network rm $networks
+```
+
+Caveats:
+- The `codex-agent-*`, `codex-claude-*`, `codex-codex-*` and `agent-workspace-*` names are **global to the host**. If other codex-slack stacks run on the same host (for example dev branch stacks), they are matched too. In that case, trim the dry-run list by hand before step 2.
+- Images are left in place. To remove them as well, run `docker image rm` on the master/agent images, or `docker image prune -a` if nothing else on the host needs them.
+- The shared `sre-traefik-public` network is external and unlabeled, so it is left alone.
+
 ## 5. On the target host: verify and import
 
 ```bash
